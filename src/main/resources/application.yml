@@ -1,0 +1,5 @@
+spring:
+  application:
+    name: shg-trip-back
+  profiles:
+    active: local

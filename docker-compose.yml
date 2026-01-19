@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16.11
+    container_name: shg-trip-postgres
+    environment:
+      POSTGRES_DB: trip
+      POSTGRES_USER: weShg
+      POSTGRES_PASSWORD: "shg99**"
+      TZ: Asia/Seoul
+    ports:
+      - "5432:5432"
+    volumes:
+      - shg_trip_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weShg -d trip"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  shg_trip_pgdata:
