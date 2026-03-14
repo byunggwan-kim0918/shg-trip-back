@@ -1,0 +1,31 @@
+package com.shg.trip.shgtrip.global.exception;
+
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
+
+@Getter
+@RequiredArgsConstructor
+public enum ErrorCode {
+
+    // Auth
+    INVALID_PROVIDER("AUTH_001", "지원하지 않는 소셜 로그인입니다.", HttpStatus.BAD_REQUEST),
+    OAUTH_AUTHENTICATION_FAILED("AUTH_002", "소셜 인증에 실패했습니다.", HttpStatus.UNAUTHORIZED),
+    INVALID_TOKEN("AUTH_003", "유효하지 않은 토큰입니다.", HttpStatus.UNAUTHORIZED),
+    EXPIRED_TOKEN("AUTH_004", "만료된 토큰입니다.", HttpStatus.UNAUTHORIZED),
+    REFRESH_TOKEN_NOT_FOUND("AUTH_005", "리프레시 토큰을 찾을 수 없습니다.", HttpStatus.UNAUTHORIZED),
+    EMAIL_NOT_PROVIDED("AUTH_006", "이메일 정보를 제공받지 못했습니다.", HttpStatus.UNAUTHORIZED),
+    REFRESH_TOKEN_REUSE_DETECTED("AUTH_007", "비정상적인 토큰 사용이 감지되어 전체 세션이 종료되었습니다.", HttpStatus.UNAUTHORIZED),
+
+    // User
+    USER_NOT_FOUND("USER_001", "사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND),
+    DUPLICATE_NICKNAME("USER_002", "이미 사용 중인 닉네임입니다.", HttpStatus.CONFLICT),
+
+    // Common
+    INVALID_INPUT("COMMON_001", "잘못된 입력입니다.", HttpStatus.BAD_REQUEST),
+    INTERNAL_SERVER_ERROR("COMMON_999", "서버 오류가 발생했습니다.", HttpStatus.INTERNAL_SERVER_ERROR);
+
+    private final String code;
+    private final String message;
+    private final HttpStatus httpStatus;
+}

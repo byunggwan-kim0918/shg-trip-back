@@ -17,5 +17,19 @@ services:
       timeout: 3s
       retries: 20
 
+  redis:
+    image: redis:7.4-alpine
+    container_name: shg-trip-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - shg_trip_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
 volumes:
   shg_trip_pgdata:
+  shg_trip_redis:
