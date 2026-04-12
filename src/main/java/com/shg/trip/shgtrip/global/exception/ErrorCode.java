@@ -21,7 +21,30 @@ public enum ErrorCode {
     USER_NOT_FOUND("USER_001", "사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND),
     DUPLICATE_NICKNAME("USER_002", "이미 사용 중인 닉네임입니다.", HttpStatus.CONFLICT),
 
+    // Itinerary
+    ITINERARY_NOT_FOUND("ITINERARY_001", "일정을 찾을 수 없습니다.", HttpStatus.NOT_FOUND),
+    ITINERARY_ACCESS_DENIED("ITINERARY_002", "일정에 접근할 권한이 없습니다.", HttpStatus.FORBIDDEN),
+    ITINERARY_VERSION_CONFLICT("ITINERARY_003", "일정이 다른 곳에서 수정되었습니다. 다시 시도해주세요.", HttpStatus.CONFLICT),
+
+    // Place
+    PLACE_NOT_FOUND("PLACE_001", "장소를 찾을 수 없습니다.", HttpStatus.NOT_FOUND),
+
+    // Wishlist
+    WISHLIST_ALREADY_EXISTS("WISHLIST_001", "이미 찜한 장소입니다.", HttpStatus.CONFLICT),
+    WISHLIST_NOT_FOUND("WISHLIST_002", "찜 목록에 없는 장소입니다.", HttpStatus.NOT_FOUND),
+
+    // AI
+    AI_SERVICE_ERROR("AI_001", "AI 서비스 오류가 발생했습니다.", HttpStatus.SERVICE_UNAVAILABLE),
+    AI_SERVICE_TIMEOUT("AI_002", "AI 서비스 응답 시간이 초과되었습니다.", HttpStatus.GATEWAY_TIMEOUT),
+
+    // External
+    EXTERNAL_API_ERROR("EXTERNAL_001", "외부 API 오류가 발생했습니다.", HttpStatus.BAD_GATEWAY),
+
+    // Validation
+    VALIDATION_FAILED("VALIDATION_001", "입력 데이터 검증에 실패했습니다.", HttpStatus.UNPROCESSABLE_ENTITY),
+
     // Common
+    RESOURCE_NOT_FOUND("COMMON_002", "요청한 리소스를 찾을 수 없습니다.", HttpStatus.NOT_FOUND),
     INVALID_INPUT("COMMON_001", "잘못된 입력입니다.", HttpStatus.BAD_REQUEST),
     INTERNAL_SERVER_ERROR("COMMON_999", "서버 오류가 발생했습니다.", HttpStatus.INTERNAL_SERVER_ERROR);
 

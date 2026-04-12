@@ -13,10 +13,11 @@ Build: Gradle (Groovy DSL) - build.gradle
 DB: PostgreSQL 16.11 (Docker)
 Cache: Redis 7.4-alpine (Docker)
 ORM: Spring Data JPA
-Migration: Flyway
+Migration: Flyway (V1~V12)
 Auth: JWT (jjwt 0.12.6) + OAuth 2.0
 Security: Spring Security 6 (STATELESS)
 HTTP Client: Spring RestClient (WebClient 아님)
+AI: Anthropic Java SDK 2.15.0 (Claude Haiku 4.5 / Sonnet 4.6)
 Lombok: 사용 중
 Test: JUnit 5 + Mockito (Testcontainers 예정)
 ```
@@ -33,74 +34,107 @@ shg-trip-back/
 │   │   ├── auth/                          # ✅ 구현 완료
 │   │   │   ├── controller/AuthController.java
 │   │   │   ├── dto/
-│   │   │   │   ├── OAuthCallbackRequest.java
-│   │   │   │   ├── OAuthCallbackResponse.java
-│   │   │   │   ├── OAuthLoginResult.java
-│   │   │   │   ├── OAuthUserInfo.java
-│   │   │   │   ├── TokenRefreshResponse.java
-│   │   │   │   └── TokenRefreshResult.java
-│   │   │   ├── entity/
-│   │   │   │   ├── OAuthProvider.java     # KAKAO, GOOGLE, NAVER
-│   │   │   │   ├── RefreshToken.java      # Redis 기반
-│   │   │   │   └── UserAuthProvider.java
+│   │   │   ├── entity/                    # OAuthProvider, RefreshToken, UserAuthProvider
 │   │   │   ├── repository/
-│   │   │   │   ├── RefreshTokenRepository.java
-│   │   │   │   └── UserAuthProviderRepository.java
 │   │   │   └── service/
 │   │   │       ├── AuthService.java
 │   │   │       └── oauth/                 # Strategy Pattern
-│   │   │           ├── OAuthProviderStrategy.java
-│   │   │           ├── OAuthStrategyFactory.java
-│   │   │           ├── KakaoOAuthStrategy.java
-│   │   │           ├── GoogleOAuthStrategy.java
-│   │   │           └── NaverOAuthStrategy.java
 │   │   │
-│   │   └── user/                          # ✅ 구현 완료
-│   │       ├── controller/UserController.java
+│   │   ├── user/                          # ✅ 구현 완료
+│   │   │   ├── controller/UserController.java
+│   │   │   ├── dto/                       # ProfileResponse, ProfileUpdateRequest
+│   │   │   ├── entity/                    # User, UserRole, UserStatus
+│   │   │   ├── repository/UserRepository.java
+│   │   │   └── service/UserService.java
+│   │   │
+│   │   ├── place/                         # ✅ 구현 완료
+│   │   │   ├── controller/                # PlaceController, WishlistController
+│   │   │   ├── client/                    # GooglePlacesClient, GooglePlaceDetail
+│   │   │   ├── dto/
+│   │   │   ├── entity/Place.java
+│   │   │   ├── repository/PlaceRepository.java  # findByNameAndAddress, searchByKeyword, searchByRadius
+│   │   │   └── service/                   # PlaceService, PlaceRefreshService, WishlistService
+│   │   │
+│   │   ├── itinerary/                     # ✅ 구현 완료
+│   │   │   ├── controller/
+│   │   │   │   ├── ItineraryController.java       # CRUD + finalize + share
+│   │   │   │   └── SharedItineraryController.java # GET /api/shared/{token} (비인증)
+│   │   │   ├── dto/
+│   │   │   │   ├── ItineraryGenerateRequest.java  # PlanningMode.AUTO/MANUAL
+│   │   │   │   ├── ItineraryResponse.java         # 상세 (steps 포함)
+│   │   │   │   ├── ItinerarySummaryResponse.java  # 목록 (steps 미포함)
+│   │   │   │   ├── ItineraryStepResponse.java
+│   │   │   │   ├── AlternativeOptionResponse.java
+│   │   │   │   ├── PlaceResponse.java
+│   │   │   │   ├── ItineraryUpdateRequest.java
+│   │   │   │   └── ShareLinkResponse.java
+│   │   │   ├── entity/
+│   │   │   │   ├── Itinerary.java         # @Version, soft delete, ItineraryStatus
+│   │   │   │   ├── ItineraryStep.java     # place, alternatives, transportation
+│   │   │   │   ├── AlternativeOption.java
+│   │   │   │   └── StringArrayConverter.java  # TEXT[] ↔ List<String>
+│   │   │   ├── repository/ItineraryRepository.java  # findByIdWithDetails (JOIN FETCH), findByShareToken
+│   │   │   └── service/ItineraryService.java  # CRUD + 소유권 검증 + 공유
+│   │   │
+│   │   └── planning/                      # ✅ 구현 완료
+│   │       ├── controller/PlanningController.java  # POST generate, GET stream (SSE)
 │   │       ├── dto/
-│   │       │   ├── ProfileResponse.java
-│   │       │   └── ProfileUpdateRequest.java
-│   │       ├── entity/
-│   │       │   ├── User.java
-│   │       │   ├── UserRole.java          # USER, ADMIN
-│   │       │   └── UserStatus.java        # ACTIVE, DORMANT, SUSPENDED, WITHDRAWN
-│   │       ├── repository/UserRepository.java
-│   │       └── service/UserService.java
+│   │       │   ├── EnrichedInput.java     # Haiku 보강 결과
+│   │       │   ├── ItineraryData.java     # AI Tool Use 응답
+│   │       │   ├── StepData.java
+│   │       │   ├── PlaceData.java         # 11필드 (AI는 5필드만 채움, 방안 B)
+│   │       │   ├── ValidationResult.java  # Hard/Soft 검증 결과
+│   │       │   ├── ProgressEvent.java     # SSE 이벤트
+│   │       │   └── GenerateJobResponse.java
+│   │       └── service/
+│   │           ├── ai/
+│   │           │   ├── AIService.java     # 인터페이스
+│   │           │   └── ClaudeAIService.java  # enrichInput, generateItinerary, enhance, regenerate
+│   │           ├── validation/
+│   │           │   └── ItineraryValidationService.java  # validateHard, validateSoft, validateWithRetry
+│   │           ├── TravelPlannerService.java      # jobId + SSE emitter 관리
+│   │           ├── ItineraryGenerationExecutor.java # @Async 파이프라인 (별도 빈)
+│   │           ├── ItinerarySaveHelper.java        # @Transactional 저장 전용 (별도 빈)
+│   │           └── ItineraryDataMapper.java        # AI 응답 → 엔티티 + Google Places 배치 조회
 │   │
 │   └── global/
 │       ├── config/
-│       │   ├── SecurityConfig.java        # CORS, JWT Filter, 공개/보호 경로
-│       │   ├── JpaConfig.java             # Auditing
+│       │   ├── SecurityConfig.java        # /api/shared/** permitAll 추가
+│       │   ├── AsyncConfig.java           # planningExecutor (DelegatingSecurityContextAsyncTaskExecutor)
+│       │   ├── AnthropicClientConfig.java # AnthropicClient 빈
+│       │   ├── AnthropicProperties.java   # anthropic.models.haiku/sonnet/opus
+│       │   ├── JpaConfig.java
 │       │   ├── RedisConfig.java
-│       │   ├── RestClientConfig.java      # Spring RestClient
-│       │   └── OAuthProperties.java       # @ConfigurationProperties
-│       ├── entity/
-│       │   └── BaseTimeEntity.java        # createdAt, updatedAt
+│       │   ├── RestClientConfig.java
+│       │   └── OAuthProperties.java
+│       ├── entity/BaseTimeEntity.java
 │       ├── exception/
-│       │   ├── ErrorCode.java             # AUTH_001~006, USER_001~002, COMMON_001/999
+│       │   ├── ErrorCode.java             # AUTH, USER, ITINERARY, PLACE, WISHLIST, AI, EXTERNAL, VALIDATION, COMMON
 │       │   ├── BusinessException.java
 │       │   └── GlobalExceptionHandler.java
 │       ├── response/
-│       │   ├── ApiResponse.java           # { success, data, error }
+│       │   ├── ApiResponse.java
+│       │   ├── PageResponse.java          # Page<T> 래퍼 (내부 구현 노출 방지)
 │       │   └── ErrorInfo.java
-│       └── security/
-│           ├── JwtTokenProvider.java       # HS256, access 30분, refresh 7일
-│           ├── JwtAuthenticationFilter.java
-│           ├── JwtProperties.java          # @ConfigurationProperties
-│           └── UserPrincipal.java
+│       ├── security/
+│       │   ├── JwtTokenProvider.java
+│       │   ├── JwtAuthenticationFilter.java
+│       │   ├── JwtProperties.java
+│       │   └── UserPrincipal.java
+│       └── validation/                    # 커스텀 Validator
 │
 ├── src/main/resources/
-│   ├── application.yml                    # 공통 설정
-│   ├── application-local.yml              # 로컬 DB/Redis/JWT/OAuth 설정
-│   └── db/migration/
-│       ├── V1__init.sql                   # users, user_auth_providers
-│       ├── V2__add_refresh_tokens.sql
-│       ├── V3__add_refresh_token_revoked.sql
-│       ├── V4__remove_email_unique_constraint.sql
-│       └── V5__drop_refresh_tokens.sql    # Redis로 이관
+│   ├── application.yml
+│   ├── application-local.yml              # anthropic.models, google.places 설정 포함
+│   ├── prompts/
+│   │   ├── enrich-input.txt               # Haiku 입력 보강 프롬프트
+│   │   ├── generate-itinerary.txt         # Sonnet 일정 생성 프롬프트
+│   │   ├── enhance-itinerary.txt          # Sonnet 일정 보강 프롬프트
+│   │   └── regenerate-itinerary.txt       # Sonnet 일정 재생성 프롬프트
+│   └── db/migration/                      # V1~V12
 │
-├── docker-compose.yml                     # PostgreSQL 16 + Redis 7
-├── .env                                   # JWT_SECRET, OAuth 키
+├── docker-compose.yml
+├── .env                                   # JWT_SECRET, ANTHROPIC_API_KEY, GOOGLE_PLACES_API_KEY
 └── build.gradle
 ```
 
@@ -124,6 +158,37 @@ Security Filter Chain:
   JwtAuthenticationFilter → SecurityContextHolder
   공개: /api/auth/**, /actuator/health, /api/shared/**
   보호: 나머지 전부
+```
+
+---
+
+## 🤖 AI 파이프라인 구조
+
+```
+일정 생성 요청 흐름:
+  POST /api/itineraries/generate → jobId 반환
+  GET  /api/itineraries/generate/{jobId}/stream → SSE 스트림
+
+  TravelPlannerService (jobId + emitter 관리)
+    → ItineraryGenerationExecutor (@Async, 별도 빈)
+      1. enrichInput (Haiku 4.5) — 여행지 컨텍스트 보강
+      2. resolveSelectedPlaces — Manual Mode 시 필수 검증
+      3. generateItinerary (Sonnet 4.6) — Tool Use 스키마 기반
+      4. validateWithRetry (ItineraryValidationService)
+         - validateHard: 필수 필드, 날짜 범위, 대안 3~5개
+         - validateSoft: 예산 초과, 일정 밀도, 교통 정보 (score 0~100)
+         - 70점 미만 → enhanceItinerary (최대 3회)
+         - 3회 실패 → regenerateItinerary
+      5. ItinerarySaveHelper (@Transactional, 별도 빈)
+         - ItineraryDataMapper.toEntity() + save()
+         - Google Places API 배치 조회 + fallback 저장
+
+  SSE 이벤트: progress (20→50→70→90→100%), complete, error
+
+모델 설정 (application-local.yml):
+  anthropic.models.haiku: claude-haiku-4-5-20251001
+  anthropic.models.sonnet: claude-sonnet-4-6
+  anthropic.models.opus: claude-opus-4-6 (미사용, 비용 효율성 고려)
 ```
 
 ---
@@ -217,4 +282,4 @@ docker compose up -d
 
 ---
 
-_Last Updated: 2026-03-15_
+_Last Updated: 2026-04-05_
