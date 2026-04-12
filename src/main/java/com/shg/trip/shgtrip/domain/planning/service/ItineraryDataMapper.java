@@ -126,6 +126,7 @@ public class ItineraryDataMapper {
     private Map<String, Place> batchResolvePlaces(Map<String, PlaceData> uniquePlaces, String destination) {
         Map<String, Place> cache = new HashMap<>();
         Map<String, Place> stalePlaces = new HashMap<>();
+        int fallbackCount = 0;
 
         // 여행지 기준 좌표 조회 (Google API로 1회 검색) — 엉뚱한 장소 필터링에 사용
         double[] destinationCoord = resolveDestinationCoord(destination);
@@ -151,14 +152,35 @@ public class ItineraryDataMapper {
             PlaceData pd = entry.getValue();
             if (stalePlaces.containsKey(key)) {
                 // 만료된 장소: Google API로 정보 갱신
-                cache.put(key, refreshFromGoogle(stalePlaces.get(key), pd));
+                Place refreshed = refreshFromGoogle(stalePlaces.get(key), pd);
+                cache.put(key, refreshed);
+                if (isFallbackPlace(refreshed)) {
+                    fallbackCount++;
+                }
             } else {
                 // 신규 장소: Google API 조회 후 저장
-                cache.put(key, resolveFromGoogleOrFallback(pd, destinationCoord));
+                Place resolved = resolveFromGoogleOrFallback(pd, destinationCoord);
+                cache.put(key, resolved);
+                if (isFallbackPlace(resolved)) {
+                    fallbackCount++;
+                }
             }
         }
 
+        if (fallbackCount > 0) {
+            log.warn("Google Places 미확인 장소 {}건 (좌표·사진 없음, 지도 표시 불가)", fallbackCount);
+        }
+
         return cache;
+    }
+
+    /**
+     * fallback으로 생성된 장소인지 판별 (좌표가 0,0이면 fallback).
+     */
+    private boolean isFallbackPlace(Place place) {
+        return place.getLatitude() != null && place.getLongitude() != null
+                && BigDecimal.ZERO.compareTo(place.getLatitude()) == 0
+                && BigDecimal.ZERO.compareTo(place.getLongitude()) == 0;
     }
 
     /**

@@ -13,6 +13,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.ItineraryData;
 import com.shg.trip.shgtrip.domain.planning.dto.SoftEvaluationResult;
 import com.shg.trip.shgtrip.domain.planning.dto.ValidationResult;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
+import com.shg.trip.shgtrip.global.config.PlanningProperties;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
@@ -35,6 +36,7 @@ public class ClaudeAIService implements AIService {
 
     private final AnthropicClient anthropicClient;
     private final AnthropicProperties anthropicProperties;
+    private final PlanningProperties planningProperties;
     private final ObjectMapper objectMapper;
     private final String enrichInputPromptTemplate;
     private final String generateItineraryPromptTemplate;
@@ -44,9 +46,11 @@ public class ClaudeAIService implements AIService {
 
     public ClaudeAIService(AnthropicClient anthropicClient,
                            AnthropicProperties anthropicProperties,
+                           PlanningProperties planningProperties,
                            ObjectMapper objectMapper) {
         this.anthropicClient = anthropicClient;
         this.anthropicProperties = anthropicProperties;
+        this.planningProperties = planningProperties;
         this.objectMapper = objectMapper;
         this.enrichInputPromptTemplate = loadPromptTemplate("prompts/enrich-input.txt");
         this.generateItineraryPromptTemplate = loadPromptTemplate("prompts/generate-itinerary.txt");
@@ -139,12 +143,13 @@ public class ClaudeAIService implements AIService {
                     .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
                             "AI 응답에서 일정 데이터를 추출할 수 없습니다."));
 
-            // max_tokens 도달로 JSON이 잘린 경우 — steps가 비어있으면 토큰 부족 경고
-            if ((result.steps() == null || result.steps().isEmpty())
-                    && message.stopReason().isPresent()
-                    && String.valueOf(message.stopReason().get()).contains("max_tokens")) {
-                log.error("AI output truncated by max_tokens ({}). Increase token budget for {} days.",
-                        maxTokens, days);
+            // max_tokens 도달로 JSON이 잘린 경우 — stopReason이 max_tokens이면 데이터 불완전
+            boolean truncated = message.stopReason().isPresent()
+                    && String.valueOf(message.stopReason().get()).contains("max_tokens");
+            if (truncated) {
+                int actualSteps = result.steps() != null ? result.steps().size() : 0;
+                log.error("AI output truncated by max_tokens ({}). Generated {} steps for {} days.",
+                        maxTokens, actualSteps, days);
                 throw new BusinessException(ErrorCode.AI_SERVICE_ERROR,
                         "AI 응답이 토큰 한도로 잘렸습니다. 일정 데이터가 불완전합니다.");
             }
@@ -172,7 +177,7 @@ public class ClaudeAIService implements AIService {
         long estimatedDays = itinerary.steps() != null && !itinerary.steps().isEmpty()
                 ? itinerary.steps().stream().mapToInt(s -> s.dayNumber()).max().orElse(3)
                 : 3;
-        int maxTokens = Math.min(calculateMaxTokens(estimatedDays) + 2048, 32768);
+        int maxTokens = Math.min(calculateMaxTokens(estimatedDays) + 4096, 64000);
         log.info("enhanceItinerary: estimatedDays={}, maxTokens={}", estimatedDays, maxTokens);
 
         try {
@@ -320,28 +325,31 @@ public class ClaudeAIService implements AIService {
             log.warn("Soft quality evaluation failed: {}", e.getMessage());
         }
 
-        return new SoftEvaluationResult(60, List.of("AI 품질 평가 실패, 기본값 적용"));
+        // fallback 점수는 softThreshold - 1로 설정 (ItineraryValidationService catch 블록과 일관성 유지)
+        int fallbackScore = Math.max(0, planningProperties.validation().softThreshold() - 1);
+        return new SoftEvaluationResult(fallbackScore, List.of("AI 품질 평가 실패, 기본값 적용"));
     }
 
     // ── Private helpers ──
 
     /**
      * 여행 일수에 따라 maxTokens를 동적으로 계산.
-     * step당 place(~100토큰) + alternatives 3~5개(~400토큰) + 교통/메타(~100토큰) ≈ 600토큰
-     * 하루 5step × 600 = 3,000토큰 + 최상위 메타데이터 버퍼 2048.
-     * 최소 12288, 최대 32768.
+     * step당 place(~150토큰) + alternatives 3~5개(~600토큰) + 교통/메타(~150토큰) ≈ 900토큰
+     * 하루 5~7step × 900 = 4,500~6,300토큰 → 안전하게 하루 6,000토큰 + 최상위 메타데이터 버퍼 2048.
+     * 최소 16384, 최대 64000 (Claude Sonnet 4 extended output 한도).
      */
     private int calculateMaxTokens(long days) {
-        int estimated = (int) (days * 3000) + 2048;
-        return Math.max(12288, Math.min(estimated, 32768));
+        int estimated = (int) (days * 6000) + 2048;
+        return Math.max(16384, Math.min(estimated, 64000));
     }
 
     private String buildEnrichPrompt(ItineraryGenerateRequest input) {
+        String formattedBudget = String.format("%,d", input.budget().longValue());
         return enrichInputPromptTemplate
                 .replace("{destination}", input.destination())
                 .replace("{themes}", String.join(", ", input.themes()))
                 .replace("{categories}", String.join(", ", input.categories()))
-                .replace("{budget}", input.budget().toPlainString())
+                .replace("{budget}", formattedBudget)
                 .replace("{startDate}", input.startDate().toString())
                 .replace("{endDate}", input.endDate().toString())
                 .replace("{description}", input.description() != null ? input.description() : "없음");

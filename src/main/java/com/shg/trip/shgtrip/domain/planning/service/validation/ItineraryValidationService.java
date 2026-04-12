@@ -82,22 +82,22 @@ public class ItineraryValidationService {
                     errors.add(prefix + "종료 시간 형식이 올바르지 않습니다 (HH:mm).");
                 }
 
-                // 대안 개수 검증 (3~5개)
-                if (step.alternatives() == null || step.alternatives().size() < 3) {
-                    errors.add(prefix + "대안 장소가 3개 미만입니다.");
-                }
-                if (step.alternatives() != null && step.alternatives().size() > 5) {
-                    errors.add(prefix + "대안 장소가 5개를 초과합니다.");
+                // 대안 개수 검증 (3~5개) — 교통 허브(공항/기차역 등) step은 대안이 비현실적이므로 제외
+                boolean isTransitHub = isTransitHub(step);
+                if (!isTransitHub) {
+                    if (step.alternatives() == null || step.alternatives().size() < 3) {
+                        errors.add(prefix + "대안 장소가 3개 미만입니다.");
+                    }
+                    if (step.alternatives() != null && step.alternatives().size() > 5) {
+                        errors.add(prefix + "대안 장소가 5개를 초과합니다.");
+                    }
                 }
             }
 
-            // 메인 장소 중복 검증 (숙소·공항 제외)
+            // 메인 장소 중복 검증 (숙소·교통 허브 제외)
             Map<String, Long> placeNameCount = data.steps().stream()
                     .filter(s -> s.place() != null && s.place().name() != null)
-                    .filter(s -> {
-                        String cat = s.place().category();
-                        return cat == null || (!cat.equals("숙소") && !cat.equals("accommodation"));
-                    })
+                    .filter(s -> !isTransitHubOrAccommodation(s))
                     .collect(java.util.stream.Collectors.groupingBy(
                             s -> s.place().name(), java.util.stream.Collectors.counting()));
             placeNameCount.entrySet().stream()
@@ -127,6 +127,7 @@ public class ItineraryValidationService {
                 warnings.add(String.format("예상 비용(%s원)이 예산(%s원)을 초과합니다.",
                         data.estimatedCost().toPlainString(), input.budget().toPlainString()));
                 score = Math.max(score - 15, 0);
+                log.debug("Soft 감점: 예산 초과 -15 → score={}", score);
             }
 
             // 일정 밀도 (하루 평균 단계 수) — pace에 따라 기준 다름
@@ -139,6 +140,7 @@ public class ItineraryValidationService {
                         if (avgSteps < 4) {
                             warnings.add("알차게 페이스인데 하루 평균 일정이 4개 미만입니다.");
                             score = Math.max(score - 10, 0);
+                            log.debug("Soft 감점: tight 페이스 밀도 부족 -10 → score={}", score);
                         }
                     }
                     case "relaxed" -> {
@@ -146,16 +148,19 @@ public class ItineraryValidationService {
                         if (avgSteps > 5) {
                             warnings.add("여유롭게 페이스인데 하루 평균 일정이 5개를 초과합니다.");
                             score = Math.max(score - 10, 0);
+                            log.debug("Soft 감점: relaxed 페이스 과밀 -10 → score={}", score);
                         }
                     }
                     default -> { // normal
                         if (avgSteps < 2) {
                             warnings.add("하루 평균 일정이 2개 미만으로 빈약합니다.");
                             score = Math.max(score - 10, 0);
+                            log.debug("Soft 감점: normal 페이스 밀도 부족 -10 → score={}", score);
                         }
                         if (avgSteps > 8) {
                             warnings.add("하루 평균 일정이 8개를 초과하여 과밀합니다.");
                             score = Math.max(score - 10, 0);
+                            log.debug("Soft 감점: normal 페이스 과밀 -10 → score={}", score);
                         }
                     }
                 }
@@ -178,6 +183,7 @@ public class ItineraryValidationService {
                 if (missingTransport > 0) {
                     warnings.add(String.format("교통 정보가 누락된 단계가 %d개 있습니다.", missingTransport));
                     score = Math.max(score - (int) (missingTransport * 5), 0);
+                    log.debug("Soft 감점: 교통 정보 누락 {}건 × -5 → score={}", missingTransport, score);
                 }
 
                 // 이동 시간 > 시간 갭 검증 (물리적으로 불가능한 이동)
@@ -188,7 +194,7 @@ public class ItineraryValidationService {
                 for (int i = 0; i < sorted.size() - 1; i++) {
                     StepData cur = sorted.get(i);
                     StepData next = sorted.get(i + 1);
-                    if (!cur.dayNumber().equals(next.dayNumber())) continue;
+                    if (cur.dayNumber() != next.dayNumber()) continue;
                     if (next.transportationDuration() == null) continue;
                     if (cur.endTime() == null || next.startTime() == null) continue;
                     try {
@@ -203,10 +209,13 @@ public class ItineraryValidationService {
                 if (impossibleMoves > 0) {
                     warnings.add(String.format("이동 시간이 시간 갭보다 긴 단계가 %d개 있습니다 (물리적으로 불가능한 이동).", impossibleMoves));
                     score = Math.max(score - (int) (impossibleMoves * 3), 0);
+                    log.debug("Soft 감점: 불가능한 이동 {}건 × -3 → score={}", impossibleMoves, score);
                 }
             }
 
             String feedback = warnings.isEmpty() ? null : String.join(" / ", warnings);
+
+            log.debug("Soft 검증 완료: AI 점수={}, Java 감점 후 최종 점수={}, 감점 항목 수={}", aiEval.score(), score, warnings.size() - aiEval.issues().size());
 
             if (score >= planningProperties.validation().softThreshold()) {
                 return ValidationResult.softPass(score, warnings, feedback);
@@ -302,6 +311,32 @@ public class ItineraryValidationService {
     }
 
     /** "HH:mm" 형식 시간 문자열을 분으로 변환 */
+
+    /** 교통 허브 장소명 패턴 — "역사박물관" 등 오탐 방지를 위해 정밀 매칭 */
+    private static final java.util.regex.Pattern TRANSIT_NAME_PATTERN = java.util.regex.Pattern.compile(
+            "공항|airport|기차역|버스터미널|터미널|terminal|항구|port|페리|ferry|station|\\S+역(?!사)"
+            // "\\S+역(?!사)" → "서울역", "도쿄역" 매칭, "역사박물관" 미매칭
+    );
+
+    /** 교통 허브 step인지 — 장소명 패턴 매칭 또는 FLIGHT 교통수단 */
+    private boolean isTransitHub(StepData step) {
+        if (step.transportationMode() != null && step.transportationMode().equals("FLIGHT")) {
+            return true;
+        }
+        String placeName = step.place() != null && step.place().name() != null
+                ? step.place().name().toLowerCase() : "";
+        return TRANSIT_NAME_PATTERN.matcher(placeName).find();
+    }
+
+    /** 숙소 또는 교통 허브 step인지 */
+    private boolean isTransitHubOrAccommodation(StepData step) {
+        String cat = step.place() != null ? step.place().category() : null;
+        if (cat != null && (cat.equals("숙소") || cat.equalsIgnoreCase("accommodation"))) {
+            return true;
+        }
+        return isTransitHub(step);
+    }
+
     private int timeToMinutes(String time) {
         String[] parts = time.split(":");
         return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
