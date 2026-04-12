@@ -2,9 +2,8 @@ package com.shg.trip.shgtrip.domain.auth.controller;
 
 import com.shg.trip.shgtrip.domain.auth.dto.*;
 import com.shg.trip.shgtrip.domain.auth.service.AuthService;
-import com.shg.trip.shgtrip.domain.user.dto.ProfileResponse;
+import com.shg.trip.shgtrip.global.config.CookieProperties;
 import com.shg.trip.shgtrip.global.response.ApiResponse;
-import com.shg.trip.shgtrip.global.security.JwtTokenProvider;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -19,7 +18,7 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
-    private final JwtTokenProvider jwtTokenProvider;
+    private final CookieProperties cookieProperties;
 
     @PostMapping("/oauth/callback")
     public ResponseEntity<ApiResponse<OAuthCallbackResponse>> oauthCallback(
@@ -27,15 +26,13 @@ public class AuthController {
             HttpServletResponse response) {
 
         OAuthLoginResult result = authService.processOAuthCallback(request);
-
-        addRefreshTokenCookie(response, result.refreshToken());
+        addRefreshTokenCookie(response, result.refreshToken(), result.refreshMaxAge());
 
         OAuthCallbackResponse body = new OAuthCallbackResponse(
                 result.accessToken(),
                 result.isNewUser(),
-                ProfileResponse.from(result.user())
+                result.profile()
         );
-
         return ResponseEntity.ok(ApiResponse.success(body));
     }
 
@@ -44,9 +41,8 @@ public class AuthController {
             @CookieValue(name = "refresh_token") String refreshToken,
             HttpServletResponse response) {
 
-        TokenRefreshResult result = authService.refreshAccessToken(refreshToken);
-
-        addRefreshTokenCookie(response, result.refreshToken());
+        OAuthLoginResult result = authService.refreshAccessToken(refreshToken);
+        addRefreshTokenCookie(response, result.refreshToken(), result.refreshMaxAge());
 
         return ResponseEntity.ok(ApiResponse.success(
                 new TokenRefreshResponse(result.accessToken())));
@@ -61,17 +57,16 @@ public class AuthController {
             authService.logout(refreshToken);
         }
         clearRefreshTokenCookie(response);
-
         return ResponseEntity.ok(ApiResponse.success(null));
     }
 
-    private void addRefreshTokenCookie(HttpServletResponse response, String token) {
+    private void addRefreshTokenCookie(HttpServletResponse response, String token, long maxAgeMs) {
         ResponseCookie cookie = ResponseCookie.from("refresh_token", token)
                 .httpOnly(true)
-                .secure(false)
+                .secure(cookieProperties.secure())
                 .sameSite("Lax")
                 .path("/")
-                .maxAge(jwtTokenProvider.getRefreshExpiration() / 1000)
+                .maxAge(maxAgeMs / 1000)
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
     }
@@ -79,11 +74,12 @@ public class AuthController {
     private void clearRefreshTokenCookie(HttpServletResponse response) {
         ResponseCookie cookie = ResponseCookie.from("refresh_token", "")
                 .httpOnly(true)
-                .secure(false)
+                .secure(cookieProperties.secure())
                 .sameSite("Lax")
                 .path("/")
                 .maxAge(0)
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
     }
+
 }
