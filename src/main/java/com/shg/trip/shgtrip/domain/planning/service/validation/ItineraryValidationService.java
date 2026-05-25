@@ -314,8 +314,12 @@ public class ItineraryValidationService {
 
     /** 교통 허브 장소명 패턴 — "역사박물관" 등 오탐 방지를 위해 정밀 매칭 */
     private static final java.util.regex.Pattern TRANSIT_NAME_PATTERN = java.util.regex.Pattern.compile(
-            "공항|airport|기차역|버스터미널|터미널|terminal|항구|port|페리|ferry|station|\\S+역(?!사)"
+            "공항|기차역|버스터미널|터미널|항구|페리|"
+                    + "airport|(?:train|bus|subway|metro)\\s*station|terminal|port|ferry|"
+                    + "\\S+역(?!사)",
             // "\\S+역(?!사)" → "서울역", "도쿄역" 매칭, "역사박물관" 미매칭
+            // 영문 station은 교통 수식어(train/bus/subway/metro)와 결합된 경우만 매칭
+            java.util.regex.Pattern.CASE_INSENSITIVE
     );
 
     /** 교통 허브 step인지 — 장소명 패턴 매칭 또는 FLIGHT 교통수단 */

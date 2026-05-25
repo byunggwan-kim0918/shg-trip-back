@@ -177,7 +177,7 @@ public class ClaudeAIService implements AIService {
         long estimatedDays = itinerary.steps() != null && !itinerary.steps().isEmpty()
                 ? itinerary.steps().stream().mapToInt(s -> s.dayNumber()).max().orElse(3)
                 : 3;
-        int maxTokens = Math.min(calculateMaxTokens(estimatedDays) + 4096, 64000);
+        int maxTokens = Math.min(calculateMaxTokens(estimatedDays) + 4096, anthropicProperties.maxOutputTokens());
         log.info("enhanceItinerary: estimatedDays={}, maxTokens={}", estimatedDays, maxTokens);
 
         try {
@@ -336,15 +336,16 @@ public class ClaudeAIService implements AIService {
      * 여행 일수에 따라 maxTokens를 동적으로 계산.
      * step당 place(~150토큰) + alternatives 3~5개(~600토큰) + 교통/메타(~150토큰) ≈ 900토큰
      * 하루 5~7step × 900 = 4,500~6,300토큰 → 안전하게 하루 6,000토큰 + 최상위 메타데이터 버퍼 2048.
-     * 최소 16384, 최대 64000 (Claude Sonnet 4 extended output 한도).
+     * 최소 16384, 최대는 anthropic.models.max-output-tokens 설정값.
      */
     private int calculateMaxTokens(long days) {
+        int limit = anthropicProperties.maxOutputTokens();
         int estimated = (int) (days * 6000) + 2048;
-        return Math.max(16384, Math.min(estimated, 64000));
+        return Math.max(16384, Math.min(estimated, limit));
     }
 
     private String buildEnrichPrompt(ItineraryGenerateRequest input) {
-        String formattedBudget = String.format("%,d", input.budget().longValue());
+        String formattedBudget = String.format("%,.0f", input.budget());
         return enrichInputPromptTemplate
                 .replace("{destination}", input.destination())
                 .replace("{themes}", String.join(", ", input.themes()))
