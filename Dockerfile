@@ -18,7 +18,7 @@ FROM eclipse-temurin:21-jre-jammy
 RUN groupadd -r shgapp && useradd -r -g shgapp shgapp
 
 # STAGE 2 RUN (실행 환경 - 1에서 만든 jar 복사)
-COPY --from=builder /app/build/libs/*.jar shg-app.jar
+COPY --from=builder /shgapp/build/libs/*.jar shg-app.jar
 
 # STAGE 2 RUN (실행 환경 - jar 소유권 변경)
 RUN chown shgapp:shgapp shg-app.jar
