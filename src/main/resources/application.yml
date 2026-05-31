@@ -1,0 +1,9 @@
+spring:
+  application:
+    name: shg-trip-back
+  profiles:
+    active: local
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false

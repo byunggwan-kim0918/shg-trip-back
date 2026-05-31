@@ -1,0 +1,50 @@
+package com.shg.trip.shgtrip.domain.place.service;
+
+import com.shg.trip.shgtrip.domain.place.client.GooglePlacesClient;
+import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
+import com.shg.trip.shgtrip.global.exception.BusinessException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class PlaceRefreshService {
+
+    private final PlaceRepository placeRepository;
+    private final GooglePlacesClient googlePlacesClient;
+
+    /**
+     * 장소 데이터를 Google Places API로 비동기 갱신.
+     * 조회 응답을 블로킹하지 않고 백그라운드에서 처리.
+     */
+    @Async
+    @Transactional
+    public void refreshAsync(Long placeId, String placeName) {
+        try {
+            googlePlacesClient.searchAndGetDetail(placeName).ifPresent(detail -> {
+                placeRepository.findById(placeId).ifPresent(place ->
+                    place.update(
+                            detail.address(),
+                            detail.lat(),
+                            detail.lng(),
+                            detail.rating(),
+                            detail.priceLevel(),
+                            detail.openingHours(),
+                            detail.photoReference(),
+                            detail.sourceUrl()
+                    )
+                );
+            });
+            log.debug("Place {} refreshed successfully", placeId);
+        } catch (BusinessException e) {
+            log.warn("Failed to refresh place {}: {}", placeId, e.getMessage());
+        } catch (Exception e) {
+            log.error("Unexpected error refreshing place {}: {}", placeId, e.getMessage());
+        }
+    }
+}
