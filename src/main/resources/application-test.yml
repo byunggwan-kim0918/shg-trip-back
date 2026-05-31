@@ -1,0 +1,16 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/shgtrip
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:testpassword123}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+  config:
+    import: ""
+
+jwt:
+  secret: 0101010101010101010101010101010101010101010101010101010101010101
+  access-expiration: 1800000
+  refresh-expiration: 604800000
