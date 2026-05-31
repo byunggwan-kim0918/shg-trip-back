@@ -48,5 +48,3 @@ logs/
 ### Dockerfile ###
 Dockerfile
 .dockerignore
-
-.env.production
