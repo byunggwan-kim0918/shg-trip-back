@@ -28,7 +28,7 @@ logging:
     "[org.springframework.security]": DEBUG
 
 jwt:
-  secret: ${JWT_SECRET:dGhpcyBpcyBhIGxvY2FsIGRldmVsb3BtZW50IHNlY3JldCBrZXkgZm9yIGp3dA==}
+  secret: ${JWT_SECRET:bG9jYWxfZGV2X3NlY3JldF9rZXlfZm9yX2p3dF90ZXN0aW5n}
   access-expiration: 1800000
   refresh-expiration: 604800000
 

@@ -49,13 +49,21 @@ public class PlaceController {
         String googleUrl = "https://places.googleapis.com/v1/" + ref
                 + "/media?maxWidthPx=800&key=" + googlePlacesProperties.apiKey();
 
-        byte[] imageBytes = restClient.get()
-                .uri(googleUrl)
-                .retrieve()
-                .body(byte[].class);
+        byte[] imageBytes;
+        try {
+            imageBytes = restClient.get()
+                    .uri(googleUrl)
+                    .retrieve()
+                    .body(byte[].class);
+        } catch (Exception e) {
+            // photo reference가 만료되었거나 유효하지 않은 경우
+            response.sendError(HttpServletResponse.SC_NOT_FOUND, "이미지를 가져올 수 없습니다.");
+            return;
+        }
 
         if (imageBytes == null || imageBytes.length == 0) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "이미지를 가져올 수 없습니다.");
+            response.sendError(HttpServletResponse.SC_NOT_FOUND, "이미지를 가져올 수 없습니다.");
+            return;
         }
 
         response.setContentType(MediaType.IMAGE_JPEG_VALUE);

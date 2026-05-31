@@ -23,6 +23,8 @@ COPY --from=builder /shgapp/build/libs/*.jar shg-app.jar
 # STAGE 2 RUN (실행 환경 - jar 소유권 변경)
 RUN chown shgapp:shgapp shg-app.jar
 
+RUN mkdir -p /logs && chown shgapp:shgapp /logs
+
 USER shgapp
 
 EXPOSE 8080

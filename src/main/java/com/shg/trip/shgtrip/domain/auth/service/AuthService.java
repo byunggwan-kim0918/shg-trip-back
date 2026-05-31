@@ -58,11 +58,11 @@ public class AuthService {
         } else {
             user = User.builder()
                     .email(userInfo.email())
-                    .nickname(null)
+                    .nickname(userInfo.nickname())
                     .profileImage(userInfo.profileImage())
                     .build();
             user = userRepository.save(user);
-            isNewUser = true;
+            isNewUser = user.isNewUser();
 
             UserAuthProvider authProvider = UserAuthProvider.builder()
                     .userId(user.getId())

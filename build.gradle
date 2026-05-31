@@ -41,6 +41,7 @@ dependencies {
     developmentOnly 'org.springframework.boot:spring-boot-devtools'
     annotationProcessor 'org.projectlombok:lombok'
     implementation 'com.anthropic:anthropic-java:2.15.0'
+    implementation 'io.awspring.cloud:spring-cloud-aws-starter-secrets-manager:3.3.0'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.security:spring-security-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
