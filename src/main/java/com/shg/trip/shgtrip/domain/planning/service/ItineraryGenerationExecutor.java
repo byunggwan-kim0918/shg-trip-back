@@ -61,7 +61,7 @@ public class ItineraryGenerationExecutor {
             sendProgress(emitter, 70, "동선 최적화 중...", "VALIDATING");
             ItineraryData validated = validationService.validateWithRetry(itineraryData, enrichedInput, selectedPlaces);
 
-            // 4-1. Manual Mode: 선택 장소 포함 여부 검증 (Req 3.1)
+            // 4-1. Manual Mode: 선택 장소 포함 여부 검증
             validateSelectedPlacesIncluded(validated, selectedPlaces);
 
             // 5. 엔티티 변환 + 저장 (90%)
@@ -83,7 +83,7 @@ public class ItineraryGenerationExecutor {
     }
 
     /**
-     * Manual Mode: 사용자가 선택한 장소가 최종 일정에 포함되었는지 검증. (Req 3.1)
+     * Manual Mode: 사용자가 선택한 장소가 최종 일정에 포함되었는지 검증.
      * 부분 매칭(contains) 사용: AI가 "강남역 3호선"처럼 약간 다른 이름을 사용할 경우도 허용.
      */
     private void validateSelectedPlacesIncluded(ItineraryData data, List<Place> requiredPlaces) {

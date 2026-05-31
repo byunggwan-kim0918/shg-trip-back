@@ -12,8 +12,6 @@ import java.util.List;
 /**
  * AI 기반 일정 생성 서비스 인터페이스.
  * Claude LLM을 활용하여 입력 보강, 일정 생성, 보강, 재생성을 수행합니다.
- *
- * Requirements: 2.1, 2.2, 4.2, 4.4, 4.6
  */
 public interface AIService {
 
@@ -58,7 +56,7 @@ public interface AIService {
     ItineraryData regenerateItinerary(EnrichedInput enrichedInput, String lastFailureReason, List<Place> selectedPlaces);
 
     /**
-     * Haiku 4.5로 일정 품질을 평가합니다. (Req 4.2)
+     * Haiku 4.5로 일정 품질을 평가합니다.
      * 문맥 일관성(30점), 동선 효율성(40점), 정보 완전성(30점)을 평가하여 0~100 점수 반환.
      *
      * @param data 평가할 일정 데이터

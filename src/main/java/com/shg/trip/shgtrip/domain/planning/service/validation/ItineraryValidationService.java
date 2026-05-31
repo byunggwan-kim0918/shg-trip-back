@@ -25,7 +25,6 @@ import java.util.Map;
  * - validateHard: 필수 필드 검증 (순수 Java 로직)
  * - validateSoft: AI 품질 검증 (Haiku 4.5)
  * - validateWithRetry: 보강 → 재검증 → 재생성 파이프라인
- * Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
  */
 @Slf4j
 @Service
@@ -109,13 +108,13 @@ public class ItineraryValidationService {
     }
 
     /**
-     * Soft 검증: Haiku 4.5 AI 품질 평가 + Java 규칙 검사 (Req 4.2).
+     * Soft 검증: Haiku 4.5 AI 품질 평가 + Java 규칙 검사.
      * AI 평가 (validate-soft.txt): 문맥 일관성(30점), 동선 효율성(40점), 정보 완전성(30점)
      * Java 추가 감점: 예산 초과(-15), 일정 밀도(-10), 교통 정보 누락(-5/건)
      */
     public ValidationResult validateSoft(ItineraryData data, EnrichedInput input) {
         try {
-            // 1. AI 품질 평가 (Haiku 4.5) — Req 4.2 핵심 요구사항
+            // 1. AI 품질 평가 (Haiku 4.5)
             SoftEvaluationResult aiEval = aiService.evaluateSoftQuality(data, input);
             int score = aiEval.score();
             List<String> warnings = new ArrayList<>(aiEval.issues());
@@ -272,7 +271,7 @@ public class ItineraryValidationService {
                 break;
             }
 
-            // 마지막 enhance 후에도 soft 재검증 수행 (Req 4.5)
+            // 마지막 enhance 후에도 soft 재검증 수행
             if (attempt == MAX_ENHANCE_ATTEMPTS - 1) {
                 ValidationResult finalSoft = validateSoft(current, input);
                 lastSoftResult = finalSoft;

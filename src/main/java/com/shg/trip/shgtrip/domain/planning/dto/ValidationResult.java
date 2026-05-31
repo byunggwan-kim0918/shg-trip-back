@@ -4,7 +4,6 @@ import java.util.List;
 
 /**
  * 일정 검증 결과.
- * Requirements: 4.1~4.6
  */
 public record ValidationResult(
         boolean valid,

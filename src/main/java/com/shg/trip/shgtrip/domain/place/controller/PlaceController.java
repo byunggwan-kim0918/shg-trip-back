@@ -44,8 +44,7 @@ public class PlaceController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "이미지가 없습니다.");
         }
 
-        // Places API (New): photoReference = "places/{placeId}/photos/{photoId}"
-        // 사진 URL: https://places.googleapis.com/v1/{photoName}/media
+        // Places API (New) 사진 URL
         String googleUrl = "https://places.googleapis.com/v1/" + ref
                 + "/media?maxWidthPx=800&key=" + googlePlacesProperties.apiKey();
 

@@ -11,7 +11,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 공유 일정 조회 (비인증).
- * Requirements: 7.5
  */
 @RestController
 @RequestMapping("/api/shared")

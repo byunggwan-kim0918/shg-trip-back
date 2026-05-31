@@ -76,9 +76,7 @@ public class AuthService {
         String refreshToken = jwtTokenProvider.createRefreshToken();
         long refreshExpirationMs = jwtTokenProvider.getRefreshExpiration();
 
-        // Redis는 JPA 트랜잭션과 독립적으로 즉시 반영됨.
-        // JPA 커밋 실패 시 고아 토큰이 남을 수 있으나, TTL(7일)로 자연 만료되고
-        // 실제 사용 시 userId 검증에서 걸러지므로 허용 가능한 수준.
+        // Redis TTL(7일)로 자연 만료되므로 JPA 커밋 실패 시에도 허용 가능
         try {
             refreshTokenRepository.save(RefreshToken.builder()
                     .token(refreshToken)
@@ -99,7 +97,7 @@ public class AuthService {
         RefreshToken refreshToken = refreshTokenRepository.findByToken(refreshTokenValue)
                 .orElseThrow(() -> new BusinessException(ErrorCode.REFRESH_TOKEN_NOT_FOUND));
 
-        // AUTH_007: revoked된 토큰으로 접근 → 탈취 감지 → 해당 유저의 전체 세션 무효화
+        // revoked된 토큰으로 접근 → 탈취 감지 → 해당 유저의 전체 세션 무효화
         if (refreshToken.isRevoked()) {
             log.warn("Refresh Token 재사용 감지 (탈취 의심). userId={}", refreshToken.getUserId());
             refreshTokenRepository.deleteByUserId(refreshToken.getUserId());
@@ -109,8 +107,7 @@ public class AuthService {
         User user = userRepository.findById(refreshToken.getUserId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
 
-        // Rotation: 새 토큰 저장 성공 확인 후 기존 토큰 revoke
-        // 순서 보장: 새 토큰 save 실패 시 기존 토큰이 살아있어 재시도 가능
+        // Rotation: 새 토큰 저장 후 기존 토큰 revoke
         String newAccessToken = jwtTokenProvider.createAccessToken(user.getId(), user.getRole().name());
         String newRefreshToken = jwtTokenProvider.createRefreshToken();
         long refreshExpirationMs = jwtTokenProvider.getRefreshExpiration();
@@ -127,7 +124,6 @@ public class AuthService {
             throw new BusinessException(ErrorCode.REFRESH_TOKEN_NOT_FOUND);
         }
 
-        // 새 토큰 저장 성공 후 기존 토큰 revoke
         refreshToken.revoke();
         refreshTokenRepository.save(refreshToken);
 

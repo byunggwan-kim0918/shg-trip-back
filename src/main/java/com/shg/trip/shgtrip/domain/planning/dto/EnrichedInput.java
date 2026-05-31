@@ -6,7 +6,6 @@ import java.util.List;
 
 /**
  * Haiku가 보강한 사용자 입력.
- * Requirements: 2.1
  */
 public record EnrichedInput(
         String destination,

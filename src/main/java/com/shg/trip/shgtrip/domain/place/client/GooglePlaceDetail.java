@@ -24,10 +24,8 @@ public record GooglePlaceDetail(
 ) {
     @SuppressWarnings("unchecked")
     public static GooglePlaceDetail from(Map<String, Object> place) {
-        // id (New API: "id" 필드)
         String placeId = (String) place.get("id");
 
-        // displayName.text
         String name = null;
         Map<String, Object> displayName = (Map<String, Object>) place.get("displayName");
         if (displayName != null) {
@@ -36,7 +34,6 @@ public record GooglePlaceDetail(
 
         String address = (String) place.get("formattedAddress");
 
-        // location.latitude / location.longitude
         double lat = 0.0, lng = 0.0;
         Map<String, Object> location = (Map<String, Object>) place.get("location");
         if (location != null) {
@@ -46,10 +43,8 @@ public record GooglePlaceDetail(
 
         Double rating = toDoubleOrNull(place.get("rating"));
 
-        // priceLevel: New API는 문자열 enum (PRICE_LEVEL_INEXPENSIVE 등)
         Integer priceLevel = parsePriceLevel((String) place.get("priceLevel"));
 
-        // regularOpeningHours.weekdayDescriptions
         String openingHours = null;
         Map<String, Object> hours = (Map<String, Object>) place.get("regularOpeningHours");
         if (hours != null) {
@@ -59,7 +54,6 @@ public record GooglePlaceDetail(
             }
         }
 
-        // photos[0].name → photo reference (New API: "photos[].name" 형식)
         String photoReference = null;
         List<Map<String, Object>> photos = (List<Map<String, Object>>) place.get("photos");
         if (photos != null && !photos.isEmpty()) {
@@ -68,7 +62,6 @@ public record GooglePlaceDetail(
 
         String sourceUrl = (String) place.get("googleMapsUri");
 
-        // types 필드
         List<String> types = Optional.ofNullable((List<String>) place.get("types"))
                 .orElse(List.of());
 

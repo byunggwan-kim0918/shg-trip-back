@@ -16,7 +16,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
  * 일정 생성 API 엔드포인트.
- * Requirements: 10.2
  */
 @RestController
 @RequestMapping("/api/itineraries")

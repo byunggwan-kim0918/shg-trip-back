@@ -8,8 +8,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * 일정 생성 요청 DTO
- * Requirements: 1.3, 1.5, 16.1~16.5
+ * 일정 생성 요청 DTO.
  */
 @ValidDateRange
 public record ItineraryGenerateRequest(

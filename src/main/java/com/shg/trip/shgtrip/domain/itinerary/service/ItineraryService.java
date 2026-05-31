@@ -25,7 +25,6 @@ import java.util.UUID;
 
 /**
  * 일정 관리 서비스.
- * Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 13.4, 5.4
  */
 @Slf4j
 @Service
@@ -91,7 +90,7 @@ public class ItineraryService {
     }
 
     /**
-     * 일정 단계의 대안 장소 선택 (Req 5.1).
+     * 일정 단계의 대안 장소 선택.
      * 선택 후 해당 step과 다음 step의 교통 거리를 좌표 기반으로 재계산한다.
      */
     @Transactional
@@ -111,15 +110,14 @@ public class ItineraryService {
 
         step.selectAlternative(selected);
 
-        // 교통 거리 재계산: stepOrder 기준 정렬된 리스트에서 이전/다음 step 찾기
+        // 교통 거리 재계산
         recalculateTransportation(itinerary.getSteps(), step);
 
         return ItineraryResponse.from(itinerary);
     }
 
     /**
-     * 대안 선택 후 해당 step의 교통 거리와 다음 step의 교통 거리를 재계산.
-     * 일차 경계를 넘는 경우(다른 dayNumber)는 skip한다.
+     * 대안 선택 후 인접 step의 교통 거리를 재계산. 일차 경계를 넘는 경우 skip.
      */
     private void recalculateTransportation(List<ItineraryStep> allSteps, ItineraryStep changedStep) {
         List<ItineraryStep> sorted = allSteps.stream()
@@ -135,7 +133,6 @@ public class ItineraryService {
         }
         if (idx < 0) return;
 
-        // 현재 step의 교통 거리 재계산 (이전 step → 현재 step), 같은 날만
         if (idx > 0) {
             ItineraryStep prev = sorted.get(idx - 1);
             if (prev.getDayNumber().equals(changedStep.getDayNumber())) {
@@ -143,7 +140,6 @@ public class ItineraryService {
             }
         }
 
-        // 다음 step의 교통 거리 재계산 (현재 step → 다음 step), 같은 날만
         if (idx < sorted.size() - 1) {
             ItineraryStep next = sorted.get(idx + 1);
             if (changedStep.getDayNumber().equals(next.getDayNumber())) {

@@ -80,7 +80,7 @@ public class ItineraryStep extends BaseTimeEntity {
     }
 
     /**
-     * 대안 장소 선택 적용 (Req 5.1).
+     * 대안 장소 선택 적용.
      * 선택된 대안이 메인으로 올라오고, 기존 메인 장소는 대안 목록 끝으로 내려감 (swap).
      * notes/estimatedCost도 함께 교체하여 step 정보가 선택 장소 기준으로 갱신됨.
      * remove 후 optionOrder를 재계산하여 orphanRemoval flush 순서 충돌 방지.

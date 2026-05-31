@@ -20,7 +20,6 @@ import java.util.concurrent.ConcurrentHashMap;
  * 여행 일정 생성 워크플로우 서비스.
  * jobId 관리 + SSE emitter 등록 담당.
  * 실제 파이프라인은 ItineraryGenerationExecutor(@Async)에 위임.
- * Requirements: 2.1, 2.2, 2.3, 2.4, 2.5
  */
 @Slf4j
 @Service

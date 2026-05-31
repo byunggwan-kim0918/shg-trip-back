@@ -52,7 +52,6 @@ public class Place extends BaseTimeEntity {
 
     private String imageUrl;
 
-    // Google Places photo_reference (API 키 없이 저장, 응답 시 키 조합)
     private String photoReference;
 
     private String sourceUrl;

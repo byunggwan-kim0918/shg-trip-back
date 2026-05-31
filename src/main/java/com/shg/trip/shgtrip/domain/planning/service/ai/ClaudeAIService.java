@@ -28,7 +28,6 @@ import java.util.stream.Collectors;
 
 /**
  * Claude LLM 기반 AI 서비스 구현체.
- * Requirements: 2.1, 2.2, 4.4, 4.6
  */
 @Slf4j
 @Service
@@ -244,7 +243,7 @@ public class ClaudeAIService implements AIService {
     }
 
     /**
-     * Haiku 4.5로 일정 품질을 평가합니다. (Req 4.2)
+     * Haiku 4.5로 일정 품질을 평가합니다.
      * 문맥 일관성(30점), 동선 효율성(40점), 정보 완전성(30점) 기준으로 0~100 점수 반환.
      * AI 호출 실패 시 기본값(75점)으로 fallback 처리.
      */
@@ -483,7 +482,6 @@ public class ClaudeAIService implements AIService {
      * ItineraryData 구조에 맞는 JSON Schema를 구성합니다.
      */
     private Tool buildItineraryTool() {
-        // PlaceData 스키마 (식별 정보만 — 좌표/평점/영업시간은 Google Places API에서 조회)
         Map<String, Object> placeSchema = Map.ofEntries(
                 Map.entry("type", "object"),
                 Map.entry("properties", Map.ofEntries(
@@ -496,7 +494,6 @@ public class ClaudeAIService implements AIService {
                 Map.entry("required", List.of("name", "address", "category"))
         );
 
-        // AlternativeData 스키마 (장소 정보 + 해당 대안 선택 시의 notes/estimatedCost)
         Map<String, Object> alternativeSchema = Map.ofEntries(
                 Map.entry("type", "object"),
                 Map.entry("properties", Map.ofEntries(
@@ -511,7 +508,6 @@ public class ClaudeAIService implements AIService {
                 Map.entry("required", List.of("name", "address", "category"))
         );
 
-        // StepData 스키마
         Map<String, Object> stepSchema = Map.ofEntries(
                 Map.entry("type", "object"),
                 Map.entry("properties", Map.ofEntries(
@@ -535,7 +531,6 @@ public class ClaudeAIService implements AIService {
                 Map.entry("required", List.of("stepOrder", "dayNumber", "startTime", "endTime", "place", "alternatives"))
         );
 
-        // ItineraryData 최상위 스키마
         Tool.InputSchema.Properties properties = Tool.InputSchema.Properties.builder()
                 .putAdditionalProperty("title", JsonValue.from(Map.of("type", "string", "description", "일정 제목")))
                 .putAdditionalProperty("destination", JsonValue.from(Map.of("type", "string")))

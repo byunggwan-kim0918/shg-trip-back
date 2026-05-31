@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.*;
 
 /**
  * 일정 관리 API 엔드포인트.
- * Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 13.4
  */
 @RestController
 @RequestMapping("/api/itineraries")

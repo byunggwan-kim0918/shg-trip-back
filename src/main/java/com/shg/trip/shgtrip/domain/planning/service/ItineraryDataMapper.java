@@ -25,7 +25,6 @@ import java.util.stream.Stream;
 /**
  * AI 응답(ItineraryData) → Itinerary 엔티티 변환.
  * PlaceData → Place 엔티티 조회/생성 (Google Places API 연동).
- * Requirements: 2.2, 6.1
  */
 @Slf4j
 @Component
@@ -119,7 +118,7 @@ public class ItineraryDataMapper {
      * 배치 Place resolve:
      * 1) DB에서 name+address로 일괄 조회
      *    - 유효(7일 미만): 캐시에 직접 등록
-     *    - 만료(7일 이상): stale 목록으로 분류 → Google API로 갱신 (Req 6.3)
+     *    - 만료(7일 이상): stale 목록으로 분류 → Google API로 갱신
      * 2) 미존재분 + 만료분: Google API 호출 (신규 저장 or 기존 업데이트)
      * 3) Google 실패 시 fallback 처리
      */
@@ -200,7 +199,7 @@ public class ItineraryDataMapper {
     }
 
     /**
-     * 만료된 Place를 Google Places API로 갱신. (Req 6.3)
+     * 만료된 Place를 Google Places API로 갱신.
      * 갱신 실패 시 오래된 데이터를 그대로 반환 (서비스 중단 방지).
      */
     private Place refreshFromGoogle(Place stalePlace, PlaceData placeData) {
