@@ -8,7 +8,7 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
   config:
-    import: ""
+    import: "optional:aws-secretsmanager:shg-trip/prod"
 
 jwt:
   secret: 0101010101010101010101010101010101010101010101010101010101010101
