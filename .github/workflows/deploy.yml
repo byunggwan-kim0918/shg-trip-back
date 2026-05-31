@@ -1,0 +1,42 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push to ECR
+        run: |
+          docker build -t ${{ secrets.ECR_REGISTRY }}/shgtrip/app:latest .
+          docker push ${{ secrets.ECR_REGISTRY }}/shgtrip/app:latest
+
+      - name: Deploy via SSM
+        run: |
+          aws ssm send-command \
+            --region ${{ secrets.AWS_REGION }} \
+            --document-name "AWS-RunShellScript" \
+            --targets "Key=tag:Role,Values=app" \
+            --parameters 'commands=[
+              "aws ecr get-login-password --region ap-northeast-2 | sudo docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}",
+              "sudo docker pull ${{ secrets.ECR_REGISTRY }}/shgtrip/app:latest",
+              "sudo docker stop shgtrip-app || true",
+              "sudo docker rm shgtrip-app || true",
+              "sudo docker run -d --name shgtrip-app --restart always -p 8080:8080 ${{ secrets.ECR_REGISTRY }}/shgtrip/app:latest"
+            ]' \
+            --timeout-seconds 300
