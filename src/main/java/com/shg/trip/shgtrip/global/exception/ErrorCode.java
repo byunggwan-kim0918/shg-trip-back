@@ -37,6 +37,10 @@ public enum ErrorCode {
     AI_SERVICE_ERROR("AI_001", "AI 서비스 오류가 발생했습니다.", HttpStatus.SERVICE_UNAVAILABLE),
     AI_SERVICE_TIMEOUT("AI_002", "AI 서비스 응답 시간이 초과되었습니다.", HttpStatus.GATEWAY_TIMEOUT),
 
+    // Planning
+    GENERATION_ALREADY_IN_PROGRESS("PLANNING_001", "이미 일정 생성이 진행 중입니다.", HttpStatus.CONFLICT),
+    GENERATION_CANCELLED("PLANNING_002", "일정 생성이 취소되었습니다.", HttpStatus.BAD_REQUEST),
+
     // External
     EXTERNAL_API_ERROR("EXTERNAL_001", "외부 API 오류가 발생했습니다.", HttpStatus.BAD_GATEWAY),
 

@@ -18,39 +18,58 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 여행 일정 생성 워크플로우 서비스.
- * jobId 관리 + SSE emitter 등록 담당.
- * 실제 파이프라인은 ItineraryGenerationExecutor(@Async)에 위임.
+ * - jobId / emitter 생명주기 관리
+ * - 유저별 동시 생성 1개 제한 (새 요청 시 기존 작업 취소)
+ * - 취소 플래그는 CancellationRegistry에 위임 (순환 의존성 방지)
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class TravelPlannerService {
 
-    private static final long SSE_TIMEOUT = 600_000L; // 10분 (Sonnet 응답 1~2분 × 최대 5회 AI 호출 고려)
-    private static final long EVICTION_THRESHOLD_MS = 720_000L; // 12분 — SSE_TIMEOUT + 여유 2분
+    private static final long SSE_TIMEOUT_MS = 600_000L;      // 10분
+    private static final long EVICTION_THRESHOLD_MS = 720_000L; // 12분
 
     private final ItineraryGenerationExecutor generationExecutor;
     private final GenerationResultStore resultStore;
+    private final CancellationRegistry cancellationRegistry;
 
-    private final ConcurrentHashMap<String, EmitterEntry> emitters = new ConcurrentHashMap<>();
+    /** jobId → JobEntry */
+    private final ConcurrentHashMap<String, JobEntry> jobs = new ConcurrentHashMap<>();
+    /** userId → 현재 진행 중인 jobId (동시 생성 1개 제한) */
+    private final ConcurrentHashMap<Long, String> activeUserJobs = new ConcurrentHashMap<>();
 
-    private record EmitterEntry(SseEmitter emitter, Instant createdAt) {}
+    private record JobEntry(SseEmitter emitter, Long userId, Instant createdAt) {}
+
+    // -------------------------------------------------------------------------
+    // Public API
+    // -------------------------------------------------------------------------
 
     /**
-     * 일정 생성 작업 시작 → jobId 반환.
-     * emitter 등록 후 executor에 비동기 위임.
+     * 일정 생성 시작.
+     * 동일 유저의 기존 진행 중 작업이 있으면 취소 후 새 작업 시작.
      */
     public GenerateJobResponse startGeneration(ItineraryGenerateRequest request, Long userId) {
+        // 기존 작업 취소
+        String existingJobId = activeUserJobs.get(userId);
+        if (existingJobId != null) {
+            log.info("Cancelling existing job {} for user {} — new generation requested", existingJobId, userId);
+            cancelJob(existingJobId);
+        }
+
         String jobId = UUID.randomUUID().toString();
-        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT);
+        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
 
-        emitter.onCompletion(() -> emitters.remove(jobId));
-        emitter.onTimeout(() -> emitters.remove(jobId));
-        emitter.onError(e -> emitters.remove(jobId));
+        emitter.onCompletion(() -> cleanupJob(jobId));
+        emitter.onTimeout(() -> {
+            log.warn("SSE emitter timed out for job {}", jobId);
+            cleanupJob(jobId);
+        });
+        emitter.onError(e -> cleanupJob(jobId));
 
-        emitters.put(jobId, new EmitterEntry(emitter, Instant.now()));
+        jobs.put(jobId, new JobEntry(emitter, userId, Instant.now()));
+        activeUserJobs.put(userId, jobId);
 
-        // 별도 빈(executor)에서 호출 → @Async 프록시 정상 동작
         generationExecutor.execute(jobId, request, userId, emitter);
 
         return new GenerateJobResponse(jobId);
@@ -58,49 +77,76 @@ public class TravelPlannerService {
 
     /**
      * SSE emitter 조회.
+     * jobId가 없으면 RESOURCE_NOT_FOUND — 클라이언트는 /plan/new로 안내.
      */
     public SseEmitter getEmitter(String jobId) {
-        EmitterEntry entry = emitters.get(jobId);
+        JobEntry entry = jobs.get(jobId);
         if (entry == null) {
-            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "생성 작업을 찾을 수 없습니다: " + jobId);
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
+                    "생성 작업을 찾을 수 없습니다: " + jobId);
         }
         return entry.emitter();
     }
 
     /**
-     * 생성 완료된 itineraryId 저장 (executor에서 호출).
-     */
-    public void saveResult(String jobId, Long itineraryId) {
-        resultStore.save(jobId, itineraryId);
-    }
-
-    /**
-     * 인증된 클라이언트가 jobId로 완료된 itineraryId 조회.
-     * 조회 후 즉시 제거 — 1회성 토큰처럼 동작.
+     * 완료된 itineraryId 조회 (TTL 내 재조회 허용).
      */
     public Long getResult(String jobId) {
-        return resultStore.getAndRemove(jobId);
+        return resultStore.get(jobId);
     }
 
     /**
-     * 1분 주기로 TTL 초과 emitter 정리.
-     * 정상 흐름에서는 onCompletion/onTimeout 콜백으로 제거되지만,
-     * 클라이언트가 SSE 연결을 맺지 않거나 콜백 누락 시 여기서 sweep.
+     * 작업 취소 (새 요청 시 기존 작업 중단용).
+     * 취소 플래그는 executor가 감지할 수 있도록 cleanupJob에서 제거하지 않음.
+     * executor가 return 후 emitter onCompletion 콜백 → cleanupJob 순서로 정리됨.
      */
+    public void cancelJob(String jobId) {
+        cancellationRegistry.cancel(jobId);
+        JobEntry entry = jobs.get(jobId);
+        if (entry != null) {
+            try {
+                entry.emitter().complete();
+            } catch (Exception ignored) {}
+        }
+        // cleanupJob은 emitter.onCompletion 콜백에서 자동 호출됨
+        // 여기서 직접 호출하면 cancellationRegistry.remove가 너무 일찍 실행될 수 있음
+        JobEntry removed = jobs.remove(jobId);
+        if (removed != null) {
+            activeUserJobs.remove(removed.userId(), jobId);
+        }
+        // 취소 플래그는 executor가 종료된 후 evictStaleEmitters에서 정리되거나
+        // 다음 startGeneration 시 덮어씌워짐 — 여기서 remove 하지 않음
+    }
+
+    // -------------------------------------------------------------------------
+    // Internal
+    // -------------------------------------------------------------------------
+
+    private void cleanupJob(String jobId) {
+        JobEntry entry = jobs.remove(jobId);
+        if (entry != null) {
+            activeUserJobs.remove(entry.userId(), jobId);
+            // cancelJob 경로에서는 이미 jobs.remove가 됐으므로 entry == null → 여기 안 들어옴
+            // 정상 완료 / 타임아웃 경로에서만 취소 플래그 정리
+            cancellationRegistry.remove(jobId);
+        }
+    }
+
+    /** 1분 주기 — TTL 초과 emitter 강제 정리 */
     @Scheduled(fixedDelay = 60_000)
     public void evictStaleEmitters() {
         Instant threshold = Instant.now().minusMillis(EVICTION_THRESHOLD_MS);
-        Iterator<Map.Entry<String, EmitterEntry>> it = emitters.entrySet().iterator();
+        Iterator<Map.Entry<String, JobEntry>> it = jobs.entrySet().iterator();
         int evicted = 0;
 
         while (it.hasNext()) {
-            Map.Entry<String, EmitterEntry> entry = it.next();
+            Map.Entry<String, JobEntry> entry = it.next();
             if (entry.getValue().createdAt().isBefore(threshold)) {
                 try {
                     entry.getValue().emitter().complete();
-                } catch (Exception ignored) {
-                    // 이미 완료/에러 상태일 수 있음
-                }
+                } catch (Exception ignored) {}
+                activeUserJobs.remove(entry.getValue().userId(), entry.getKey());
+                cancellationRegistry.remove(entry.getKey());
                 it.remove();
                 evicted++;
             }
