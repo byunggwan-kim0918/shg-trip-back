@@ -5,8 +5,62 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  # Job 1: 단위 테스트 (DB/Redis 불필요, 빠름)
+  unit-test:
     runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Compile
+        run: ./gradlew compileJava compileTestJava --no-daemon
+
+      - name: Run unit tests
+        run: ./gradlew test --no-daemon -PexcludeTags=integration
+        env:
+          SPRING_PROFILES_ACTIVE: test
+
+      - name: Generate coverage report
+        run: ./gradlew jacocoTestReport --no-daemon
+
+      - name: Verify coverage threshold (70%)
+        run: ./gradlew jacocoTestCoverageVerification --no-daemon
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Unit Test Results
+          path: build/test-results/test/*.xml
+          reporter: java-junit
+          fail-on-error: true
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jacoco-report
+          path: build/reports/jacoco/test/html/
+
+  # Job 2: 통합 테스트 (DB/Redis service container)
+  integration-test:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: read
 
     services:
       postgres:
@@ -14,7 +68,7 @@ jobs:
         env:
           POSTGRES_DB: shgtrip
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: password
+          POSTGRES_PASSWORD: testpassword123
         ports:
           - 5432:5432
         options: >-
@@ -41,19 +95,30 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
+          cache: gradle
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Run tests
+      - name: Run integration tests
+        run: ./gradlew test --no-daemon -PincludeTags=integration
         env:
+          SPRING_PROFILES_ACTIVE: test
           DB_HOST: localhost
           DB_PORT: 5432
           DB_USERNAME: postgres
-          DB_PASSWORD: password
+          DB_PASSWORD: testpassword123
           REDIS_HOST: localhost
           REDIS_PORT: 6379
-        run: ./gradlew test --no-daemon
 
       - name: Build check
         run: ./gradlew build -x test --no-daemon
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: Integration Test Results
+          path: build/test-results/test/*.xml
+          reporter: java-junit
+          fail-on-error: true

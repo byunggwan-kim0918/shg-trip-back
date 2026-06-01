@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '3.5.9'
     id 'io.spring.dependency-management' version '1.1.7'
+    id 'jacoco'
 }
 
 group = 'com.shg.trip'
@@ -48,7 +49,57 @@ dependencies {
 }
 
 tasks.named('test') {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        if (project.hasProperty('excludeTags')) {
+            excludeTags project.property('excludeTags')
+        }
+        if (project.hasProperty('includeTags')) {
+            includeTags project.property('includeTags')
+        }
+    }
+    finalizedBy jacocoTestReport
+}
+
+jacoco {
+    toolVersion = "0.8.12"
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+    afterEvaluate {
+        classDirectories.setFrom(files(classDirectories.files.collect {
+            fileTree(dir: it, exclude: [
+                '**/ShgTripBackApplication*',
+                '**/dto/**',
+                '**/entity/**',
+                '**/config/**',
+                '**/global/**'
+            ])
+        }))
+    }
+}
+
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            element = 'CLASS'
+            excludes = [
+                'com.shg.trip.shgtrip.ShgTripBackApplication',
+                'com.shg.trip.shgtrip.*.dto.*',
+                'com.shg.trip.shgtrip.*.entity.*',
+                'com.shg.trip.shgtrip.global.*'
+            ]
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.70
+            }
+        }
+    }
 }
 
 bootRun {
