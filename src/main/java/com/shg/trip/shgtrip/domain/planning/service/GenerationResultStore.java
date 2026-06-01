@@ -30,15 +30,23 @@ public class GenerationResultStore {
     }
 
     /**
-     * 조회 후 즉시 제거 — 1회성 토큰처럼 동작하여 재사용 방지.
+     * 조회 (TTL 내에서 재조회 허용).
+     * 새로고침 시 result를 다시 가져올 수 있도록 삭제하지 않음.
      */
-    public Long getAndRemove(String jobId) {
+    public Long get(String jobId) {
         String key = KEY_PREFIX + jobId;
-        String value = redisTemplate.opsForValue().getAndDelete(key);
+        String value = redisTemplate.opsForValue().get(key);
         if (value == null) {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
-                    "완료된 생성 결과를 찾을 수 없습니다. 이미 조회했거나 만료된 jobId입니다: " + jobId);
+                    "완료된 생성 결과를 찾을 수 없습니다. 만료된 jobId입니다: " + jobId);
         }
         return Long.parseLong(value);
+    }
+
+    /**
+     * 결과 존재 여부 확인 (SSE 연결 시 이미 완료된 작업인지 판단용).
+     */
+    public boolean exists(String jobId) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(KEY_PREFIX + jobId));
     }
 }

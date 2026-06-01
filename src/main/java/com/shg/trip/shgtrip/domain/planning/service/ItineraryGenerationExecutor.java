@@ -22,9 +22,10 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 비동기 일정 생성 실행기.
- * TravelPlannerService와 분리하여 @Async 프록시가 정상 동작하도록 함.
- * toEntity() + save()를 단일 @Transactional로 묶어 cascade 안전성 보장.
+ * 비동기 일정 생성 파이프라인.
+ * - TravelPlannerService와 분리하여 @Async 프록시 정상 동작 보장
+ * - 각 AI 호출 전 취소 여부 확인 → 클라이언트 disconnect 시 불필요한 API 호출 방지
+ * - 저장은 ItinerarySaveHelper(@Transactional)에 위임
  */
 @Slf4j
 @Component
@@ -36,39 +37,44 @@ public class ItineraryGenerationExecutor {
     private final ItinerarySaveHelper saveHelper;
     private final PlaceRepository placeRepository;
     private final GenerationResultStore resultStore;
+    private final CancellationRegistry cancellationRegistry;
 
     /**
      * 비동기 일정 생성 파이프라인.
-     * @Async + @Transactional 동시 적용 제거 — AI 호출 중 커넥션 점유 방지.
-     * 저장 단계만 ItinerarySaveHelper(@Transactional)에 위임.
-     * 20% → 50% → 70% → 90% → 100%
+     * 진행 단계: 20% → 50% → 70% → 90% → 100%
+     * 각 AI 호출 전 취소 여부 확인 — 취소 시 조용히 종료 (emitter는 이미 complete 처리됨).
      */
     @Async("planningExecutor")
     public void execute(String jobId, ItineraryGenerateRequest request, Long userId, SseEmitter emitter) {
         try {
             // 1. 입력 보강 (20%)
+            if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 20, "분석 중...", "ENRICHING");
             EnrichedInput enrichedInput = aiService.enrichInput(request);
 
-            // 2. 선택 장소 조회 (Manual Mode: 필수 검증 포함)
+            // 2. 선택 장소 조회
+            if (cancellationRegistry.isCancelled(jobId)) return;
             List<Place> selectedPlaces = resolveSelectedPlaces(request);
 
             // 3. 일정 생성 (50%)
+            if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 50, "장소 탐색 중...", "GENERATING");
             ItineraryData itineraryData = aiService.generateItinerary(enrichedInput, selectedPlaces);
 
             // 4. 검증 + 보강 파이프라인 (70%)
+            if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 70, "동선 최적화 중...", "VALIDATING");
             ItineraryData validated = validationService.validateWithRetry(itineraryData, enrichedInput, selectedPlaces);
 
             // 4-1. Manual Mode: 선택 장소 포함 여부 검증
             validateSelectedPlacesIncluded(validated, selectedPlaces);
 
-            // 5. 엔티티 변환 + 저장 (90%)
+            // 5. 저장 (90%)
+            if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 90, "일정을 저장하고 있습니다...", "SAVING");
             Itinerary saved = saveHelper.save(validated, enrichedInput, userId);
 
-            // 6. 완료 (100%) — itineraryId는 인증된 result API로만 제공
+            // 6. 완료 — 저장 후 취소 체크는 하지 않음 (이미 DB에 저장됐으므로 결과 전달)
             resultStore.save(jobId, saved.getId());
             sendProgress(emitter, 100, "일정 생성이 완료되었습니다.", "COMPLETE");
             sendComplete(emitter);
@@ -82,10 +88,10 @@ public class ItineraryGenerationExecutor {
         }
     }
 
-    /**
-     * Manual Mode: 사용자가 선택한 장소가 최종 일정에 포함되었는지 검증.
-     * 부분 매칭(contains) 사용: AI가 "강남역 3호선"처럼 약간 다른 이름을 사용할 경우도 허용.
-     */
+    // -------------------------------------------------------------------------
+    // Private helpers
+    // -------------------------------------------------------------------------
+
     private void validateSelectedPlacesIncluded(ItineraryData data, List<Place> requiredPlaces) {
         if (requiredPlaces == null || requiredPlaces.isEmpty()) return;
 
@@ -105,10 +111,6 @@ public class ItineraryGenerationExecutor {
         }
     }
 
-    /**
-     * 부분 매칭: required 이름이 step 이름에 포함되거나, step 이름이 required 이름에 포함되면 일치로 판단.
-     * 예) required="강남역" / step="강남역 3호선" → 포함 관계 성립
-     */
     private boolean isPlaceIncluded(String requiredName, Set<String> stepPlaceNames) {
         String required = requiredName.toLowerCase();
         return stepPlaceNames.stream().anyMatch(stepName ->
@@ -143,14 +145,12 @@ public class ItineraryGenerationExecutor {
                     .name("progress")
                     .data(new ProgressEvent(percentage, message, stage)));
         } catch (IOException e) {
-            log.warn("Failed to send progress event: {}", e.getMessage());
+            log.warn("Failed to send progress event for stage {}: {}", stage, e.getMessage());
         }
     }
 
     private void sendComplete(SseEmitter emitter) {
         try {
-            // itineraryId는 SSE에 포함하지 않음 — 비인증 스트림에서 타인 일정 ID 노출 방지.
-            // 클라이언트는 complete 수신 후 인증된 GET /generate/{jobId}/result 로 조회.
             emitter.send(SseEmitter.event()
                     .name("complete")
                     .data(Map.of("status", "DONE")));

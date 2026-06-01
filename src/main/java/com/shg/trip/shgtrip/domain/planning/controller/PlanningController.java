@@ -48,8 +48,9 @@ public class PlanningController {
     }
 
     /**
-     * GET /api/itineraries/generate/{jobId}/result → 완료된 itineraryId 반환 (인증 필수, 1회성).
+     * GET /api/itineraries/generate/{jobId}/result → 완료된 itineraryId 반환 (인증 필수).
      * SSE complete 이벤트에 itineraryId를 노출하지 않고 인증된 API로만 제공.
+     * TTL(10분) 내 재조회 허용 — 새로고침 시에도 결과 접근 가능.
      */
     @GetMapping("/generate/{jobId}/result")
     public ApiResponse<Long> getGenerationResult(
