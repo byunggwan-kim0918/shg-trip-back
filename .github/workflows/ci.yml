@@ -5,7 +5,7 @@ on:
     branches: [ main ]
 
 jobs:
-  # Job 1: 단위 테스트 (DB/Redis 불필요, 빠름)
+  # Job 1: 단위 테스트
   unit-test:
     runs-on: ubuntu-latest
     permissions:
@@ -29,7 +29,7 @@ jobs:
         run: ./gradlew compileJava compileTestJava --no-daemon
 
       - name: Run unit tests
-        run: ./gradlew test --no-daemon -PexcludeTags=integration
+        run: ./gradlew test --no-daemon
         env:
           SPRING_PROFILES_ACTIVE: test
 
@@ -101,7 +101,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run integration tests
-        run: ./gradlew test --no-daemon -PincludeTags=integration
+        run: ./gradlew integrationTest --no-daemon
         env:
           SPRING_PROFILES_ACTIVE: test
           DB_HOST: localhost
@@ -119,6 +119,6 @@ jobs:
         if: always()
         with:
           name: Integration Test Results
-          path: build/test-results/test/*.xml
+          path: build/test-results/integrationTest/*.xml
           reporter: java-junit
           fail-on-error: true

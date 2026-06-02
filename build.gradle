@@ -50,14 +50,21 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform {
-        if (project.hasProperty('excludeTags')) {
-            excludeTags project.property('excludeTags')
-        }
-        if (project.hasProperty('includeTags')) {
-            includeTags project.property('includeTags')
-        }
+        excludeTags 'integration'
     }
     finalizedBy jacocoTestReport
+}
+
+// 통합 테스트 전용 task — DB/Redis service가 있는 환경에서만 실행
+tasks.register('integrationTest', Test) {
+    description = 'Runs integration tests (requires DB/Redis)'
+    group = 'verification'
+    useJUnitPlatform {
+        includeTags 'integration'
+    }
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    shouldRunAfter tasks.named('test')
 }
 
 jacoco {
