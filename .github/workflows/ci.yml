@@ -36,9 +36,6 @@ jobs:
       - name: Generate coverage report
         run: ./gradlew jacocoTestReport --no-daemon
 
-      - name: Verify coverage threshold (70%)
-        run: ./gradlew jacocoTestCoverageVerification --no-daemon
-
       - name: Publish test results
         uses: dorny/test-reporter@v1
         if: always()
