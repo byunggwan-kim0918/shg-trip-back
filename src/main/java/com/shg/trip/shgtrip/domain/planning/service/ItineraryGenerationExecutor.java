@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 /**
@@ -50,7 +51,8 @@ public class ItineraryGenerationExecutor {
             // 1. 입력 보강 (20%)
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 20, "분석 중...", "ENRICHING");
-            EnrichedInput enrichedInput = aiService.enrichInput(request);
+            EnrichedInput enrichedInput = executeWithHeartbeat(emitter,
+                    () -> aiService.enrichInput(request));
 
             // 2. 선택 장소 조회
             if (cancellationRegistry.isCancelled(jobId)) return;
@@ -59,12 +61,14 @@ public class ItineraryGenerationExecutor {
             // 3. 일정 생성 (50%)
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 50, "장소 탐색 중...", "GENERATING");
-            ItineraryData itineraryData = aiService.generateItinerary(enrichedInput, selectedPlaces);
+            ItineraryData itineraryData = executeWithHeartbeat(emitter,
+                    () -> aiService.generateItinerary(enrichedInput, selectedPlaces));
 
             // 4. 검증 + 보강 파이프라인 (70%)
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 70, "동선 최적화 중...", "VALIDATING");
-            ItineraryData validated = validationService.validateWithRetry(itineraryData, enrichedInput, selectedPlaces);
+            ItineraryData validated = executeWithHeartbeat(emitter,
+                    () -> validationService.validateWithRetry(itineraryData, enrichedInput, selectedPlaces));
 
             // 4-1. Manual Mode: 선택 장소 포함 여부 검증
             validateSelectedPlacesIncluded(validated, selectedPlaces);
@@ -144,8 +148,34 @@ public class ItineraryGenerationExecutor {
             emitter.send(SseEmitter.event()
                     .name("progress")
                     .data(new ProgressEvent(percentage, message, stage)));
-        } catch (IOException e) {
+        } catch (IOException | IllegalStateException e) {
             log.warn("Failed to send progress event for stage {}: {}", stage, e.getMessage());
+        }
+    }
+
+    /**
+     * AI 호출처럼 오래 걸리는 작업을 실행하면서 30초마다 SSE heartbeat를 전송.
+     * Next.js 프록시 레이어가 idle 타임아웃(~120s)으로 연결을 끊는 것을 방지.
+     */
+    private <T> T executeWithHeartbeat(SseEmitter emitter, Callable<T> task) {
+        ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor();
+        ScheduledFuture<?> heartbeatFuture = heartbeat.scheduleAtFixedRate(() -> {
+            try {
+                emitter.send(SseEmitter.event().comment("heartbeat"));
+            } catch (IOException e) {
+                // emitter가 이미 닫힌 경우 — 무시
+            }
+        }, 30, 30, TimeUnit.SECONDS);
+
+        try {
+            return task.call();
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        } finally {
+            heartbeatFuture.cancel(false);
+            heartbeat.shutdown();
         }
     }
 
@@ -155,7 +185,7 @@ public class ItineraryGenerationExecutor {
                     .name("complete")
                     .data(Map.of("status", "DONE")));
             emitter.complete();
-        } catch (IOException e) {
+        } catch (IOException | IllegalStateException e) {
             log.warn("Failed to send complete event: {}", e.getMessage());
         }
     }
@@ -166,7 +196,7 @@ public class ItineraryGenerationExecutor {
                     .name("error")
                     .data(Map.of("message", message)));
             emitter.complete();
-        } catch (IOException e) {
+        } catch (IOException | IllegalStateException e) {
             log.warn("Failed to send error event: {}", e.getMessage());
         }
     }
