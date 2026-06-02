@@ -9,6 +9,8 @@ import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -34,6 +36,9 @@ public class ItineraryService {
     private static final int SHARE_EXPIRE_DAYS = 7;
 
     private final ItineraryRepository itineraryRepository;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     @Transactional(readOnly = true)
     public ItineraryResponse getItinerary(Long itineraryId, Long userId) {
@@ -109,6 +114,9 @@ public class ItineraryService {
                         "대안 장소를 찾을 수 없습니다. 이미 선택된 대안이거나 유효하지 않은 요청입니다."));
 
         step.selectAlternative(selected);
+
+        // Ensure DELETE executes before INSERT to avoid Hibernate orphanRemoval flush conflicts
+        entityManager.flush();
 
         // 교통 거리 재계산
         recalculateTransportation(itinerary.getSteps(), step);

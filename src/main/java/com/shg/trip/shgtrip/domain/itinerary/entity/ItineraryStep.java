@@ -98,10 +98,10 @@ public class ItineraryStep extends BaseTimeEntity {
         // remove 먼저 — Hibernate DELETE 예약
         this.alternatives.remove(selected);
 
-        // remove 이후 남은 목록 기준으로 새 optionOrder 계산 (충돌 방지)
-        int newOrder = this.alternatives.stream()
-                .mapToInt(AlternativeOption::getOptionOrder)
-                .max().orElse(0) + 1;
+        // remove 이후 새 optionOrder 계산: selected의 원래 order + 남은 리스트 크기 + 1
+        // 이렇게 하면 빈 리스트에서도 selected.getOptionOrder() + 1 이상이 되어
+        // removed element와 동일한 optionOrder를 피할 수 있음 (Hibernate orphanRemoval flush 충돌 방지)
+        int newOrder = selected.getOptionOrder() + this.alternatives.size() + 1;
 
         if (previousPlace != null) {
             AlternativeOption swapped = AlternativeOption.builder()

@@ -24,10 +24,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
- * Claude LLM 기반 AI 서비스 구현체.
+ * Claude LLM 기반 AI 서비스 구현체. prod 프로파일에서만 활성화.
  */
 @Slf4j
 @Service
@@ -69,7 +70,8 @@ public class ClaudeAIService implements AIService {
                     .addUserMessage(prompt)
                     .build();
 
-            Message message = anthropicClient.messages().create(params);
+            Message message = executeWithRetry(
+                    () -> anthropicClient.messages().create(params), 2);
 
             String enrichedContext = message.content().stream()
                     .filter(block -> block.isText())
@@ -114,7 +116,8 @@ public class ClaudeAIService implements AIService {
                     .toolToolChoice("generate_itinerary")
                     .build();
 
-            Message message = anthropicClient.messages().create(params);
+            Message message = executeWithRetry(
+                    () -> anthropicClient.messages().create(params), 2);
 
             // 디버깅: AI 응답 raw 내용 + 사용 토큰 확인
             log.info("generateItinerary response: stopReason={}, inputTokens={}, outputTokens={}",
@@ -188,7 +191,8 @@ public class ClaudeAIService implements AIService {
                     .toolToolChoice("generate_itinerary")
                     .build();
 
-            Message message = anthropicClient.messages().create(params);
+            Message message = executeWithRetry(
+                    () -> anthropicClient.messages().create(params), 2);
 
             log.info("enhanceItinerary response: stopReason={}, inputTokens={}, outputTokens={}",
                     message.stopReason(),
@@ -225,7 +229,8 @@ public class ClaudeAIService implements AIService {
                     .toolToolChoice("generate_itinerary")
                     .build();
 
-            Message message = anthropicClient.messages().create(params);
+            Message message = executeWithRetry(
+                    () -> anthropicClient.messages().create(params), 2);
 
             return message.content().stream()
                     .filter(block -> block.isToolUse())
@@ -293,7 +298,8 @@ public class ClaudeAIService implements AIService {
                     .addUserMessage(prompt)
                     .build();
 
-            Message message = anthropicClient.messages().create(params);
+            Message message = executeWithRetry(
+                    () -> anthropicClient.messages().create(params), 2);
 
             String responseText = message.content().stream()
                     .filter(block -> block.isText())
@@ -560,6 +566,33 @@ public class ClaudeAIService implements AIService {
             return resource.getContentAsString(StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalStateException("프롬프트 템플릿 로드 실패: " + path, e);
+        }
+    }
+
+    /**
+     * 재시도 가능한 에러(529 overloaded, 500 등)에 대해 최대 maxRetries회 재시도.
+     * Exponential backoff 적용 (1초, 2초).
+     */
+    private <T> T executeWithRetry(Supplier<T> action, int maxRetries) {
+        int attempt = 0;
+        while (true) {
+            try {
+                return action.get();
+            } catch (com.anthropic.errors.InternalServerException e) {
+                attempt++;
+                if (attempt > maxRetries) {
+                    throw e;
+                }
+                long waitMs = 1000L * attempt;
+                log.warn("Anthropic API 일시 오류 (시도 {}/{}), {}ms 후 재시도: {}",
+                        attempt, maxRetries, waitMs, e.getMessage());
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
         }
     }
 }
