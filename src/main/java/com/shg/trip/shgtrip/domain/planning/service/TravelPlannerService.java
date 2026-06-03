@@ -30,7 +30,7 @@ public class TravelPlannerService {
     private static final long SSE_TIMEOUT_MS = 600_000L;      // 10분
     private static final long EVICTION_THRESHOLD_MS = 720_000L; // 12분
 
-    private final ItineraryGenerationExecutor generationExecutor;
+    private final OptimizedGenerationExecutor optimizedGenerationExecutor;
     private final GenerationResultStore resultStore;
     private final CancellationRegistry cancellationRegistry;
 
@@ -70,7 +70,7 @@ public class TravelPlannerService {
         jobs.put(jobId, new JobEntry(emitter, userId, Instant.now()));
         activeUserJobs.put(userId, jobId);
 
-        generationExecutor.execute(jobId, request, userId, emitter);
+        optimizedGenerationExecutor.execute(jobId, request, userId, emitter);
 
         return new GenerateJobResponse(jobId);
     }

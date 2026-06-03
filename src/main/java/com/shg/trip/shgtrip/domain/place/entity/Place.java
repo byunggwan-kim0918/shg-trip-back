@@ -3,9 +3,12 @@ package com.shg.trip.shgtrip.domain.place.entity;
 import com.shg.trip.shgtrip.global.entity.BaseTimeEntity;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.List;
 
 @Entity
 @Table(name = "places")
@@ -77,6 +80,40 @@ public class Place extends BaseTimeEntity {
 
     @Column(nullable = false)
     private OffsetDateTime savedAt;
+
+    // --- LLM Optimization: 벡터 임베딩 및 배치 보강 필드 ---
+
+    /** pgvector embedding (OpenAI text-embedding-3-small: 1536 dimensions) */
+    @Column(columnDefinition = "vector(1536)", insertable = false, updatable = false)
+    private String embedding;
+
+    /** 장소 태그 (배치 보강으로 생성) */
+    @Column(columnDefinition = "TEXT[]")
+    @JdbcTypeCode(SqlTypes.ARRAY)
+    private List<String> tags;
+
+    /** 추천 시간대 (배치 보강으로 생성) */
+    @Column(name = "recommended_time_slots", columnDefinition = "TEXT[]")
+    @JdbcTypeCode(SqlTypes.ARRAY)
+    private List<String> recommendedTimeSlots;
+
+    /** 배치 보강 완료 시각 */
+    @Column(name = "enriched_at")
+    private OffsetDateTime enrichedAt;
+
+    /** 데이터 소스 ('google', 'foursquare', 'llm_generated') */
+    @Column(length = 50)
+    @Builder.Default
+    private String source = "google";
+
+    /** soft delete 활성 상태 */
+    @Column
+    @Builder.Default
+    private Boolean active = true;
+
+    /** soft delete 비활성화 시각 */
+    @Column(name = "deactivated_at")
+    private OffsetDateTime deactivatedAt;
 
     @PrePersist
     protected void onSave() {
