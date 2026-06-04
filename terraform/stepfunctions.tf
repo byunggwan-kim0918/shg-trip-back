@@ -112,9 +112,9 @@ resource "aws_sfn_state_machine" "monthly_pipeline" {
         Type     = "Task"
         Resource = "arn:aws:states:::sns:publish"
         Parameters = {
-          TopicArn   = aws_sns_topic.pipeline_alerts.arn
+          TopicArn    = aws_sns_topic.pipeline_alerts.arn
           "Message.$" = "States.Format('❌ FSQ 파이프라인 실패: {}', $.error)"
-          Subject    = "[shgtrip] FSQ 파이프라인 실패"
+          Subject     = "[shgtrip] FSQ 파이프라인 실패"
         }
         End = true
       }

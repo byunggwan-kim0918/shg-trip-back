@@ -35,8 +35,8 @@ resource "aws_ecs_task_definition" "fsq_extractor" {
   family                   = "${var.project}-fsq-extractor"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "1024"  # 1 vCPU
-  memory                   = "2048"  # 2 GB
+  cpu                      = "1024" # 1 vCPU
+  memory                   = "2048" # 2 GB
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.fsq_extractor_task.arn
 
@@ -45,9 +45,9 @@ resource "aws_ecs_task_definition" "fsq_extractor" {
     image = "${aws_ecr_repository.fsq_extractor.repository_url}:latest"
 
     environment = [
-      { name = "S3_BUCKET",   value = aws_s3_bucket.data.bucket },
-      { name = "S3_PREFIX",   value = "foursquare" },
-      { name = "AWS_REGION",  value = var.aws_region },
+      { name = "S3_BUCKET", value = aws_s3_bucket.data.bucket },
+      { name = "S3_PREFIX", value = "foursquare" },
+      { name = "AWS_REGION", value = var.aws_region },
     ]
 
     secrets = [{
@@ -79,8 +79,8 @@ resource "aws_ecs_task_definition" "batch" {
   family                   = "${var.project}-batch"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "2048"  # 2 vCPU (임베딩 생성 고려)
-  memory                   = "4096"  # 4 GB
+  cpu                      = "2048" # 2 vCPU (임베딩 생성 고려)
+  memory                   = "4096" # 4 GB
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.batch_task.arn
 
@@ -89,10 +89,10 @@ resource "aws_ecs_task_definition" "batch" {
     image = "${aws_ecr_repository.batch.repository_url}:latest"
 
     environment = [
-      { name = "SPRING_PROFILES_ACTIVE",    value = "batch" },
-      { name = "BATCH_FOURSQUARE_SOURCE",   value = "s3" },
-      { name = "BATCH_FOURSQUARE_S3_BUCKET",value = aws_s3_bucket.data.bucket },
-      { name = "AWS_REGION",                value = var.aws_region },
+      { name = "SPRING_PROFILES_ACTIVE", value = "batch" },
+      { name = "BATCH_FOURSQUARE_SOURCE", value = "s3" },
+      { name = "BATCH_FOURSQUARE_S3_BUCKET", value = aws_s3_bucket.data.bucket },
+      { name = "AWS_REGION", value = var.aws_region },
     ]
 
     logConfiguration = {

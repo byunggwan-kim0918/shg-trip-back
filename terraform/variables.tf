@@ -25,5 +25,5 @@ variable "fsq_access_token" {
 variable "github_repo" {
   description = "GitHub 저장소 (owner/repo 형식)"
   type        = string
-  default     = "kbg0918/shg-trip-back"
+  default     = "byunggwan-kim0918/shg-trip-back"
 }

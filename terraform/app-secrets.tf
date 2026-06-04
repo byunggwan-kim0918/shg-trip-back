@@ -50,8 +50,8 @@ resource "aws_iam_role_policy" "ecs_execution_secrets" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["secretsmanager:GetSecretValue"]
+      Effect = "Allow"
+      Action = ["secretsmanager:GetSecretValue"]
       Resource = [
         aws_secretsmanager_secret.app_prod.arn,
         aws_secretsmanager_secret.fsq_token.arn,

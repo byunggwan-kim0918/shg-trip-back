@@ -27,7 +27,7 @@ resource "aws_elasticache_cluster" "main" {
   security_group_ids = var.vpc_security_group_ids
 
   snapshot_retention_limit = 1
-  snapshot_window          = "19:00-20:00"  # UTC
+  snapshot_window          = "19:00-20:00" # UTC
 
   tags = {
     Project = var.project

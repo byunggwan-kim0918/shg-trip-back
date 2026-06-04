@@ -29,8 +29,8 @@ resource "aws_iam_role_policy" "fsq_extractor_task" {
     Statement = [
       {
         # S3 CSV 업로드
-        Effect   = "Allow"
-        Action   = ["s3:PutObject", "s3:GetObject", "s3:ListBucket"]
+        Effect = "Allow"
+        Action = ["s3:PutObject", "s3:GetObject", "s3:ListBucket"]
         Resource = [
           aws_s3_bucket.data.arn,
           "${aws_s3_bucket.data.arn}/foursquare/*"
@@ -66,8 +66,8 @@ resource "aws_iam_role_policy" "batch_task" {
     Statement = [
       {
         # S3 CSV 읽기 + 이미지 업로드
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:ListBucket", "s3:PutObject"]
+        Effect = "Allow"
+        Action = ["s3:GetObject", "s3:ListBucket", "s3:PutObject"]
         Resource = [
           aws_s3_bucket.data.arn,
           "${aws_s3_bucket.data.arn}/*"
@@ -127,8 +127,8 @@ resource "aws_iam_role_policy" "sfn_pipeline" {
         Resource = "*"
       },
       {
-        Effect   = "Allow"
-        Action   = ["iam:PassRole"]
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
         Resource = [
           aws_iam_role.ecs_execution.arn,
           aws_iam_role.fsq_extractor_task.arn,

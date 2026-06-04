@@ -36,11 +36,11 @@ resource "aws_db_instance" "main" {
   parameter_group_name = aws_db_parameter_group.postgres15.name
 
   backup_retention_period = 7
-  backup_window           = "18:00-19:00"  # UTC (= 03:00 KST)
+  backup_window           = "18:00-19:00" # UTC (= 03:00 KST)
   maintenance_window      = "Mon:19:00-Mon:20:00"
 
-  deletion_protection = true
-  skip_final_snapshot = false
+  deletion_protection       = true
+  skip_final_snapshot       = false
   final_snapshot_identifier = "${var.project}-postgres-final"
 
   tags = {
