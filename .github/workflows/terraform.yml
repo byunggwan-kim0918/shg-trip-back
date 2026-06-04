@@ -47,6 +47,9 @@ jobs:
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform init -input=false
 
+      - name: Download tfvars from S3
+        run: aws s3 cp s3://shgtrip-terraform-state/config/terraform.tfvars terraform/terraform.tfvars
+
       - name: Terraform Validate
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform validate
@@ -55,8 +58,6 @@ jobs:
         id: plan
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform plan -no-color -input=false -out=tfplan
-        env:
-          TF_VAR_fsq_access_token: ${{ secrets.FSQ_ACCESS_TOKEN }}
 
       - name: Comment Plan on PR
         uses: actions/github-script@v7
@@ -97,8 +98,9 @@ jobs:
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform init -input=false
 
+      - name: Download tfvars from S3
+        run: aws s3 cp s3://shgtrip-terraform-state/config/terraform.tfvars terraform/terraform.tfvars
+
       - name: Terraform Apply
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform apply -auto-approve -input=false
-        env:
-          TF_VAR_fsq_access_token: ${{ secrets.FSQ_ACCESS_TOKEN }}
