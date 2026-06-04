@@ -35,7 +35,7 @@ resource "aws_db_instance" "main" {
   password = var.db_password
 
   db_subnet_group_name   = aws_db_subnet_group.main.name
-  vpc_security_group_ids = var.vpc_security_group_ids
+  vpc_security_group_ids = ["sg-0be93287071b925cb"]
 
   parameter_group_name         = "default.postgres18"
   performance_insights_enabled = true
