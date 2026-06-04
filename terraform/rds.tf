@@ -11,6 +11,11 @@ variable "db_password" {
   sensitive   = true
 }
 
+variable "db_security_group_ids" {
+  description = "RDS에 적용할 보안그룹 ID 목록"
+  type        = list(string)
+}
+
 resource "aws_db_subnet_group" "main" {
   name       = "shgtrip-db-subnet"
   subnet_ids = var.vpc_subnet_ids
@@ -35,7 +40,7 @@ resource "aws_db_instance" "main" {
   password = var.db_password
 
   db_subnet_group_name   = aws_db_subnet_group.main.name
-  vpc_security_group_ids = var.vpc_security_group_ids
+  vpc_security_group_ids = var.db_security_group_ids
 
   parameter_group_name         = "default.postgres18"
   performance_insights_enabled = true
