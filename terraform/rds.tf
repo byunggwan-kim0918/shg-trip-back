@@ -40,7 +40,7 @@ resource "aws_db_instance" "main" {
   parameter_group_name         = "default.postgres18"
   performance_insights_enabled = true
 
-  backup_retention_period = 7
+  backup_retention_period = 1
   backup_window           = "18:00-19:00"
   maintenance_window      = "mon:19:00-mon:20:00"
 
