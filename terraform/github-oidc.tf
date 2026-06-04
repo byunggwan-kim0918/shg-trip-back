@@ -63,14 +63,14 @@ data "aws_iam_policy_document" "github_deploy_assume" {
       variable = "token.actions.githubusercontent.com:aud"
       values   = ["sts.amazonaws.com"]
     }
-    # pull_request: closed 트리거는 sub가 "repo:...:pull/N/merge" 형태로 오므로
-    # StringLike + pull/* 패턴으로 허용. main 브랜치 PR만 받도록 워크플로우에서 제한.
+    # push: main 트리거 + environment: production 사용 시
+    # sub가 "repo:...:environment:production" 형태로 옴
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.github_repo}:pull/*",
         "repo:${var.github_repo}:ref:refs/heads/main",
+        "repo:${var.github_repo}:environment:production",
       ]
     }
   }
