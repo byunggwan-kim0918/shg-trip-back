@@ -1,9 +1,8 @@
 name: Deploy Backend
 
 on:
-  pull_request:
+  push:
     branches: [main]
-    types: [closed]
     paths-ignore:
       - 'terraform/**'
       - 'docs/**'
@@ -19,8 +18,6 @@ permissions:
 
 jobs:
   build-and-deploy:
-    # 실제 merge된 PR만 처리 (closed but not merged는 무시)
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     environment: production
 
