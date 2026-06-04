@@ -30,7 +30,7 @@ public class GooglePlacesClient {
     private static final String FIELD_MASK =
             "places.id,places.displayName,places.formattedAddress,places.location," +
             "places.rating,places.priceLevel,places.regularOpeningHours," +
-            "places.photos,places.googleMapsUri,places.types";
+            "places.photos,places.googleMapsUri,places.types,places.editorialSummary";
 
     /**
      * 장소명으로 Text Search 후 첫 번째 결과의 상세 정보 반환.

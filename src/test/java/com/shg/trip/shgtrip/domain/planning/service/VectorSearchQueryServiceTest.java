@@ -184,8 +184,8 @@ class VectorSearchQueryServiceTest {
 
             List<VectorSearchRequest> requests = requestCaptor.getAllValues();
             // Each region search should have a subset limit
-            assertThat(requests.get(0).limit()).isEqualTo(40); // 80 / 2
-            assertThat(requests.get(1).limit()).isEqualTo(40);
+            assertThat(requests.get(0).limit()).isEqualTo(35); // 70 / 2
+            assertThat(requests.get(1).limit()).isEqualTo(35);
         }
 
         @Test
@@ -224,42 +224,42 @@ class VectorSearchQueryServiceTest {
     class CalculateTotalLimitTests {
 
         @Test
-        @DisplayName("3일 여행: days*20=60 → 60 반환")
-        void threeDayTrip_returns60() {
+        @DisplayName("3일 여행: days*10=30 → 30 반환")
+        void threeDayTrip_returns30() {
             VectorEnrichedInput input = createBasicInput(3);
-            assertThat(service.calculateTotalLimit(input)).isEqualTo(60);
+            assertThat(service.calculateTotalLimit(input)).isEqualTo(30);
         }
 
         @Test
-        @DisplayName("4일 여행: days*20=80 → 80 반환")
-        void fourDayTrip_returns80() {
+        @DisplayName("4일 여행: days*10=40 → 40 반환")
+        void fourDayTrip_returns40() {
             VectorEnrichedInput input = createBasicInput(4);
-            assertThat(service.calculateTotalLimit(input)).isEqualTo(80);
+            assertThat(service.calculateTotalLimit(input)).isEqualTo(40);
         }
 
         @Test
-        @DisplayName("5일 여행: days*20=100 → cap 80 반환")
-        void fiveDayTrip_cappedAt80() {
+        @DisplayName("5일 여행: days*10=50 → 50 반환")
+        void fiveDayTrip_returns50() {
             VectorEnrichedInput input = createBasicInput(5);
-            assertThat(service.calculateTotalLimit(input)).isEqualTo(80);
+            assertThat(service.calculateTotalLimit(input)).isEqualTo(50);
         }
 
         @Test
-        @DisplayName("1일 여행: days*20=20 → min 60 반환")
-        void oneDayTrip_minIs60() {
+        @DisplayName("1일 여행: days*10=10 → min 30 반환")
+        void oneDayTrip_minIs30() {
             VectorEnrichedInput input = createBasicInput(1);
-            assertThat(service.calculateTotalLimit(input)).isEqualTo(60);
+            assertThat(service.calculateTotalLimit(input)).isEqualTo(30);
         }
 
         @Test
-        @DisplayName("2일 여행: days*20=40 → min 60 반환")
-        void twoDayTrip_minIs60() {
+        @DisplayName("2일 여행: days*10=20 → min 30 반환")
+        void twoDayTrip_minIs30() {
             VectorEnrichedInput input = createBasicInput(2);
-            assertThat(service.calculateTotalLimit(input)).isEqualTo(60);
+            assertThat(service.calculateTotalLimit(input)).isEqualTo(30);
         }
 
         @Test
-        @DisplayName("날짜가 null이면 기본값 3일 적용 → 60")
+        @DisplayName("날짜가 null이면 기본값 3일 적용 → 30")
         void nullDates_defaultsTo3Days() {
             VectorEnrichedInput input = new VectorEnrichedInput(
                     "도쿄", List.of("관광"), List.of("관광"), "normal",
@@ -268,7 +268,7 @@ class VectorSearchQueryServiceTest {
                     "도쿄", "일본", null, List.of("관광"), null,
                     "MEDIUM", null, null
             );
-            assertThat(service.calculateTotalLimit(input)).isEqualTo(60);
+            assertThat(service.calculateTotalLimit(input)).isEqualTo(30);
         }
     }
 

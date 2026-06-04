@@ -27,6 +27,19 @@ public class PlaceRefreshService {
     @Async
     @Transactional
     public void refreshAsync(Long placeId, String placeName) {
+        refreshInternal(placeId, placeName);
+    }
+
+    /**
+     * 장소 데이터를 Google Places API로 동기 갱신.
+     * CompletableFuture 병렬 호출에서 사용된다.
+     */
+    @Transactional
+    public void refreshSync(Long placeId, String placeName) {
+        refreshInternal(placeId, placeName);
+    }
+
+    private void refreshInternal(Long placeId, String placeName) {
         try {
             googlePlacesClient.searchAndGetDetail(placeName).ifPresent(detail -> {
                 placeRepository.findById(placeId).ifPresent(place -> {

@@ -21,10 +21,16 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class OptimizedGenerationExecutorTest {
 
 @ExtendWith(MockitoExtension.class)
 class OptimizedGenerationExecutorTest {
@@ -40,6 +46,10 @@ class OptimizedGenerationExecutorTest {
     @Mock private GenerationResultStore resultStore;
     @Mock private CancellationRegistry cancellationRegistry;
     @Mock private PlaceFreshnessFilter placeFreshnessFilter;
+    @Mock private com.shg.trip.shgtrip.domain.place.service.PlaceRefreshService placeRefreshService;
+    @Mock private com.shg.trip.shgtrip.domain.place.repository.PlaceRepository placeRepository;
+    @Mock private Executor googleSyncExecutor;
+    @Mock private ScheduledExecutorService sseHeartbeatScheduler;
 
     @InjectMocks
     private OptimizedGenerationExecutor executor;
@@ -54,6 +64,11 @@ class OptimizedGenerationExecutorTest {
 
     @BeforeEach
     void setUp() {
+        // heartbeat 스케줄러 stub — 실제 스케줄링 없이 즉시 반환
+        ScheduledFuture<?> noopFuture = mock(ScheduledFuture.class);
+        doReturn(noopFuture).when(sseHeartbeatScheduler)
+                .scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any());
+
         request = new ItineraryGenerateRequest(
                 ItineraryGenerateRequest.PlanningMode.AUTO,
                 "도쿄",
@@ -124,11 +139,12 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
-        when(indexBasedItineraryGenerator.generate(vectorEnrichedInput, candidates)).thenReturn(generatedOutput);
-        when(indexResultMapper.mergeIndexOutput(generatedOutput, candidates)).thenReturn(itineraryData);
-        when(hardValidator.validate(itineraryData)).thenReturn(HardValidationResult.pass());
         when(placeFreshnessFilter.filter(candidates)).thenReturn(
                 new PlaceFreshnessResult(candidates, List.of()));
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of());
+        when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
+        when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), anyList())).thenReturn(itineraryData);
+        when(hardValidator.validate(itineraryData)).thenReturn(HardValidationResult.pass());
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(42L);
@@ -141,8 +157,8 @@ class OptimizedGenerationExecutorTest {
         verify(optimizedClaudeAIService).enrichInput(request);
         verify(vectorSearchQueryService).search(vectorEnrichedInput);
         verify(fallbackDecider).shouldFallback(candidates, vectorEnrichedInput.categories());
-        verify(indexBasedItineraryGenerator).generate(vectorEnrichedInput, candidates);
-        verify(indexResultMapper).mergeIndexOutput(generatedOutput, candidates);
+        verify(indexBasedItineraryGenerator).generate(eq(vectorEnrichedInput), anyList());
+        verify(indexResultMapper).mergeIndexOutput(eq(generatedOutput), anyList());
         verify(hardValidator).validate(itineraryData);
         verify(saveHelper).save(eq(itineraryData), any(EnrichedInput.class), eq(1L));
         verify(resultStore).save("job-1", 42L);
@@ -193,10 +209,13 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
-        when(indexBasedItineraryGenerator.generate(vectorEnrichedInput, candidates)).thenReturn(generatedOutput);
+        when(placeFreshnessFilter.filter(candidates)).thenReturn(
+                new PlaceFreshnessResult(candidates, List.of()));
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of());
+        when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
 
         ItineraryData invalidData = new ItineraryData("invalid", "도쿄", BigDecimal.ZERO, List.of(), List.of());
-        when(indexResultMapper.mergeIndexOutput(generatedOutput, candidates)).thenReturn(invalidData);
+        when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), anyList())).thenReturn(invalidData);
         when(hardValidator.validate(invalidData)).thenReturn(HardValidationResult.fail("stepOrder 연속성 위반"));
 
         // 재생성 결과
@@ -204,12 +223,10 @@ class OptimizedGenerationExecutorTest {
                 "도쿄 재생성", "도쿄", new BigDecimal("1800000"), List.of("맛집"),
                 List.of(new IndexStepData(1, 1, "09:00", "11:00", 1, List.of(2),
                         "WALK", 10, BigDecimal.ONE, BigDecimal.ZERO, "관광", BigDecimal.ZERO)));
-        when(indexBasedItineraryGenerator.regenerate(vectorEnrichedInput, candidates, "stepOrder 연속성 위반"))
+        when(indexBasedItineraryGenerator.regenerate(eq(vectorEnrichedInput), anyList(), eq("stepOrder 연속성 위반")))
                 .thenReturn(regeneratedOutput);
-        when(indexResultMapper.mergeIndexOutput(regeneratedOutput, candidates)).thenReturn(itineraryData);
+        when(indexResultMapper.mergeIndexOutput(eq(regeneratedOutput), anyList())).thenReturn(itineraryData);
         when(hardValidator.validate(itineraryData)).thenReturn(HardValidationResult.pass());
-        when(placeFreshnessFilter.filter(candidates)).thenReturn(
-                new PlaceFreshnessResult(candidates, List.of()));
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(99L);
@@ -219,8 +236,8 @@ class OptimizedGenerationExecutorTest {
         executor.execute("job-4", request, 1L, emitter);
 
         // then
-        verify(indexBasedItineraryGenerator).generate(vectorEnrichedInput, candidates);
-        verify(indexBasedItineraryGenerator).regenerate(vectorEnrichedInput, candidates, "stepOrder 연속성 위반");
+        verify(indexBasedItineraryGenerator).generate(eq(vectorEnrichedInput), anyList());
+        verify(indexBasedItineraryGenerator).regenerate(eq(vectorEnrichedInput), anyList(), eq("stepOrder 연속성 위반"));
         verify(saveHelper).save(eq(itineraryData), any(EnrichedInput.class), eq(1L));
         verify(resultStore).save("job-4", 99L);
     }
@@ -233,26 +250,29 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
-        when(indexBasedItineraryGenerator.generate(vectorEnrichedInput, candidates)).thenReturn(generatedOutput);
+        when(placeFreshnessFilter.filter(candidates)).thenReturn(
+                new PlaceFreshnessResult(candidates, List.of()));
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of());
+        when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
 
         ItineraryData invalidData = new ItineraryData("bad", "도쿄", BigDecimal.ZERO, List.of(), List.of());
-        when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), eq(candidates))).thenReturn(invalidData);
+        when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), anyList())).thenReturn(invalidData);
         when(hardValidator.validate(invalidData)).thenReturn(HardValidationResult.fail("시간 형식 오류"));
 
         IndexBasedItineraryOutput regeneratedOutput = new IndexBasedItineraryOutput(
                 "도쿄 재생성2", "도쿄", BigDecimal.ZERO, List.of(), List.of());
-        when(indexBasedItineraryGenerator.regenerate(vectorEnrichedInput, candidates, "시간 형식 오류"))
+        when(indexBasedItineraryGenerator.regenerate(eq(vectorEnrichedInput), anyList(), eq("시간 형식 오류")))
                 .thenReturn(regeneratedOutput);
 
         ItineraryData stillInvalid = new ItineraryData("still bad", "도쿄", BigDecimal.ZERO, List.of(), List.of());
-        when(indexResultMapper.mergeIndexOutput(regeneratedOutput, candidates)).thenReturn(stillInvalid);
+        when(indexResultMapper.mergeIndexOutput(eq(regeneratedOutput), anyList())).thenReturn(stillInvalid);
         when(hardValidator.validate(stillInvalid)).thenReturn(HardValidationResult.fail("여전히 오류"));
 
         // when
         executor.execute("job-5", request, 1L, emitter);
 
         // then
-        verify(indexBasedItineraryGenerator).regenerate(vectorEnrichedInput, candidates, "시간 형식 오류");
+        verify(indexBasedItineraryGenerator).regenerate(eq(vectorEnrichedInput), anyList(), eq("시간 형식 오류"));
         verify(saveHelper, never()).save(any(), any(), anyLong());
     }
 
@@ -294,11 +314,12 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
-        when(indexBasedItineraryGenerator.generate(vectorEnrichedInput, candidates)).thenReturn(generatedOutput);
-        when(indexResultMapper.mergeIndexOutput(generatedOutput, candidates)).thenReturn(itineraryData);
-        when(hardValidator.validate(itineraryData)).thenReturn(HardValidationResult.pass());
         when(placeFreshnessFilter.filter(candidates)).thenReturn(
                 new PlaceFreshnessResult(candidates, List.of()));
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of());
+        when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
+        when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), anyList())).thenReturn(itineraryData);
+        when(hardValidator.validate(itineraryData)).thenReturn(HardValidationResult.pass());
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(50L);

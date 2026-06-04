@@ -32,9 +32,9 @@ public class VectorSearchQueryService {
 
     private static final Logger log = LoggerFactory.getLogger(VectorSearchQueryService.class);
 
-    private static final int MIN_PER_CATEGORY = 15;
+    private static final int MIN_PER_CATEGORY = 10;
     private static final int MAX_PER_CATEGORY = 20;
-    private static final int MIN_TOTAL = 60;
+    private static final int MIN_TOTAL = 30;
     private static final int MAX_TOTAL = 80;
 
     private final EmbeddingService embeddingService;
@@ -80,7 +80,7 @@ public class VectorSearchQueryService {
      */
     int calculateTotalLimit(VectorEnrichedInput input) {
         long days = calculateTripDays(input);
-        int calculated = (int) (days * 20);
+        int calculated = (int) (days * 10);
         return Math.max(MIN_TOTAL, Math.min(calculated, MAX_TOTAL));
     }
 

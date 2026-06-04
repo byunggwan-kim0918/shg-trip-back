@@ -27,14 +27,13 @@ class BatchJobRunnerTest {
     private BatchJobRunner batchJobRunner;
 
     @Test
-    @DisplayName("배치 파이프라인은 시딩 → 임베딩 → 태그보강 순서로 실행된다")
+    @DisplayName("배치 파이프라인은 시딩 → 임베딩 순서로 실행된다 (enrich 비활성화 시)")
     void run_executesInCorrectOrder() throws Exception {
         batchJobRunner.run();
 
-        InOrder inOrder = inOrder(foursquareSeeder, embeddingBatchJob, batchEnrichScheduler);
+        InOrder inOrder = inOrder(foursquareSeeder, embeddingBatchJob);
         inOrder.verify(foursquareSeeder).seed();
         inOrder.verify(embeddingBatchJob).execute();
-        inOrder.verify(batchEnrichScheduler).enrich();
     }
 
     @Test
@@ -54,10 +53,10 @@ class BatchJobRunnerTest {
     }
 
     @Test
-    @DisplayName("BatchEnrichScheduler.enrich()가 호출된다")
-    void run_callsBatchEnrichScheduler() throws Exception {
+    @DisplayName("enrichEnabled=false이면 BatchEnrichScheduler.enrich()가 호출되지 않는다")
+    void run_enrichDisabled_doesNotCallBatchEnrichScheduler() throws Exception {
         batchJobRunner.run();
 
-        verify(batchEnrichScheduler).enrich();
+        verify(batchEnrichScheduler, org.mockito.Mockito.never()).enrich();
     }
 }

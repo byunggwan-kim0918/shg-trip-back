@@ -49,7 +49,7 @@ class PlaceFreshnessFilterTest {
         );
     }
 
-    private Place createPlace(Long id, String name, OffsetDateTime savedAt) {
+    private Place createPlace(Long id, String name, OffsetDateTime googleSyncedAt) {
         return Place.builder()
                 .id(id)
                 .name(name)
@@ -57,7 +57,8 @@ class PlaceFreshnessFilterTest {
                 .latitude(BigDecimal.valueOf(35.6))
                 .longitude(BigDecimal.valueOf(139.7))
                 .category("관광")
-                .savedAt(savedAt)
+                .savedAt(OffsetDateTime.now())
+                .googleSyncedAt(googleSyncedAt)
                 .build();
     }
 

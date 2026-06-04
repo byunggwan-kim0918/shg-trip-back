@@ -2,6 +2,9 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
+import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
+import com.shg.trip.shgtrip.domain.place.service.PlaceRefreshService;
 import com.shg.trip.shgtrip.domain.planning.dto.*;
 import com.shg.trip.shgtrip.domain.planning.service.ai.IndexBasedItineraryGenerator;
 import com.shg.trip.shgtrip.domain.planning.service.ai.OptimizedClaudeAIService;
@@ -13,9 +16,12 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * 최적화된 일정 생성 파이프라인 실행기.
@@ -40,6 +46,8 @@ public class OptimizedGenerationExecutor {
     private final GenerationResultStore resultStore;
     private final CancellationRegistry cancellationRegistry;
     private final PlaceFreshnessFilter placeFreshnessFilter;
+    private final PlaceRefreshService placeRefreshService;
+    private final PlaceRepository placeRepository;
 
     /**
      * 비동기 최적화 일정 생성 파이프라인.
@@ -81,17 +89,29 @@ public class OptimizedGenerationExecutor {
                 return;
             }
 
-            // 4. 벡터 경로: 인덱스 기반 일정 생성 (Sonnet 1회)
+            // 4. Google Places 동기화 (stale 장소 병렬 호출)
+            if (cancellationRegistry.isCancelled(jobId)) return;
+            sendSseEvent(emitter, "syncing_places", 40, "장소 정보를 동기화하고 있습니다...");
+
+            PlaceFreshnessResult freshnessResult = placeFreshnessFilter.filter(candidates);
+            if (!freshnessResult.stalePlaces().isEmpty()) {
+                syncStalePlaces(freshnessResult.stalePlaces());
+            }
+
+            // 동기화 후 DB 최신 데이터(rating, priceLevel, openingHours)를 candidates에 반영
+            List<PlaceCandidate> enrichedCandidates = enrichCandidatesFromDb(candidates);
+
+            // 5. 벡터 경로: 인덱스 기반 일정 생성 (Sonnet 1회)
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "generating_itinerary", 50, "일정을 생성하고 있습니다...");
 
             IndexBasedItineraryOutput generatedOutput = executeWithHeartbeat(emitter,
-                    () -> indexBasedItineraryGenerator.generate(enrichedInput, candidates));
+                    () -> indexBasedItineraryGenerator.generate(enrichedInput, enrichedCandidates));
 
-            // 5. 인덱스 → 장소 데이터 결합 (placeIndex 범위 초과 시 재생성 경로로 전환)
+            // 6. 인덱스 → 장소 데이터 결합 (placeIndex 범위 초과 시 재생성 경로로 전환)
             ItineraryData itineraryData;
             try {
-                itineraryData = indexResultMapper.mergeIndexOutput(generatedOutput, candidates);
+                itineraryData = indexResultMapper.mergeIndexOutput(generatedOutput, enrichedCandidates);
             } catch (IllegalArgumentException e) {
                 // placeIndex가 범위 밖 → 재생성 시도
                 log.info("IndexResultMapper 범위 초과 에러, 1회 재생성 시도: {}", e.getMessage());
@@ -101,10 +121,10 @@ public class OptimizedGenerationExecutor {
 
                 IndexBasedItineraryOutput regeneratedOutput = executeWithHeartbeat(emitter,
                         () -> indexBasedItineraryGenerator.regenerate(
-                                enrichedInput, candidates, e.getMessage()));
+                                enrichedInput, enrichedCandidates, e.getMessage()));
 
                 try {
-                    itineraryData = indexResultMapper.mergeIndexOutput(regeneratedOutput, candidates);
+                    itineraryData = indexResultMapper.mergeIndexOutput(regeneratedOutput, enrichedCandidates);
                 } catch (IllegalArgumentException e2) {
                     log.error("재생성 후에도 인덱스 범위 초과: {}", e2.getMessage());
                     sendSseError(emitter, "VALIDATION_FAILED",
@@ -125,10 +145,10 @@ public class OptimizedGenerationExecutor {
 
                 IndexBasedItineraryOutput regeneratedOutput = executeWithHeartbeat(emitter,
                         () -> indexBasedItineraryGenerator.regenerate(
-                                enrichedInput, candidates, validationResult.failureReason()));
+                                enrichedInput, enrichedCandidates, validationResult.failureReason()));
 
                 try {
-                    itineraryData = indexResultMapper.mergeIndexOutput(regeneratedOutput, candidates);
+                    itineraryData = indexResultMapper.mergeIndexOutput(regeneratedOutput, enrichedCandidates);
                 } catch (IllegalArgumentException e) {
                     log.error("재생성 후 인덱스 범위 초과: {}", e.getMessage());
                     sendSseError(emitter, "VALIDATION_FAILED",
@@ -145,24 +165,14 @@ public class OptimizedGenerationExecutor {
                 }
             }
 
-            // 7. Freshness 필터 + Google Places 갱신
-            if (cancellationRegistry.isCancelled(jobId)) return;
-            sendSseEvent(emitter, "refreshing_places", 80, "장소 정보를 갱신하고 있습니다...");
-
-            PlaceFreshnessResult freshnessResult = placeFreshnessFilter.filter(candidates);
-            for (PlaceCandidate staleCandidate : freshnessResult.stalePlaces()) {
-                log.debug("Stale place identified for refresh: placeId={}, name={}",
-                        staleCandidate.placeId(), staleCandidate.name());
-            }
-
-            // 8. 저장
+            // 7. 저장
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "saving", 90, "일정을 저장하고 있습니다...");
 
             EnrichedInput legacyInput = toLegacyEnrichedInput(enrichedInput);
             Itinerary saved = saveHelper.save(itineraryData, legacyInput, userId);
 
-            // 9. 완료
+            // 8. 완료
             resultStore.save(jobId, saved.getId());
             sendSseEvent(emitter, "completed", 100, "일정 생성이 완료되었습니다.");
             sendComplete(emitter);
@@ -177,6 +187,62 @@ public class OptimizedGenerationExecutor {
     }
 
     // ── Private helpers ──
+
+    /**
+     * stale 장소들을 병렬로 Google Places 동기화한다.
+     * 동기화 실패 시 해당 장소를 건너뛰고 계속 진행한다 (best-effort).
+     */
+    private void syncStalePlaces(List<PlaceCandidate> stalePlaces) {
+        log.info("Google Places 동기화 시작: {}건", stalePlaces.size());
+
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (PlaceCandidate candidate : stalePlaces) {
+            if (candidate.placeId() == null) continue;
+            futures.add(CompletableFuture.runAsync(() ->
+                    placeRefreshService.refreshSync(candidate.placeId(), candidate.name())
+            ));
+        }
+
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                    .get(10, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            log.warn("Google Places 동기화 타임아웃 (10초), 동기화된 장소만 사용");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Google Places 동기화 인터럽트");
+        } catch (ExecutionException e) {
+            log.warn("Google Places 동기화 중 일부 실패: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 동기화 후 candidates를 DB의 최신 데이터(rating, priceLevel, openingHours)로 갱신한다.
+     */
+    private List<PlaceCandidate> enrichCandidatesFromDb(List<PlaceCandidate> candidates) {
+        List<Long> placeIds = candidates.stream()
+                .map(PlaceCandidate::placeId)
+                .filter(id -> id != null)
+                .distinct()
+                .collect(Collectors.toList());
+
+        Map<Long, Place> placeMap = placeRepository.findAllById(placeIds).stream()
+                .collect(Collectors.toMap(Place::getId, Function.identity()));
+
+        return candidates.stream().map(c -> {
+            Place place = c.placeId() != null ? placeMap.get(c.placeId()) : null;
+            if (place == null) return c;
+            return new PlaceCandidate(
+                    c.index(), c.placeId(), c.name(), c.address(), c.category(),
+                    c.tags(), c.region(), c.country(), c.latitude(), c.longitude(),
+                    place.getDescription() != null ? place.getDescription() : c.description(),
+                    place.getRating() != null ? place.getRating() : c.rating(),
+                    c.similarityScore(),
+                    place.getPriceLevel(),
+                    place.getOpeningHours()
+            );
+        }).collect(Collectors.toList());
+    }
 
     /**
      * VectorEnrichedInput → EnrichedInput 변환.

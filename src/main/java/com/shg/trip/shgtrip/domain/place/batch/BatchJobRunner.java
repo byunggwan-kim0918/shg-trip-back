@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.place.batch;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
@@ -24,9 +25,12 @@ public class BatchJobRunner implements CommandLineRunner {
 
     private final FoursquareSeeder foursquareSeeder;
 
+    @Value("${batch.enrich.enabled:false}")
+    private boolean enrichEnabled;
+
     @Override
     public void run(String... args) {
-        log.info("=== 배치 파이프라인 시작 ===");
+        log.info("=== 배치 파이프라인 시작 (enrich.enabled={}) ===", enrichEnabled);
 
         // [1/3] Foursquare 시딩 — 예외 격리
         log.info("[1/3] Foursquare 장소 시딩 시작");

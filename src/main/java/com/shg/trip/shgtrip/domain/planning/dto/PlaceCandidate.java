@@ -20,5 +20,18 @@ public record PlaceCandidate(
         BigDecimal longitude,
         String description,
         BigDecimal rating,
-        double similarityScore  // cosine 유사도
-) {}
+        double similarityScore, // cosine 유사도
+        Integer priceLevel,     // Google Places 가격 수준 (1~4)
+        String openingHours     // Google Places 영업시간
+) {
+    /**
+     * priceLevel, openingHours 없이 생성하는 기존 호환 생성자.
+     */
+    public PlaceCandidate(int index, Long placeId, String name, String address,
+                          String category, List<String> tags, String region, String country,
+                          BigDecimal latitude, BigDecimal longitude, String description,
+                          BigDecimal rating, double similarityScore) {
+        this(index, placeId, name, address, category, tags, region, country,
+                latitude, longitude, description, rating, similarityScore, null, null);
+    }
+}

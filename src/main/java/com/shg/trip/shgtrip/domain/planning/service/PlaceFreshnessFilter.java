@@ -34,6 +34,7 @@ public class PlaceFreshnessFilter {
 
     /**
      * 후보 장소들을 freshness 기준으로 fresh/stale로 분류한다.
+     * googleSyncedAt 기준으로 판단: null이면 미동기화, 7일 초과면 stale.
      *
      * @param candidates 벡터 검색으로 조회된 후보 장소 목록
      * @return fresh(재사용 가능)과 stale(Google API 호출 대상) 분류 결과
@@ -50,7 +51,7 @@ public class PlaceFreshnessFilter {
                 .distinct()
                 .collect(Collectors.toList());
 
-        // DB에서 해당 장소들 조회하여 savedAt 확인
+        // DB에서 해당 장소들 조회하여 googleSyncedAt 확인
         Map<Long, Place> placeMap = placeRepository.findAllById(placeIds).stream()
                 .collect(Collectors.toMap(Place::getId, Function.identity()));
 
@@ -61,23 +62,19 @@ public class PlaceFreshnessFilter {
 
         for (PlaceCandidate candidate : candidates) {
             if (candidate.placeId() == null) {
-                // placeId가 null → MISSING → stale로 분류
                 stalePlaces.add(candidate);
                 continue;
             }
 
             Place place = placeMap.get(candidate.placeId());
             if (place == null) {
-                // DB에서 찾을 수 없음 → MISSING → stale로 분류
                 stalePlaces.add(candidate);
                 log.debug("Place not found in DB: placeId={}, name={}", candidate.placeId(), candidate.name());
-            } else if (place.getSavedAt() == null || place.getSavedAt().isBefore(freshnessThreshold)) {
-                // savedAt이 7일 초과 → STALE
+            } else if (place.getGoogleSyncedAt() == null || place.getGoogleSyncedAt().isBefore(freshnessThreshold)) {
                 stalePlaces.add(candidate);
-                log.debug("Stale place: placeId={}, name={}, savedAt={}",
-                        candidate.placeId(), candidate.name(), place.getSavedAt());
+                log.debug("Stale place: placeId={}, name={}, googleSyncedAt={}",
+                        candidate.placeId(), candidate.name(), place.getGoogleSyncedAt());
             } else {
-                // savedAt이 7일 이내 → FRESH
                 freshPlaces.add(candidate);
             }
         }

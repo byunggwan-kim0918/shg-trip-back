@@ -101,6 +101,10 @@ public class Place extends BaseTimeEntity {
     @Column(name = "enriched_at")
     private OffsetDateTime enrichedAt;
 
+    /** Google Places API 마지막 동기화 시각 */
+    @Column(name = "google_synced_at")
+    private OffsetDateTime googleSyncedAt;
+
     /** 데이터 소스 ('google', 'foursquare', 'llm_generated') */
     @Column(length = 50)
     @Builder.Default
@@ -129,7 +133,8 @@ public class Place extends BaseTimeEntity {
     }
 
     public void update(String address, double lat, double lng, Double rating,
-                       Integer priceLevel, String openingHours, String photoReference, String sourceUrl) {
+                       Integer priceLevel, String openingHours, String photoReference,
+                       String sourceUrl, String description) {
         this.address = address;
         this.latitude = BigDecimal.valueOf(lat);
         this.longitude = BigDecimal.valueOf(lng);
@@ -138,7 +143,9 @@ public class Place extends BaseTimeEntity {
         if (openingHours != null) this.openingHours = openingHours;
         if (photoReference != null) this.photoReference = photoReference;
         if (sourceUrl != null) this.sourceUrl = sourceUrl;
+        if (description != null && !description.isBlank()) this.description = description;
         this.savedAt = OffsetDateTime.now();
+        this.googleSyncedAt = OffsetDateTime.now();
     }
 
     /**

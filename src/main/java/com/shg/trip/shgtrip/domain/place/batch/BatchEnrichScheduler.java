@@ -38,7 +38,7 @@ public class BatchEnrichScheduler {
     private static final int MAX_RETRIES = 3;
     private static final long POLL_INTERVAL_MS = 10_000; // 10초
     private static final long MAX_POLL_DURATION_MS = 3_600_000; // 1시간
-    private static final String SONNET_MODEL = "claude-sonnet-4-20250514";
+    private static final String ENRICH_MODEL = "claude-sonnet-4-20250514";
 
     private final PlaceRepository placeRepository;
     private final ObjectMapper objectMapper;
@@ -148,7 +148,7 @@ public class BatchEnrichScheduler {
             Map<String, Object> request = Map.of(
                     "custom_id", "place_" + place.getId(),
                     "params", Map.of(
-                            "model", SONNET_MODEL,
+                            "model", ENRICH_MODEL,
                             "max_tokens", 1024,
                             "messages", List.of(
                                     Map.of("role", "user", "content", prompt)

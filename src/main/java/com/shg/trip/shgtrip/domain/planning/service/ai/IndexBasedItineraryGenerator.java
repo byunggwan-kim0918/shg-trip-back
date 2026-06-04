@@ -206,6 +206,9 @@ public class IndexBasedItineraryGenerator {
         sb.append("## 여행 정보\n");
         sb.append("- 여행지: ").append(input.normalizedDestination()).append("\n");
         sb.append("- 테마: ").append(String.join(", ", input.themes())).append("\n");
+        if (input.categories() != null && !input.categories().isEmpty()) {
+            sb.append("- 카테고리: ").append(String.join(", ", input.categories())).append("\n");
+        }
         sb.append("- 예산: ").append(input.budget().toPlainString()).append("원 (")
                 .append(input.budgetRange()).append(")\n");
         sb.append("- 기간: ").append(input.startDate()).append(" ~ ").append(input.endDate())
@@ -213,6 +216,12 @@ public class IndexBasedItineraryGenerator {
         sb.append("- 페이스: ").append(input.pace()).append("\n");
         sb.append("- 시즌: ").append(input.seasonContext() != null ? input.seasonContext() : "")
                 .append("\n");
+        if (input.description() != null && !input.description().isBlank()) {
+            sb.append("- 요청사항: ").append(input.description()).append("\n");
+        }
+        if (input.enrichedContext() != null && !input.enrichedContext().isBlank()) {
+            sb.append("- 현지 정보: ").append(input.enrichedContext()).append("\n");
+        }
 
         // 지역 배분 (있을 경우)
         if (input.regionAllocation() != null && !input.regionAllocation().isEmpty()) {
@@ -234,6 +243,17 @@ public class IndexBasedItineraryGenerator {
                     .append(" lng:").append(formatCoord(candidate.longitude()));
             if (candidate.rating() != null && candidate.rating().compareTo(BigDecimal.ZERO) > 0) {
                 sb.append(" ★").append(candidate.rating());
+            }
+            if (candidate.priceLevel() != null) {
+                sb.append(" 가격:").append("$".repeat(candidate.priceLevel()));
+            }
+            if (candidate.openingHours() != null && !candidate.openingHours().isBlank()) {
+                sb.append(" 영업:").append(candidate.openingHours());
+            }
+            if (candidate.description() != null && !candidate.description().isBlank()) {
+                String desc = candidate.description();
+                if (desc.length() > 80) desc = desc.substring(0, 80) + "…";
+                sb.append(" | ").append(desc);
             }
             sb.append("\n");
         }

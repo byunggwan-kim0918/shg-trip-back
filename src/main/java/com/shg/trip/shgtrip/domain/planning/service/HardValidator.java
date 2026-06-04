@@ -7,7 +7,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -19,6 +23,8 @@ import java.util.regex.Pattern;
  * 2. 시간 형식: HH:mm + endTime > startTime (같은 날 기준)
  * 3. stepOrder 연속성: 1부터 시작, 1씩 증가, 갭 없음
  * 4. dayNumber 일관성: 단조 비감소 (monotonically non-decreasing)
+ * 5. 중복 장소: 같은 날 동일 장소 중복 방문 불가
+ * 6. 시간 겹침: 같은 날 연속 스텝 간 startTime < 이전 endTime 불가
  */
 @Slf4j
 @Component
@@ -44,6 +50,10 @@ public class HardValidator {
 
         List<StepData> steps = data.steps();
         int previousDayNumber = 0;
+        String previousEndTime = null;
+
+        // 날짜별 방문 장소 추적 (중복 검사용)
+        Map<Integer, Set<String>> visitedPlacesByDay = new HashMap<>();
 
         for (int i = 0; i < steps.size(); i++) {
             StepData step = steps.get(i);
@@ -66,7 +76,36 @@ public class HardValidator {
                 errors.add(prefix + String.format("dayNumber(%d)가 이전 step의 dayNumber(%d)보다 작습니다.",
                         step.dayNumber(), previousDayNumber));
             }
+
+            // 날짜가 바뀌면 이전 endTime 리셋
+            if (step.dayNumber() != previousDayNumber) {
+                previousEndTime = null;
+            }
+
+            // 5. 같은 날 시간 겹침 검증
+            boolean startValid = step.startTime() != null && TIME_PATTERN.matcher(step.startTime()).matches();
+            if (startValid && previousEndTime != null) {
+                int prevEndMinutes = timeToMinutes(previousEndTime);
+                int curStartMinutes = timeToMinutes(step.startTime());
+                if (curStartMinutes < prevEndMinutes) {
+                    errors.add(prefix + String.format("startTime(%s)이 이전 step의 endTime(%s)보다 이릅니다.",
+                            step.startTime(), previousEndTime));
+                }
+            }
+
+            // 6. 같은 날 중복 장소 검증
+            if (step.place() != null && step.place().name() != null && !step.place().name().isBlank()) {
+                String placeName = step.place().name();
+                visitedPlacesByDay.computeIfAbsent(step.dayNumber(), k -> new HashSet<>());
+                if (!visitedPlacesByDay.get(step.dayNumber()).add(placeName)) {
+                    errors.add(prefix + String.format("같은 날(%d일차) '%s'가 중복 방문됩니다.",
+                            step.dayNumber(), placeName));
+                }
+            }
+
             previousDayNumber = step.dayNumber();
+            boolean endValid = step.endTime() != null && TIME_PATTERN.matcher(step.endTime()).matches();
+            if (endValid) previousEndTime = step.endTime();
         }
 
         if (errors.isEmpty()) {
