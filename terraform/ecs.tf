@@ -1,8 +1,8 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  account_id  = data.aws_caller_identity.current.account_id
-  ecr_base    = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com"
+  account_id = data.aws_caller_identity.current.account_id
+  ecr_base   = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com"
 }
 
 # ── ECS Fargate용 Target Group (콘솔에서 생성, target_type = ip) ──────────────

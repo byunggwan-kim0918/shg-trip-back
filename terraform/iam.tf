@@ -215,8 +215,8 @@ resource "aws_iam_role_policy" "app_task" {
       },
       {
         # ECS Exec (운영 중 디버깅용 — 필요 없으면 제거 가능)
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "ssmmessages:CreateControlChannel",
           "ssmmessages:CreateDataChannel",
           "ssmmessages:OpenControlChannel",
