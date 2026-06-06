@@ -183,3 +183,58 @@ resource "aws_iam_role_policy" "scheduler" {
     }]
   })
 }
+
+# ── App Service Task Role ─────────────────────────────────────────────────────
+# Task Role = 컨테이너 프로세스가 AWS SDK로 직접 접근할 때 사용
+# Spring Cloud AWS는 런타임에 SDK로 Secrets Manager를 호출 → task role 필요
+resource "aws_iam_role" "app_task" {
+  name               = "${var.project}-app-task-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume_role.json
+
+  tags = { Project = var.project, Env = var.env }
+}
+
+resource "aws_iam_role_policy" "app_task" {
+  name = "${var.project}-app-task-policy"
+  role = aws_iam_role.app_task.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # Spring Cloud AWS: 앱 프로세스가 런타임에 직접 시크릿 조회
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret"]
+        Resource = [aws_secretsmanager_secret.app_prod.arn]
+      },
+      {
+        # S3: 장소 이미지 저장/조회
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+        Resource = ["${aws_s3_bucket.data.arn}/*"]
+      },
+      {
+        # ECS Exec (운영 중 디버깅용 — 필요 없으면 제거 가능)
+        Effect = "Allow"
+        Action = [
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# ── Web Service Task Role ─────────────────────────────────────────────────────
+resource "aws_iam_role" "web_task" {
+  name               = "${var.project}-web-task-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume_role.json
+
+  tags = { Project = var.project, Env = var.env }
+}
+
+# Web Task Role은 현재 별도 AWS 리소스 직접 접근 없음
+# SESSION_SECRET은 execution role이 secrets manager에서 가져와 환경변수로 주입
