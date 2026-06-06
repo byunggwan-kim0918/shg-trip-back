@@ -54,6 +54,7 @@ jobs:
 
   # Job 2: 통합 테스트 (DB/Redis service container)
   integration-test:
+    needs: unit-test
     runs-on: ubuntu-latest
     permissions:
       checks: write

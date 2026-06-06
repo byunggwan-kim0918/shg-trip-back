@@ -22,3 +22,8 @@ output "github_deploy_role_arn" {
   description = "GitHub Actions Deploy OIDC Role ARN"
   value       = aws_iam_role.github_deploy.arn
 }
+
+output "github_deploy_front_role_arn" {
+  description = "GitHub Actions 프론트엔드 배포 OIDC Role ARN"
+  value       = aws_iam_role.github_deploy_front.arn
+}

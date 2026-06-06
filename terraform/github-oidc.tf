@@ -114,7 +114,8 @@ resource "aws_iam_role_policy" "github_deploy" {
           "ecr:CompleteLayerUpload"
         ]
         Resource = [
-          aws_ecr_repository.batch.arn
+          aws_ecr_repository.batch.arn,
+          "arn:aws:ecr:${var.aws_region}:${local.account_id}:repository/shgtrip/app"
         ]
       },
       {
@@ -135,7 +136,94 @@ resource "aws_iam_role_policy" "github_deploy" {
         Action = ["iam:PassRole"]
         Resource = [
           aws_iam_role.ecs_execution.arn,
-          aws_iam_role.batch_task.arn
+          aws_iam_role.batch_task.arn,
+          aws_iam_role.app_task.arn
+        ]
+      }
+    ]
+  })
+}
+
+# ── 프론트엔드 배포 Role (shg-trip-front 리포 전용) ──────────────────────────
+data "aws_iam_policy_document" "github_deploy_front_assume" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values = [
+        "repo:${var.github_repo_front}:ref:refs/heads/main",
+        "repo:${var.github_repo_front}:environment:production",
+      ]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_deploy_front" {
+  name               = "${var.project}-github-deploy-front"
+  assume_role_policy = data.aws_iam_policy_document.github_deploy_front_assume.json
+
+  tags = {
+    Project = var.project
+    Env     = var.env
+  }
+}
+
+resource "aws_iam_role_policy" "github_deploy_front" {
+  name = "${var.project}-github-deploy-front-policy"
+  role = aws_iam_role.github_deploy_front.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid      = "ECRAuth"
+        Effect   = "Allow"
+        Action   = ["ecr:GetAuthorizationToken"]
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRPushWeb"
+        Effect = "Allow"
+        Action = [
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:BatchGetImage",
+          "ecr:PutImage",
+          "ecr:InitiateLayerUpload",
+          "ecr:UploadLayerPart",
+          "ecr:CompleteLayerUpload"
+        ]
+        # shgtrip/web 리포 (콘솔 생성 → ARN 직접 명시)
+        Resource = ["arn:aws:ecr:${var.aws_region}:${local.account_id}:repository/shgtrip/web"]
+      },
+      {
+        Sid    = "ECSDeployWeb"
+        Effect = "Allow"
+        Action = [
+          "ecs:UpdateService",
+          "ecs:DescribeServices",
+          "ecs:DescribeTaskDefinition",
+          "ecs:RegisterTaskDefinition"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "PassRole"
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = [
+          aws_iam_role.ecs_execution.arn,
+          aws_iam_role.web_task.arn
         ]
       }
     ]

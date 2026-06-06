@@ -10,8 +10,11 @@ on:
 
 env:
   AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: shgtrip/app
+  ECS_CLUSTER: shgtrip-cluster
+  ECS_SERVICE: shgtrip-app
+  CONTAINER_NAME: app
 
-# OIDC 토큰 요청에 필요한 최소 권한
 permissions:
   id-token: write
   contents: read
@@ -24,20 +27,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: gradle
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
-      # CI에서 이미 테스트 통과한 코드만 여기 도달하므로 -x test
-      - name: Build JAR
-        run: ./gradlew bootJar --no-daemon -x test
-
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -48,36 +37,41 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      # latest + SHA 듀얼 태깅: latest는 편의용, SHA는 롤백 추적용
+      # latest + SHA 듀얼 태깅
       - name: Build and push Docker image
         id: build
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t $ECR_REGISTRY/shgtrip-batch:$IMAGE_TAG \
-                       -t $ECR_REGISTRY/shgtrip-batch:latest .
-          docker push $ECR_REGISTRY/shgtrip-batch:$IMAGE_TAG
-          docker push $ECR_REGISTRY/shgtrip-batch:latest
-          echo "image=$ECR_REGISTRY/shgtrip-batch:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      # 현재 task definition을 가져와서 이미지만 교체 (다른 설정 유지)
+      # 현재 task definition을 가져와서 이미지만 교체
       - name: Download current task definition
         run: |
           aws ecs describe-task-definition \
-            --task-definition shgtrip-batch \
+            --task-definition ${{ env.ECS_SERVICE }} \
             --query taskDefinition \
             > task-def.json
 
-      - name: Update task definition with new image
+      - name: Render new task definition with updated image
         id: task-def
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-def.json
-          container-name: batch
+          container-name: ${{ env.CONTAINER_NAME }}
           image: ${{ steps.build.outputs.image }}
 
-      - name: Register new task definition
-        run: |
-          aws ecs register-task-definition \
-            --cli-input-json file://${{ steps.task-def.outputs.task-definition }}
+      - name: Deploy to ECS Service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          # 새 Task 헬스체크 통과 후 구 Task 종료 확인까지 대기
+          wait-for-service-stability: true
