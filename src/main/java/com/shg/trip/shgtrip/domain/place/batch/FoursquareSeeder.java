@@ -40,7 +40,10 @@ public class FoursquareSeeder {
     static final Set<String> PRIORITY_CITIES = Set.of(
             "Seoul", "Busan", "Jeju", "Incheon", "Daegu", "Daejeon",
             "Gwangju", "Suwon", "Gangneung", "Gyeongju", "Jeonju", "Yeosu",
-            "Tokyo", "Osaka", "Kyoto", "Fukuoka", "Sapporo");
+            "Tokyo", "Osaka", "Kyoto", "Fukuoka", "Sapporo",
+            "Nagoya", "Yokohama", "Kobe", "Nara", "Hiroshima",
+            "Okinawa", "Kanazawa", "Hakone", "Kamakura", "Nikko",
+            "Sendai", "Nagasaki", "Kagoshima", "Beppu", "Takayama");
 
     public record FoursquareRecord(
             String name, BigDecimal latitude, BigDecimal longitude,

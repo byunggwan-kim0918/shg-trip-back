@@ -10,10 +10,7 @@ on:
 
 env:
   AWS_REGION: ap-northeast-2
-  ECR_REPOSITORY: shgtrip/app
   ECS_CLUSTER: shgtrip-cluster
-  ECS_SERVICE: shgtrip-app
-  CONTAINER_NAME: app
 
 permissions:
   id-token: write
@@ -37,25 +34,34 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      # latest + SHA 듀얼 태깅
-      - name: Build and push Docker image
+      # 앱 + 배치는 동일한 Spring Boot 이미지 (한 번 빌드, 두 ECR에 push)
+      - name: Build and push Docker images
         id: build
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
+          APP_REPO: shgtrip/app
+          BATCH_REPO: shgtrip-batch
         run: |
-          docker build \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          docker build -t app-image:$IMAGE_TAG .
 
-      # 현재 task definition을 가져와서 이미지만 교체
+          # 앱 ECR — SHA + latest 듀얼 태깅
+          docker tag app-image:$IMAGE_TAG $ECR_REGISTRY/$APP_REPO:$IMAGE_TAG
+          docker tag app-image:$IMAGE_TAG $ECR_REGISTRY/$APP_REPO:latest
+          docker push $ECR_REGISTRY/$APP_REPO:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$APP_REPO:latest
+
+          # 배치 ECR — latest만 (Step Functions가 latest pull)
+          docker tag app-image:$IMAGE_TAG $ECR_REGISTRY/$BATCH_REPO:latest
+          docker push $ECR_REGISTRY/$BATCH_REPO:latest
+
+          echo "image=$ECR_REGISTRY/$APP_REPO:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      # ECS 앱 서비스 롤링 배포
       - name: Download current task definition
         run: |
           aws ecs describe-task-definition \
-            --task-definition ${{ env.ECS_SERVICE }} \
+            --task-definition shgtrip-app \
             --query taskDefinition \
             > task-def.json
 
@@ -64,14 +70,13 @@ jobs:
         uses: aws-actions/amazon-ecs-render-task-definition@v1
         with:
           task-definition: task-def.json
-          container-name: ${{ env.CONTAINER_NAME }}
+          container-name: app
           image: ${{ steps.build.outputs.image }}
 
       - name: Deploy to ECS Service
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
-          service: ${{ env.ECS_SERVICE }}
+          service: shgtrip-app
           cluster: ${{ env.ECS_CLUSTER }}
-          # 새 Task 헬스체크 통과 후 구 Task 종료 확인까지 대기
           wait-for-service-stability: true
