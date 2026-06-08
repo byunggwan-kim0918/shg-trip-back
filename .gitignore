@@ -46,7 +46,7 @@ logs/
 .env
 
 ### Dockerfile ###
-Dockerfile
+# Dockerfile  -- 주석: 루트 및 하위 Dockerfile은 추적 대상
 .dockerignore
 
 ### Terraform ###
