@@ -43,8 +43,12 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok'
     implementation 'com.anthropic:anthropic-java:2.15.0'
     implementation 'io.awspring.cloud:spring-cloud-aws-starter-secrets-manager:3.3.0'
+    implementation 'io.awspring.cloud:spring-cloud-aws-starter-s3:3.3.0'
+    implementation 'org.springframework.retry:spring-retry'
+    implementation 'org.springframework.boot:spring-boot-starter-aop'
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.security:spring-security-test'
+    testImplementation 'net.jqwik:jqwik:1.9.2'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 

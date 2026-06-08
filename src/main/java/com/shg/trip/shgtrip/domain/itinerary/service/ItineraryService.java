@@ -6,6 +6,7 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.s3.PlaceImageAsyncRecovery;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
@@ -36,6 +37,7 @@ public class ItineraryService {
     private static final int SHARE_EXPIRE_DAYS = 7;
 
     private final ItineraryRepository itineraryRepository;
+    private final PlaceImageAsyncRecovery asyncRecovery;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -43,7 +45,15 @@ public class ItineraryService {
     @Transactional(readOnly = true)
     public ItineraryResponse getItinerary(Long itineraryId, Long userId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+        triggerAsyncImageRecovery(itinerary);
         return ItineraryResponse.from(itinerary);
+    }
+
+    private void triggerAsyncImageRecovery(Itinerary itinerary) {
+        itinerary.getSteps().stream()
+                .map(ItineraryStep::getPlace)
+                .filter(place -> place != null && place.getImageUrl() == null && place.getPhotoReference() != null)
+                .forEach(place -> asyncRecovery.tryUploadAsync(place.getId(), place.getPhotoReference()));
     }
 
     @Transactional(readOnly = true)

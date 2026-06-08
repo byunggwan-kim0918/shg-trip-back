@@ -56,6 +56,25 @@ public class Place extends BaseTimeEntity {
 
     private String sourceUrl;
 
+    /**
+     * 데이터 출처. 'google', 'foursquare', 'llm_generated' 중 하나.
+     */
+    @Column(length = 50)
+    private String source;
+
+    /**
+     * 세미콜론(;) 구분 태그 문자열. 벡터 검색 및 보강에 활용된다.
+     */
+    @Column(columnDefinition = "TEXT")
+    private String tags;
+
+    /**
+     * 장소 활성 여부. false이면 검색에서 제외된다.
+     */
+    @Builder.Default
+    @Column(nullable = false)
+    private boolean active = true;
+
     @Column(nullable = false)
     private OffsetDateTime savedAt;
 
@@ -68,6 +87,10 @@ public class Place extends BaseTimeEntity {
         return savedAt.isBefore(OffsetDateTime.now().minusDays(7));
     }
 
+    public void updateImageUrl(String imageUrl) {
+        this.imageUrl = imageUrl;
+    }
+
     public void update(String address, double lat, double lng, Double rating,
                        Integer priceLevel, String openingHours, String photoReference, String sourceUrl) {
         this.address = address;
@@ -78,6 +101,23 @@ public class Place extends BaseTimeEntity {
         if (openingHours != null) this.openingHours = openingHours;
         if (photoReference != null) this.photoReference = photoReference;
         if (sourceUrl != null) this.sourceUrl = sourceUrl;
+        this.savedAt = OffsetDateTime.now();
+    }
+
+    /**
+     * Foursquare CSV에서 가져온 메타데이터를 갱신한다.
+     * 핵심 필드(name, address, latitude, longitude)는 변경하지 않는다.
+     *
+     * @param tags        세미콜론 구분 태그 문자열
+     * @param description 장소 설명
+     */
+    public void updateFoursquareMetadata(String tags, String description) {
+        if (tags != null && !tags.isBlank()) {
+            this.tags = tags;
+        }
+        if (description != null && !description.isBlank()) {
+            this.description = description;
+        }
         this.savedAt = OffsetDateTime.now();
     }
 }
