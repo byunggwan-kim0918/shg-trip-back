@@ -7,8 +7,6 @@ spring:
     hibernate:
       ddl-auto: validate
     open-in-view: false
-  flyway:
-    repair-on-migrate: true
 
 cloud:
   aws:
