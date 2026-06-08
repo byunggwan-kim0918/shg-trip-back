@@ -1,0 +1,45 @@
+name: Deploy FSQ Extractor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'fsq-extractor/**'
+
+env:
+  AWS_REGION: ap-northeast-2
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/shgtrip-github-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push FSQ extractor image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+          REPO: shgtrip-fsq-extractor
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/$REPO:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$REPO:latest \
+            ./fsq-extractor
+          docker push $ECR_REGISTRY/$REPO:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$REPO:latest

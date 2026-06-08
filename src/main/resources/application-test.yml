@@ -5,8 +5,9 @@ spring:
       - io.awspring.cloud.autoconfigure.core.CredentialsProviderAutoConfiguration
       - io.awspring.cloud.autoconfigure.core.RegionProviderAutoConfiguration
       - io.awspring.cloud.autoconfigure.config.secretsmanager.SecretsManagerAutoConfiguration
+      - io.awspring.cloud.autoconfigure.s3.S3AutoConfiguration
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/shgtrip
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:trip}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:testpassword123}
   data:
@@ -48,6 +49,11 @@ anthropic:
     haiku: claude-haiku-4-5-20251001
     sonnet: claude-sonnet-4-6
     max-output-tokens: 64000
+
+openai:
+  api-key: test-openai-key
+  embedding-model: text-embedding-3-small
+  embedding-dimensions: 1536
 
 google:
   places:

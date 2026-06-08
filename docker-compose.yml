@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16.11
+    image: pgvector/pgvector:pg16
     container_name: shg-trip-postgres
     environment:
       POSTGRES_DB: trip

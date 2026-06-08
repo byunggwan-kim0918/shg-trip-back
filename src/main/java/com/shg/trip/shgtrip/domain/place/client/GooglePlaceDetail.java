@@ -20,7 +20,8 @@ public record GooglePlaceDetail(
         String openingHours,
         String photoReference,
         String sourceUrl,
-        List<String> types
+        List<String> types,
+        String editorialSummary
 ) {
     @SuppressWarnings("unchecked")
     public static GooglePlaceDetail from(Map<String, Object> place) {
@@ -65,8 +66,16 @@ public record GooglePlaceDetail(
         List<String> types = Optional.ofNullable((List<String>) place.get("types"))
                 .orElse(List.of());
 
+        // editorialSummary: 구글이 선별적으로 제공하는 장소 소개 문구
+        String editorialSummary = null;
+        Map<String, Object> summary = (Map<String, Object>) place.get("editorialSummary");
+        if (summary != null) {
+            editorialSummary = (String) summary.get("text");
+        }
+
         return new GooglePlaceDetail(placeId, name, address, lat, lng,
-                rating, priceLevel, openingHours, photoReference, sourceUrl, types);
+                rating, priceLevel, openingHours, photoReference, sourceUrl, types,
+                editorialSummary);
     }
 
     /**

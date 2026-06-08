@@ -115,6 +115,7 @@ resource "aws_iam_role_policy" "github_deploy" {
         ]
         Resource = [
           aws_ecr_repository.batch.arn,
+          aws_ecr_repository.fsq_extractor.arn,
           "arn:aws:ecr:${var.aws_region}:${local.account_id}:repository/shgtrip/app"
         ]
       },

@@ -16,7 +16,8 @@ public record PlaceResponse(
         BigDecimal rating,
         Integer priceLevel,
         String openingHours,
-        String imageUrl
+        String imageUrl,
+        String description
 ) {
     public static PlaceResponse from(Place place) {
         if (place == null) return null;
@@ -33,7 +34,8 @@ public record PlaceResponse(
                 place.getLatitude(), place.getLongitude(),
                 place.getCategory(), place.getRegion(), place.getCountry(),
                 place.getRating(), place.getPriceLevel(),
-                place.getOpeningHours(), imageUrl
+                place.getOpeningHours(), imageUrl,
+                place.getDescription()
         );
     }
 }

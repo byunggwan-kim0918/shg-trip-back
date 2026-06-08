@@ -54,10 +54,7 @@ oauth:
 
 planning:
   validation:
-    # Soft 검증 통과 기준 점수 (0~100). Req 4.2 기반.
-    # - 기본 점수 80점에서 estimatedCost 미입력(-10), tags 미입력(-5), stepOrder 불일치(-5), notes 채움률 50% 미만(-5) 감점
-    # - 예산 초과(-15), 일정 밀도 이탈(-10), 교통 정보 누락(단계당 -5) 추가 감점
-    # - 70점은 위 감점 조합 시 "구조는 온전하나 품질 미흡" 경계값으로 설정
+    # Soft 검증 통과 기준 점수 (0~100)
     soft-threshold: 70
 
 anthropic:
@@ -65,6 +62,11 @@ anthropic:
     haiku: claude-haiku-4-5-20251001
     sonnet: claude-sonnet-4-6
     max-output-tokens: 64000
+
+openai:
+  api-key: ${OPENAI_API_KEY:}
+  embedding-model: text-embedding-3-small
+  embedding-dimensions: 1536
 
 google:
   places:

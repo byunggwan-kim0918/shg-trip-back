@@ -209,7 +209,8 @@ public class ItineraryDataMapper {
             if (detail.isPresent()) {
                 GooglePlaceDetail d = detail.get();
                 stalePlace.update(d.address(), d.lat(), d.lng(), d.rating(),
-                        d.priceLevel(), d.openingHours(), d.photoReference(), d.sourceUrl());
+                        d.priceLevel(), d.openingHours(), d.photoReference(), d.sourceUrl(),
+                        d.editorialSummary());
                 return placePersistenceHelper.updateAndSave(stalePlace);
             }
         } catch (com.shg.trip.shgtrip.global.exception.BusinessException e) {
@@ -253,7 +254,8 @@ public class ItineraryDataMapper {
                     Place ex = existing.get();
                     if (ex.isStale()) {
                         ex.update(d.address(), d.lat(), d.lng(), d.rating(),
-                                d.priceLevel(), d.openingHours(), d.photoReference(), d.sourceUrl());
+                                d.priceLevel(), d.openingHours(), d.photoReference(), d.sourceUrl(),
+                                d.editorialSummary());
                         return placePersistenceHelper.updateAndSave(ex);
                     }
                     return ex;

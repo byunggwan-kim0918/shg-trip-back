@@ -29,4 +29,4 @@ USER shgapp
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "-Dspring.profiles.active=prod", "shg-app.jar"]
+ENTRYPOINT ["java", "-jar", "shg-app.jar"]

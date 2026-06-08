@@ -84,6 +84,11 @@ anthropic:
     sonnet: claude-sonnet-4-6
     max-output-tokens: 64000
 
+openai:
+  api-key: ${OPENAI_API_KEY}
+  embedding-model: text-embedding-3-small
+  embedding-dimensions: 1536
+
 google:
   places:
     api-key: ${GOOGLE_PLACES_API_KEY}
