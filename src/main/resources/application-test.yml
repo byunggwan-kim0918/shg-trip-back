@@ -57,3 +57,11 @@ google:
 planning:
   validation:
     soft-threshold: 70
+
+cloud:
+  aws:
+    s3:
+      region: ap-northeast-2
+      bucket: shgtrip-data-test
+      access-key: test
+      secret-key: test
