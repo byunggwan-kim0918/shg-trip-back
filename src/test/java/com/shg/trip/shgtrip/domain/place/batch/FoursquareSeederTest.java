@@ -233,8 +233,8 @@ class FoursquareSeederTest {
         @Test
         @DisplayName("인기 도시가 아니면 false를 반환한다")
         void isPriorityCity_no() {
-            assertThat(seeder.isPriorityCity("Yokohama")).isFalse();
             assertThat(seeder.isPriorityCity("Paris")).isFalse();
+            assertThat(seeder.isPriorityCity("Berlin")).isFalse();
         }
 
         @Test
