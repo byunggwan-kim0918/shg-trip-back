@@ -1,5 +1,7 @@
--- V19: places 테이블에 벡터 임베딩 및 배치 보강 관련 컬럼 추가
--- S3 브랜치(V18__add_s3_columns)와 통합 — IF NOT EXISTS로 중복 방지
+-- V19: pgvector 확장 활성화 + 벡터 임베딩 및 배치 보강 컬럼 추가
+
+-- pgvector 확장 (RDS PostgreSQL에서 기본 지원)
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- 임베딩 벡터 컬럼 (OpenAI text-embedding-3-small: 1536 dimensions)
 ALTER TABLE places ADD COLUMN IF NOT EXISTS embedding vector(1536);
