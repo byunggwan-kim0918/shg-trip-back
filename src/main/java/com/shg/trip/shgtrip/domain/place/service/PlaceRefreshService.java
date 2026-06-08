@@ -51,7 +51,8 @@ public class PlaceRefreshService {
                             detail.priceLevel(),
                             detail.openingHours(),
                             detail.photoReference(),
-                            detail.sourceUrl()
+                            detail.sourceUrl(),
+                            detail.editorialSummary()
                     );
                     if (detail.photoReference() != null && place.getImageUrl() == null) {
                         try {

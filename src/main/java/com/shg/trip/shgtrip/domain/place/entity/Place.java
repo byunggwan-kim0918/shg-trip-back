@@ -59,27 +59,10 @@ public class Place extends BaseTimeEntity {
 
     private String sourceUrl;
 
-    /**
-     * 데이터 출처. 'google', 'foursquare', 'llm_generated' 중 하나.
-     */
+    /** 데이터 소스 ('google', 'foursquare', 'llm_generated') */
     @Column(length = 50)
-    private String source;
-
-    /**
-     * 세미콜론(;) 구분 태그 문자열. 벡터 검색 및 보강에 활용된다.
-     */
-    @Column(columnDefinition = "TEXT")
-    private String tags;
-
-    /**
-     * 장소 활성 여부. false이면 검색에서 제외된다.
-     */
     @Builder.Default
-    @Column(nullable = false)
-    private boolean active = true;
-
-    @Column(nullable = false)
-    private OffsetDateTime savedAt;
+    private String source = "google";
 
     // --- LLM Optimization: 벡터 임베딩 및 배치 보강 필드 ---
 
@@ -105,11 +88,6 @@ public class Place extends BaseTimeEntity {
     @Column(name = "google_synced_at")
     private OffsetDateTime googleSyncedAt;
 
-    /** 데이터 소스 ('google', 'foursquare', 'llm_generated') */
-    @Column(length = 50)
-    @Builder.Default
-    private String source = "google";
-
     /** soft delete 활성 상태 */
     @Column
     @Builder.Default
@@ -118,6 +96,9 @@ public class Place extends BaseTimeEntity {
     /** soft delete 비활성화 시각 */
     @Column(name = "deactivated_at")
     private OffsetDateTime deactivatedAt;
+
+    @Column(nullable = false)
+    private OffsetDateTime savedAt;
 
     @PrePersist
     protected void onSave() {
@@ -148,20 +129,56 @@ public class Place extends BaseTimeEntity {
         this.googleSyncedAt = OffsetDateTime.now();
     }
 
+    /** soft delete 처리 */
+    public void deactivate() {
+        this.active = false;
+        this.deactivatedAt = OffsetDateTime.now();
+    }
+
+    /** 재활성화 */
+    public void reactivate() {
+        this.active = true;
+        this.deactivatedAt = null;
+    }
+
     /**
-     * Foursquare CSV에서 가져온 메타데이터를 갱신한다.
-     * 핵심 필드(name, address, latitude, longitude)는 변경하지 않는다.
-     *
-     * @param tags        세미콜론 구분 태그 문자열
-     * @param description 장소 설명
+     * Anthropic Batch API 보강 결과를 반영한다.
      */
-    public void updateFoursquareMetadata(String tags, String description) {
-        if (tags != null && !tags.isBlank()) {
-            this.tags = tags;
+    public void enrichWith(List<String> newTags, String newDescription, List<String> newTimeSlots) {
+        if (newTags != null && !newTags.isEmpty()) {
+            this.tags = new java.util.ArrayList<>(newTags);
+        }
+        if (newDescription != null && !newDescription.isBlank()) {
+            this.description = newDescription;
+        }
+        if (newTimeSlots != null && !newTimeSlots.isEmpty()) {
+            this.recommendedTimeSlots = new java.util.ArrayList<>(newTimeSlots);
+        }
+        this.enrichedAt = OffsetDateTime.now();
+    }
+
+    /**
+     * Foursquare 시딩 시 메타데이터만 갱신한다.
+     */
+    public void updateFoursquareMetadata(String category, List<String> newTags, String description) {
+        if (category != null && !category.isBlank()) {
+            this.category = category;
+        }
+        if (newTags != null && !newTags.isEmpty()) {
+            if (this.tags == null || this.tags.isEmpty()) {
+                this.tags = new java.util.ArrayList<>(newTags);
+            } else {
+                java.util.List<String> merged = new java.util.ArrayList<>(this.tags);
+                for (String tag : newTags) {
+                    if (!merged.contains(tag)) merged.add(tag);
+                }
+                this.tags = merged;
+            }
         }
         if (description != null && !description.isBlank()) {
             this.description = description;
         }
+        this.source = "foursquare";
         this.savedAt = OffsetDateTime.now();
     }
 }

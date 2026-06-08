@@ -74,11 +74,21 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /**
      * 국가, 지역, source='foursquare'로 장소 목록 조회.
-     * FoursquareSeeder에서 upsert 시 기존 장소 일괄 조회에 사용된다.
      */
     @Query("SELECT p FROM Place p WHERE p.country = :country AND p.region = :region AND p.source = 'foursquare'")
-    java.util.List<Place> findAllByCountryAndRegionAndSourceFoursquare(
+    List<Place> findAllByCountryAndRegionAndSourceFoursquare(
             @Param("country") String country,
             @Param("region") String region
     );
+
+    /**
+     * 임베딩이 없고 활성 상태인 장소를 페이징 조회 — EmbeddingBatchJob 사용.
+     */
+    @Query("SELECT p FROM Place p WHERE p.embedding IS NULL AND p.active = true")
+    Page<Place> findByEmbeddingIsNullAndActiveTrue(Pageable pageable);
+
+    /**
+     * 미보강(enriched_at IS NULL)이고 활성 상태인 장소 페이징 조회 — BatchEnrichScheduler 사용.
+     */
+    Page<Place> findByEnrichedAtIsNullAndActiveTrue(Pageable pageable);
 }

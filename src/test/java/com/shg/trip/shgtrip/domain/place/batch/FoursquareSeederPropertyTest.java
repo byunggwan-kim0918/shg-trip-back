@@ -44,7 +44,7 @@ class FoursquareSeederPropertyTest {
                 .thenReturn(List.of(existingPlace));
         when(mockRepo.saveAll(Mockito.anyList())).thenAnswer(inv -> inv.getArgument(0));
 
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null);
 
         // The upsert row uses the same name/country/region as existing place to trigger update path
         String[] row = new String[]{
@@ -97,7 +97,7 @@ class FoursquareSeederPropertyTest {
         // Set up mock repository
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
 
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null);
 
         Map<String, Integer> columnIndex = Map.of(
                 "name", 0, "latitude", 1, "longitude", 2,
@@ -135,7 +135,7 @@ class FoursquareSeederPropertyTest {
             @ForAll("validCsvRows") String[] validRow
     ) {
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null);
 
         Map<String, Integer> columnIndex = Map.of(
                 "name", 0, "latitude", 1, "longitude", 2,
@@ -164,7 +164,7 @@ class FoursquareSeederPropertyTest {
             @ForAll("rowsWithMissingRequiredField") String[] invalidRow
     ) {
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null);
 
         Map<String, Integer> columnIndex = Map.of(
                 "name", 0, "latitude", 1, "longitude", 2,

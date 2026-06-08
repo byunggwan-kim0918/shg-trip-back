@@ -2,21 +2,21 @@ package com.shg.trip.shgtrip.domain.place.batch;
 
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
+import com.shg.trip.shgtrip.domain.place.s3.FoursquareCsvSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.io.TempDir;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.util.Collections;
 import java.util.List;
@@ -33,15 +33,14 @@ class FoursquareSeederTest {
     @Mock
     private PlaceRepository placeRepository;
 
+    @Mock
+    private FoursquareCsvSource csvSource;
+
     @InjectMocks
     private FoursquareSeeder seeder;
 
-    @TempDir
-    Path tempDir;
-
     @BeforeEach
     void setUp() {
-        ReflectionTestUtils.setField(seeder, "dataFilePath", "data/foursquare-places.csv");
         ReflectionTestUtils.setField(seeder, "chunkSize", 1000);
     }
 
@@ -326,12 +325,10 @@ class FoursquareSeederTest {
     class SeedIntegration {
 
         @Test
-        @DisplayName("데이터 파일이 없으면 건너뛴다")
-        void seed_noFile() {
-            ReflectionTestUtils.setField(seeder, "dataFilePath", "/non/existent/path.csv");
-
+        @DisplayName("CSV 소스가 빈 스트림을 반환하면 건너뛴다")
+        void seed_emptyStream() throws IOException {
+            when(csvSource.open()).thenReturn(new ByteArrayInputStream("".getBytes(StandardCharsets.UTF_8)));
             seeder.seed();
-
             verifyNoInteractions(placeRepository);
         }
 
@@ -343,27 +340,27 @@ class FoursquareSeederTest {
                     센소지,35.7148,139.7967,Japan,Tokyo,Temple,2-3-1 Asakusa,관광;사찰,유명 사찰
                     에펠탑,48.8584,2.2945,France,Paris,Landmark,Champ de Mars,관광;랜드마크,프랑스 랜드마크
                     """;
-            Path csvFile = tempDir.resolve("test-places.csv");
-            Files.writeString(csvFile, csv);
-            ReflectionTestUtils.setField(seeder, "dataFilePath", csvFile.toString());
-
+            when(csvSource.open()).thenReturn(new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8)));
             when(placeRepository.findAllByCountryAndRegionAndSourceFoursquare(anyString(), anyString()))
                     .thenReturn(Collections.emptyList());
-
             seeder.seed();
-
             verify(placeRepository, atLeastOnce()).saveAll(anyList());
         }
 
         @Test
-        @DisplayName("빈 CSV 파일은 처리하지 않는다")
-        void seed_emptyFile() throws IOException {
-            Path csvFile = tempDir.resolve("empty.csv");
-            Files.writeString(csvFile, "");
-            ReflectionTestUtils.setField(seeder, "dataFilePath", csvFile.toString());
-
+        @DisplayName("빈 CSV 헤더만 있으면 처리하지 않는다")
+        void seed_headerOnly() throws IOException {
+            String csv = "name,latitude,longitude,country,region,category,address,tags,description\n";
+            when(csvSource.open()).thenReturn(new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8)));
             seeder.seed();
+            verifyNoInteractions(placeRepository);
+        }
 
+        @Test
+        @DisplayName("CSV 소스에서 IOException 발생 시 처리를 중단한다")
+        void seed_ioException() throws IOException {
+            when(csvSource.open()).thenThrow(new IOException("S3 connection failed"));
+            seeder.seed();
             verifyNoInteractions(placeRepository);
         }
     }
