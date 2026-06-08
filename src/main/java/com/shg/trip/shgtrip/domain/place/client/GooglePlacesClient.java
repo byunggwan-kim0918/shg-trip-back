@@ -67,4 +67,24 @@ public class GooglePlacesClient {
             throw new BusinessException(ErrorCode.EXTERNAL_API_ERROR);
         }
     }
+
+    /**
+     * Google Places Photo API (New)로 이미지 바이너리를 다운로드한다.
+     * @param photoReference 예: "places/ChIJ.../photos/AXCi2Q..."
+     * @return 이미지 바이너리, 실패 시 Optional.empty()
+     */
+    public Optional<byte[]> downloadPhotoBytes(String photoReference) {
+        try {
+            byte[] bytes = restClient.get()
+                    .uri("https://places.googleapis.com/v1/{photoReference}/media?maxHeightPx=800",
+                            photoReference)
+                    .header("X-Goog-Api-Key", properties.apiKey())
+                    .retrieve()
+                    .body(byte[].class);
+            return Optional.ofNullable(bytes);
+        } catch (Exception e) {
+            log.warn("Places Photo API 다운로드 실패: photoReference='{}', error={}", photoReference, e.getMessage());
+            return Optional.empty();
+        }
+    }
 }

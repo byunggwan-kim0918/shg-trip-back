@@ -20,9 +20,14 @@ public record PlaceResponse(
         OffsetDateTime savedAt
 ) {
     public static PlaceResponse from(Place place) {
-        String imageUrl = place.getPhotoReference() != null
-                ? "/api/places/" + place.getId() + "/photo"
-                : null;
+        String imageUrl;
+        if (place.getImageUrl() != null) {
+            imageUrl = place.getImageUrl();
+        } else if (place.getPhotoReference() != null) {
+            imageUrl = "/api/places/" + place.getId() + "/photo";
+        } else {
+            imageUrl = null;
+        }
         return new PlaceResponse(
                 place.getId(),
                 place.getName(),

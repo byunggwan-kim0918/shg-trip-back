@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.place.service;
 import com.shg.trip.shgtrip.domain.place.client.GooglePlacesClient;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
+import com.shg.trip.shgtrip.domain.place.s3.PlaceImageUploader;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +18,7 @@ public class PlaceRefreshService {
 
     private final PlaceRepository placeRepository;
     private final GooglePlacesClient googlePlacesClient;
+    private final PlaceImageUploader placeImageUploader;
 
     /**
      * 장소 데이터를 Google Places API로 비동기 갱신.
@@ -27,7 +29,7 @@ public class PlaceRefreshService {
     public void refreshAsync(Long placeId, String placeName) {
         try {
             googlePlacesClient.searchAndGetDetail(placeName).ifPresent(detail -> {
-                placeRepository.findById(placeId).ifPresent(place ->
+                placeRepository.findById(placeId).ifPresent(place -> {
                     place.update(
                             detail.address(),
                             detail.lat(),
@@ -37,8 +39,16 @@ public class PlaceRefreshService {
                             detail.openingHours(),
                             detail.photoReference(),
                             detail.sourceUrl()
-                    )
-                );
+                    );
+                    if (detail.photoReference() != null && place.getImageUrl() == null) {
+                        try {
+                            placeImageUploader.uploadIfAbsent(placeId, detail.photoReference())
+                                    .ifPresent(place::updateImageUrl);
+                        } catch (Exception e) {
+                            log.warn("Failed to upload image for place {}: {}", placeId, e.getMessage());
+                        }
+                    }
+                });
             });
             log.debug("Place {} refreshed successfully", placeId);
         } catch (BusinessException e) {

@@ -7,3 +7,7 @@ spring:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+  cloud:
+    aws:
+      s3:
+        enabled: false

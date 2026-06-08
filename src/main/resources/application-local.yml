@@ -70,3 +70,15 @@ google:
   places:
     api-key: ${GOOGLE_PLACES_API_KEY:}
     text-search-uri: https://places.googleapis.com/v1/places:searchText
+
+cloud:
+  aws:
+    s3:
+      region: ap-northeast-2
+      bucket: shgtrip-data
+      access-key: ${AWS_ACCESS_KEY_ID:}
+      secret-key: ${AWS_SECRET_ACCESS_KEY:}
+
+batch:
+  foursquare:
+    source: local
