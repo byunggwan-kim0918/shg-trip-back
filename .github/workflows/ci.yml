@@ -106,6 +106,7 @@ jobs:
           DB_PORT: 5432
           DB_USERNAME: postgres
           DB_PASSWORD: testpassword123
+          DB_NAME: shgtrip
           REDIS_HOST: localhost
           REDIS_PORT: 6379
 
