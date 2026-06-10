@@ -92,7 +92,7 @@ def extract(conn: duckdb.DuckDBPyConnection) -> int:
             WHERE country IN ('KR', 'JP')
               AND locality IN ({cities_sql})
               AND date_closed IS NULL
-              AND date_refreshed >= (CURRENT_DATE - INTERVAL 2 YEAR)
+              AND CAST(date_refreshed AS DATE) >= (CURRENT_DATE - INTERVAL 2 YEAR)
         ) TO '{OUTPUT_FILE}' (HEADER, DELIMITER ',')
     """)
 
