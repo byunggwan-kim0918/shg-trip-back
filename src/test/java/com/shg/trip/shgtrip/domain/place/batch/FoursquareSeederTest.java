@@ -25,6 +25,7 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -35,6 +36,9 @@ class FoursquareSeederTest {
 
     @Mock
     private FoursquareCsvSource csvSource;
+
+    @Mock
+    private PlaceSeedingHistoryRepository historyRepository;
 
     @InjectMocks
     private FoursquareSeeder seeder;
@@ -51,15 +55,16 @@ class FoursquareSeederTest {
         @Test
         @DisplayName("CSV 헤더를 올바르게 파싱한다")
         void parseHeader_success() {
-            String header = "name,latitude,longitude,country,region,category,address,tags";
+            String header = "fsq_place_id,name,latitude,longitude,country,region,category,address,tags";
             Map<String, Integer> index = seeder.parseHeader(header);
 
-            assertThat(index).containsEntry("name", 0);
-            assertThat(index).containsEntry("latitude", 1);
-            assertThat(index).containsEntry("longitude", 2);
-            assertThat(index).containsEntry("country", 3);
-            assertThat(index).containsEntry("region", 4);
-            assertThat(index).containsEntry("category", 5);
+            assertThat(index).containsEntry("fsq_place_id", 0);
+            assertThat(index).containsEntry("name", 1);
+            assertThat(index).containsEntry("latitude", 2);
+            assertThat(index).containsEntry("longitude", 3);
+            assertThat(index).containsEntry("country", 4);
+            assertThat(index).containsEntry("region", 5);
+            assertThat(index).containsEntry("category", 6);
         }
 
         @Test
@@ -98,8 +103,8 @@ class FoursquareSeederTest {
         @DisplayName("모든 필수 컬럼이 있으면 true를 반환한다")
         void validateRequiredColumns_allPresent() {
             Map<String, Integer> index = Map.of(
-                    "name", 0, "latitude", 1, "longitude", 2,
-                    "country", 3, "region", 4, "category", 5
+                    "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
+                    "country", 4, "region", 5, "category", 6
             );
             assertThat(seeder.validateRequiredColumns(index)).isTrue();
         }
@@ -123,21 +128,22 @@ class FoursquareSeederTest {
         @BeforeEach
         void setUp() {
             columnIndex = Map.of(
-                    "name", 0, "latitude", 1, "longitude", 2,
-                    "country", 3, "region", 4, "category", 5,
-                    "address", 6, "tags", 7, "description", 8
+                    "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
+                    "country", 4, "region", 5, "category", 6,
+                    "address", 7, "tags", 8, "description", 9
             );
         }
 
         @Test
         @DisplayName("유효한 행을 FoursquareRecord로 매핑한다")
         void mapToRecord_validRow() {
-            String[] fields = {"센소지", "35.7148", "139.7967", "Japan", "Tokyo", "Temple",
+            String[] fields = {"fsq_abc123", "센소지", "35.7148", "139.7967", "Japan", "Tokyo", "Temple",
                     "2 Chome-3-1 Asakusa", "관광;사찰", "유명 사찰"};
 
             FoursquareSeeder.FoursquareRecord record = seeder.mapToRecord(fields, columnIndex);
 
             assertThat(record).isNotNull();
+            assertThat(record.fsqPlaceId()).isEqualTo("fsq_abc123");
             assertThat(record.name()).isEqualTo("센소지");
             assertThat(record.latitude()).isEqualByComparingTo("35.7148");
             assertThat(record.longitude()).isEqualByComparingTo("139.7967");
@@ -150,7 +156,16 @@ class FoursquareSeederTest {
         @Test
         @DisplayName("필수 필드 누락 시 null을 반환한다")
         void mapToRecord_missingRequired() {
-            String[] fields = {"", "35.7148", "139.7967", "Japan", "Tokyo", "Temple",
+            String[] fields = {"fsq_abc123", "", "35.7148", "139.7967", "Japan", "Tokyo", "Temple",
+                    "address", "tags", "desc"};
+
+            assertThat(seeder.mapToRecord(fields, columnIndex)).isNull();
+        }
+
+        @Test
+        @DisplayName("fsq_place_id 누락 시 null을 반환한다")
+        void mapToRecord_missingFsqPlaceId() {
+            String[] fields = {"", "센소지", "35.7148", "139.7967", "Japan", "Tokyo", "Temple",
                     "address", "tags", "desc"};
 
             assertThat(seeder.mapToRecord(fields, columnIndex)).isNull();
@@ -159,7 +174,7 @@ class FoursquareSeederTest {
         @Test
         @DisplayName("위도가 범위를 벗어나면 null을 반환한다")
         void mapToRecord_invalidLatitude() {
-            String[] fields = {"Test", "91.0", "139.0", "Japan", "Tokyo", "Cafe",
+            String[] fields = {"fsq_abc123", "Test", "91.0", "139.0", "Japan", "Tokyo", "Cafe",
                     "address", "tags", "desc"};
 
             assertThat(seeder.mapToRecord(fields, columnIndex)).isNull();
@@ -168,7 +183,7 @@ class FoursquareSeederTest {
         @Test
         @DisplayName("경도가 범위를 벗어나면 null을 반환한다")
         void mapToRecord_invalidLongitude() {
-            String[] fields = {"Test", "35.0", "181.0", "Japan", "Tokyo", "Cafe",
+            String[] fields = {"fsq_abc123", "Test", "35.0", "181.0", "Japan", "Tokyo", "Cafe",
                     "address", "tags", "desc"};
 
             assertThat(seeder.mapToRecord(fields, columnIndex)).isNull();
@@ -177,7 +192,7 @@ class FoursquareSeederTest {
         @Test
         @DisplayName("좌표가 숫자가 아니면 null을 반환한다")
         void mapToRecord_nonNumericCoordinates() {
-            String[] fields = {"Test", "abc", "139.0", "Japan", "Tokyo", "Cafe",
+            String[] fields = {"fsq_abc123", "Test", "abc", "139.0", "Japan", "Tokyo", "Cafe",
                     "address", "tags", "desc"};
 
             assertThat(seeder.mapToRecord(fields, columnIndex)).isNull();
@@ -249,74 +264,52 @@ class FoursquareSeederTest {
     class UpsertLogic {
 
         @Test
-        @DisplayName("신규 장소를 삽입한다")
+        @DisplayName("신규 장소를 upsert 한다")
         void processChunk_insertsNewPlace() {
             Map<String, Integer> columnIndex = Map.of(
-                    "name", 0, "latitude", 1, "longitude", 2,
-                    "country", 3, "region", 4, "category", 5,
-                    "address", 6, "tags", 7, "description", 8
+                    "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
+                    "country", 4, "region", 5, "category", 6,
+                    "address", 7, "tags", 8, "description", 9
             );
-            String[] fields = {"센소지", "35.7148", "139.7967", "Japan", "Tokyo", "Temple",
+            String[] fields = {"fsq_senso", "센소지", "35.7148", "139.7967", "Japan", "Tokyo", "Temple",
                     "2-3-1 Asakusa", "관광", "유명 사찰"};
-
-            when(placeRepository.findAllByCountryAndRegionAndSourceFoursquare("Japan", "Tokyo"))
-                    .thenReturn(Collections.emptyList());
 
             int[] result = seeder.processChunk(List.<String[]>of(fields), columnIndex);
 
-            assertThat(result[0]).isEqualTo(1); // inserted
-            assertThat(result[1]).isEqualTo(0); // updated
-            verify(placeRepository).saveAll(argThat(list -> {
-                @SuppressWarnings("unchecked")
-                List<Place> places = (List<Place>) list;
-                Place place = places.get(0);
-                return place.getName().equals("센소지")
-                        && place.getSource().equals("foursquare")
-                        && place.getCountry().equals("Japan");
-            }));
+            assertThat(result[0]).isEqualTo(1); // processed
+
+            verify(placeRepository).upsertFoursquarePlace(
+                    eq("fsq_senso"),
+                    eq("센소지"),
+                    eq("2-3-1 Asakusa"),
+                    argThat(lat -> lat.compareTo(new BigDecimal("35.7148")) == 0),
+                    argThat(lng -> lng.compareTo(new BigDecimal("139.7967")) == 0),
+                    eq("Japan"),
+                    eq("Tokyo"),
+                    eq("Temple"),
+                    anyString(),
+                    eq("유명 사찰")
+            );
         }
 
         @Test
-        @DisplayName("기존 장소가 있으면 메타데이터만 갱신한다 (핵심 필드 보존)")
-        void processChunk_updatesMetadataOnly() {
+        @DisplayName("청크 내 같은 fsq_place_id 중복은 한 번만 upsert 한다")
+        void processChunk_dedupWithinChunk() {
             Map<String, Integer> columnIndex = Map.of(
-                    "name", 0, "latitude", 1, "longitude", 2,
-                    "country", 3, "region", 4, "category", 5,
-                    "address", 6, "tags", 7, "description", 8
+                    "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
+                    "country", 4, "region", 5, "category", 6,
+                    "address", 7, "tags", 8, "description", 9
             );
-            String[] fields = {"센소지", "35.7148", "139.7967", "Japan", "Tokyo", "HistoricTemple",
-                    "2-3-1 Asakusa", "관광;역사", "Updated description"};
+            // 같은 fsq_place_id 2건 (재수집 등으로 중복 가능)
+            String[] row1 = {"fsq_same", "7-Eleven", "35.0", "139.0", "Japan", "Tokyo", "Store", "", "편의점", ""};
+            String[] row2 = {"fsq_same", "7-Eleven", "35.1", "139.1", "Japan", "Tokyo", "Store", "", "편의점", ""};
 
-            Place existingPlace = Place.builder()
-                    .name("센소지")
-                    .address("2-3-1 Asakusa")
-                    .latitude(new BigDecimal("35.7148"))
-                    .longitude(new BigDecimal("139.7967"))
-                    .country("Japan")
-                    .region("Tokyo")
-                    .category("Temple")
-                    .source("foursquare")
-                    .savedAt(OffsetDateTime.now().minusDays(30))
-                    .active(true)
-                    .build();
+            int[] result = seeder.processChunk(List.of(row1, row2), columnIndex);
 
-            when(placeRepository.findAllByCountryAndRegionAndSourceFoursquare("Japan", "Tokyo"))
-                    .thenReturn(List.of(existingPlace));
-
-            int[] result = seeder.processChunk(List.<String[]>of(fields), columnIndex);
-
-            assertThat(result[0]).isEqualTo(0); // inserted
-            assertThat(result[1]).isEqualTo(1); // updated
-
-            // 핵심 필드 보존 확인
-            assertThat(existingPlace.getName()).isEqualTo("센소지");
-            assertThat(existingPlace.getAddress()).isEqualTo("2-3-1 Asakusa");
-            assertThat(existingPlace.getLatitude()).isEqualByComparingTo("35.7148");
-            assertThat(existingPlace.getLongitude()).isEqualByComparingTo("139.7967");
-
-            // 메타데이터 갱신 확인
-            assertThat(existingPlace.getCategory()).isEqualTo("HistoricTemple");
-            assertThat(existingPlace.getSource()).isEqualTo("foursquare");
+            assertThat(result[0]).isEqualTo(1); // 중복 제거되어 1건만 처리
+            verify(placeRepository, times(1)).upsertFoursquarePlace(
+                    eq("fsq_same"), eq("7-Eleven"), anyString(), any(), any(),
+                    eq("Japan"), eq("Tokyo"), eq("Store"), anyString(), anyString());
         }
     }
 
@@ -324,36 +317,41 @@ class FoursquareSeederTest {
     @DisplayName("seed() 통합 동작")
     class SeedIntegration {
 
+        @BeforeEach
+        void setUp() {
+            when(historyRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        }
+
         @Test
         @DisplayName("CSV 소스가 빈 스트림을 반환하면 건너뛴다")
         void seed_emptyStream() throws IOException {
             when(csvSource.open()).thenReturn(new ByteArrayInputStream("".getBytes(StandardCharsets.UTF_8)));
             seeder.seed();
             verifyNoInteractions(placeRepository);
-        }
-
-        @Test
+        }        @Test
         @DisplayName("CSV 파일을 읽어 장소를 생성한다")
         void seed_processesFile() throws IOException {
             String csv = """
-                    name,latitude,longitude,country,region,category,address,tags,description
-                    센소지,35.7148,139.7967,Japan,Tokyo,Temple,2-3-1 Asakusa,관광;사찰,유명 사찰
-                    에펠탑,48.8584,2.2945,France,Paris,Landmark,Champ de Mars,관광;랜드마크,프랑스 랜드마크
+                    fsq_place_id,name,latitude,longitude,country,region,category,address,tags,description
+                    fsq_senso,센소지,35.7148,139.7967,Japan,Tokyo,Temple,2-3-1 Asakusa,관광;사찰,유명 사찰
+                    fsq_eiffel,에펠탑,48.8584,2.2945,France,Paris,Landmark,Champ de Mars,관광;랜드마크,프랑스 랜드마크
                     """;
             when(csvSource.open()).thenReturn(new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8)));
-            when(placeRepository.findAllByCountryAndRegionAndSourceFoursquare(anyString(), anyString()))
-                    .thenReturn(Collections.emptyList());
             seeder.seed();
-            verify(placeRepository, atLeastOnce()).saveAll(anyList());
+            verify(placeRepository, atLeastOnce()).upsertFoursquarePlace(
+                    anyString(), anyString(), anyString(), any(), any(),
+                    anyString(), anyString(), anyString(), anyString(), anyString());
         }
 
         @Test
         @DisplayName("빈 CSV 헤더만 있으면 처리하지 않는다")
         void seed_headerOnly() throws IOException {
-            String csv = "name,latitude,longitude,country,region,category,address,tags,description\n";
+            String csv = "fsq_place_id,name,latitude,longitude,country,region,category,address,tags,description\n";
             when(csvSource.open()).thenReturn(new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8)));
             seeder.seed();
-            verifyNoInteractions(placeRepository);
+            verify(placeRepository, never()).upsertFoursquarePlace(
+                    any(), any(), any(), any(), any(),
+                    any(), any(), any(), any(), any());
         }
 
         @Test
@@ -361,7 +359,9 @@ class FoursquareSeederTest {
         void seed_ioException() throws IOException {
             when(csvSource.open()).thenThrow(new IOException("S3 connection failed"));
             seeder.seed();
-            verifyNoInteractions(placeRepository);
+            verify(placeRepository, never()).upsertFoursquarePlace(
+                    any(), any(), any(), any(), any(),
+                    any(), any(), any(), any(), any());
         }
     }
 }

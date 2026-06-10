@@ -22,6 +22,10 @@ public class Place extends BaseTimeEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /** Foursquare POI 전역 고유 ID (FSQ 시딩 데이터의 자연키) */
+    @Column(name = "fsq_place_id", unique = true)
+    private String fsqPlaceId;
+
     @Column(nullable = false)
     private String name;
 

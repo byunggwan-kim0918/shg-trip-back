@@ -14,4 +14,11 @@ public interface FoursquareCsvSource {
      * @throws IOException 파일 읽기 실패 시
      */
     InputStream open() throws IOException;
+
+    /**
+     * 소스 경로를 반환한다 (이력 기록용). 구현체가 재정의 가능.
+     */
+    default String sourcePath() {
+        return getClass().getSimpleName();
+    }
 }
