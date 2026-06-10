@@ -285,7 +285,7 @@ class FoursquareSeederTest {
                     "address", 6, "tags", 7, "description", 8
             );
             String[] fields = {"센소지", "35.7148", "139.7967", "Japan", "Tokyo", "HistoricTemple",
-                    "New Address", "관광;역사", "Updated description"};
+                    "2-3-1 Asakusa", "관광;역사", "Updated description"};
 
             Place existingPlace = Place.builder()
                     .name("센소지")
