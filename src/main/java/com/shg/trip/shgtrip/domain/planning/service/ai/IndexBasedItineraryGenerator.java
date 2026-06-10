@@ -157,10 +157,11 @@ public class IndexBasedItineraryGenerator {
 
     /**
      * maxTokens를 동적으로 계산한다.
-     * 인덱스 기반이므로 기존 대비 대폭 절감: days × 800 + 500.
+     * 인덱스 기반이므로 기존(ClaudeAIService: days*6000)보다 절감: days × 3000 + 500.
+     * ClaudeAIService와의 균형: 직접 생성 vs 인덱스 기반 = 6000 vs 3000
      */
     int calculateMaxTokens(long days) {
-        int estimated = (int) (days * 800) + 500;
+        int estimated = (int) (days * 3000) + 500;
         return Math.min(estimated, anthropicProperties.maxOutputTokens());
     }
 

@@ -8,6 +8,34 @@ resource "aws_s3_bucket" "data" {
   }
 }
 
+# S3 버킷 정책: ECS Task Role에 S3 접근 허용
+resource "aws_s3_bucket_policy" "data" {
+  bucket = aws_s3_bucket.data.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowECSTaskRoleS3Access"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${aws_iam_role.app_task.name}"
+        }
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.data.arn,
+          "${aws_s3_bucket.data.arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
 resource "aws_s3_bucket_versioning" "data" {
   bucket = aws_s3_bucket.data.id
   versioning_configuration {
