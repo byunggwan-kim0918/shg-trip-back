@@ -42,8 +42,7 @@ resource "aws_sfn_state_machine" "monthly_pipeline" {
       ExtractFSQ = {
         Type             = "Task"
         Resource         = "arn:aws:states:::ecs:runTask.sync"
-        TimeoutSeconds   = 1800
-        HeartbeatSeconds = 300
+        TimeoutSeconds   = 3600
         Parameters = {
           LaunchType     = "FARGATE"
           Cluster        = aws_ecs_cluster.main.arn
