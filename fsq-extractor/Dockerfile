@@ -12,8 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY extract.py .
 
-# 비root 실행
-RUN groupadd -r extractor && useradd -r -g extractor extractor
+# 비root 실행 (DuckDB extension 설치에 home directory 필요)
+RUN groupadd -r extractor && useradd -r -g extractor -m extractor
 RUN mkdir -p /tmp && chown extractor:extractor /tmp
 USER extractor
 
