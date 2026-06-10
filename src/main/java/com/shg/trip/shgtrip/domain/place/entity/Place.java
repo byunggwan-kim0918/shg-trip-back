@@ -34,10 +34,10 @@ public class Place extends BaseTimeEntity {
     @Column(nullable = false, precision = 11, scale = 8)
     private BigDecimal longitude;
 
-    @Column(nullable = false, length = 100)
+    @Column(nullable = false, length = 255)
     private String category;
 
-    @Column(length = 100)
+    @Column(length = 255)
     private String region;
 
     @Column(length = 100)
