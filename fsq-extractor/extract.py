@@ -79,6 +79,7 @@ def extract(conn: duckdb.DuckDBPyConnection) -> int:
     conn.execute(f"""
         COPY (
             SELECT
+                fsq_place_id,
                 name,
                 latitude,
                 longitude,

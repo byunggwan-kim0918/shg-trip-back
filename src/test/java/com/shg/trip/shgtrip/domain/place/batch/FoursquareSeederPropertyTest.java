@@ -32,90 +32,66 @@ class FoursquareSeederPropertyTest {
             @ForAll("existingPlaces") Place existingPlace,
             @ForAll("upsertRows") String[] upsertRow
     ) {
-        // Arrange: capture original core field values before upsert
-        String originalName = existingPlace.getName();
-        String originalAddress = existingPlace.getAddress();
-        BigDecimal originalLatitude = existingPlace.getLatitude();
-        BigDecimal originalLongitude = existingPlace.getLongitude();
-
-        // Set up mock repository to return the existing place
+        // Set up mock repository
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
-        when(mockRepo.findAllByCountryAndRegionAndSourceFoursquare(anyString(), anyString()))
-                .thenReturn(List.of(existingPlace));
-        when(mockRepo.saveAll(Mockito.anyList())).thenAnswer(inv -> inv.getArgument(0));
 
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null);
 
-        // The upsert row uses the same name/country/region as existing place to trigger update path
         String[] row = new String[]{
-                existingPlace.getName(),                    // name (matches existing)
-                upsertRow[1],                              // latitude (new value from CSV)
-                upsertRow[2],                              // longitude (new value from CSV)
-                existingPlace.getCountry(),                // country (matches existing)
-                existingPlace.getRegion(),                 // region (matches existing)
-                upsertRow[5],                              // category (new metadata)
-                upsertRow[6],                              // address (new value in CSV)
-                upsertRow[7],                              // tags
-                upsertRow[8]                               // description
+                "fsq_" + Math.abs(existingPlace.getName().hashCode()), // fsq_place_id
+                existingPlace.getName(),
+                upsertRow[2],                              // latitude
+                upsertRow[3],                              // longitude
+                existingPlace.getCountry(),
+                existingPlace.getRegion(),
+                upsertRow[6],                              // category
+                upsertRow[7],                              // address
+                upsertRow[8],                              // tags
+                upsertRow[9]                               // description
         };
 
         Map<String, Integer> columnIndex = Map.of(
-                "name", 0, "latitude", 1, "longitude", 2,
-                "country", 3, "region", 4, "category", 5,
-                "address", 6, "tags", 7, "description", 8
+                "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
+                "country", 4, "region", 5, "category", 6,
+                "address", 7, "tags", 8, "description", 9
         );
 
-        // Act: process chunk (upsert)
+        // Act: process chunk → DB upsert로 위임되며, 기존 엔티티 객체는 건드리지 않는다
         List<String[]> rows = new ArrayList<>();
         rows.add(row);
-        seeder.processChunk(rows, columnIndex);
+        int[] result = seeder.processChunk(rows, columnIndex);
 
-        // Assert: core fields must NOT change after upsert
-        assertThat(existingPlace.getName()).isEqualTo(originalName);
-        assertThat(existingPlace.getAddress()).isEqualTo(originalAddress);
-        assertThat(existingPlace.getLatitude()).isEqualByComparingTo(originalLatitude);
-        assertThat(existingPlace.getLongitude()).isEqualByComparingTo(originalLongitude);
+        // Assert: upsert는 fsq_place_id 기준 DB가 처리하므로 메모리상 기존 엔티티는 불변
+        assertThat(result[0]).isEqualTo(1);
+        verify(mockRepo, times(1)).upsertFoursquarePlace(
+                anyString(), anyString(), anyString(), any(), any(),
+                anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     /**
      * Property 1 (data source failure case):
-     * When data source access fails (IOException during CSV read), existing data remains unchanged.
-     * We simulate this by verifying that processChunk with an empty list does not affect existing places.
-     *
+     * 데이터 소스 접근 실패(빈 청크) 시 어떤 DB 작업도 일어나지 않는다.
      */
     @Property(tries = 100)
     void dataSourceFailurePreservesExistingData(
             @ForAll("existingPlaces") Place existingPlace
     ) {
-        // Arrange: capture original state
-        String originalName = existingPlace.getName();
-        String originalAddress = existingPlace.getAddress();
-        BigDecimal originalLatitude = existingPlace.getLatitude();
-        BigDecimal originalLongitude = existingPlace.getLongitude();
-        String originalCategory = existingPlace.getCategory();
-
-        // Set up mock repository
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
 
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null);
 
         Map<String, Integer> columnIndex = Map.of(
-                "name", 0, "latitude", 1, "longitude", 2,
-                "country", 3, "region", 4, "category", 5,
-                "address", 6, "tags", 7, "description", 8
+                "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
+                "country", 4, "region", 5, "category", 6,
+                "address", 7, "tags", 8, "description", 9
         );
 
         // Act: process empty chunk (simulates no data available due to source failure)
         int[] result = seeder.processChunk(new ArrayList<>(), columnIndex);
 
-        // Assert: no changes made, existing data untouched
-        assertThat(result[0]).isEqualTo(0); // no inserts
-        assertThat(result[1]).isEqualTo(0); // no updates
-        assertThat(existingPlace.getName()).isEqualTo(originalName);
-        assertThat(existingPlace.getAddress()).isEqualTo(originalAddress);
-        assertThat(existingPlace.getLatitude()).isEqualByComparingTo(originalLatitude);
-        assertThat(existingPlace.getLongitude()).isEqualByComparingTo(originalLongitude);
-        assertThat(existingPlace.getCategory()).isEqualTo(originalCategory);
+        // Assert: no changes made
+        assertThat(result[0]).isEqualTo(0);
+        assertThat(result[1]).isEqualTo(0);
 
         // Repository should never be called
         verifyNoInteractions(mockRepo);
@@ -135,18 +111,19 @@ class FoursquareSeederPropertyTest {
             @ForAll("validCsvRows") String[] validRow
     ) {
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null);
 
         Map<String, Integer> columnIndex = Map.of(
-                "name", 0, "latitude", 1, "longitude", 2,
-                "country", 3, "region", 4, "category", 5,
-                "address", 6, "tags", 7, "description", 8
+                "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
+                "country", 4, "region", 5, "category", 6,
+                "address", 7, "tags", 8, "description", 9
         );
 
         FoursquareSeeder.FoursquareRecord result = seeder.mapToRecord(validRow, columnIndex);
 
         // When mapToRecord returns non-null, all required fields must be non-null
         assertThat(result).isNotNull();
+        assertThat(result.fsqPlaceId()).isNotNull().isNotBlank();
         assertThat(result.name()).isNotNull().isNotBlank();
         assertThat(result.category()).isNotNull().isNotBlank();
         assertThat(result.region()).isNotNull().isNotBlank();
@@ -164,12 +141,12 @@ class FoursquareSeederPropertyTest {
             @ForAll("rowsWithMissingRequiredField") String[] invalidRow
     ) {
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null);
 
         Map<String, Integer> columnIndex = Map.of(
-                "name", 0, "latitude", 1, "longitude", 2,
-                "country", 3, "region", 4, "category", 5,
-                "address", 6, "tags", 7, "description", 8
+                "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
+                "country", 4, "region", 5, "category", 6,
+                "address", 7, "tags", 8, "description", 9
         );
 
         FoursquareSeeder.FoursquareRecord result = seeder.mapToRecord(invalidRow, columnIndex);
@@ -236,7 +213,7 @@ class FoursquareSeederPropertyTest {
 
         return Combinators.combine(latStrings, lngStrings, categories, addresses, tags, descriptions)
                 .as((lat, lng, category, address, tag, desc) ->
-                        new String[]{"placeholder", lat, lng, "placeholder", "placeholder",
+                        new String[]{"fsq_ph", "placeholder", lat, lng, "placeholder", "placeholder",
                                 category, address, tag, desc}
                 );
     }
@@ -270,7 +247,8 @@ class FoursquareSeederPropertyTest {
                     String address = "Some Address " + region;
                     String tag = "관광;맛집";
                     String desc = "A great place";
-                    return new String[]{name, lat, lng, country, region, category, address, tag, desc};
+                    String fsqId = "fsq_" + Math.abs((name + region).hashCode());
+                    return new String[]{fsqId, name, lat, lng, country, region, category, address, tag, desc};
                 });
     }
 
@@ -291,15 +269,15 @@ class FoursquareSeederPropertyTest {
         Arbitrary<String> regions = Arbitraries.of("Tokyo", "Seoul", "Osaka", "Busan");
         Arbitrary<String> categories = Arbitraries.of(
                 "Restaurant", "Cafe", "Temple", "Museum", "Park");
-        // Index of required field to blank: 0=name, 1=lat, 2=lng, 3=country, 4=region, 5=category
-        Arbitrary<Integer> fieldToBlank = Arbitraries.integers().between(0, 5);
+        // Index of required field to blank: 0=fsq_place_id, 1=name, 2=lat, 3=lng, 4=country, 5=region, 6=category
+        Arbitrary<Integer> fieldToBlank = Arbitraries.integers().between(0, 6);
         // Blank value: empty string or whitespace
         Arbitrary<String> blankValues = Arbitraries.of("", "  ");
 
         return Combinators.combine(names, latStrings, lngStrings, countries, regions, categories, fieldToBlank)
                 .flatAs((name, lat, lng, country, region, category, blankIdx) ->
                         blankValues.map(blankVal -> {
-                            String[] row = new String[]{name, lat, lng, country, region, category,
+                            String[] row = new String[]{"fsq_x", name, lat, lng, country, region, category,
                                     "Some Address", "관광;맛집", "Description"};
                             row[blankIdx] = blankVal;
                             return row;

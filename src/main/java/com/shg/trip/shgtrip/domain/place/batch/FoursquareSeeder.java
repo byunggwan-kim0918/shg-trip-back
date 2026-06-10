@@ -30,12 +30,13 @@ public class FoursquareSeeder {
 
     private final PlaceRepository placeRepository;
     private final FoursquareCsvSource csvSource;
+    private final PlaceSeedingHistoryRepository historyRepository;
 
     @Value("${batch.foursquare.chunk-size:1000}")
     private int chunkSize;
 
     private static final List<String> REQUIRED_COLUMNS = List.of(
-            "name", "latitude", "longitude", "country", "region", "category");
+            "fsq_place_id", "name", "latitude", "longitude", "country", "region", "category");
 
     static final Set<String> PRIORITY_CITIES = Set.of(
             "Seoul", "Busan", "Jeju", "Incheon", "Daegu", "Daejeon",
@@ -46,30 +47,42 @@ public class FoursquareSeeder {
             "Sendai", "Nagasaki", "Kagoshima", "Beppu", "Takayama");
 
     public record FoursquareRecord(
-            String name, BigDecimal latitude, BigDecimal longitude,
+            String fsqPlaceId, String name, BigDecimal latitude, BigDecimal longitude,
             String country, String region, String category,
             String address, List<String> tags, String description
     ) {}
 
     public void seed() {
+        // 배치 시작 시점에 RUNNING 상태로 이력 row 생성 (컨테이너 crash 시도 추적 가능)
+        PlaceSeedingHistory history = historyRepository.save(
+                PlaceSeedingHistory.builder()
+                        .startedAt(OffsetDateTime.now())
+                        .sourceFile(csvSource.sourcePath())
+                        .build()
+        );
+
         try (InputStream is = csvSource.open();
              BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
 
             String headerLine = reader.readLine();
             if (headerLine == null || headerLine.isBlank()) {
                 log.warn("[FoursquareSeeder] 빈 CSV 데이터");
+                history.fail("빈 CSV 데이터");
+                historyRepository.save(history);
                 return;
             }
 
             Map<String, Integer> columnIndex = parseHeader(headerLine);
             if (!validateRequiredColumns(columnIndex)) {
                 log.error("[FoursquareSeeder] 필수 컬럼 누락");
+                history.fail("필수 컬럼 누락");
+                historyRepository.save(history);
                 return;
             }
 
             List<String[]> chunk = new ArrayList<>(chunkSize);
             String line;
-            int totalInserted = 0, totalUpdated = 0, failedChunks = 0;
+            int totalProcessed = 0, failedChunks = 0, failedRows = 0;
 
             while ((line = reader.readLine()) != null) {
                 String[] fields = parseCsvLine(line);
@@ -79,10 +92,10 @@ public class FoursquareSeeder {
                 if (chunk.size() >= chunkSize) {
                     try {
                         int[] result = processChunk(chunk, columnIndex);
-                        totalInserted += result[0];
-                        totalUpdated += result[1];
+                        totalProcessed += result[0];
                     } catch (Exception e) {
                         failedChunks++;
+                        failedRows += chunk.size();
                         log.error("[FoursquareSeeder] 청크 처리 실패 (건너뜀, {}건): {}",
                                 chunk.size(), e.getMessage());
                     }
@@ -93,19 +106,28 @@ public class FoursquareSeeder {
             if (!chunk.isEmpty()) {
                 try {
                     int[] result = processChunk(chunk, columnIndex);
-                    totalInserted += result[0];
-                    totalUpdated += result[1];
+                    totalProcessed += result[0];
                 } catch (Exception e) {
                     failedChunks++;
+                    failedRows += chunk.size();
                     log.error("[FoursquareSeeder] 마지막 청크 처리 실패 (건너뜀, {}건): {}",
                             chunk.size(), e.getMessage());
                 }
             }
 
-            log.info("[FoursquareSeeder] 완료: inserted={}, updated={}, failedChunks={}",
-                    totalInserted, totalUpdated, failedChunks);
+            // 배치 완료 후 DB에서 직접 카운트 — upsert 반환값보다 정확
+            int inserted = placeRepository.countInsertedSince(history.getStartedAt());
+            int updated = placeRepository.countUpdatedSince(history.getStartedAt());
+            history.complete(totalProcessed, inserted, updated, failedRows, failedChunks);
+            historyRepository.save(history);
+
+            log.info("[FoursquareSeeder] 완료: processed={}, failedChunks={}, failedRows={}",
+                    totalProcessed, failedChunks, failedRows);
+
         } catch (IOException e) {
             log.error("[FoursquareSeeder] CSV 읽기 실패: {}", e.getMessage());
+            history.fail(e.getMessage());
+            historyRepository.save(history);
         }
     }
 
@@ -120,67 +142,54 @@ public class FoursquareSeeder {
 
         if (records.isEmpty()) return new int[]{0, 0};
 
-        // CSV 내부 중복 제거 (name + address 기준, 먼저 나온 것 유지)
+        // CSV 내부 중복 제거 (fsq_place_id 기준, 먼저 나온 것 유지)
         Map<String, FoursquareRecord> dedupMap = new LinkedHashMap<>();
         for (FoursquareRecord r : records) {
-            String key = r.name() + "|" + (r.address() != null ? r.address() : "");
-            dedupMap.putIfAbsent(key, r);
-        }
-        List<FoursquareRecord> dedupRecords = new ArrayList<>(dedupMap.values());
-
-        Map<String, List<FoursquareRecord>> grouped = dedupRecords.stream()
-                .collect(Collectors.groupingBy(r -> r.country() + "|" + r.region()));
-
-        int inserted = 0, updated = 0;
-        List<Place> toSave = new ArrayList<>();
-
-        for (Map.Entry<String, List<FoursquareRecord>> entry : grouped.entrySet()) {
-            List<FoursquareRecord> groupRecords = entry.getValue();
-            String country = groupRecords.get(0).country();
-            String region = groupRecords.get(0).region();
-
-            List<Place> existing = placeRepository.findAllByCountryAndRegionAndSourceFoursquare(country, region);
-            Map<String, Place> existingByNameAddress = existing.stream()
-                    .collect(Collectors.toMap(
-                            p -> p.getName() + "|" + p.getAddress(),
-                            p -> p, (a, b) -> a));
-
-            for (FoursquareRecord record : groupRecords) {
-                String lookupKey = record.name() + "|" + (record.address() != null ? record.address() : "");
-                Place existingPlace = existingByNameAddress.get(lookupKey);
-                if (existingPlace != null) {
-                    existingPlace.updateFoursquareMetadata(record.category(), record.tags(), record.description());
-                    toSave.add(existingPlace);
-                    updated++;
-                } else {
-                    Place newPlace = Place.builder()
-                            .name(record.name())
-                            .address(record.address() != null ? record.address() : "")
-                            .latitude(record.latitude())
-                            .longitude(record.longitude())
-                            .country(record.country())
-                            .region(record.region())
-                            .category(record.category())
-                            .tags(record.tags())
-                            .description(record.description())
-                            .source("foursquare")
-                            .active(true)
-                            .savedAt(OffsetDateTime.now())
-                            .build();
-                    toSave.add(newPlace);
-                    existingByNameAddress.put(lookupKey, newPlace); // 같은 청크 내 후속 중복 방지
-                    inserted++;
-                }
-            }
+            dedupMap.putIfAbsent(r.fsqPlaceId(), r);
         }
 
-        if (!toSave.isEmpty()) placeRepository.saveAll(toSave);
-        return new int[]{inserted, updated};
+        int processed = 0;
+        for (FoursquareRecord record : dedupMap.values()) {
+            // DB 레벨 upsert로 청크 간/동시성 중복을 안전하게 처리
+            placeRepository.upsertFoursquarePlace(
+                    record.fsqPlaceId(),
+                    record.name(),
+                    record.address() != null ? record.address() : "",
+                    record.latitude(),
+                    record.longitude(),
+                    record.country(),
+                    record.region(),
+                    record.category(),
+                    toPostgresArray(record.tags()),
+                    record.description() != null ? record.description() : ""
+            );
+            processed++;
+        }
+
+        // upsert는 insert/update를 구분하지 않으므로 처리 건수만 반환
+        return new int[]{processed, 0};
+    }
+
+    /**
+     * 문자열 리스트를 PostgreSQL 배열 리터럴 형식으로 변환한다. 예: {"tag1","tag2"}
+     */
+    private String toPostgresArray(List<String> values) {
+        if (values == null || values.isEmpty()) return "{}";
+        StringBuilder sb = new StringBuilder("{");
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) sb.append(",");
+            // 큰따옴표와 백슬래시 이스케이프
+            String escaped = values.get(i).replace("\\", "\\\\").replace("\"", "\\\"");
+            sb.append("\"").append(escaped).append("\"");
+        }
+        sb.append("}");
+        return sb.toString();
     }
 
     public FoursquareRecord mapToRecord(String[] fields, Map<String, Integer> columnIndex) {
         if (fields == null) return null;
 
+        String fsqPlaceId = getField(fields, columnIndex, "fsq_place_id");
         String name = getField(fields, columnIndex, "name");
         String latStr = getField(fields, columnIndex, "latitude");
         String lngStr = getField(fields, columnIndex, "longitude");
@@ -188,7 +197,7 @@ public class FoursquareSeeder {
         String region = getField(fields, columnIndex, "region");
         String category = getField(fields, columnIndex, "category");
 
-        if (isBlank(name) || isBlank(latStr) || isBlank(lngStr)
+        if (isBlank(fsqPlaceId) || isBlank(name) || isBlank(latStr) || isBlank(lngStr)
                 || isBlank(country) || isBlank(region) || isBlank(category)) {
             return null;
         }
@@ -209,7 +218,7 @@ public class FoursquareSeeder {
         String description = getField(fields, columnIndex, "description");
         List<String> tags = parseTags(tagsRaw, category);
 
-        return new FoursquareRecord(name.trim(), latitude, longitude,
+        return new FoursquareRecord(fsqPlaceId.trim(), name.trim(), latitude, longitude,
                 country.trim(), truncate(region.trim(), 255), truncate(category.trim(), 255),
                 address != null ? address.trim() : null, tags, description);
     }
