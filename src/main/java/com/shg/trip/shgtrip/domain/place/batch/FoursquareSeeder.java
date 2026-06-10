@@ -185,8 +185,13 @@ public class FoursquareSeeder {
         List<String> tags = parseTags(tagsRaw, category);
 
         return new FoursquareRecord(name.trim(), latitude, longitude,
-                country.trim(), region.trim(), category.trim(),
+                country.trim(), truncate(region.trim(), 255), truncate(category.trim(), 255),
                 address != null ? address.trim() : null, tags, description);
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null) return null;
+        return value.length() > maxLength ? value.substring(0, maxLength) : value;
     }
 
     public List<String> parseTags(String tagsRaw, String category) {
