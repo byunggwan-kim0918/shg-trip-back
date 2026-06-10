@@ -157,6 +157,7 @@ def upload_to_s3(row_count: int) -> str:
 if __name__ == "__main__":
     try:
         conn = duckdb.connect()
+        conn.execute("SET home_directory='/tmp';")
         connect_iceberg(conn)
 
         columns = print_schema(conn)  # 스키마 확인 및 컬럼 목록 획득

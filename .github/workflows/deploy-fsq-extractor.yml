@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'fsq-extractor/**'
+  workflow_dispatch:
 
 env:
   AWS_REGION: ap-northeast-2
@@ -31,15 +32,11 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build and push FSQ extractor image
+      - name: Build and push FSQ Extractor image
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-          REPO: shgtrip-fsq-extractor
+          FSQ_REPO: shgtrip-fsq-extractor
         run: |
-          docker build \
-            -t $ECR_REGISTRY/$REPO:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$REPO:latest \
-            ./fsq-extractor
-          docker push $ECR_REGISTRY/$REPO:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$REPO:latest
+          docker build -t fsq-extractor:latest ./fsq-extractor
+          docker tag fsq-extractor:latest $ECR_REGISTRY/$FSQ_REPO:latest
+          docker push $ECR_REGISTRY/$FSQ_REPO:latest
