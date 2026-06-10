@@ -18,9 +18,19 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /**
      * 장소명 + 주소로 기존 장소 조회 (AI 응답 → DB 매핑용, 활성 상태만)
+     * 중복 데이터 대비: source 우선순위 (google > foursquare > 기타), 최신순
+     * List로 반환받아 첫 번째만 선택 (중복 시 예외 대신 우선순위 데이터 사용)
      */
-    @Query("SELECT p FROM Place p WHERE p.name = :name AND p.address = :address AND p.active = true")
-    Optional<Place> findByNameAndAddress(@Param("name") String name, @Param("address") String address);
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.name = :name AND p.address = :address AND p.active = true
+            ORDER BY CASE WHEN p.source = 'google' THEN 0 ELSE 1 END, p.createdAt DESC
+            """)
+    List<Place> findByNameAndAddressList(@Param("name") String name, @Param("address") String address);
+
+    default Optional<Place> findByNameAndAddress(String name, String address) {
+        return findByNameAndAddressList(name, address).stream().findFirst();
+    }
 
     /**
      * 키워드로 장소 검색 (이름, 주소, 설명 포함)
@@ -89,6 +99,22 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      */
     @Query("SELECT p FROM Place p WHERE p.embedding IS NULL AND p.active = true")
     Page<Place> findByEmbeddingIsNullAndActiveTrue(Pageable pageable);
+
+    /**
+     * 벡터 검색 후보 중 Google API 동기화가 필요한 place 조회.
+     * 조건: source='foursquare' OR stale(7일 이상)
+     * @param placeIds 벡터 검색 결과 place ID 목록
+     * @param sevenDaysAgo 7일 전 시각
+     * @return 동기화 대상 place 목록
+     */
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.id IN :placeIds
+            AND (p.source = 'foursquare' OR p.savedAt < :sevenDaysAgo)
+            AND p.active = true
+            """)
+    List<Place> findByIdAndNeedsSync(@Param("placeIds") List<Long> placeIds,
+                                      @Param("sevenDaysAgo") OffsetDateTime sevenDaysAgo);
 
     /**
      * 미보강(enriched_at IS NULL)이고 활성 상태인 장소 페이징 조회 — BatchEnrichScheduler 사용.
