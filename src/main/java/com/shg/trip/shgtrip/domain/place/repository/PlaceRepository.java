@@ -17,9 +17,10 @@ import java.time.OffsetDateTime;
 public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /**
-     * 장소명 + 주소로 기존 장소 조회 (AI 응답 → DB 매핑용)
+     * 장소명 + 주소로 기존 장소 조회 (AI 응답 → DB 매핑용, 활성 상태만)
      */
-    Optional<Place> findByNameAndAddress(String name, String address);
+    @Query("SELECT p FROM Place p WHERE p.name = :name AND p.address = :address AND p.active = true")
+    Optional<Place> findByNameAndAddress(@Param("name") String name, @Param("address") String address);
 
     /**
      * 키워드로 장소 검색 (이름, 주소, 설명 포함)
