@@ -133,6 +133,11 @@ public class Place extends BaseTimeEntity {
         this.googleSyncedAt = OffsetDateTime.now();
     }
 
+    /** 데이터 소스 변경 (Foursquare → Google) */
+    public void setSource(String source) {
+        this.source = source;
+    }
+
     /** soft delete 처리 */
     public void deactivate() {
         this.active = false;

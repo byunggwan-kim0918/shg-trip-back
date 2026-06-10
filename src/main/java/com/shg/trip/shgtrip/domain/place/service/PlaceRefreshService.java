@@ -41,8 +41,17 @@ public class PlaceRefreshService {
 
     private void refreshInternal(Long placeId, String placeName) {
         try {
-            googlePlacesClient.searchAndGetDetail(placeName).ifPresent(detail -> {
-                placeRepository.findById(placeId).ifPresent(place -> {
+            placeRepository.findById(placeId).ifPresent(place -> {
+                // 위도경도가 있으면 location bias로 더 정확한 검색
+                var detailOpt = (place.getLatitude() != null && place.getLongitude() != null)
+                        ? googlePlacesClient.searchAndGetDetailWithLocation(
+                                placeName,
+                                place.getLatitude().doubleValue(),
+                                place.getLongitude().doubleValue()
+                        )
+                        : googlePlacesClient.searchAndGetDetail(placeName);
+
+                detailOpt.ifPresent(detail -> {
                     place.update(
                             detail.address(),
                             detail.lat(),
@@ -54,7 +63,10 @@ public class PlaceRefreshService {
                             detail.sourceUrl(),
                             detail.editorialSummary()
                     );
-                    if (detail.photoReference() != null && place.getImageUrl() == null) {
+                    // Foursquare 시딩 데이터를 Google API로 갱신 → source 변경
+                    place.setSource("google");
+                    // stale 갱신 시 최신 이미지도 함께 업로드 (이전 이미지 있어도 갱신)
+                    if (detail.photoReference() != null) {
                         try {
                             placeImageUploader.uploadIfAbsent(placeId, detail.photoReference())
                                     .ifPresent(place::updateImageUrl);
@@ -64,7 +76,7 @@ public class PlaceRefreshService {
                     }
                 });
             });
-            log.debug("Place {} refreshed successfully", placeId);
+            log.debug("Place {} refreshed successfully and source changed to 'google'", placeId);
         } catch (BusinessException e) {
             log.warn("Failed to refresh place {}: {}", placeId, e.getMessage());
         } catch (Exception e) {

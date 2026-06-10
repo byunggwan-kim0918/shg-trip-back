@@ -200,7 +200,8 @@ public class ItineraryDataMapper {
 
     /**
      * 만료된 Place를 Google Places API로 갱신.
-     * 갱신 실패 시 오래된 데이터를 그대로 반환 (서비스 중단 방지).
+     * 갱신 실패 시 오래진 데이터를 그대로 반환 (서비스 중단 방지).
+     * photoReference는 DB에 저장되며, 이미지는 화면 조회 시 PlaceImageAsyncRecovery에서 비동기로 다운로드.
      */
     private Place refreshFromGoogle(Place stalePlace, PlaceData placeData) {
         try {
@@ -226,7 +227,7 @@ public class ItineraryDataMapper {
      * Google Places API 조회 → 실패 시 fallback 저장.
      * - BusinessException(외부 API 장애)은 fallback으로 처리 (일정 생성 전체 중단 방지)
      * - 일반 예외(파싱 오류 등)도 fallback 처리
-     * - save()는 PlacePersistenceHelper(REQUIRES_NEW)에 위임 → race condition 안전
+     * - photoReference는 DB에 저장되며, 이미지는 화면 조회 시 PlaceImageAsyncRecovery에서 비동기로 다운로드
      * - destinationCoord가 있으면 여행지 기준 500km 초과 장소는 fallback 처리 (엉뚱한 장소 방지)
      */
     private Place resolveFromGoogleOrFallback(PlaceData placeData, double[] destinationCoord) {
@@ -274,10 +275,10 @@ public class ItineraryDataMapper {
                         .openingHours(d.openingHours())
                         .photoReference(d.photoReference())
                         .sourceUrl(d.sourceUrl())
+                        .source("google")
                         .savedAt(OffsetDateTime.now())
                         .build();
-                // REQUIRES_NEW 트랜잭션 내에서 저장 → race condition 시 충돌 트랜잭션 롤백 후 재조회
-                return placePersistenceHelper.saveOrFetch(place);
+                return placeRepository.save(place);
             }
         } catch (com.shg.trip.shgtrip.global.exception.BusinessException e) {
             log.warn("Google Places API 장애로 fallback 처리: name={}, error={}", placeData.name(), e.getMessage());
@@ -294,7 +295,7 @@ public class ItineraryDataMapper {
     }
 
     private Place buildFallbackPlace(PlaceData placeData) {
-        return placePersistenceHelper.saveOrFetch(Place.builder()
+        Place fallback = Place.builder()
                 .name(placeData.name())
                 .address(placeData.address() != null ? placeData.address() : "주소 미확인")
                 .latitude(BigDecimal.ZERO)
@@ -302,8 +303,10 @@ public class ItineraryDataMapper {
                 .category(placeData.category() != null ? placeData.category() : "기타")
                 .region(placeData.region())
                 .country(placeData.country())
+                .source("google")
                 .savedAt(OffsetDateTime.now())
-                .build());
+                .build();
+        return placeRepository.save(fallback);
     }
 
     private ItineraryStep toStepEntity(StepData stepData, Map<String, Place> placeCache) {

@@ -45,7 +45,6 @@ class OptimizedGenerationExecutorTest {
     @Mock private ItinerarySaveHelper saveHelper;
     @Mock private GenerationResultStore resultStore;
     @Mock private CancellationRegistry cancellationRegistry;
-    @Mock private PlaceFreshnessFilter placeFreshnessFilter;
     @Mock private com.shg.trip.shgtrip.domain.place.service.PlaceRefreshService placeRefreshService;
     @Mock private com.shg.trip.shgtrip.domain.place.repository.PlaceRepository placeRepository;
     @Mock private Executor googleSyncExecutor;
@@ -139,8 +138,7 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
-        when(placeFreshnessFilter.filter(candidates)).thenReturn(
-                new PlaceFreshnessResult(candidates, List.of()));
+        when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
         when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
         when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), anyList())).thenReturn(itineraryData);
@@ -209,8 +207,7 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
-        when(placeFreshnessFilter.filter(candidates)).thenReturn(
-                new PlaceFreshnessResult(candidates, List.of()));
+        when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
         when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
 
@@ -250,8 +247,7 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
-        when(placeFreshnessFilter.filter(candidates)).thenReturn(
-                new PlaceFreshnessResult(candidates, List.of()));
+        when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
         when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
 
@@ -314,8 +310,7 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
-        when(placeFreshnessFilter.filter(candidates)).thenReturn(
-                new PlaceFreshnessResult(candidates, List.of()));
+        when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
         when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
         when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), anyList())).thenReturn(itineraryData);

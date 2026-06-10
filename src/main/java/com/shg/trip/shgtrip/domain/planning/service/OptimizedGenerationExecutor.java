@@ -16,9 +16,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.time.OffsetDateTime;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -89,13 +88,26 @@ public class OptimizedGenerationExecutor {
                 return;
             }
 
-            // 4. Google Places 동기화 (stale 장소 병렬 호출)
+            // 4. Google Places 동기화 (source='foursquare' OR stale 조건 확인)
+            // 벡터 검색 결과 중 source='foursquare' 또는 stale(7일 이상)인 것들만 Google API로 갱신
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "syncing_places", 40, "장소 정보를 동기화하고 있습니다...");
 
-            PlaceFreshnessResult freshnessResult = placeFreshnessFilter.filter(candidates);
-            if (!freshnessResult.stalePlaces().isEmpty()) {
-                syncStalePlaces(freshnessResult.stalePlaces());
+            List<Long> placeIds = candidates.stream()
+                    .map(PlaceCandidate::placeId)
+                    .filter(Objects::nonNull)
+                    .distinct()
+                    .collect(Collectors.toList());
+
+            // 동기화 대상: source='foursquare' OR stale(7일 이상)
+            List<Place> toSync = placeRepository.findByIdAndNeedsSync(
+                    placeIds,
+                    OffsetDateTime.now().minusDays(7)
+            );
+
+            if (!toSync.isEmpty()) {
+                log.info("Google Places 동기화 대상: {}건 (source='foursquare' or stale)", toSync.size());
+                syncAllPlaces(toSync);
             }
 
             // 동기화 후 DB 최신 데이터(rating, priceLevel, openingHours)를 candidates에 반영
@@ -192,14 +204,19 @@ public class OptimizedGenerationExecutor {
      * stale 장소들을 병렬로 Google Places 동기화한다.
      * 동기화 실패 시 해당 장소를 건너뛰고 계속 진행한다 (best-effort).
      */
-    private void syncStalePlaces(List<PlaceCandidate> stalePlaces) {
-        log.info("Google Places 동기화 시작: {}건", stalePlaces.size());
+    /**
+     * Place 목록을 Google Places API로 동기화한다.
+     * source를 'foursquare' → 'google'으로 변경하여 완전한 정보로 갱신한다.
+     * 동기화 실패 시 해당 장소를 건너뛰고 계속 진행한다 (best-effort).
+     */
+    private void syncAllPlaces(List<Place> places) {
+        log.info("Google Places 동기화 시작: {}건 (source='foursquare' or stale)", places.size());
 
         List<CompletableFuture<Void>> futures = new ArrayList<>();
-        for (PlaceCandidate candidate : stalePlaces) {
-            if (candidate.placeId() == null) continue;
+        for (Place place : places) {
+            if (place.getId() == null) continue;
             futures.add(CompletableFuture.runAsync(() ->
-                    placeRefreshService.refreshSync(candidate.placeId(), candidate.name())
+                    placeRefreshService.refreshSync(place.getId(), place.getName())
             ));
         }
 
