@@ -70,8 +70,8 @@ public class GooglePlacesClient {
 
     /**
      * 장소명 + 위도경도로 Text Search (location restriction 적용).
-     * 기존 위치 ~100m 직사각형 영역 내에서만 검색 → 정확한 장소 매칭.
-     * Foursquare 시딩 데이터는 좌표가 정확하므로 0.001도(~100m) 범위로 충분.
+     * 기존 위치 ~50m 직사각형 영역 내에서만 검색 → 정확한 장소 매칭.
+     * Foursquare 시딩 데이터는 좌표가 정확하므로 0.0005도(~50m) 범위로 충분.
      * @param query 검색어 (장소명)
      * @param latitude 기존 위도
      * @param longitude 기존 경도
@@ -79,8 +79,8 @@ public class GooglePlacesClient {
      */
     public Optional<GooglePlaceDetail> searchAndGetDetailWithLocation(String query, double latitude, double longitude) {
         try {
-            // 0.001도 ≈ 100m (적도 기준)
-            double delta = 0.001;
+            // 0.0005도 ≈ 50m (적도 기준, 약 100m x 88m 범위)
+            double delta = 0.0005;
 
             @SuppressWarnings("unchecked")
             Map<String, Object> response = restClient.post()
