@@ -44,43 +44,43 @@ class IndexBasedItineraryGeneratorTest {
     // ── calculateMaxTokens 테스트 ──
 
     @Test
-    @DisplayName("1일 여행: maxTokens = 1 * 800 + 500 = 1300")
-    void calculateMaxTokens_oneDay_returns1300() {
+    @DisplayName("1일 여행: maxTokens = 1 * 3000 + 500 = 3500")
+    void calculateMaxTokens_oneDay_returns3500() {
         int result = generator.calculateMaxTokens(1);
-        assertThat(result).isEqualTo(1300);
+        assertThat(result).isEqualTo(3500);
     }
 
     @Test
-    @DisplayName("3일 여행: maxTokens = 3 * 800 + 500 = 2900")
-    void calculateMaxTokens_threeDays_returns2900() {
+    @DisplayName("3일 여행: maxTokens = 3 * 3000 + 500 = 9500")
+    void calculateMaxTokens_threeDays_returns9500() {
         int result = generator.calculateMaxTokens(3);
-        assertThat(result).isEqualTo(2900);
+        assertThat(result).isEqualTo(9500);
     }
 
     @Test
-    @DisplayName("5일 여행: maxTokens = 5 * 800 + 500 = 4500")
-    void calculateMaxTokens_fiveDays_returns4500() {
+    @DisplayName("5일 여행: maxTokens = 5 * 3000 + 500 = 15500")
+    void calculateMaxTokens_fiveDays_returns15500() {
         int result = generator.calculateMaxTokens(5);
-        assertThat(result).isEqualTo(4500);
+        assertThat(result).isEqualTo(15500);
     }
 
     @Test
-    @DisplayName("7일 여행: maxTokens = 7 * 800 + 500 = 6100")
-    void calculateMaxTokens_sevenDays_returns6100() {
+    @DisplayName("7일 여행: maxTokens = 7 * 3000 + 500 = 21500")
+    void calculateMaxTokens_sevenDays_returns21500() {
         int result = generator.calculateMaxTokens(7);
-        assertThat(result).isEqualTo(6100);
+        assertThat(result).isEqualTo(21500);
     }
 
     @Test
     @DisplayName("maxOutputTokens보다 큰 값이 계산되면 maxOutputTokens로 제한")
     void calculateMaxTokens_exceedsMax_cappedAtMaxOutputTokens() {
-        // 100일 × 800 + 500 = 80500 > 64000
+        // 100일 × 3000 + 500 = 300500 > 64000
         int result = generator.calculateMaxTokens(100);
         assertThat(result).isEqualTo(64000);
     }
 
     @Test
-    @DisplayName("0일 여행: maxTokens = 0 * 800 + 500 = 500")
+    @DisplayName("0일 여행: maxTokens = 0 * 3000 + 500 = 500")
     void calculateMaxTokens_zeroDays_returns500() {
         int result = generator.calculateMaxTokens(0);
         assertThat(result).isEqualTo(500);
@@ -248,8 +248,8 @@ class IndexBasedItineraryGeneratorTest {
         MessageCreateParams params = captor.getValue();
         // Sonnet 모델 사용
         assertThat(params.model().toString()).contains("claude-sonnet-4-20250514");
-        // maxTokens = 3 * 800 + 500 = 2900
-        assertThat(params.maxTokens()).isEqualTo(2900L);
+        // maxTokens = 3 * 3000 + 500 = 9500
+        assertThat(params.maxTokens()).isEqualTo(9500L);
     }
 
     @Test
@@ -319,8 +319,8 @@ class IndexBasedItineraryGeneratorTest {
         MessageCreateParams params = captor.getValue();
         // Sonnet 모델 사용
         assertThat(params.model().toString()).contains("claude-sonnet-4-20250514");
-        // maxTokens = 3 * 800 + 500 = 2900
-        assertThat(params.maxTokens()).isEqualTo(2900L);
+        // maxTokens = 3 * 3000 + 500 = 9500
+        assertThat(params.maxTokens()).isEqualTo(9500L);
     }
 
     @Test
