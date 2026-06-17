@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -136,8 +137,7 @@ public class GooglePlacesClient {
     public Optional<byte[]> downloadPhotoBytes(String photoReference) {
         try {
             byte[] bytes = restClient.get()
-                    .uri("https://places.googleapis.com/v1/{photoReference}/media?maxHeightPx=800",
-                            photoReference)
+                    .uri(URI.create("https://places.googleapis.com/v1/" + photoReference + "/media?maxHeightPx=800"))
                     .header("X-Goog-Api-Key", properties.apiKey())
                     .retrieve()
                     .body(byte[].class);

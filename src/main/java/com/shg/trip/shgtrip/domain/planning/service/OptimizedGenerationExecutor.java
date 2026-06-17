@@ -282,15 +282,15 @@ public class OptimizedGenerationExecutor {
 
     /**
      * SSE 진행 상태 이벤트를 전송한다.
-     * JSON 형식: {status, progress, message}
+     * JSON 형식: {stage, percentage, message}
      */
     private void sendSseEvent(SseEmitter emitter, String status, int progress, String message) {
         try {
             emitter.send(SseEmitter.event()
                     .name("progress")
                     .data(Map.of(
-                            "status", status,
-                            "progress", progress,
+                            "stage", status,
+                            "percentage", progress,
                             "message", message
                     )));
         } catch (IOException | IllegalStateException e) {

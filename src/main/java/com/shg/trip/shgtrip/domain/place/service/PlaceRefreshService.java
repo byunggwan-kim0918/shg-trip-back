@@ -83,4 +83,22 @@ public class PlaceRefreshService {
             log.error("Unexpected error refreshing place {}: {}", placeId, e.getMessage());
         }
     }
+
+    /**
+     * photoReference만으로 S3 업로드 (Google Places 재검색 없음).
+     * 이미지 프록시 성공 경로에서 호출 — imageUrl이 없으면 비동기 S3 업로드.
+     */
+    @Async("planningExecutor")
+    @Transactional
+    public void uploadPhotoIfAbsent(Long placeId, String photoReference) {
+        try {
+            placeRepository.findById(placeId).ifPresent(place -> {
+                if (place.getImageUrl() != null) return;
+                placeImageUploader.uploadIfAbsent(placeId, photoReference)
+                        .ifPresent(place::updateImageUrl);
+            });
+        } catch (Exception e) {
+            log.warn("Failed to upload photo for place {}: {}", placeId, e.getMessage());
+        }
+    }
 }

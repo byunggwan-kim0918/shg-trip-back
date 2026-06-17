@@ -79,4 +79,13 @@ public class PlaceService {
                 .map(Place::getPhotoReference)
                 .orElse(null);
     }
+
+    /**
+     * photo proxy용 S3 image_url 조회
+     */
+    public String getImageUrl(Long placeId) {
+        return placeRepository.findById(placeId)
+                .map(Place::getImageUrl)
+                .orElse(null);
+    }
 }

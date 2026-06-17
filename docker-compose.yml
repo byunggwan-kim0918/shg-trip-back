@@ -17,19 +17,38 @@ services:
       timeout: 3s
       retries: 20
 
-  redis:
-    image: redis:7.4-alpine
-    container_name: shg-trip-redis
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: shg-trip-valkey
     ports:
       - "6379:6379"
     volumes:
-      - shg_trip_redis:/data
+      - shg_trip_valkey:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  localstack:
+    image: localstack/localstack:4
+    container_name: shg-trip-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: s3,secretsmanager
+      DEBUG: 0
+      TZ: Asia/Seoul
+    volumes:
+      - ./docker/localstack/init:/etc/localstack/init/ready.d
+      - shg_trip_localstack:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://localhost:4566/_localstack/health"]
       interval: 5s
       timeout: 3s
       retries: 20
 
 volumes:
   shg_trip_pgdata:
-  shg_trip_redis:
+  shg_trip_valkey:
+  shg_trip_localstack:
