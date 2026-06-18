@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -35,8 +36,10 @@ public class PlaceImageAsyncRecovery {
      * imageUrl이 없는 장소에 대해 비동기로 S3 업로드를 시도한다.
      * Redis SETNX로 분산 락을 획득한 후 업로드를 진행하며,
      * 락 미획득 시 이미 다른 요청이 진행 중이므로 즉시 반환한다.
+     * @Transactional은 updateImageUrl()이 DB에 커밋되도록 보장한다.
      */
     @Async
+    @Transactional
     public void tryUploadAsync(Long placeId, String photoReference) {
         String lockKey = LOCK_PREFIX + placeId;
         String lockValue = UUID.randomUUID().toString();

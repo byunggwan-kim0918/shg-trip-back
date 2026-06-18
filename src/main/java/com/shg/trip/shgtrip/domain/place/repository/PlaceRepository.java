@@ -122,6 +122,14 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     Page<Place> findByEnrichedAtIsNullAndActiveTrue(Pageable pageable);
 
     /**
+     * Presigned URL 갱신 대상 조회 (주 1회).
+     * imageUrl이 있는 place를 찾아서 presigned URL 재생성.
+     * S3 key (images/places/{id}.jpg)로 직접 생성하므로 photoReference 불필요.
+     */
+    @Query("SELECT p FROM Place p WHERE p.imageUrl IS NOT NULL")
+    List<Place> findByImageUrlNotNull();
+
+    /**
      * 배치 시작 시각 이후 신규 등록된 장소 수 (inserted).
      * created_at >= since 이고 created_at = updated_at 이면 이번 배치에서 처음 생성된 row.
      */

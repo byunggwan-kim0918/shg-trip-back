@@ -13,6 +13,7 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 
 import java.net.URI;
 
@@ -82,6 +83,61 @@ public class S3Config {
             return client;
         } catch (Exception e) {
             log.error("S3Client (prod) 초기화 실패: region={}", props.region(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * 로컬 개발 환경용 S3Presigner.
+     * LocalStack 지원: cloud.aws.s3.endpoint가 설정되면 해당 엔드포인트 사용.
+     * S3Client와 동일한 설정으로 일관성 유지.
+     * Path-style access enabled로 virtual-hosted-style URL 대신 path-style URL 생성.
+     */
+    @Bean
+    @Profile("local")
+    public S3Presigner s3PresignerLocal(S3Properties props) {
+        log.info("S3Presigner (local) 초기화: region={}, endpoint={}", props.region(), s3Endpoint);
+        try {
+            var builder = S3Presigner.builder()
+                    .region(Region.of(props.region()))
+                    .credentialsProvider(StaticCredentialsProvider.create(
+                            AwsBasicCredentials.create(props.accessKey(), props.secretKey())));
+
+            // LocalStack 지원: 엔드포인트 오버라이드 + Path-style access
+            if (StringUtils.hasText(s3Endpoint)) {
+                builder.endpointOverride(URI.create(s3Endpoint))
+                        .serviceConfiguration(S3Configuration.builder()
+                                .pathStyleAccessEnabled(true)
+                                .build());
+                log.info("LocalStack S3Presigner 엔드포인트 설정: {}", s3Endpoint);
+            }
+
+            S3Presigner presigner = builder.build();
+            log.info("S3Presigner (local) 초기화 완료");
+            return presigner;
+        } catch (Exception e) {
+            log.error("S3Presigner (local) 초기화 실패: region={}", props.region(), e);
+            throw e;
+        }
+    }
+
+    /**
+     * 프로덕션/배치 환경용 S3Presigner.
+     * ECS Task Role(IAM Role)을 통해 DefaultCredentialsProvider로 자동 인증합니다.
+     */
+    @Bean
+    @Profile("!local")
+    public S3Presigner s3PresignerProd(S3Properties props) {
+        log.info("S3Presigner (prod) 초기화: region={}", props.region());
+        try {
+            S3Presigner presigner = S3Presigner.builder()
+                    .region(Region.of(props.region()))
+                    .credentialsProvider(DefaultCredentialsProvider.create())
+                    .build();
+            log.info("S3Presigner (prod) 초기화 완료");
+            return presigner;
+        } catch (Exception e) {
+            log.error("S3Presigner (prod) 초기화 실패: region={}", props.region(), e);
             throw e;
         }
     }
