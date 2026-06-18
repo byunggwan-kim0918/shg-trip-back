@@ -20,14 +20,6 @@ public record PlaceResponse(
         OffsetDateTime savedAt
 ) {
     public static PlaceResponse from(Place place) {
-        String imageUrl;
-        if (place.getImageUrl() != null) {
-            imageUrl = place.getImageUrl();
-        } else if (place.getPhotoReference() != null) {
-            imageUrl = "/api/places/" + place.getId() + "/photo";
-        } else {
-            imageUrl = null;
-        }
         return new PlaceResponse(
                 place.getId(),
                 place.getName(),
@@ -39,7 +31,7 @@ public record PlaceResponse(
                 place.getRating(),
                 place.getPriceLevel(),
                 place.getOpeningHours(),
-                imageUrl,
+                place.getImageUrl(),
                 place.getSavedAt()
         );
     }

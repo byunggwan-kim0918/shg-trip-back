@@ -8,10 +8,14 @@ import org.springframework.stereotype.Component;
 import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.presigner.S3Presigner;
+import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 
+import java.time.Duration;
 import java.util.Optional;
 
 /**
@@ -24,19 +28,23 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class S3PlaceImageUploader implements PlaceImageUploader {
 
+    private static final String S3_IMAGE_KEY_PREFIX = "images/places/";
+    private static final String S3_IMAGE_EXTENSION = ".jpg";
+    private static final int PRESIGNED_URL_DURATION_DAYS = 7;
+
     private final S3Client s3Client;
+    private final S3Presigner s3Presigner;
     private final S3Properties s3Properties;
     private final GooglePlacesClient googlePlacesClient;
 
     @Override
     public Optional<String> uploadIfAbsent(Long placeId, String photoReference) {
-        String key = "images/places/" + placeId + ".jpg";
-        String s3Url = buildS3Url(key);
+        String key = buildS3ImageKey(placeId);
 
-        // 1) S3에 이미 존재하면 스킵 — PutObject 호출 없이 URL 반환
+        // 1) S3에 이미 존재하면 스킵 — Presigned URL 생성해서 반환
         if (existsInS3(key)) {
-            log.debug("S3 이미지 이미 존재, 스킵: key={}", key);
-            return Optional.of(s3Url);
+            log.debug("S3 이미지 이미 존재, presigned URL 생성: key={}", key);
+            return Optional.of(buildPresignedUrl(key));
         }
 
         // 2) Google Places Photo API로 이미지 바이너리 다운로드
@@ -55,8 +63,10 @@ public class S3PlaceImageUploader implements PlaceImageUploader {
                     .cacheControl("max-age=2592000")
                     .build();
             s3Client.putObject(request, RequestBody.fromBytes(imageBytes.get()));
-            log.info("S3 이미지 업로드 완료: placeId={}, url={}", placeId, s3Url);
-            return Optional.of(s3Url);
+            log.info("S3 이미지 업로드 완료: placeId={}", placeId);
+
+            // 4) Presigned URL 생성해서 반환
+            return Optional.of(buildPresignedUrl(key));
         } catch (SdkClientException | NoSuchKeyException e) {
             log.warn("S3 이미지 업로드 실패: placeId={}, error={}", placeId, e.getMessage());
             return Optional.empty();
@@ -83,11 +93,46 @@ public class S3PlaceImageUploader implements PlaceImageUploader {
     }
 
     /**
-     * S3 객체의 퍼블릭 URL을 구성한다.
-     * 형식: https://{bucket}.s3.{region}.amazonaws.com/{key}
+     * S3 객체의 Presigned URL을 생성한다 (7일 유효).
+     * Presigned URL은 AWS 서명이 포함된 임시 접근 URL이며, S3 버킷이 private이어도 접근 가능하다.
+     * 7일 유효으로 설정하여 사용자가 저장된 일정을 보는 동안 이미지가 만료되지 않도록 보장.
      */
-    private String buildS3Url(String key) {
-        return String.format("https://%s.s3.%s.amazonaws.com/%s",
-                s3Properties.bucket(), s3Properties.region(), key);
+    private String buildPresignedUrl(String key) {
+        return generatePresignedUrl(key);
+    }
+
+    private String generatePresignedUrl(String key) {
+        try {
+            GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                    .bucket(s3Properties.bucket())
+                    .key(key)
+                    .build();
+
+            GetObjectPresignRequest presignRequest = GetObjectPresignRequest.builder()
+                    .signatureDuration(Duration.ofDays(PRESIGNED_URL_DURATION_DAYS))
+                    .getObjectRequest(getObjectRequest)
+                    .build();
+
+            return s3Presigner.presignGetObject(presignRequest)
+                    .url()
+                    .toString();
+        } catch (Exception e) {
+            log.warn("Presigned URL 생성 실패: key={}, error={}", key, e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    public Optional<String> generatePresignedUrlForKey(String key) {
+        String presignedUrl = generatePresignedUrl(key);
+        if (presignedUrl != null) {
+            log.debug("Presigned URL 생성: key={}", key);
+            return Optional.of(presignedUrl);
+        }
+        return Optional.empty();
+    }
+
+    private String buildS3ImageKey(Long placeId) {
+        return S3_IMAGE_KEY_PREFIX + placeId + S3_IMAGE_EXTENSION;
     }
 }

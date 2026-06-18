@@ -1,3 +1,17 @@
+server:
+  tomcat:
+    # SSE 실시간 전송을 위한 설정
+    connection-timeout: 300000          # 5분 (기본 20초)
+    keep-alive-timeout: 300000          # 5분 (기본 60초) — ALB가 연결 끊기 전 여유
+    wait-time-before-shutdown: 5000     # graceful shutdown 대기시간
+    threads:
+      max: 200                          # 최대 스레드 (기본 200)
+      min-spare: 10                     # 최소 스레드 (기본 10)
+    accept-count: 100                   # 요청 큐 크기 (기본 100)
+  compression:
+    enabled: true
+    min-response-size: 1024             # 1KB 이상만 압축
+
 spring:
   config:
     import: aws-secretsmanager:shg-trip/prod

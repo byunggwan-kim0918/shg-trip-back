@@ -11,6 +11,7 @@ import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -22,15 +23,8 @@ import java.util.Set;
 import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
-/**
- * 비동기 일정 생성 파이프라인.
- * - TravelPlannerService와 분리하여 @Async 프록시 정상 동작 보장
- * - 각 AI 호출 전 취소 여부 확인 → 클라이언트 disconnect 시 불필요한 API 호출 방지
- * - 저장은 ItinerarySaveHelper(@Transactional)에 위임
- */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class ItineraryGenerationExecutor {
 
     private final AIService aiService;
@@ -39,62 +33,64 @@ public class ItineraryGenerationExecutor {
     private final PlaceRepository placeRepository;
     private final GenerationResultStore resultStore;
     private final CancellationRegistry cancellationRegistry;
+    private final ScheduledExecutorService heartbeatExecutor;
 
-    /**
-     * 비동기 일정 생성 파이프라인.
-     * 진행 단계: 20% → 50% → 70% → 90% → 100%
-     * 각 AI 호출 전 취소 여부 확인 — 취소 시 조용히 종료 (emitter는 이미 complete 처리됨).
-     */
+    public ItineraryGenerationExecutor(
+            AIService aiService,
+            ItineraryValidationService validationService,
+            ItinerarySaveHelper saveHelper,
+            PlaceRepository placeRepository,
+            GenerationResultStore resultStore,
+            CancellationRegistry cancellationRegistry,
+            @Qualifier("sseHeartbeatScheduler") ScheduledExecutorService heartbeatExecutor) {
+        this.aiService = aiService;
+        this.validationService = validationService;
+        this.saveHelper = saveHelper;
+        this.placeRepository = placeRepository;
+        this.resultStore = resultStore;
+        this.cancellationRegistry = cancellationRegistry;
+        this.heartbeatExecutor = heartbeatExecutor;
+    }
+
     @Async("planningExecutor")
     public void execute(String jobId, ItineraryGenerateRequest request, Long userId, SseEmitter emitter) {
         try {
-            // 1. 입력 보강 (20%)
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 20, "분석 중...", "ENRICHING");
             EnrichedInput enrichedInput = executeWithHeartbeat(emitter,
                     () -> aiService.enrichInput(request));
 
-            // 2. 선택 장소 조회
             if (cancellationRegistry.isCancelled(jobId)) return;
             List<Place> selectedPlaces = resolveSelectedPlaces(request);
 
-            // 3. 일정 생성 (50%)
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 50, "장소 탐색 중...", "GENERATING");
             ItineraryData itineraryData = executeWithHeartbeat(emitter,
                     () -> aiService.generateItinerary(enrichedInput, selectedPlaces));
 
-            // 4. 검증 + 보강 파이프라인 (70%)
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 70, "동선 최적화 중...", "VALIDATING");
             ItineraryData validated = executeWithHeartbeat(emitter,
                     () -> validationService.validateWithRetry(itineraryData, enrichedInput, selectedPlaces));
 
-            // 4-1. Manual Mode: 선택 장소 포함 여부 검증
             validateSelectedPlacesIncluded(validated, selectedPlaces);
 
-            // 5. 저장 (90%)
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 90, "일정을 저장하고 있습니다...", "SAVING");
             Itinerary saved = saveHelper.save(validated, enrichedInput, userId);
 
-            // 6. 완료 — 저장 후 취소 체크는 하지 않음 (이미 DB에 저장됐으므로 결과 전달)
             resultStore.save(jobId, saved.getId());
             sendProgress(emitter, 100, "일정 생성이 완료되었습니다.", "COMPLETE");
             sendComplete(emitter);
 
         } catch (BusinessException e) {
-            log.error("Generation failed for job {}: {}", jobId, e.getMessage());
-            sendError(emitter, e.getMessage());
+            log.warn("Generation failed for job {}: {}", jobId, e.getErrorCode());
+            sendError(emitter, "요청 처리 중 문제가 발생했습니다.");
         } catch (Exception e) {
-            log.error("Unexpected error during generation for job {}: {}", jobId, e.getMessage(), e);
+            log.error("Unexpected error during generation for job {}", jobId, e);
             sendError(emitter, "일정 생성 중 예기치 않은 오류가 발생했습니다.");
         }
     }
-
-    // -------------------------------------------------------------------------
-    // Private helpers
-    // -------------------------------------------------------------------------
 
     private void validateSelectedPlacesIncluded(ItineraryData data, List<Place> requiredPlaces) {
         if (requiredPlaces == null || requiredPlaces.isEmpty()) return;
@@ -104,14 +100,12 @@ public class ItineraryGenerationExecutor {
                 .map(s -> s.place().name().toLowerCase())
                 .collect(Collectors.toSet());
 
-        List<String> missing = requiredPlaces.stream()
-                .filter(p -> !isPlaceIncluded(p.getName(), stepPlaceNames))
-                .map(Place::getName)
-                .toList();
+        boolean allIncluded = requiredPlaces.stream()
+                .allMatch(p -> isPlaceIncluded(p.getName(), stepPlaceNames));
 
-        if (!missing.isEmpty()) {
+        if (!allIncluded) {
             throw new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                    "Manual Mode 선택 장소가 일정에 포함되지 않았습니다: " + String.join(", ", missing));
+                    "선택한 일부 장소가 최적 일정에 포함될 수 없었습니다.");
         }
     }
 
@@ -135,10 +129,8 @@ public class ItineraryGenerationExecutor {
 
         List<Place> found = placeRepository.findAllById(ids);
         if (found.size() != ids.size()) {
-            Set<Long> foundIds = found.stream().map(Place::getId).collect(Collectors.toSet());
-            List<Long> missingIds = ids.stream().filter(id -> !foundIds.contains(id)).toList();
             throw new BusinessException(ErrorCode.INVALID_INPUT,
-                    "선택한 장소를 찾을 수 없습니다. ID: " + missingIds);
+                    "요청하신 일부 장소를 찾을 수 없습니다.");
         }
         return found;
     }
@@ -149,33 +141,23 @@ public class ItineraryGenerationExecutor {
                     .name("progress")
                     .data(new ProgressEvent(percentage, message, stage)));
         } catch (IOException | IllegalStateException e) {
-            log.warn("Failed to send progress event for stage {}: {}", stage, e.getMessage());
+            log.warn("Failed to send progress event for stage {}", stage);
         }
     }
 
-    /**
-     * AI 호출처럼 오래 걸리는 작업을 실행하면서 30초마다 SSE heartbeat를 전송.
-     * Next.js 프록시 레이어가 idle 타임아웃(~120s)으로 연결을 끊는 것을 방지.
-     */
-    private <T> T executeWithHeartbeat(SseEmitter emitter, Callable<T> task) {
-        ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor();
-        ScheduledFuture<?> heartbeatFuture = heartbeat.scheduleAtFixedRate(() -> {
+    private <T> T executeWithHeartbeat(SseEmitter emitter, Callable<T> task) throws Exception {
+        ScheduledFuture<?> heartbeatFuture = heartbeatExecutor.scheduleAtFixedRate(() -> {
             try {
                 emitter.send(SseEmitter.event().comment("heartbeat"));
             } catch (IOException e) {
-                // emitter가 이미 닫힌 경우 — 무시
+                log.debug("Heartbeat send failed");
             }
         }, 30, 30, TimeUnit.SECONDS);
 
         try {
             return task.call();
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RuntimeException(e);
         } finally {
             heartbeatFuture.cancel(false);
-            heartbeat.shutdown();
         }
     }
 
@@ -186,7 +168,7 @@ public class ItineraryGenerationExecutor {
                     .data(Map.of("status", "DONE")));
             emitter.complete();
         } catch (IOException | IllegalStateException e) {
-            log.warn("Failed to send complete event: {}", e.getMessage());
+            log.warn("Failed to send complete event");
         }
     }
 
@@ -197,7 +179,7 @@ public class ItineraryGenerationExecutor {
                     .data(Map.of("message", message)));
             emitter.complete();
         } catch (IOException | IllegalStateException e) {
-            log.warn("Failed to send error event: {}", e.getMessage());
+            log.warn("Failed to send error event");
         }
     }
 }

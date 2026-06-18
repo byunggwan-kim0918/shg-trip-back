@@ -1,3 +1,10 @@
+server:
+  tomcat:
+    # SSE 로컬 테스트 설정 (prod와 동일)
+    connection-timeout: 300000
+    keep-alive-timeout: 300000
+    wait-time-before-shutdown: 5000
+
 spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/trip
@@ -78,8 +85,9 @@ cloud:
     s3:
       region: ap-northeast-2
       bucket: shgtrip-data
-      access-key: ${AWS_ACCESS_KEY_ID:}
-      secret-key: ${AWS_SECRET_ACCESS_KEY:}
+      endpoint: http://localhost:4566
+      access-key: ${AWS_ACCESS_KEY_ID:localdev}
+      secret-key: ${AWS_SECRET_ACCESS_KEY:localdev}
 
 batch:
   foursquare:
