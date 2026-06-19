@@ -4,10 +4,15 @@ FROM gradle:8.5-jdk21 AS builder
 # STAGE 1 Build (빌드 환경 - 작업 dir)
 WORKDIR /shgapp
 
-# STAGE 1 Build (빌드 환경 - 현재 dir 전체를 /app으로 복사)
-COPY . .
+# STAGE 1 Build (의존성 먼저 캐시: build.gradle 먼저 복사)
+COPY build.gradle settings.gradle ./
+RUN gradle dependencies --no-daemon > /dev/null 2>&1 || true
 
-# STAGE 1 Build (빌드 환경 - jar 파일 생성)
+# STAGE 1 Build (소스 복사 후 빌드)
+COPY src ./src
+COPY gradle ./gradle
+
+# STAGE 1 Build (jar 파일 생성 - 의존성 캐시 활용)
 RUN gradle build -x test --no-daemon
 
 
@@ -29,4 +34,8 @@ USER shgapp
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "shg-app.jar"]
+ENTRYPOINT ["java", \
+  "-XX:+UseG1GC", \
+  "-XX:MaxGCPauseMillis=200", \
+  "-Dspring.jmx.enabled=false", \
+  "-jar", "shg-app.jar"]

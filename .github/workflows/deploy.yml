@@ -79,4 +79,7 @@ jobs:
           task-definition: ${{ steps.task-def.outputs.task-definition }}
           service: shgtrip-app
           cluster: ${{ env.ECS_CLUSTER }}
-          wait-for-service-stability: true
+          wait-for-service-stability: false
+          waiter:
+            max-attempts: 120
+            delay: 15
