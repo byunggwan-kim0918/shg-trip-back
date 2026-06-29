@@ -12,6 +12,7 @@ public record EnrichedInput(
         List<String> themes,
         List<String> categories,
         String pace,
+        String transportPref,
         BigDecimal budget,
         LocalDate startDate,
         LocalDate endDate,

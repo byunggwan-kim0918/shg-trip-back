@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -48,30 +49,44 @@ public class VectorSearchQueryService {
 
     /**
      * VectorEnrichedInput 기반으로 벡터 검색을 수행하여 PlaceCandidate 목록을 반환한다.
+     * 카테고리별 분리 검색을 수행하여 균등한 후보 분포를 보장한다.
      *
      * @param input enrichInput 결과
      * @return 1-based 인덱스가 부여된 후보 장소 목록
      */
     public List<PlaceCandidate> search(VectorEnrichedInput input) {
-        String queryText = SearchQueryBuilder.buildSearchQuery(input);
-        log.debug("벡터 검색 쿼리 텍스트: {}", queryText);
-
-        float[] queryVector = embeddingService.embed(queryText);
-
         int totalLimit = calculateTotalLimit(input);
+        Map<String, String> categoryQueries = SearchQueryBuilder.buildCategoryQueries(input);
+        Map<String, Integer> categoryLimits = buildCategoryLimits(categoryQueries, totalLimit);
 
-        List<VectorSearchResult> results;
+        log.debug("카테고리별 검색 limit: {}", categoryLimits);
 
-        if (shouldSplitByRegion(input)) {
-            results = searchByRegion(input, queryVector, totalLimit);
-        } else {
-            VectorSearchRequest request = buildRequest(input, queryVector, null, totalLimit);
-            results = placeVectorSearchService.search(request);
+        List<VectorSearchResult> allResults = new ArrayList<>();
+
+        for (Map.Entry<String, String> entry : categoryQueries.entrySet()) {
+            String category = entry.getKey();
+            String queryText = entry.getValue();
+            int limit = categoryLimits.getOrDefault(category, 10);
+
+            log.debug("카테고리 '{}' 벡터 검색: 쿼리='{}', limit={}", category, queryText, limit);
+
+            float[] queryVector = embeddingService.embed(queryText);
+
+            List<VectorSearchResult> results;
+            if (shouldSplitByRegion(input)) {
+                results = searchByRegionAndCategory(input, queryVector, category, limit);
+            } else {
+                VectorSearchRequest request = buildRequest(input, queryVector, null, category, limit);
+                results = placeVectorSearchService.search(request);
+            }
+
+            allResults.addAll(results);
+            log.debug("카테고리 '{}' 검색 완료: {}개 결과", category, results.size());
         }
 
-        log.info("벡터 검색 결과: {}개 장소 반환 (요청 limit: {})", results.size(), totalLimit);
+        log.info("전체 벡터 검색 결과: {}개 장소 반환 (요청 총 limit: {})", allResults.size(), totalLimit);
 
-        return convertToCandidates(results);
+        return convertToCandidates(allResults);
     }
 
     /**
@@ -85,17 +100,37 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 카테고리당 반환 수를 계산한다 (15~20개).
-     * 현재는 단일 쿼리로 categories IN 필터를 적용하여 DB에서 자연 분배되도록 하고 있음.
-     * 향후 카테고리별 균등 분배가 필요한 경우 per-category 쿼리로 전환 시 사용.
+     * 카테고리별 벡터 검색 limit을 배분한다.
+     * 규칙:
+     * - attraction: 40% (days × 2 최소)
+     * - restaurant: 25% (days × 3 최소)
+     * - accommodation: 10% (3 최소)
+     * - transportation: 10% (2 최소, 키 없으면 생략)
+     * - cafe: 15% (days 최소)
+     *
+     * transportation이 없으면 그 10%를 attraction에 추가 배분.
      */
-    int calculatePerCategoryLimit(VectorEnrichedInput input, int totalLimit) {
-        List<String> categories = input.categories();
-        if (categories == null || categories.isEmpty()) {
-            return totalLimit;
+    Map<String, Integer> buildCategoryLimits(Map<String, String> categoryQueries, int totalLimit) {
+        long days = Math.max(1, totalLimit / 10);
+        Map<String, Integer> limits = new HashMap<>();
+
+        boolean hasTransportation = categoryQueries.containsKey("transportation");
+
+        if (hasTransportation) {
+            limits.put("transportation", Math.max(2, (int) (totalLimit * 0.1)));
+            limits.put("restaurant", Math.max((int) (days * 3), (int) (totalLimit * 0.25)));
+            limits.put("attraction", Math.max((int) (days * 2), (int) (totalLimit * 0.40)));
+            limits.put("accommodation", Math.max(3, (int) (totalLimit * 0.1)));
+            limits.put("cafe", Math.max((int) days, (int) (totalLimit * 0.15)));
+        } else {
+            // transportation 없으면 그 10%를 attraction에 추가 (50%)
+            limits.put("restaurant", Math.max((int) (days * 3), (int) (totalLimit * 0.25)));
+            limits.put("attraction", Math.max((int) (days * 2), (int) (totalLimit * 0.50)));
+            limits.put("accommodation", Math.max(3, (int) (totalLimit * 0.1)));
+            limits.put("cafe", Math.max((int) days, (int) (totalLimit * 0.15)));
         }
-        int perCategory = totalLimit / categories.size();
-        return Math.max(MIN_PER_CATEGORY, Math.min(perCategory, MAX_PER_CATEGORY));
+
+        return limits;
     }
 
     /**
@@ -108,23 +143,25 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 지역별 분리 검색을 수행하고 결과를 합친다.
+     * 지역별 및 카테고리별 분리 검색을 수행한다.
+     * regionAllocation 맵의 각 엔트리(일차범위 → 지역 리스트)마다 해당 카테고리 검색을 수행.
      */
-    private List<VectorSearchResult> searchByRegion(VectorEnrichedInput input,
-                                                     float[] queryVector,
-                                                     int totalLimit) {
+    private List<VectorSearchResult> searchByRegionAndCategory(VectorEnrichedInput input,
+                                                              float[] queryVector,
+                                                              String category,
+                                                              int categoryLimit) {
         Map<String, List<String>> regionAllocation = input.regionAllocation();
         int regionCount = regionAllocation.size();
-        int limitPerRegion = totalLimit / regionCount;
+        int limitPerRegion = Math.max(1, categoryLimit / regionCount);
 
         List<VectorSearchResult> allResults = new ArrayList<>();
 
         for (Map.Entry<String, List<String>> entry : regionAllocation.entrySet()) {
             List<String> regions = entry.getValue();
-            log.debug("지역별 검색 - 일차: {}, 지역: {}, limit: {}",
-                    entry.getKey(), regions, limitPerRegion);
+            log.debug("지역·카테고리 검색 - 카테고리: {}, 일차: {}, 지역: {}, limit: {}",
+                    category, entry.getKey(), regions, limitPerRegion);
 
-            VectorSearchRequest request = buildRequest(input, queryVector, regions, limitPerRegion);
+            VectorSearchRequest request = buildRequest(input, queryVector, regions, category, limitPerRegion);
             List<VectorSearchResult> regionResults = placeVectorSearchService.search(request);
             allResults.addAll(regionResults);
         }
@@ -135,20 +172,24 @@ public class VectorSearchQueryService {
     /**
      * VectorSearchRequest를 구성한다.
      * enrichInput 프롬프트에서 country=ISO코드, regions=영어 도시명으로 반환하도록 지정되어 있음.
+     * category: 단일 카테고리 (벡터 검색 시 해당 카테고리로만 필터링)
      */
     private VectorSearchRequest buildRequest(VectorEnrichedInput input,
                                               float[] queryVector,
                                               List<String> regions,
+                                              String category,
                                               int limit) {
         List<String> searchRegions = regions != null ? regions : input.regions();
+        List<String> categoryFilter = category != null ? List.of(category) : input.categories();
 
-        log.debug("벡터 검색 필터: country='{}', regions={}", input.country(), searchRegions);
+        log.debug("벡터 검색 필터: country='{}', regions={}, category={}, limit={}",
+                input.country(), searchRegions, category, limit);
 
         return new VectorSearchRequest(
                 queryVector,
                 input.country(),
                 searchRegions,
-                input.categories(),
+                categoryFilter,
                 input.searchTags(),
                 input.budgetRange(),
                 limit
@@ -158,6 +199,7 @@ public class VectorSearchQueryService {
     /**
      * VectorSearchResult 목록을 PlaceCandidate 목록으로 변환한다.
      * 1-based 연속 인덱싱을 유지한다.
+     * priceLevel, openingHours는 DB에서 별도로 enrichment 단계에서 채운다.
      */
     List<PlaceCandidate> convertToCandidates(List<VectorSearchResult> results) {
         List<PlaceCandidate> candidates = new ArrayList<>(results.size());
@@ -176,7 +218,9 @@ public class VectorSearchQueryService {
                     r.longitude(),
                     r.description(),
                     r.rating(),
-                    r.similarityScore()
+                    r.similarityScore(),
+                    null,  // priceLevel (enrichCandidatesFromDb에서 채움)
+                    null   // openingHours (enrichCandidatesFromDb에서 채움)
             ));
         }
         return candidates;

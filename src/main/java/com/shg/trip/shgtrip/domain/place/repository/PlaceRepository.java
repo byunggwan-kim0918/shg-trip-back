@@ -95,6 +95,18 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     );
 
     /**
+     * region 목록 내 Lodging 카테고리 장소를 평점 순 조회 — 숙소 후보 보완용.
+     */
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.region IN :regions
+              AND LOWER(p.category) LIKE '%lodging%'
+              AND p.active = true
+            ORDER BY p.rating DESC NULLS LAST
+            """)
+    List<Place> findTopAccommodationsByRegions(@Param("regions") List<String> regions, Pageable pageable);
+
+    /**
      * 임베딩이 없고 활성 상태인 장소를 페이징 조회 — EmbeddingBatchJob 사용.
      */
     @Query("SELECT p FROM Place p WHERE p.embedding IS NULL AND p.active = true")

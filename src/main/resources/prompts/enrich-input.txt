@@ -7,6 +7,7 @@
 - 예산: {budget}원 (한국 원화 기준 총 예산)
 - 기간: {startDate} ~ {endDate}
 - 페이스: {pace}
+- 이동수단 선호: {transportPref} (walk=도보/버스 우선, car=자동차 우선, any=상관없음)
 - 설명: {description}
 
 ## 작업
@@ -38,11 +39,49 @@
 - 예: "조용한 곳" + "시끌벅적" → 상충 (CONFLICTING_THEMES)
 - 예: "휴양" + "극한 액티비티" → 상충 (CONFLICTING_THEMES)
 
-### 3. 검색 힌트 생성
-valid=true인 경우에만 아래 필드를 생성합니다:
+### 3. 교통 허브 추출 (transportationHub)
+국내/해외 여행지 특성에 따라 도착·출발 교통 허브를 결정합니다:
 
-**searchTags (5~10개):**
-- 테마, 카테고리, 설명 텍스트를 분석하여 벡터 검색에 적합한 한국어 태그를 생성합니다.
+| 조건 | 처리 |
+|------|------|
+| `country != "KR"` (해외) | 항상 AIRPORT. arrivalHub/departureHub = 해당 도시 주요 공항명 |
+| 국내 섬 지역 (제주, 울릉도 등) | AIRPORT 또는 FERRY |
+| `description`에 "비행기"/"KTX"/"고속버스" 명시 | 해당 교통수단의 허브 타입 |
+| 국내 육지 + 교통수단 미명시 | null (차량 이동 간주) |
+
+응답:
+```json
+"transportationHub": {
+  "arrivalHub": "제주국제공항",
+  "departureHub": "제주국제공항",
+  "hubType": "AIRPORT"
+}
+```
+- hubType 값: AIRPORT | BUS_TERMINAL | TRAIN_STATION | FERRY | null
+- arrivalHub, departureHub는 공항/터미널/역의 실제 이름 또는 null
+
+### 3-B. 카테고리별 검색 쿼리 생성 (categorySearchQueries)
+각 카테고리마다 검색에 최적화된 한국어 쿼리를 생성합니다 (벡터 검색 용도):
+
+응답:
+```json
+"categorySearchQueries": {
+  "transportation": "제주 제주국제공항 버스터미널 버스",
+  "restaurant": "제주 흑돼지 해산물 맛집 점심 저녁",
+  "attraction": "제주 성산일출봉 한라산 올레길 협재",
+  "accommodation": "제주 호텔 게스트하우스 리조트",
+  "cafe": "제주 카페 디저트 베이커리 간식"
+}
+```
+
+규칙:
+- transportation: 교통 허브 검색용 (transportationHub가 null이면 이 키 생략)
+- restaurant/attraction/accommodation/cafe: 각 카테고리별 자연어 쿼리
+- 여행지명 + 테마 + 카테고리 특성을 반영한 구체적 쿼리 (예: "해산물 맛집"은 단순 "맛집"보다 나음)
+- 각 쿼리는 벡터 임베딩 대상이므로 자연스러운 한국어 문장형
+
+### 3-C. 기존 searchTags 유지
+테마, 카테고리, 설명 텍스트를 분석하여 벡터 검색에 적합한 한국어 태그를 생성합니다.
 - 사용자가 하위 구역을 입력한 경우(예: 해운대, 홍대, 신주쿠), 해당 구역명과 주변 명소 키워드를 앞쪽에 배치하세요.
   - 예: "해운대" 입력 → ["해운대 해수욕장", "마린시티", "해운대 맛집", "동백섬", ...]
   - 예: "홍대" 입력 → ["홍대 카페", "연남동", "홍대 클럽", "합정", ...]
@@ -75,6 +114,7 @@ valid=true인 경우에만 아래 필드를 생성합니다:
 - 반드시 JSON만 출력하세요. 설명, 인사말, 마크다운 코드블록 없이 순수 JSON만 반환합니다.
 - valid=false인 경우: errorCode, errorMessage만 필수이며 나머지 필드는 null로 설정합니다.
 - valid=true인 경우: normalizedDestination, country, regions, searchTags, budgetRange, seasonContext, enrichedContext를 모두 채웁니다.
+- transportationHub와 categorySearchQueries도 항상 포함합니다 (transportation 키는 허브가 null이면 생략 가능).
 - 설명(description)이 "없음"이면 무시하세요.
 
 ## 응답 형식 (JSON)
@@ -90,6 +130,18 @@ valid=true인 경우에만 아래 필드를 생성합니다:
   "searchTags": ["맛집", "쇼핑", "패션", "라멘", "스시", "하라주쿠 카페", "전망대"],
   "budgetRange": "MEDIUM",
   "seasonContext": "4월 벚꽃 시즌, 관광객 많음",
+  "transportationHub": {
+    "arrivalHub": "나리타 국제공항",
+    "departureHub": "나리타 국제공항",
+    "hubType": "AIRPORT"
+  },
+  "categorySearchQueries": {
+    "transportation": "도쿄 나리타 국제공항 하네다 공항 기차역",
+    "restaurant": "도쿄 라멘 스시 모츠나베 맛집 점심 저녁",
+    "attraction": "도쿄 아사쿠사 절 신주쿠 도시 전망대 시부야",
+    "accommodation": "도쿄 호텔 료칸 비즈니스호텔",
+    "cafe": "도쿄 카페 디저트 파스타"
+  },
   "regionAllocation": {"1-2": ["시부야","하라주쿠"], "3-4": ["아사쿠사","우에노"]},
   "enrichedContext": "[현지 컨텍스트] 4월 도쿄는 벚꽃 만개 시기로 우에노 공원, 메구로 강 등이 인기. [테마 추천] 쇼핑: 시부야109, 하라주쿠 타케시타 거리. 맛집: 츠키지 외시장, 라멘 거리. [예산 팁] 1일 약 15만원으로 비즈니스호텔+현지식당 수준. [시즌 정보] 벚꽃 성수기, 숙소 조기 예약 권장."
 }
@@ -105,6 +157,13 @@ valid=true인 경우에만 아래 필드를 생성합니다:
   "searchTags": ["해운대 해수욕장", "마린시티", "동백섬", "해운대 맛집", "센텀시티", "해운대 카페"],
   "budgetRange": "MEDIUM",
   "seasonContext": "7월 여름 성수기, 해수욕 최적 시즌",
+  "transportationHub": null,
+  "categorySearchQueries": {
+    "restaurant": "해운대 해산물 회 생선구이 맛집 점심 저녁",
+    "attraction": "해운대 해수욕장 마린시티 동백섬 센텀시티",
+    "accommodation": "해운대 호텔 리조트 게스트하우스 숙소",
+    "cafe": "해운대 카페 디저트 조용한 카페"
+  },
   "regionAllocation": null,
   "enrichedContext": "[현지 컨텍스트] 해운대는 부산 대표 해수욕장으로 마린시티 야경과 동백섬이 인기. [테마 추천] 해수욕장 주변 해산물 맛집 밀집. [예산 팁] 성수기 숙소 조기 예약 필수. [시즌 정보] 7월 성수기, 파라솔 구역 조기 마감."
 }

@@ -15,8 +15,10 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * embedding IS NULL인 장소를 조회하여 배치 임베딩을 생성하고 저장하는 작업.
@@ -42,41 +44,51 @@ public class EmbeddingBatchJob {
     private int batchSize;
 
     /**
+     * processBatch 결과. failedIds는 이번 실행에서 재시도하지 않도록 제외할 place ID 목록
+     * (embedding이 여전히 NULL이라 다음 조회에도 다시 잡히기 때문).
+     */
+    record BatchResult(int success, int failed, List<Long> failedIds) {
+    }
+
+    /**
      * 임베딩 배치 생성을 실행한다.
+     * <p>
+     * page offset을 증가시키는 방식 대신, 이번 실행에서 실패한 place ID를 메모리에 누적해
+     * 매번 첫 페이지를 다시 조회하면서 그 ID들을 걸러낸다. embedding IS NULL 조건의 총
+     * 건수는 같은 실행 중에도 성공한 만큼 계속 줄어들기 때문에, 고정 offset 증가는 실제
+     * 남은 건수보다 앞서나가 Page.isEmpty()로 조용히 조기 종료될 수 있다(시도조차 안 된
+     * 레코드가 남아있는데도 "완료"로 로그가 찍히는 버그) — 그 경로를 원천적으로 없앤다.
      */
     public void execute() {
         log.info("EmbeddingBatchJob 시작 - batchSize={}", batchSize);
 
         int totalProcessed = 0;
         int totalFailed = 0;
-        int pageNumber = 0;
+        Set<Long> excludedIds = new HashSet<>();
 
         while (true) {
             Page<Place> page = placeRepository.findByEmbeddingIsNullAndActiveTrue(
-                    PageRequest.of(pageNumber, batchSize));
+                    PageRequest.of(0, batchSize));
 
             if (page.isEmpty()) {
                 break;
             }
 
-            List<Place> places = page.getContent();
-            log.info("배치 {} 처리 중 - {}건 (전체 미임베딩: {}건)",
-                    pageNumber + 1, places.size(), page.getTotalElements());
+            List<Place> places = page.getContent().stream()
+                    .filter(p -> !excludedIds.contains(p.getId()))
+                    .toList();
 
-            int[] result = processBatch(places);
-            totalProcessed += result[0];
-            totalFailed += result[1];
-
-            // 처리된 장소는 embedding이 채워지므로 항상 page 0을 조회
-            // 실패한 장소가 있으면 다음 페이지로 이동
-            if (result[1] > 0) {
-                pageNumber++;
-            }
-            // pageNumber는 실패한 항목이 없으면 0을 유지 (이미 임베딩이 저장됨)
-
-            if (!page.hasNext() && result[1] == 0) {
+            if (places.isEmpty()) {
+                // 남은 건 이번 실행에서 이미 실패 처리된 장소뿐 — 다음 실행에서 재시도
                 break;
             }
+
+            log.info("배치 처리 중 - {}건 (전체 미임베딩: {}건)", places.size(), page.getTotalElements());
+
+            BatchResult result = processBatch(places);
+            totalProcessed += result.success();
+            totalFailed += result.failed();
+            excludedIds.addAll(result.failedIds());
         }
 
         log.info("EmbeddingBatchJob 완료 - 처리: {}건, 실패: {}건", totalProcessed, totalFailed);
@@ -86,11 +98,12 @@ public class EmbeddingBatchJob {
      * 장소 배치를 처리하여 임베딩을 생성하고 저장한다.
      *
      * @param places 임베딩을 생성할 장소 목록
-     * @return [성공 건수, 실패 건수]
+     * @return 성공/실패 건수와 실패한 place ID 목록
      */
-    int[] processBatch(List<Place> places) {
+    BatchResult processBatch(List<Place> places) {
         List<String> texts = new ArrayList<>();
         List<Place> validPlaces = new ArrayList<>();
+        List<Long> textBuildFailedIds = new ArrayList<>();
 
         // 1. 텍스트 생성 (실패 시 해당 장소 건너뛰기)
         for (Place place : places) {
@@ -101,11 +114,12 @@ public class EmbeddingBatchJob {
             } catch (Exception e) {
                 log.warn("텍스트 생성 실패 - placeId={}, name={}: {}",
                         place.getId(), place.getName(), e.getMessage());
+                textBuildFailedIds.add(place.getId());
             }
         }
 
         if (validPlaces.isEmpty()) {
-            return new int[]{0, places.size()};
+            return new BatchResult(0, places.size(), allIds(places));
         }
 
         // 2. 배치 임베딩 생성
@@ -114,13 +128,13 @@ public class EmbeddingBatchJob {
             embeddings = embeddingService.embedBatch(texts);
         } catch (Exception e) {
             log.error("배치 임베딩 생성 API 호출 실패: {}", e.getMessage(), e);
-            return new int[]{0, places.size()};
+            return new BatchResult(0, places.size(), allIds(places));
         }
 
         if (embeddings.size() != validPlaces.size()) {
             log.error("임베딩 결과 수 불일치 - 요청: {}건, 응답: {}건",
                     validPlaces.size(), embeddings.size());
-            return new int[]{0, places.size()};
+            return new BatchResult(0, places.size(), allIds(places));
         }
 
         // 3. 일괄 저장
@@ -133,10 +147,14 @@ public class EmbeddingBatchJob {
             placeVectorSearchService.storeBatch(embeddingMap);
         } catch (Exception e) {
             log.error("임베딩 일괄 저장 실패: {}", e.getMessage(), e);
-            return new int[]{0, places.size()};
+            return new BatchResult(0, places.size(), allIds(places));
         }
 
         int failed = places.size() - validPlaces.size();
-        return new int[]{validPlaces.size(), failed};
+        return new BatchResult(validPlaces.size(), failed, textBuildFailedIds);
+    }
+
+    private List<Long> allIds(List<Place> places) {
+        return places.stream().map(Place::getId).toList();
     }
 }

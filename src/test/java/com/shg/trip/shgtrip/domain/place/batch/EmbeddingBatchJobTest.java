@@ -19,6 +19,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -126,11 +127,9 @@ class EmbeddingBatchJobTest {
         List<Place> places = List.of(place);
 
         Page<Place> page = new PageImpl<>(places, PageRequest.of(0, 100), 1);
-        // 첫 호출: 실패하는 배치 반환, 두 번째 호출: 빈 페이지 (pageNumber 증가)
+        // 실패한 place는 excludedIds로 걸러지므로, 같은 page 0 재조회 시 빈 결과가 되어 종료된다
         when(placeRepository.findByEmbeddingIsNullAndActiveTrue(PageRequest.of(0, 100)))
                 .thenReturn(page);
-        when(placeRepository.findByEmbeddingIsNullAndActiveTrue(PageRequest.of(1, 100)))
-                .thenReturn(Page.empty());
 
         when(embeddingService.embedBatch(anyList()))
                 .thenThrow(new RuntimeException("OpenAI API 오류"));
@@ -149,8 +148,6 @@ class EmbeddingBatchJobTest {
         Page<Place> page = new PageImpl<>(places, PageRequest.of(0, 100), 1);
         when(placeRepository.findByEmbeddingIsNullAndActiveTrue(PageRequest.of(0, 100)))
                 .thenReturn(page);
-        when(placeRepository.findByEmbeddingIsNullAndActiveTrue(PageRequest.of(1, 100)))
-                .thenReturn(Page.empty());
 
         when(embeddingService.embedBatch(anyList()))
                 .thenReturn(List.of(new float[]{0.1f}));
@@ -181,10 +178,11 @@ class EmbeddingBatchJobTest {
         when(embeddingService.embedBatch(anyList()))
                 .thenReturn(List.of(new float[]{0.1f}));
 
-        int[] result = embeddingBatchJob.processBatch(List.of(invalidPlace, validPlace));
+        EmbeddingBatchJob.BatchResult result = embeddingBatchJob.processBatch(List.of(invalidPlace, validPlace));
 
-        assertThat(result[0]).isEqualTo(1); // 성공
-        assertThat(result[1]).isEqualTo(1); // 실패
+        assertThat(result.success()).isEqualTo(1);
+        assertThat(result.failed()).isEqualTo(1);
+        assertThat(result.failedIds()).containsExactly(1L);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<String>> textCaptor = ArgumentCaptor.forClass(List.class);
@@ -203,11 +201,59 @@ class EmbeddingBatchJobTest {
         when(embeddingService.embedBatch(anyList()))
                 .thenReturn(List.of(new float[]{0.1f}));
 
-        int[] result = embeddingBatchJob.processBatch(List.of(place1, place2));
+        EmbeddingBatchJob.BatchResult result = embeddingBatchJob.processBatch(List.of(place1, place2));
 
-        assertThat(result[0]).isEqualTo(0);
-        assertThat(result[1]).isEqualTo(2);
+        assertThat(result.success()).isEqualTo(0);
+        assertThat(result.failed()).isEqualTo(2);
+        assertThat(result.failedIds()).containsExactlyInAnyOrder(1L, 2L);
         verifyNoInteractions(placeVectorSearchService);
+    }
+
+    @Test
+    @DisplayName("일부 장소에서 텍스트 생성 실패가 발생해도 남은 미임베딩 장소를 같은 실행에서 계속 처리한다")
+    void execute_partialFailureMidRun_doesNotTerminateEarly() {
+        // 텍스트 생성 단계에서 실패하는 장소(name=null)와, 다음 페이지에서 처리될 장소
+        Place invalidFailing = Place.builder()
+                .id(1L).name(null).address("도쿄")
+                .latitude(BigDecimal.valueOf(35.0)).longitude(BigDecimal.valueOf(139.0))
+                .category("관광").savedAt(OffsetDateTime.now()).build();
+        Place succeeding = createPlace(2L, "성공장소", "관광");
+        Place remaining = createPlace(3L, "나머지장소", "관광");
+
+        // 1번째 조회: [invalidFailing, succeeding] (전체 미임베딩 250건 중 첫 페이지)
+        Page<Place> firstPage = new PageImpl<>(List.of(invalidFailing, succeeding), PageRequest.of(0, 100), 250);
+        // succeeding이 처리되면 DB에서 빠지므로, 2번째 조회는 [invalidFailing(여전히 NULL), remaining]
+        Page<Place> secondPage = new PageImpl<>(List.of(invalidFailing, remaining), PageRequest.of(0, 100), 249);
+
+        when(placeRepository.findByEmbeddingIsNullAndActiveTrue(PageRequest.of(0, 100)))
+                .thenReturn(firstPage, secondPage, Page.empty());
+
+        when(embeddingService.embedBatch(anyList()))
+                .thenAnswer(invocation -> {
+                    List<String> texts = invocation.getArgument(0);
+                    List<float[]> result = new ArrayList<>();
+                    for (int i = 0; i < texts.size(); i++) {
+                        result.add(new float[]{0.1f});
+                    }
+                    return result;
+                });
+
+        embeddingBatchJob.execute();
+
+        // remaining(id=3)까지 처리됐어야 함 — pageNumber 증가 방식이었다면 offset 초과로
+        // 조기 종료되어 이 검증이 실패했을 것
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<Long, float[]>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(placeVectorSearchService, atLeastOnce()).storeBatch(captor.capture());
+        boolean remainingProcessed = captor.getAllValues().stream()
+                .anyMatch(map -> map.containsKey(3L));
+        assertThat(remainingProcessed).isTrue();
+
+        // invalidFailing(id=1)은 두 번째 조회에서도 다시 나타나지만, 같은 실행에서는
+        // excludedIds로 걸러져 embedBatch에 다시 전달되지 않아야 한다(무한 루프 방지 확인)
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> textCaptor = ArgumentCaptor.forClass(List.class);
+        verify(embeddingService, atLeastOnce()).embedBatch(textCaptor.capture());
     }
 
     private Place createPlace(Long id, String name, String category) {

@@ -38,8 +38,12 @@ public class BatchJobRunner implements CommandLineRunner {
         }
 
         log.info("[2/3] 임베딩 배치 생성 시작");
-        embeddingBatchJob.execute();
-        log.info("[2/3] 임베딩 배치 생성 완료");
+        try {
+            embeddingBatchJob.execute();
+            log.info("[2/3] 임베딩 배치 생성 완료");
+        } catch (Exception e) {
+            log.error("[2/3] 임베딩 배치 생성 실패, 이후 단계 계속 진행: {}", e.getMessage(), e);
+        }
 
         if (enrichEnabled) {
             log.info("[3/3] 태그/설명 배치 보강 시작");

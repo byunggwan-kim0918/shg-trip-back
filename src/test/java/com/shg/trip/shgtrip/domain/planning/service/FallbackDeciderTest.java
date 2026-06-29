@@ -11,9 +11,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * FallbackDecider 단위 테스트.
- * 총 후보 수 20개 기준으로 벡터 경로/Fallback 경로 분기를 검증한다.
+ * 실제 DB 카테고리는 Foursquare 계층 경로 형식 (예: "Dining and Drinking > Restaurant > ...")
  */
 class FallbackDeciderTest {
+
+    // 실제 DB 카테고리 값 (Foursquare 경로)
+    private static final String CAT_RESTAURANT = "Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant";
+    private static final String CAT_CAFE = "Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop";
+    private static final String CAT_LODGING = "Travel and Transportation > Lodging > Hotel";
+    private static final String CAT_ATTRACTION = "Landmarks and Outdoors > Park";
 
     private FallbackDecider decider;
 
@@ -22,19 +28,19 @@ class FallbackDeciderTest {
         decider = new FallbackDecider();
     }
 
-    private PlaceCandidate createCandidate(int index) {
+    private PlaceCandidate createCandidate(int index, String category) {
         return new PlaceCandidate(
                 index, (long) index, "Place " + index, "Address " + index,
-                "RESTAURANT", List.of("맛집"), "Seoul", "KR",
+                category, List.of(category), "Seoul", "KR",
                 BigDecimal.valueOf(37.5), BigDecimal.valueOf(127.0),
                 "설명", BigDecimal.valueOf(4.5), 0.9
         );
     }
 
-    private List<PlaceCandidate> createCandidates(int count) {
+    private List<PlaceCandidate> createCandidates(int startIndex, String category, int count) {
         List<PlaceCandidate> candidates = new ArrayList<>();
-        for (int i = 1; i <= count; i++) {
-            candidates.add(createCandidate(i));
+        for (int i = startIndex; i < startIndex + count; i++) {
+            candidates.add(createCandidate(i, category));
         }
         return candidates;
     }
@@ -44,30 +50,29 @@ class FallbackDeciderTest {
     class NormalBranchingTests {
 
         @Test
-        @DisplayName("후보가 20개 이상이면 false 반환 (벡터 경로 사용)")
-        void twentyOrMoreCandidates_returnsFalse() {
-            List<PlaceCandidate> candidates = createCandidates(20);
-            assertThat(decider.shouldFallback(candidates, List.of("음식", "관광"))).isFalse();
+        @DisplayName("3일 여행 - 실제 DB 카테고리로 모든 조건 충족 → false")
+        void allRequirementsMetForThreeDays_returnsFalse() {
+            List<PlaceCandidate> candidates = new ArrayList<>();
+            candidates.addAll(createCandidates(1, CAT_ATTRACTION, 5));
+            candidates.addAll(createCandidates(6, CAT_RESTAURANT, 8));
+            candidates.addAll(createCandidates(14, CAT_LODGING, 3));
+            assertThat(decider.shouldFallback(candidates, 3)).isFalse();
         }
 
         @Test
-        @DisplayName("후보가 20개 초과이면 false 반환")
-        void moreThanTwentyCandidates_returnsFalse() {
-            List<PlaceCandidate> candidates = createCandidates(50);
-            assertThat(decider.shouldFallback(candidates, List.of("음식"))).isFalse();
-        }
-
-        @Test
-        @DisplayName("후보가 20개 미만이면 true 반환 (Fallback 경로)")
-        void lessThanTwentyCandidates_returnsTrue() {
-            List<PlaceCandidate> candidates = createCandidates(19);
-            assertThat(decider.shouldFallback(candidates, List.of("음식", "관광"))).isTrue();
+        @DisplayName("5일 여행 - 실제 DB 카테고리로 모든 조건 충족 → false")
+        void allRequirementsMetForFiveDays_returnsFalse() {
+            List<PlaceCandidate> candidates = new ArrayList<>();
+            candidates.addAll(createCandidates(1, CAT_ATTRACTION, 10));
+            candidates.addAll(createCandidates(11, CAT_RESTAURANT, 12));
+            candidates.addAll(createCandidates(23, CAT_LODGING, 3));
+            assertThat(decider.shouldFallback(candidates, 5)).isFalse();
         }
 
         @Test
         @DisplayName("후보가 비어있으면 true 반환")
         void emptyCandidates_returnsTrue() {
-            assertThat(decider.shouldFallback(List.of(), List.of("음식"))).isTrue();
+            assertThat(decider.shouldFallback(List.of(), 3)).isTrue();
         }
     }
 
@@ -78,35 +83,46 @@ class FallbackDeciderTest {
         @Test
         @DisplayName("candidates가 null이면 true 반환")
         void nullCandidates_returnsTrue() {
-            assertThat(decider.shouldFallback(null, List.of("음식"))).isTrue();
+            assertThat(decider.shouldFallback(null, 3)).isTrue();
         }
 
         @Test
-        @DisplayName("requestedCategories가 null이어도 총 수 기준으로 판단")
-        void nullCategories_usesTotalCount() {
-            List<PlaceCandidate> candidates = createCandidates(25);
-            assertThat(decider.shouldFallback(candidates, null)).isFalse();
+        @DisplayName("식당 부족 (days×2 미만) → true")
+        void insufficientRestaurants_returnsTrue() {
+            List<PlaceCandidate> candidates = new ArrayList<>();
+            candidates.addAll(createCandidates(1, CAT_RESTAURANT, 5));  // 3일 기준 6개 필요
+            candidates.addAll(createCandidates(6, CAT_ATTRACTION, 5));
+            candidates.addAll(createCandidates(11, CAT_LODGING, 2));
+            assertThat(decider.shouldFallback(candidates, 3)).isTrue();
         }
 
         @Test
-        @DisplayName("requestedCategories가 비어있어도 총 수 기준으로 판단")
-        void emptyCategories_usesTotalCount() {
-            List<PlaceCandidate> candidates = createCandidates(21);
-            assertThat(decider.shouldFallback(candidates, List.of())).isFalse();
+        @DisplayName("관광지 부족 (days 미만) → true")
+        void insufficientAttractions_returnsTrue() {
+            List<PlaceCandidate> candidates = new ArrayList<>();
+            candidates.addAll(createCandidates(1, CAT_ATTRACTION, 2));  // 3일 기준 3개 필요
+            candidates.addAll(createCandidates(3, CAT_RESTAURANT, 8));
+            candidates.addAll(createCandidates(11, CAT_LODGING, 2));
+            assertThat(decider.shouldFallback(candidates, 3)).isTrue();
         }
 
         @Test
-        @DisplayName("정확히 경계값(20개)은 false 반환")
-        void exactBoundary_returnsFalse() {
-            List<PlaceCandidate> candidates = createCandidates(20);
-            assertThat(decider.shouldFallback(candidates, List.of("관광"))).isFalse();
+        @DisplayName("숙소 없음 → true")
+        void noAccommodation_returnsTrue() {
+            List<PlaceCandidate> candidates = new ArrayList<>();
+            candidates.addAll(createCandidates(1, CAT_ATTRACTION, 5));
+            candidates.addAll(createCandidates(6, CAT_RESTAURANT, 10));
+            assertThat(decider.shouldFallback(candidates, 3)).isTrue();
         }
 
         @Test
-        @DisplayName("경계값 바로 아래(19개)는 true 반환")
-        void justBelowBoundary_returnsTrue() {
-            List<PlaceCandidate> candidates = createCandidates(19);
-            assertThat(decider.shouldFallback(candidates, List.of("관광"))).isTrue();
+        @DisplayName("총 후보 15개 미만 → true")
+        void belowMinTotal_returnsTrue() {
+            List<PlaceCandidate> candidates = new ArrayList<>();
+            candidates.addAll(createCandidates(1, CAT_ATTRACTION, 4));
+            candidates.addAll(createCandidates(5, CAT_RESTAURANT, 7));
+            candidates.addAll(createCandidates(12, CAT_LODGING, 2));  // 총 13개
+            assertThat(decider.shouldFallback(candidates, 3)).isTrue();
         }
     }
 }

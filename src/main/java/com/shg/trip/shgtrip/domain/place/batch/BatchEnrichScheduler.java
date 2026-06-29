@@ -59,7 +59,18 @@ public class BatchEnrichScheduler {
     }
 
     /**
+     * processChunk 결과. failedIds는 이번 실행에서 재시도하지 않도록 제외할 place ID 목록
+     * (enriched_at이 여전히 NULL이라 다음 조회에도 다시 잡히기 때문).
+     */
+    record ChunkResult(int success, int failed, List<Long> failedIds) {
+    }
+
+    /**
      * 태그/설명 배치 보강을 실행한다.
+     * <p>
+     * page offset을 증가시키는 방식 대신, 이번 실행에서 실패한 place ID를 메모리에 누적해
+     * 매번 첫 페이지를 다시 조회하면서 그 ID들을 걸러낸다(EmbeddingBatchJob과 동일한 이유 —
+     * 고정 offset 증가는 실제 남은 건수보다 앞서나가 조용히 조기 종료될 수 있다).
      */
     public void enrich() {
         if (anthropicApiKey == null || anthropicApiKey.isBlank()) {
@@ -71,33 +82,31 @@ public class BatchEnrichScheduler {
 
         int totalProcessed = 0;
         int totalFailed = 0;
-        int pageNumber = 0;
+        Set<Long> excludedIds = new HashSet<>();
 
         while (true) {
             Page<Place> page = placeRepository.findByEnrichedAtIsNullAndActiveTrue(
-                    PageRequest.of(pageNumber, chunkSize));
+                    PageRequest.of(0, chunkSize));
 
             if (page.isEmpty()) {
                 break;
             }
 
-            List<Place> places = page.getContent();
-            log.info("배치 보강 청크 처리 중 - {}건 (전체 미보강: {}건)",
-                    places.size(), page.getTotalElements());
+            List<Place> places = page.getContent().stream()
+                    .filter(p -> !excludedIds.contains(p.getId()))
+                    .toList();
 
-            int[] result = processChunk(places);
-            totalProcessed += result[0];
-            totalFailed += result[1];
-
-            // 성공한 장소는 enriched_at이 설정되어 다음 조회에서 제외됨
-            // 실패한 장소가 있으면 다음 페이지로 이동
-            if (result[1] > 0) {
-                pageNumber++;
-            }
-
-            if (!page.hasNext() && result[1] == 0) {
+            if (places.isEmpty()) {
+                // 남은 건 이번 실행에서 이미 실패 처리된 장소뿐 — 다음 실행에서 재시도
                 break;
             }
+
+            log.info("배치 보강 청크 처리 중 - {}건 (전체 미보강: {}건)", places.size(), page.getTotalElements());
+
+            ChunkResult result = processChunk(places);
+            totalProcessed += result.success();
+            totalFailed += result.failed();
+            excludedIds.addAll(result.failedIds());
         }
 
         log.info("BatchEnrichScheduler 완료 - 보강 성공: {}건, 실패: {}건", totalProcessed, totalFailed);
@@ -107,9 +116,9 @@ public class BatchEnrichScheduler {
      * 장소 청크를 처리하여 Anthropic Batch API로 보강한다.
      *
      * @param places 보강할 장소 목록 (최대 chunkSize건)
-     * @return [성공 건수, 실패 건수]
+     * @return 성공/실패 건수와 실패한 place ID 목록
      */
-    int[] processChunk(List<Place> places) {
+    ChunkResult processChunk(List<Place> places) {
         try {
             // 1. 배치 요청 구성
             List<Map<String, Object>> requests = buildBatchRequests(places);
@@ -118,14 +127,14 @@ public class BatchEnrichScheduler {
             String batchId = submitBatch(requests);
             if (batchId == null) {
                 log.error("배치 제출 실패 - {}건 모두 실패 처리", places.size());
-                return new int[]{0, places.size()};
+                return new ChunkResult(0, places.size(), allIds(places));
             }
 
             // 3. 폴링으로 완료 대기
             String resultsUrl = pollForCompletion(batchId);
             if (resultsUrl == null) {
                 log.error("배치 폴링 실패 또는 타임아웃 - batchId={}", batchId);
-                return new int[]{0, places.size()};
+                return new ChunkResult(0, places.size(), allIds(places));
             }
 
             // 4. 결과 조회 및 처리
@@ -133,8 +142,12 @@ public class BatchEnrichScheduler {
 
         } catch (Exception e) {
             log.error("배치 보강 처리 중 예외 발생: {}", e.getMessage(), e);
-            return new int[]{0, places.size()};
+            return new ChunkResult(0, places.size(), allIds(places));
         }
+    }
+
+    private List<Long> allIds(List<Place> places) {
+        return places.stream().map(Place::getId).toList();
     }
 
     /**
@@ -191,42 +204,71 @@ public class BatchEnrichScheduler {
     }
 
     /**
-     * Anthropic Batch API에 배치를 제출한다.
+     * Anthropic Batch API에 배치를 제출한다. 5xx/IOException은 MAX_RETRIES회까지
+     * 지수 백오프로 재시도한다(OpenAIEmbeddingService.callEmbeddingsApi와 동일한 전략 —
+     * 이전엔 MAX_RETRIES 필드만 선언돼 있고 실제 재시도가 전혀 없었음). 4xx는 재시도 불필요.
      *
      * @return 배치 ID (실패 시 null)
      */
     String submitBatch(List<Map<String, Object>> requests) {
+        String requestBody;
         try {
             Map<String, Object> body = Map.of("requests", requests);
-            String requestBody = objectMapper.writeValueAsString(body);
-
-            HttpRequest httpRequest = HttpRequest.newBuilder()
-                    .uri(URI.create(BATCH_API_URL))
-                    .header("Content-Type", "application/json")
-                    .header("x-api-key", anthropicApiKey)
-                    .header("anthropic-version", "2023-06-01")
-                    .timeout(Duration.ofSeconds(60))
-                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() == 200 || response.statusCode() == 201) {
-                JsonNode root = objectMapper.readTree(response.body());
-                String batchId = root.get("id").asText();
-                log.info("배치 제출 성공 - batchId={}, 요청 수={}", batchId, requests.size());
-                return batchId;
-            }
-
-            log.error("배치 제출 실패 - HTTP {}: {}", response.statusCode(), response.body());
+            requestBody = objectMapper.writeValueAsString(body);
+        } catch (Exception e) {
+            log.error("배치 요청 본문 직렬화 실패: {}", e.getMessage(), e);
             return null;
+        }
 
-        } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) {
+        HttpRequest httpRequest = HttpRequest.newBuilder()
+                .uri(URI.create(BATCH_API_URL))
+                .header("Content-Type", "application/json")
+                .header("x-api-key", anthropicApiKey)
+                .header("anthropic-version", "2023-06-01")
+                .timeout(Duration.ofSeconds(60))
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                .build();
+
+        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+            try {
+                HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+
+                if (response.statusCode() == 200 || response.statusCode() == 201) {
+                    JsonNode root = objectMapper.readTree(response.body());
+                    String batchId = root.get("id").asText();
+                    log.info("배치 제출 성공 - batchId={}, 요청 수={}", batchId, requests.size());
+                    return batchId;
+                }
+
+                if (response.statusCode() >= 500) {
+                    log.warn("배치 제출 서버 에러 (HTTP {}), 재시도 {}/{}",
+                            response.statusCode(), attempt + 1, MAX_RETRIES);
+                    sleepWithBackoff(attempt);
+                    continue;
+                }
+
+                log.error("배치 제출 실패 - HTTP {}: {}", response.statusCode(), response.body());
+                return null;
+
+            } catch (IOException e) {
+                log.warn("배치 제출 IO 에러, 재시도 {}/{}: {}", attempt + 1, MAX_RETRIES, e.getMessage());
+                sleepWithBackoff(attempt);
+            } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                log.error("배치 제출 중 인터럽트 발생", e);
+                return null;
             }
-            log.error("배치 제출 중 예외 발생: {}", e.getMessage(), e);
-            return null;
+        }
+
+        log.error("배치 제출 실패: {}회 재시도 후에도 실패", MAX_RETRIES);
+        return null;
+    }
+
+    private void sleepWithBackoff(int attempt) {
+        try {
+            Thread.sleep(1000L * (1L << attempt));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -297,9 +339,9 @@ public class BatchEnrichScheduler {
      *
      * @param resultsUrl 결과 파일 URL
      * @param places     원본 장소 목록
-     * @return [성공 건수, 실패 건수]
+     * @return 성공/실패 건수와 실패한 place ID 목록
      */
-    int[] processResults(String resultsUrl, List<Place> places) {
+    ChunkResult processResults(String resultsUrl, List<Place> places) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(resultsUrl))
@@ -313,7 +355,7 @@ public class BatchEnrichScheduler {
 
             if (response.statusCode() != 200) {
                 log.error("배치 결과 조회 실패 - HTTP {}", response.statusCode());
-                return new int[]{0, places.size()};
+                return new ChunkResult(0, places.size(), allIds(places));
             }
 
             // 장소 ID → Place 매핑
@@ -324,6 +366,7 @@ public class BatchEnrichScheduler {
 
             int success = 0;
             int failed = 0;
+            List<Long> failedIds = new ArrayList<>();
 
             // JSONL 형식으로 한 줄씩 처리
             String[] lines = response.body().split("\n");
@@ -346,6 +389,7 @@ public class BatchEnrichScheduler {
                     if (resultBody == null || !"succeeded".equals(resultBody.path("type").asText())) {
                         log.warn("장소 보강 실패 - placeId={}, result={}", placeId, resultBody);
                         failed++;
+                        failedIds.add(placeId);
                         continue;
                     }
 
@@ -356,6 +400,7 @@ public class BatchEnrichScheduler {
                     if (content == null) {
                         log.warn("응답 텍스트 추출 실패 - placeId={}", placeId);
                         failed++;
+                        failedIds.add(placeId);
                         continue;
                     }
 
@@ -365,6 +410,7 @@ public class BatchEnrichScheduler {
                         success++;
                     } else {
                         failed++;
+                        failedIds.add(placeId);
                     }
 
                 } catch (Exception e) {
@@ -374,14 +420,14 @@ public class BatchEnrichScheduler {
             }
 
             log.info("배치 결과 처리 완료 - 성공: {}건, 실패: {}건", success, failed);
-            return new int[]{success, failed};
+            return new ChunkResult(success, failed, failedIds);
 
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
             log.error("배치 결과 처리 중 예외: {}", e.getMessage(), e);
-            return new int[]{0, places.size()};
+            return new ChunkResult(0, places.size(), allIds(places));
         }
     }
 

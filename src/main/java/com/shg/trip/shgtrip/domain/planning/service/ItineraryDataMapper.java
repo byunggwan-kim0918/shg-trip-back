@@ -35,6 +35,15 @@ public class ItineraryDataMapper {
     private final GooglePlacesClient googlePlacesClient;
     private final PlacePersistenceHelper placePersistenceHelper;
     private final RouteOptimizer routeOptimizer;
+    private final ItineraryAutoFixer autoFixer;
+
+    /**
+     * 여행지 기준 "엉뚱한 장소" 판정 거리(km). 기존 500km는 한국 내 도시 단위 오매칭
+     * (예: 제주↔서울 약 450km)을 걸러내지 못할 만큼 느슨했음 — 단일 지역 여행 기준으로
+     * 충분히 타이트하게(150km) 좁혔다. 전국 일주처럼 광역 여행이면 destinationCoord 자체가
+     * 모호해져 이 검증의 의미가 줄어들지만, 그 경우도 500km보다 150km가 더 안전한 기본값.
+     */
+    private static final double DESTINATION_DISTANCE_THRESHOLD_KM = 150;
 
     /**
      * ItineraryData → Itinerary 엔티티 변환.
@@ -47,14 +56,31 @@ public class ItineraryDataMapper {
      * 저장 트랜잭션은 ItinerarySaveHelper.save()가 담당.
      */
     public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId) {
+        return toEntity(data, input, userId, false);
+    }
+
+    /**
+     * @param alreadyOptimized RouteOptimizer.repairAndSchedule()로 day/순서/시간/교통이
+     *                          이미 결정론적으로 확정된 경우 true. 이 경우 autoFixer/optimize()를
+     *                          다시 적용하면 pair 인접성·식사 슬롯 등 이미 확정된 구조가
+     *                          깨질 수 있으므로 건너뛴다(Optimized 파이프라인 경로).
+     */
+    public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId, boolean alreadyOptimized) {
         // 1. 모든 PlaceData 수집 + 중복 제거
         Map<String, PlaceData> uniquePlaces = collectUniquePlaces(data);
 
         // 2. 배치로 Place 엔티티 resolve (여행지 기준 좌표로 엉뚱한 장소 필터링)
         Map<String, Place> placeCache = batchResolvePlaces(uniquePlaces, input.destination());
 
-        // 2.5. 좌표 기반 동선 최적화 (같은 날 장소를 가까운 순서로 재정렬)
-        List<StepData> optimizedSteps = routeOptimizer.optimize(data.steps(), placeCache);
+        List<StepData> optimizedSteps;
+        if (alreadyOptimized) {
+            optimizedSteps = data.steps();
+        } else {
+            // 2.5. 같은 날 숙소 중복 제거 (강제 삽입 없음 — LLM 흐름 보존)
+            ItineraryData deduped = autoFixer.fix(data);
+            // 2.6. 좌표 기반 동선 최적화 (같은 날 장소를 가까운 순서로 재정렬)
+            optimizedSteps = routeOptimizer.optimize(deduped.steps(), placeCache);
+        }
 
         // 3. 엔티티 조립
         Itinerary itinerary = Itinerary.builder()
@@ -130,11 +156,16 @@ public class ItineraryDataMapper {
         // 여행지 기준 좌표 조회 (Google API로 1회 검색) — 엉뚱한 장소 필터링에 사용
         double[] destinationCoord = resolveDestinationCoord(destination);
 
-        // 1. DB 배치 조회 — 유효/만료 분류
+        // 1. DB 배치 조회 — 유효/만료 분류. 여행지에서 너무 먼 기존 DB row(오매칭/오래된 잘못된
+        // 데이터)는 캐시에 그대로 쓰지 않고 "못 찾음"으로 취급해 2단계에서 재해결하게 한다.
         for (Map.Entry<String, PlaceData> entry : uniquePlaces.entrySet()) {
             PlaceData pd = entry.getValue();
             placeRepository.findByNameAndAddress(pd.name(), pd.address())
                     .ifPresent(place -> {
+                        if (isFarFromDestination(place.getLatitude(), place.getLongitude(), destinationCoord)) {
+                            log.warn("DB에 캐시된 장소가 여행지에서 너무 멀어 재해결 대상으로 처리: name={}", place.getName());
+                            return;
+                        }
                         if (place.isStale()) {
                             stalePlaces.put(entry.getKey(), place);
                         } else {
@@ -151,7 +182,7 @@ public class ItineraryDataMapper {
             PlaceData pd = entry.getValue();
             if (stalePlaces.containsKey(key)) {
                 // 만료된 장소: Google API로 정보 갱신
-                Place refreshed = refreshFromGoogle(stalePlaces.get(key), pd);
+                Place refreshed = refreshFromGoogle(stalePlaces.get(key), pd, destinationCoord);
                 cache.put(key, refreshed);
                 if (isFallbackPlace(refreshed)) {
                     fallbackCount++;
@@ -201,14 +232,20 @@ public class ItineraryDataMapper {
     /**
      * 만료된 Place를 Google Places API로 갱신.
      * 갱신 실패 시 오래진 데이터를 그대로 반환 (서비스 중단 방지).
+     * Google이 여행지에서 너무 먼 좌표를 반환하면(오매칭) 갱신을 적용하지 않고 기존 데이터를 유지한다
+     * — 잘못된 좌표로 덮어써서 지도에 엉뚱한 위치가 찍히는 것을 방지.
      * photoReference는 DB에 저장되며, 이미지는 화면 조회 시 PlaceImageAsyncRecovery에서 비동기로 다운로드.
      */
-    private Place refreshFromGoogle(Place stalePlace, PlaceData placeData) {
+    private Place refreshFromGoogle(Place stalePlace, PlaceData placeData, double[] destinationCoord) {
         try {
             Optional<GooglePlaceDetail> detail =
                     googlePlacesClient.searchAndGetDetail(placeData.name() + " " + placeData.address());
             if (detail.isPresent()) {
                 GooglePlaceDetail d = detail.get();
+                if (isFarFromDestination(BigDecimal.valueOf(d.lat()), BigDecimal.valueOf(d.lng()), destinationCoord)) {
+                    log.warn("Google 갱신 결과가 여행지에서 너무 멀어 적용하지 않고 기존 데이터 유지: name={}", stalePlace.getName());
+                    return stalePlace;
+                }
                 stalePlace.update(d.address(), d.lat(), d.lng(), d.rating(),
                         d.priceLevel(), d.openingHours(), d.photoReference(), d.sourceUrl(),
                         d.editorialSummary());
@@ -223,12 +260,21 @@ public class ItineraryDataMapper {
         return stalePlace;
     }
 
+    /** 여행지 기준 좌표에서 너무 먼지 판정. destinationCoord/좌표가 없거나 (0,0) fallback 마커면 false. */
+    private boolean isFarFromDestination(BigDecimal lat, BigDecimal lng, double[] destinationCoord) {
+        if (destinationCoord == null || lat == null || lng == null) return false;
+        if (BigDecimal.ZERO.compareTo(lat) == 0 && BigDecimal.ZERO.compareTo(lng) == 0) return false;
+        double distKm = GeoUtils.haversine(destinationCoord[0], destinationCoord[1], lat.doubleValue(), lng.doubleValue());
+        return distKm > DESTINATION_DISTANCE_THRESHOLD_KM;
+    }
+
     /**
      * Google Places API 조회 → 실패 시 fallback 저장.
      * - BusinessException(외부 API 장애)은 fallback으로 처리 (일정 생성 전체 중단 방지)
      * - 일반 예외(파싱 오류 등)도 fallback 처리
      * - photoReference는 DB에 저장되며, 이미지는 화면 조회 시 PlaceImageAsyncRecovery에서 비동기로 다운로드
-     * - destinationCoord가 있으면 여행지 기준 500km 초과 장소는 fallback 처리 (엉뚱한 장소 방지)
+     * - destinationCoord가 있으면 여행지 기준 {@link #DESTINATION_DISTANCE_THRESHOLD_KM} 초과 장소는
+     *   fallback 처리 (엉뚱한 장소 방지)
      */
     private Place resolveFromGoogleOrFallback(PlaceData placeData, double[] destinationCoord) {
         // Google API 시도
@@ -239,14 +285,11 @@ public class ItineraryDataMapper {
             if (detail.isPresent()) {
                 GooglePlaceDetail d = detail.get();
 
-                // 여행지 기준 거리 검증: 500km 초과 시 엉뚱한 장소로 판단 → fallback
-                if (destinationCoord != null && d.lat() != 0.0 && d.lng() != 0.0) {
-                    double distKm = GeoUtils.haversine(destinationCoord[0], destinationCoord[1], d.lat(), d.lng());
-                    if (distKm > 500) {
-                        log.warn("Google Places 결과가 여행지에서 너무 멀어 fallback 처리: name={}, distKm={}",
-                                placeData.name(), String.format("%.1f", distKm));
-                        return buildFallbackPlace(placeData);
-                    }
+                // 여행지 기준 거리 검증: 초과 시 엉뚱한 장소로 판단 → fallback
+                if (d.lat() != 0.0 && d.lng() != 0.0
+                        && isFarFromDestination(BigDecimal.valueOf(d.lat()), BigDecimal.valueOf(d.lng()), destinationCoord)) {
+                    log.warn("Google Places 결과가 여행지에서 너무 멀어 fallback 처리: name={}", placeData.name());
+                    return buildFallbackPlace(placeData);
                 }
 
                 // Google이 반환한 name+address로 DB에 이미 있는지 확인

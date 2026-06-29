@@ -212,7 +212,7 @@ public class PlaceRefreshService {
                 }
             }
 
-            log.info("Presigned URL 자동 갱신 완료: {} / {} places", successCount, places.size());
+            log.debug("Presigned URL 자동 갱신 완료: {} / {} places", successCount, places.size());
         } catch (Exception e) {
             log.error("Presigned URL 갱신 중 예외 발생: {}", e.getMessage());
         }

@@ -23,7 +23,7 @@ import java.util.regex.Pattern;
  * 2. 시간 형식: HH:mm + endTime > startTime (같은 날 기준)
  * 3. stepOrder 연속성: 1부터 시작, 1씩 증가, 갭 없음
  * 4. dayNumber 일관성: 단조 비감소 (monotonically non-decreasing)
- * 5. 중복 장소: 같은 날 동일 장소 중복 방문 불가
+ * 5. 중복 장소: 같은 날 동일 장소 중복 방문 불가 (숙소·교통허브 제외)
  * 6. 시간 겹침: 같은 날 연속 스텝 간 startTime < 이전 endTime 불가
  */
 @Slf4j
@@ -31,6 +31,7 @@ import java.util.regex.Pattern;
 public class HardValidator {
 
     private static final Pattern TIME_PATTERN = Pattern.compile("^([01]\\d|2[0-3]):[0-5]\\d$");
+
 
     /**
      * 벡터 경로에서 생성된 ItineraryData에 대해 hard validation만 수행한다.
@@ -93,8 +94,9 @@ public class HardValidator {
                 }
             }
 
-            // 6. 같은 날 중복 장소 검증
-            if (step.place() != null && step.place().name() != null && !step.place().name().isBlank()) {
+            // 6. 같은 날 중복 장소 검증 (숙소·교통허브 제외 — 당일 출발·복귀 패턴은 정상)
+            if (step.place() != null && step.place().name() != null && !step.place().name().isBlank()
+                    && !isAccommodationStep(step) && !isTransitHubStep(step)) {
                 String placeName = step.place().name();
                 visitedPlacesByDay.computeIfAbsent(step.dayNumber(), k -> new HashSet<>());
                 if (!visitedPlacesByDay.get(step.dayNumber()).add(placeName)) {
@@ -102,6 +104,9 @@ public class HardValidator {
                             step.dayNumber(), placeName));
                 }
             }
+
+            // 7. 식사 라벨(notes)과 실제 시간 불일치 모니터링 (비차단 — errors에 추가하지 않음)
+            logMealLabelMismatchIfAny(step);
 
             previousDayNumber = step.dayNumber();
             boolean endValid = step.endTime() != null && TIME_PATTERN.matcher(step.endTime()).matches();
@@ -115,6 +120,25 @@ public class HardValidator {
         String failureReason = String.join("; ", errors);
         log.debug("Hard validation failed: {}", failureReason);
         return HardValidationResult.fail(failureReason);
+    }
+
+    /**
+     * 식당(DINING) 스텝의 notes 라벨이 실제 startTime과 어긋나는지 모니터링용으로만 로그.
+     * 검증 실패로 처리하지 않음 — notes는 자유 텍스트라 재시도 비용 대비 효과가 낮음.
+     */
+    private void logMealLabelMismatchIfAny(StepData step) {
+        if (step.place() == null || step.notes() == null || step.startTime() == null) return;
+        if (!"DINING".equals(PlaceCategoryConstants.majorCategory(step.place().category()))) return;
+        if (!TIME_PATTERN.matcher(step.startTime()).matches()) return;
+
+        int startMin = timeToMinutes(step.startTime());
+        String notes = step.notes();
+        boolean mismatchEvening = startMin < 15 * 60 && notes.contains("저녁");
+        boolean mismatchSnack = startMin >= 17 * 60 && notes.contains("간식");
+        if (mismatchEvening || mismatchSnack) {
+            log.warn("식사 라벨 불일치 감지: day={} time={} notes='{}'",
+                    step.dayNumber(), step.startTime(), notes);
+        }
     }
 
     private void validateRequiredFields(StepData step, String prefix, List<String> errors) {
@@ -157,5 +181,15 @@ public class HardValidator {
     private int timeToMinutes(String time) {
         String[] parts = time.split(":");
         return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+    }
+
+    private boolean isAccommodationStep(StepData step) {
+        if (step.place() == null) return false;
+        return PlaceCategoryConstants.isAccommodation(step.place().category());
+    }
+
+    private boolean isTransitHubStep(StepData step) {
+        if (step.place() == null) return false;
+        return PlaceCategoryConstants.isTransitHub(step.place().name(), step.place().category());
     }
 }
