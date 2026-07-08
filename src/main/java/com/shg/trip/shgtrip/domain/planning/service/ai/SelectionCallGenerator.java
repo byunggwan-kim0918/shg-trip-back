@@ -149,7 +149,10 @@ public class SelectionCallGenerator {
         if (input.categories() != null && !input.categories().isEmpty()) {
             sb.append("- 카테고리: ").append(String.join(", ", input.categories())).append("\n");
         }
-        sb.append("- 예산: ").append(input.budget().toPlainString()).append("원\n");
+        // 예산은 선택 입력 — null이면 프롬프트에서 생략 (categories·description과 동일 패턴)
+        if (input.budget() != null) {
+            sb.append("- 예산: ").append(input.budget().toPlainString()).append("원\n");
+        }
         sb.append("- 기간: ").append(input.startDate()).append(" ~ ").append(input.endDate())
                 .append(" (").append(days - 1).append("박").append(days).append("일)\n");
         sb.append("- 여행 일수: ").append(days).append("일 (마지막날 dayNumber=").append(days).append(")\n");

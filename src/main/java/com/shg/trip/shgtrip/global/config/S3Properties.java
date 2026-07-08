@@ -11,6 +11,7 @@ public record S3Properties(
         String region,
         String bucket,
         String accessKey,
-        String secretKey
+        String secretKey,
+        String cloudFrontDomain
 ) {
 }

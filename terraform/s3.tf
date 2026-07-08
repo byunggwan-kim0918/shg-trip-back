@@ -31,6 +31,21 @@ resource "aws_s3_bucket_policy" "data" {
           aws_s3_bucket.data.arn,
           "${aws_s3_bucket.data.arn}/*"
         ]
+      },
+      {
+        # CloudFront(OAC)만 이미지 객체 GET 허용 — 버킷은 비공개 유지
+        Sid    = "AllowCloudFrontOACImageRead"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.data.arn}/images/places/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = aws_cloudfront_distribution.images.arn
+          }
+        }
       }
     ]
   })

@@ -10,21 +10,15 @@ import com.shg.trip.shgtrip.global.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class PlaceRefreshService {
-
-    private static final String S3_IMAGE_KEY_PREFIX = "images/places/";
-    private static final String S3_IMAGE_EXTENSION = ".jpg";
 
     private final PlaceRepository placeRepository;
     private final GooglePlacesClient googlePlacesClient;
@@ -206,47 +200,6 @@ public class PlaceRefreshService {
             });
         } catch (Exception e) {
             log.warn("Failed to upload photo for place {}: {}", placeId, e.getMessage());
-        }
-    }
-
-    /**
-     * Presigned URL 자동 갱신 (1주일마다).
-     * Presigned URL은 7일 유효하므로 주 1회 재생성하여 만료 방지.
-     * S3에 이미 존재하는 객체의 presigned URL만 생성 (Google API 호출 없음).
-     */
-    @Scheduled(fixedDelay = 604800000)  // 1주일 (7일 * 24시간 * 60분 * 60초 * 1000ms)
-    @Transactional
-    public void refreshPresignedUrls() {
-        try {
-            // imageUrl이 있는 모든 place 조회
-            List<Place> places = placeRepository.findByImageUrlNotNull();
-
-            if (places.isEmpty()) {
-                log.debug("갱신할 Presigned URL이 없습니다.");
-                return;
-            }
-
-            int successCount = 0;
-            for (Place place : places) {
-                try {
-                    // S3 key 재구성
-                    String key = S3_IMAGE_KEY_PREFIX + place.getId() + S3_IMAGE_EXTENSION;
-
-                    // S3에 이미 존재하는 파일의 presigned URL 재생성 (Google API 호출 없음)
-                    String newPresignedUrl = placeImageUploader.generatePresignedUrlForKey(key)
-                            .orElse(null);
-                    if (newPresignedUrl != null) {
-                        place.updateImageUrl(newPresignedUrl);
-                        successCount++;
-                    }
-                } catch (Exception e) {
-                    log.warn("Presigned URL 갱신 실패: placeId={}, error={}", place.getId(), e.getMessage());
-                }
-            }
-
-            log.debug("Presigned URL 자동 갱신 완료: {} / {} places", successCount, places.size());
-        } catch (Exception e) {
-            log.error("Presigned URL 갱신 중 예외 발생: {}", e.getMessage());
         }
     }
 }

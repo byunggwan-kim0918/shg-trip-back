@@ -113,6 +113,8 @@ resource "aws_ecs_task_definition" "batch" {
       { name = "BATCH_FOURSQUARE_SOURCE", value = "s3" },
       { name = "BATCH_FOURSQUARE_S3_BUCKET", value = aws_s3_bucket.data.bucket },
       { name = "AWS_REGION", value = var.aws_region },
+      # GooglePlaceSyncScheduler(@Profile("batch"))가 이미지 업로드 시 정적 URL 생성에 사용
+      { name = "CLOUDFRONT_DOMAIN", value = aws_cloudfront_distribution.images.domain_name },
     ]
 
     # 배치 프로필은 spring.config.import 미사용 → 개별 환경변수로 시크릿 주입 필요
@@ -166,6 +168,7 @@ resource "aws_ecs_task_definition" "app" {
     environment = [
       { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
       { name = "AWS_REGION", value = var.aws_region },
+      { name = "CLOUDFRONT_DOMAIN", value = aws_cloudfront_distribution.images.domain_name },
     ]
 
     logConfiguration = {
