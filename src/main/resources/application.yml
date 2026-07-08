@@ -13,3 +13,6 @@ cloud:
     s3:
       region: ${AWS_REGION:ap-northeast-2}
       bucket: ${S3_BUCKET:shgtrip-data}
+      # CloudFront 배포 도메인. 설정 시 이미지 정적 URL을 CloudFront로 서빙(운영).
+      # 미설정(로컬) 시 LocalStack path-style 정적 URL 사용.
+      cloud-front-domain: ${CLOUDFRONT_DOMAIN:}

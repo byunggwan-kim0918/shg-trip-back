@@ -27,3 +27,8 @@ output "github_deploy_front_role_arn" {
   description = "GitHub Actions 프론트엔드 배포 OIDC Role ARN"
   value       = aws_iam_role.github_deploy_front.arn
 }
+
+output "cloudfront_images_domain" {
+  description = "장소 이미지 서빙 CloudFront 배포 도메인 (CLOUDFRONT_DOMAIN 환경변수 값)"
+  value       = aws_cloudfront_distribution.images.domain_name
+}
