@@ -33,7 +33,7 @@ class ItineraryValidationServiceTest {
         validationService = new ItineraryValidationService(aiService, planningProperties);
 
         baseInput = new EnrichedInput(
-                "도쿄", List.of("관광"), List.of("음식"), "normal",
+                "도쿄", List.of("관광"), List.of("음식"), "normal", "any",
                 BigDecimal.valueOf(500000),
                 LocalDate.of(2026, 7, 1), LocalDate.of(2026, 7, 3),
                 null, "도쿄 여행 컨텍스트", null

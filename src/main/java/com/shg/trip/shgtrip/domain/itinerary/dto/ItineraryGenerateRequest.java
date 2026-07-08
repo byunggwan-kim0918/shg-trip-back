@@ -29,6 +29,8 @@ public record ItineraryGenerateRequest(
 
         String pace,  // tight, normal, relaxed (기본: normal)
 
+        String transportPref,  // walk, car, any (기본: any)
+
         @Positive(message = "예산은 0보다 큰 값이어야 합니다.")
         BigDecimal budget,
 

@@ -16,6 +16,7 @@ public record VectorEnrichedInput(
         List<String> themes,
         List<String> categories,
         String pace,
+        String transportPref,
         BigDecimal budget,
         LocalDate startDate,
         LocalDate endDate,
@@ -28,5 +29,7 @@ public record VectorEnrichedInput(
         Map<String, List<String>> regionAllocation,
         String budgetRange,
         String seasonContext,
-        String enrichedContext
+        String enrichedContext,
+        TransportationHub transportationHub,
+        Map<String, String> categorySearchQueries
 ) {}

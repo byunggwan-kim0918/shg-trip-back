@@ -264,10 +264,34 @@ class BatchEnrichSchedulerTest {
                 createPlace(1L, "센소지", "관광", "아사쿠사", "일본")
         );
 
-        int[] result = scheduler.processChunk(places);
+        BatchEnrichScheduler.ChunkResult result = scheduler.processChunk(places);
 
-        assertThat(result[0]).isEqualTo(0); // 성공 0
-        assertThat(result[1]).isEqualTo(1); // 실패 1
+        assertThat(result.success()).isEqualTo(0);
+        assertThat(result.failed()).isEqualTo(1);
+        assertThat(result.failedIds()).containsExactly(1L);
+    }
+
+    @Test
+    @DisplayName("일부 장소 보강이 실패해도 남은 미보강 장소를 같은 실행에서 계속 조회한다")
+    void enrich_partialFailureMidRun_doesNotTerminateEarly() {
+        // submitBatch가 항상 실패하도록(test-api-key가 유효하지 않음) 두고,
+        // PageRequest.of(0, chunkSize)로만 스텁한다 — pageNumber를 증가시키는 옛 구현이었다면
+        // 두 번째 호출이 PageRequest.of(1, chunkSize)로 나가 이 스텁에 안 걸려 NPE/빈 결과로
+        // 끝났을 것. 항상 page 0을 재조회하는 새 구현에서만 place2까지 도달한다.
+        Place place1 = createPlace(1L, "센소지", "관광", "아사쿠사", "일본");
+        Place place2 = createPlace(2L, "메이지신궁", "관광", "하라주쿠", "일본");
+
+        org.springframework.data.domain.PageRequest page0 =
+                org.springframework.data.domain.PageRequest.of(0, 1000);
+        Page<Place> firstPage = new PageImpl<>(List.of(place1), page0, 2);
+        Page<Place> secondPage = new PageImpl<>(List.of(place2), page0, 1);
+
+        when(placeRepository.findByEnrichedAtIsNullAndActiveTrue(page0))
+                .thenReturn(firstPage, secondPage, Page.empty());
+
+        scheduler.enrich();
+
+        verify(placeRepository, times(3)).findByEnrichedAtIsNullAndActiveTrue(page0);
     }
 
     private Place createPlace(Long id, String name, String category, String region, String country) {

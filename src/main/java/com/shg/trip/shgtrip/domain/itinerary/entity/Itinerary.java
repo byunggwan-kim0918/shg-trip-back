@@ -47,6 +47,9 @@ public class Itinerary extends BaseTimeEntity {
 
     private String coverImage;
 
+    /** 커버 이미지 place 참조. imageUrl(만료 presigned)은 조회 시점에 이 id로 해소한다. */
+    private Long coverPlaceId;
+
     @Column(columnDefinition = "TEXT[]")
     @JdbcTypeCode(SqlTypes.ARRAY)
     private List<String> tags;
@@ -89,13 +92,17 @@ public class Itinerary extends BaseTimeEntity {
         if (tags != null) this.tags = tags;
     }
 
-    /** 첫 번째 장소의 이미지를 커버로 설정 (photoReference 기반 프록시 URL) */
+    /**
+     * 커버로 쓸 place 참조(coverPlaceId)를 지정한다. 사진 확보가 가능한(photoReference 있는) 첫 스텝의
+     * place id를 저장하며, 실제 imageUrl(만료되는 presigned URL)은 저장하지 않고 조회 시점에 이 id로 해소한다.
+     * (과거엔 미구현된 /api/places/{id}/photo 프록시 URL을 coverImage에 넣어 커버가 항상 깨졌음.)
+     */
     public void assignCoverFromSteps() {
-        if (this.coverImage != null) return;
+        if (this.coverPlaceId != null) return;
         this.steps.stream()
                 .filter(s -> s.getPlace() != null && s.getPlace().getPhotoReference() != null)
                 .findFirst()
-                .ifPresent(s -> this.coverImage = "/api/places/" + s.getPlace().getId() + "/photo");
+                .ifPresent(s -> this.coverPlaceId = s.getPlace().getId());
     }
 
     public void complete() {

@@ -210,6 +210,7 @@ class OptimizedClaudeAIServicePropertyTest {
                 List.of("맛집", "관광"),
                 List.of("음식", "관광"),
                 "normal",
+                "any",
                 BigDecimal.valueOf(1000000),
                 LocalDate.of(2026, 8, 1),
                 LocalDate.of(2026, 8, 3),

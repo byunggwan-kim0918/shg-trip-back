@@ -49,6 +49,7 @@ class OptimizedClaudeAIServiceTest {
                 List.of("맛집", "관광"),
                 List.of("음식", "관광"),
                 "normal",
+                "any",
                 BigDecimal.valueOf(1000000),
                 LocalDate.of(2026, 8, 1),
                 LocalDate.of(2026, 8, 3),
@@ -185,7 +186,7 @@ class OptimizedClaudeAIServiceTest {
         String invalidResponse = "이것은 JSON이 아닙니다 자연어 텍스트입니다";
 
         EnrichedInput legacyResult = new EnrichedInput(
-                "도쿄", List.of("맛집"), List.of("음식"), "normal",
+                "도쿄", List.of("맛집"), List.of("음식"), "normal", "any",
                 BigDecimal.valueOf(1000000),
                 LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 3),
                 null, "fallback 컨텍스트", null
@@ -236,7 +237,7 @@ class OptimizedClaudeAIServiceTest {
                 .willThrow(new RuntimeException("API 연결 실패"));
 
         EnrichedInput legacyResult = new EnrichedInput(
-                "도쿄", List.of("맛집", "관광"), List.of("음식", "관광"), "normal",
+                "도쿄", List.of("맛집", "관광"), List.of("음식", "관광"), "normal", "any",
                 BigDecimal.valueOf(1000000),
                 LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 3),
                 "도쿄 여행", "레거시 컨텍스트", null

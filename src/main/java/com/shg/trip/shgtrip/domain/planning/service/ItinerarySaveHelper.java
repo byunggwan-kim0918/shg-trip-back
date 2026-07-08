@@ -22,7 +22,12 @@ public class ItinerarySaveHelper {
 
     @Transactional
     public Itinerary save(ItineraryData data, EnrichedInput input, Long userId) {
-        Itinerary itinerary = itineraryDataMapper.toEntity(data, input, userId);
+        return save(data, input, userId, false);
+    }
+
+    @Transactional
+    public Itinerary save(ItineraryData data, EnrichedInput input, Long userId, boolean alreadyOptimized) {
+        Itinerary itinerary = itineraryDataMapper.toEntity(data, input, userId, alreadyOptimized);
         itinerary.assignCoverFromSteps();
         return itineraryRepository.save(itinerary);
     }

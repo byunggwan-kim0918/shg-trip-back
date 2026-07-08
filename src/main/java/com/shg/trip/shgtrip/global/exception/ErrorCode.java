@@ -28,6 +28,7 @@ public enum ErrorCode {
 
     // Place
     PLACE_NOT_FOUND("PLACE_001", "장소를 찾을 수 없습니다.", HttpStatus.NOT_FOUND),
+    PLACE_REGION_MISMATCH("PLACE_002", "선택한 장소가 여행지와 다른 지역입니다.", HttpStatus.BAD_REQUEST),
 
     // Wishlist
     WISHLIST_ALREADY_EXISTS("WISHLIST_001", "이미 찜한 장소입니다.", HttpStatus.CONFLICT),

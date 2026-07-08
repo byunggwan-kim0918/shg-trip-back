@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.planning.dto.EnrichmentResult;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
+import com.shg.trip.shgtrip.domain.planning.dto.TransportationHub;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -124,11 +125,31 @@ public class OptimizedClaudeAIService {
                 regionAllocation = (Map<String, List<String>>) regionAllocObj;
             }
 
+            // transportationHub 파싱
+            TransportationHub transportationHub = null;
+            Object hubObj = parsed.get("transportationHub");
+            if (hubObj instanceof Map) {
+                Map<String, Object> hubMap = (Map<String, Object>) hubObj;
+                transportationHub = new TransportationHub(
+                        (String) hubMap.get("arrivalHub"),
+                        (String) hubMap.get("departureHub"),
+                        (String) hubMap.get("hubType")
+                );
+            }
+
+            // categorySearchQueries 파싱
+            Map<String, String> categorySearchQueries = null;
+            Object queriesObj = parsed.get("categorySearchQueries");
+            if (queriesObj instanceof Map) {
+                categorySearchQueries = (Map<String, String>) queriesObj;
+            }
+
             VectorEnrichedInput vectorEnrichedInput = new VectorEnrichedInput(
                     input.destination(),
                     input.themes(),
                     input.categories(),
                     input.pace() != null ? input.pace() : "normal",
+                    input.transportPref() != null ? input.transportPref() : "any",
                     input.budget(),
                     input.startDate(),
                     input.endDate(),
@@ -141,7 +162,9 @@ public class OptimizedClaudeAIService {
                     regionAllocation,
                     budgetRange,
                     seasonContext,
-                    enrichedContext
+                    enrichedContext,
+                    transportationHub,
+                    categorySearchQueries
             );
 
             log.debug("enrichInput 성공: destination='{}' → normalized='{}', country='{}', regions={}",
@@ -166,6 +189,7 @@ public class OptimizedClaudeAIService {
                     legacyResult.themes(),
                     legacyResult.categories(),
                     legacyResult.pace(),
+                    legacyResult.transportPref(),
                     legacyResult.budget(),
                     legacyResult.startDate(),
                     legacyResult.endDate(),
@@ -178,7 +202,9 @@ public class OptimizedClaudeAIService {
                     null,                          // regionAllocation 미생성
                     estimateBudgetRange(legacyResult.budget(), legacyResult.startDate(), legacyResult.endDate()),
                     "",                            // seasonContext 미생성
-                    legacyResult.enrichedContext()
+                    legacyResult.enrichedContext(),
+                    null,                          // transportationHub 미생성
+                    null                           // categorySearchQueries 미생성
             );
 
             return EnrichmentResult.success(vectorEnrichedInput);
@@ -200,6 +226,7 @@ public class OptimizedClaudeAIService {
                 .replace("{startDate}", input.startDate().toString())
                 .replace("{endDate}", input.endDate().toString())
                 .replace("{pace}", input.pace() != null ? input.pace() : "normal")
+                .replace("{transportPref}", input.transportPref() != null ? input.transportPref() : "any")
                 .replace("{description}", input.description() != null ? input.description() : "없음");
     }
 
@@ -231,6 +258,7 @@ public class OptimizedClaudeAIService {
                 - 예산: {budget}원
                 - 기간: {startDate} ~ {endDate}
                 - 페이스: {pace}
+                - 이동수단 선호: {transportPref} (walk=도보/버스 우선, car=자동차 우선, any=상관없음)
                 - 설명: {description}
 
                 ## 작업

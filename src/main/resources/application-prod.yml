@@ -107,3 +107,4 @@ google:
   places:
     api-key: ${GOOGLE_PLACES_API_KEY}
     text-search-uri: https://places.googleapis.com/v1/places:searchText
+    details-base-uri: https://places.googleapis.com/v1/places

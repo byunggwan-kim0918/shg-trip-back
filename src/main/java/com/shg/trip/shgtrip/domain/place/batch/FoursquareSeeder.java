@@ -46,6 +46,27 @@ public class FoursquareSeeder {
             "Okinawa", "Kanazawa", "Hakone", "Kamakura", "Nikko",
             "Sendai", "Nagasaki", "Kagoshima", "Beppu", "Takayama");
 
+    /**
+     * 여행 일정 스텝이 될 수 없는 "비여행" 카테고리 분기 키워드(Foursquare 계층 경로의 소문자 부분 문자열).
+     * 원본 Foursquare 덤프에는 은행·병원·아파트·관공서·학교·자동차서비스 등 일정과 무관한 POI가 섞여 있어
+     * 적재 단계에서 배제한다. 시장/쇼핑몰/사찰/서점/기념품점 등 관광 가치가 있는 Retail·Spiritual은 보존한다.
+     */
+    static final Set<String> BLOCKED_CATEGORY_KEYWORDS = Set.of(
+            "business and professional services", // 은행, 오피스, 자동차 서비스, 미용실, 스파, 사진관, 장례
+            "health and medicine",                // 병원, 치과, 의원, 메디컬 센터
+            "residential building",               // 아파트, 콘도
+            "government building",                 // 관공서, 우체국
+            "education",                           // 학교, 대학
+            "convenience store",
+            "pharmacy");
+
+    /** 카테고리가 비여행 분기(BLOCKED_CATEGORY_KEYWORDS)에 해당하면 true. */
+    static boolean isNonTravelCategory(String category) {
+        if (category == null) return false;
+        String lower = category.toLowerCase();
+        return BLOCKED_CATEGORY_KEYWORDS.stream().anyMatch(lower::contains);
+    }
+
     public record FoursquareRecord(
             String fsqPlaceId, String name, BigDecimal latitude, BigDecimal longitude,
             String country, String region, String category,
@@ -199,6 +220,11 @@ public class FoursquareSeeder {
 
         if (isBlank(fsqPlaceId) || isBlank(name) || isBlank(latStr) || isBlank(lngStr)
                 || isBlank(country) || isBlank(region) || isBlank(category)) {
+            return null;
+        }
+
+        // 여행 부적합 카테고리(은행·병원·아파트·관공서·학교 등)는 적재 제외
+        if (isNonTravelCategory(category)) {
             return null;
         }
 

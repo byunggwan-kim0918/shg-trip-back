@@ -197,6 +197,43 @@ class FoursquareSeederTest {
 
             assertThat(seeder.mapToRecord(fields, columnIndex)).isNull();
         }
+
+        @Test
+        @DisplayName("여행 부적합 카테고리(은행/병원/아파트/관공서/학교)는 null을 반환한다")
+        void mapToRecord_nonTravelCategory_returnsNull() {
+            String[] bank = {"fsq_1", "우리은행", "37.5", "127.0", "KR", "Seoul",
+                    "Business and Professional Services > Financial Service > Banking and Finance > Bank",
+                    "addr", "tags", "desc"};
+            String[] hospital = {"fsq_2", "제주대병원", "33.4", "126.5", "KR", "Jeju",
+                    "Health and Medicine > Hospital", "addr", "tags", "desc"};
+            String[] apartment = {"fsq_3", "래미안", "37.5", "127.0", "KR", "Seoul",
+                    "Community and Government > Residential Building > Apartment or Condo", "addr", "tags", "desc"};
+            String[] autoDealer = {"fsq_4", "KCC오토모빌 제주전시장", "33.49", "126.5", "KR", "Jeju",
+                    "Business and Professional Services > Automotive Service > Automotive Repair Shop", "addr", "tags", "desc"};
+
+            assertThat(seeder.mapToRecord(bank, columnIndex)).isNull();
+            assertThat(seeder.mapToRecord(hospital, columnIndex)).isNull();
+            assertThat(seeder.mapToRecord(apartment, columnIndex)).isNull();
+            assertThat(seeder.mapToRecord(autoDealer, columnIndex)).isNull();
+        }
+
+        @Test
+        @DisplayName("관광 가치가 있는 카테고리(식당/사찰/시장/쇼핑몰)는 보존한다")
+        void mapToRecord_travelCategory_isKept() {
+            String[] restaurant = {"fsq_1", "흑돼지집", "33.4", "126.5", "KR", "Jeju",
+                    "Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant", "addr", "tags", "desc"};
+            String[] temple = {"fsq_2", "약천사", "33.2", "126.4", "KR", "Jeju",
+                    "Community and Government > Spiritual Center > Buddhist Temple", "addr", "tags", "desc"};
+            String[] market = {"fsq_3", "동문시장", "33.5", "126.5", "KR", "Jeju",
+                    "Retail > Market", "addr", "tags", "desc"};
+            String[] mall = {"fsq_4", "신세계백화점", "37.5", "127.0", "KR", "Seoul",
+                    "Retail > Shopping Mall", "addr", "tags", "desc"};
+
+            assertThat(seeder.mapToRecord(restaurant, columnIndex)).isNotNull();
+            assertThat(seeder.mapToRecord(temple, columnIndex)).isNotNull();
+            assertThat(seeder.mapToRecord(market, columnIndex)).isNotNull();
+            assertThat(seeder.mapToRecord(mall, columnIndex)).isNotNull();
+        }
     }
 
     @Nested

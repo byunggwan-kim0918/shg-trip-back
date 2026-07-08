@@ -3,8 +3,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.planning.dto.*;
-import com.shg.trip.shgtrip.domain.planning.service.ai.IndexBasedItineraryGenerator;
-import com.shg.trip.shgtrip.domain.planning.service.ai.OptimizedClaudeAIService;
+import com.shg.trip.shgtrip.domain.planning.service.ai.SelectionCallGenerator;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,7 +21,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -31,22 +29,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+/**
+ * 새 파이프라인: enrich → vectorSearch → selectPlaces(Sonnet, concept+day힌트+pairs)
+ * → RouteOptimizer.repairAndSchedule(결정론적 day/순서/시간 확정) → 구조 저장(DRAFT) → complete(emitter 유지)
+ * → StoryGenerationService.generateAndAttach (비동기, story-ready 후 emitter 종료)
+ */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 class OptimizedGenerationExecutorTest {
 
-    @Mock private OptimizedClaudeAIService optimizedClaudeAIService;
+    @Mock private com.shg.trip.shgtrip.domain.planning.service.ai.OptimizedClaudeAIService optimizedClaudeAIService;
     @Mock private VectorSearchQueryService vectorSearchQueryService;
     @Mock private FallbackDecider fallbackDecider;
-    @Mock private IndexBasedItineraryGenerator indexBasedItineraryGenerator;
+    @Mock private SelectionCallGenerator selectionCallGenerator;
     @Mock private HardValidator hardValidator;
     @Mock private IndexResultMapper indexResultMapper;
+    @Mock private RouteOptimizer routeOptimizer;
     @Mock private ItineraryGenerationExecutor fallbackExecutor;
     @Mock private ItinerarySaveHelper saveHelper;
+    @Mock private StoryGenerationService storyGenerationService;
     @Mock private GenerationResultStore resultStore;
     @Mock private CancellationRegistry cancellationRegistry;
     @Mock private com.shg.trip.shgtrip.domain.place.service.PlaceRefreshService placeRefreshService;
     @Mock private com.shg.trip.shgtrip.domain.place.repository.PlaceRepository placeRepository;
+    @Mock private com.shg.trip.shgtrip.domain.planning.service.validation.PlaceRegionValidator placeRegionValidator;
     @Mock private Executor googleSyncExecutor;
     @Mock private ScheduledExecutorService sseHeartbeatScheduler;
 
@@ -58,15 +64,18 @@ class OptimizedGenerationExecutorTest {
     private VectorEnrichedInput vectorEnrichedInput;
     private EnrichmentResult successResult;
     private List<PlaceCandidate> candidates;
-    private IndexBasedItineraryOutput generatedOutput;
-    private ItineraryData itineraryData;
+    private SelectionOutput selectionOutput;
+    private List<StepData> fixedSteps;
+    private ItineraryData draftData;
 
     @BeforeEach
     void setUp() {
-        // heartbeat 스케줄러 stub — 실제 스케줄링 없이 즉시 반환
         ScheduledFuture<?> noopFuture = mock(ScheduledFuture.class);
         doReturn(noopFuture).when(sseHeartbeatScheduler)
                 .scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any());
+
+        lenient().when(indexResultMapper.fillMissingAccommodation(any(), any()))
+                .thenAnswer(i -> i.getArgument(0));
 
         request = new ItineraryGenerateRequest(
                 ItineraryGenerateRequest.PlanningMode.AUTO,
@@ -74,6 +83,7 @@ class OptimizedGenerationExecutorTest {
                 List.of("맛집", "쇼핑"),
                 List.of("관광", "식당", "카페"),
                 "normal",
+                "any",
                 new BigDecimal("2000000"),
                 LocalDate.of(2025, 7, 1),
                 LocalDate.of(2025, 7, 4),
@@ -85,12 +95,13 @@ class OptimizedGenerationExecutorTest {
 
         vectorEnrichedInput = new VectorEnrichedInput(
                 "도쿄", List.of("맛집", "쇼핑"), List.of("관광", "식당", "카페"),
-                "normal", new BigDecimal("2000000"),
+                "normal", "any", new BigDecimal("2000000"),
                 LocalDate.of(2025, 7, 1), LocalDate.of(2025, 7, 4),
                 "도쿄 여행", null,
                 "도쿄", "일본", List.of("시부야", "아사쿠사"),
                 List.of("맛집", "쇼핑", "라멘"), null,
-                "MEDIUM", "7월 여름 시즌", "도쿄 여행 컨텍스트"
+                "MEDIUM", "7월 여름 시즌", "도쿄 여행 컨텍스트",
+                null, null
         );
 
         successResult = EnrichmentResult.success(vectorEnrichedInput);
@@ -107,228 +118,167 @@ class OptimizedGenerationExecutorTest {
                         BigDecimal.valueOf(4.3), 0.90)
         );
 
-        generatedOutput = new IndexBasedItineraryOutput(
-                "도쿄 4일 여행", "도쿄", new BigDecimal("1800000"), List.of("맛집", "관광"),
-                List.of(
-                        new IndexStepData(1, 1, "09:00", "11:00", 1, List.of(2),
-                                "SUBWAY", 20, BigDecimal.valueOf(5.0), BigDecimal.valueOf(200), "아침 관광", BigDecimal.valueOf(0)),
-                        new IndexStepData(2, 1, "12:00", "13:00", 3, List.of(1),
-                                "WALK", 10, BigDecimal.valueOf(1.0), BigDecimal.ZERO, "점심 식사", BigDecimal.valueOf(15000))
-                )
+        selectionOutput = new SelectionOutput(
+                "도쿄 골목과 사찰을 잇는 도보 여행",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3), null, null)),
+                List.of(),
+                List.of()
         );
 
-        itineraryData = new ItineraryData(
-                "도쿄 4일 여행", "도쿄", new BigDecimal("1800000"), List.of("맛집", "관광"),
-                List.of(
-                        new StepData(1, 1, "09:00", "11:00",
-                                new PlaceData("센소지", null, "관광", "아사쿠사", "일본"),
-                                List.of(), "SUBWAY", 20, BigDecimal.valueOf(5.0), BigDecimal.valueOf(200), "아침 관광", BigDecimal.valueOf(0)),
-                        new StepData(2, 1, "12:00", "13:00",
-                                new PlaceData("이치란 라멘", null, "식당", "시부야", "일본"),
-                                List.of(), "WALK", 10, BigDecimal.valueOf(1.0), BigDecimal.ZERO, "점심 식사", BigDecimal.valueOf(15000))
-                )
+        fixedSteps = List.of(
+                new StepData(1, 1, "09:00", "11:00",
+                        new PlaceData("센소지", null, "관광", "아사쿠사", "일본"),
+                        List.of(), "SUBWAY", 20, BigDecimal.valueOf(5.0), BigDecimal.valueOf(200), null, BigDecimal.valueOf(0)),
+                new StepData(2, 1, "12:00", "13:00",
+                        new PlaceData("이치란 라멘", null, "식당", "시부야", "일본"),
+                        List.of(), "WALK", 10, BigDecimal.valueOf(1.0), BigDecimal.ZERO, null, BigDecimal.valueOf(15000))
         );
+
+        draftData = new ItineraryData(
+                selectionOutput.concept(), "도쿄", new BigDecimal("15000"), List.of(), fixedSteps);
     }
 
     @Test
-    @DisplayName("벡터 경로 정상 흐름: enrich → vectorSearch → generate → validate → save → complete")
-    void execute_vectorPath_success() {
-        // given
+    @DisplayName("정상 흐름: enrich → vectorSearch → selectPlaces → repairAndSchedule → 구조 저장 → complete(유지) → 비동기 story")
+    void execute_success_savesDraftAndTriggersAsyncStory() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
-        when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
+        when(fallbackDecider.shouldFallback(candidates, 4L)).thenReturn(false);
         when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
-        when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
-        when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), anyList())).thenReturn(itineraryData);
-        when(hardValidator.validate(itineraryData)).thenReturn(HardValidationResult.pass());
+
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
+        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any())).thenReturn(fixedSteps);
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(42L);
-        when(saveHelper.save(eq(itineraryData), any(EnrichedInput.class), eq(1L))).thenReturn(mockItinerary);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true))).thenReturn(mockItinerary);
 
-        // when
         executor.execute("job-1", request, 1L, emitter);
 
-        // then
         verify(optimizedClaudeAIService).enrichInput(request);
         verify(vectorSearchQueryService).search(vectorEnrichedInput);
-        verify(fallbackDecider).shouldFallback(candidates, vectorEnrichedInput.categories());
-        verify(indexBasedItineraryGenerator).generate(eq(vectorEnrichedInput), anyList());
-        verify(indexResultMapper).mergeIndexOutput(eq(generatedOutput), anyList());
-        verify(hardValidator).validate(itineraryData);
-        verify(saveHelper).save(eq(itineraryData), any(EnrichedInput.class), eq(1L));
+        verify(selectionCallGenerator).selectPlaces(eq(vectorEnrichedInput), anyList());
+        verify(routeOptimizer).repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any());
+        verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true));
         verify(resultStore).save("job-1", 42L);
+        verify(storyGenerationService).generateAndAttach(
+                eq("job-1"), eq(emitter), eq(42L), eq(fixedSteps), eq(selectionOutput.concept()), eq(vectorEnrichedInput));
         verify(fallbackExecutor, never()).execute(anyString(), any(), anyLong(), any());
     }
 
     @Test
     @DisplayName("enrichInput 비현실적 입력: 에러 SSE 전송 후 파이프라인 중단")
     void execute_enrichInvalid_sendsErrorAndStops() {
-        // given
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         EnrichmentResult errorResult = EnrichmentResult.error("UNREALISTIC_BUDGET", "예산이 너무 적습니다.");
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(errorResult);
 
-        // when
         executor.execute("job-2", request, 1L, emitter);
 
-        // then
         verify(optimizedClaudeAIService).enrichInput(request);
         verify(vectorSearchQueryService, never()).search(any());
-        verify(indexBasedItineraryGenerator, never()).generate(any(), any());
-        verify(saveHelper, never()).save(any(), any(), anyLong());
+        verify(selectionCallGenerator, never()).selectPlaces(any(), any());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean());
     }
 
     @Test
     @DisplayName("Fallback 경로: 카테고리 후보 부족 시 기존 executor로 위임")
     void execute_fallbackPath_delegatesToExistingExecutor() {
-        // given
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
-        when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(true);
+        when(fallbackDecider.shouldFallback(candidates, 4L)).thenReturn(true);
 
-        // when
         executor.execute("job-3", request, 1L, emitter);
 
-        // then
         verify(fallbackExecutor).execute("job-3", request, 1L, emitter);
-        verify(indexBasedItineraryGenerator, never()).generate(any(), any());
-        verify(saveHelper, never()).save(any(), any(), anyLong());
+        verify(selectionCallGenerator, never()).selectPlaces(any(), any());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean());
     }
 
     @Test
-    @DisplayName("Hard validation 실패 → 1회 재생성 성공")
-    void execute_hardValidationFails_regenerateSucceeds() {
-        // given
+    @DisplayName("구조 검증 실패는 결정론적 버그로 간주 — 재시도 없이 로그만 남기고 그대로 저장 진행")
+    void execute_hardValidationFails_logsButStillSaves() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
-        when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
+        when(fallbackDecider.shouldFallback(candidates, 4L)).thenReturn(false);
         when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
-        when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
 
-        ItineraryData invalidData = new ItineraryData("invalid", "도쿄", BigDecimal.ZERO, List.of(), List.of());
-        when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), anyList())).thenReturn(invalidData);
-        when(hardValidator.validate(invalidData)).thenReturn(HardValidationResult.fail("stepOrder 연속성 위반"));
-
-        // 재생성 결과
-        IndexBasedItineraryOutput regeneratedOutput = new IndexBasedItineraryOutput(
-                "도쿄 재생성", "도쿄", new BigDecimal("1800000"), List.of("맛집"),
-                List.of(new IndexStepData(1, 1, "09:00", "11:00", 1, List.of(2),
-                        "WALK", 10, BigDecimal.ONE, BigDecimal.ZERO, "관광", BigDecimal.ZERO)));
-        when(indexBasedItineraryGenerator.regenerate(eq(vectorEnrichedInput), anyList(), eq("stepOrder 연속성 위반")))
-                .thenReturn(regeneratedOutput);
-        when(indexResultMapper.mergeIndexOutput(eq(regeneratedOutput), anyList())).thenReturn(itineraryData);
-        when(hardValidator.validate(itineraryData)).thenReturn(HardValidationResult.pass());
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
+        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any())).thenReturn(fixedSteps);
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.fail("일부 검증 경고"));
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(99L);
-        when(saveHelper.save(eq(itineraryData), any(EnrichedInput.class), eq(1L))).thenReturn(mockItinerary);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true))).thenReturn(mockItinerary);
 
-        // when
         executor.execute("job-4", request, 1L, emitter);
 
-        // then
-        verify(indexBasedItineraryGenerator).generate(eq(vectorEnrichedInput), anyList());
-        verify(indexBasedItineraryGenerator).regenerate(eq(vectorEnrichedInput), anyList(), eq("stepOrder 연속성 위반"));
-        verify(saveHelper).save(eq(itineraryData), any(EnrichedInput.class), eq(1L));
+        verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true));
         verify(resultStore).save("job-4", 99L);
-    }
-
-    @Test
-    @DisplayName("Hard validation 실패 → 재생성도 실패 → 에러 반환")
-    void execute_hardValidationFails_regenerateAlsoFails_returnsError() {
-        // given
-        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
-        when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
-        when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
-        when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
-        when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
-        when(placeRepository.findAllById(anyList())).thenReturn(List.of());
-        when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
-
-        ItineraryData invalidData = new ItineraryData("bad", "도쿄", BigDecimal.ZERO, List.of(), List.of());
-        when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), anyList())).thenReturn(invalidData);
-        when(hardValidator.validate(invalidData)).thenReturn(HardValidationResult.fail("시간 형식 오류"));
-
-        IndexBasedItineraryOutput regeneratedOutput = new IndexBasedItineraryOutput(
-                "도쿄 재생성2", "도쿄", BigDecimal.ZERO, List.of(), List.of());
-        when(indexBasedItineraryGenerator.regenerate(eq(vectorEnrichedInput), anyList(), eq("시간 형식 오류")))
-                .thenReturn(regeneratedOutput);
-
-        ItineraryData stillInvalid = new ItineraryData("still bad", "도쿄", BigDecimal.ZERO, List.of(), List.of());
-        when(indexResultMapper.mergeIndexOutput(eq(regeneratedOutput), anyList())).thenReturn(stillInvalid);
-        when(hardValidator.validate(stillInvalid)).thenReturn(HardValidationResult.fail("여전히 오류"));
-
-        // when
-        executor.execute("job-5", request, 1L, emitter);
-
-        // then
-        verify(indexBasedItineraryGenerator).regenerate(eq(vectorEnrichedInput), anyList(), eq("시간 형식 오류"));
-        verify(saveHelper, never()).save(any(), any(), anyLong());
+        verify(storyGenerationService).generateAndAttach(eq("job-4"), any(), eq(99L), any(), any(), any());
     }
 
     @Test
     @DisplayName("취소된 작업: 즉시 중단")
     void execute_cancelled_stopsImmediately() {
-        // given
         when(cancellationRegistry.isCancelled("job-6")).thenReturn(true);
 
-        // when
         executor.execute("job-6", request, 1L, emitter);
 
-        // then
         verify(optimizedClaudeAIService, never()).enrichInput(any());
         verify(vectorSearchQueryService, never()).search(any());
-        verify(saveHelper, never()).save(any(), any(), anyLong());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean());
     }
 
     @Test
     @DisplayName("BusinessException 발생 시 에러 SSE 전송")
     void execute_businessException_sendsErrorSse() {
-        // given
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request))
                 .thenThrow(new BusinessException(ErrorCode.AI_SERVICE_ERROR, "AI 서비스 오류"));
 
-        // when
         executor.execute("job-7", request, 1L, emitter);
 
-        // then
-        verify(saveHelper, never()).save(any(), any(), anyLong());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean());
     }
 
     @Test
     @DisplayName("toLegacyEnrichedInput 변환: VectorEnrichedInput의 주요 필드가 EnrichedInput으로 정확히 매핑")
     void execute_savesWithCorrectLegacyInput() {
-        // given
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
-        when(fallbackDecider.shouldFallback(candidates, vectorEnrichedInput.categories())).thenReturn(false);
+        when(fallbackDecider.shouldFallback(candidates, 4L)).thenReturn(false);
         when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
-        when(indexBasedItineraryGenerator.generate(eq(vectorEnrichedInput), anyList())).thenReturn(generatedOutput);
-        when(indexResultMapper.mergeIndexOutput(eq(generatedOutput), anyList())).thenReturn(itineraryData);
-        when(hardValidator.validate(itineraryData)).thenReturn(HardValidationResult.pass());
+
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
+        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any())).thenReturn(fixedSteps);
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(50L);
-        when(saveHelper.save(any(), any(EnrichedInput.class), eq(1L))).thenReturn(mockItinerary);
+        when(saveHelper.save(any(), any(EnrichedInput.class), eq(1L), eq(true))).thenReturn(mockItinerary);
 
-        // when
         executor.execute("job-8", request, 1L, emitter);
 
-        // then
         ArgumentCaptor<EnrichedInput> inputCaptor = ArgumentCaptor.forClass(EnrichedInput.class);
-        verify(saveHelper).save(eq(itineraryData), inputCaptor.capture(), eq(1L));
+        verify(saveHelper).save(eq(draftData), inputCaptor.capture(), eq(1L), eq(true));
 
         EnrichedInput captured = inputCaptor.getValue();
-        assertThat(captured.destination()).isEqualTo("도쿄"); // normalizedDestination
+        assertThat(captured.destination()).isEqualTo("도쿄");
         assertThat(captured.themes()).isEqualTo(List.of("맛집", "쇼핑"));
         assertThat(captured.categories()).isEqualTo(List.of("관광", "식당", "카페"));
         assertThat(captured.pace()).isEqualTo("normal");
@@ -336,5 +286,72 @@ class OptimizedGenerationExecutorTest {
         assertThat(captured.startDate()).isEqualTo(LocalDate.of(2025, 7, 1));
         assertThat(captured.endDate()).isEqualTo(LocalDate.of(2025, 7, 4));
         assertThat(captured.enrichedContext()).isEqualTo("도쿄 여행 컨텍스트");
+    }
+
+    @org.junit.jupiter.api.Nested
+    @DisplayName("filterAccommodationsByGeography - 보완 숙소 좌표 sanity")
+    class AccommodationGeoFilter {
+
+        private com.shg.trip.shgtrip.domain.place.entity.Place hotel(String name, String region, double lat, double lng) {
+            return com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                    .name(name).region(region).country("KR")
+                    .latitude(BigDecimal.valueOf(lat)).longitude(BigDecimal.valueOf(lng))
+                    .category("Travel and Transportation > Lodging > Hotel")
+                    .build();
+        }
+
+        private PlaceCandidate candidate(String region, double lat, double lng) {
+            return new PlaceCandidate(0, 1L, "후보", "주소", "attraction", List.of(),
+                    region, "KR", BigDecimal.valueOf(lat), BigDecimal.valueOf(lng),
+                    "설명", BigDecimal.valueOf(4.0), 0.9, null, null);
+        }
+
+        private List<PlaceCandidate> jejuCandidates() {
+            return List.of(
+                    candidate("Jeju", 33.5063, 126.4931),
+                    candidate("Jeju", 33.4587, 126.9426),
+                    candidate("Jeju", 33.3940, 126.2396),
+                    candidate("Jeju", 33.3617, 126.5292));
+        }
+
+        @Test
+        @DisplayName("지역 중심점에서 100km 초과 숙소(오태깅)는 제외, 정상 제주 숙소는 보존")
+        void removesOutlierHotelKeepsValid() {
+            var validHotel = hotel("제주신라호텔", "Jeju", 33.2470, 126.4100);
+            var outlierHotel = hotel("서울호텔(오태깅)", "Jeju", 37.5665, 126.9780); // 제주 region인데 서울 좌표
+
+            List<com.shg.trip.shgtrip.domain.place.entity.Place> kept =
+                    executor.filterAccommodationsByGeography(List.of(validHotel, outlierHotel), jejuCandidates());
+
+            assertThat(kept).extracting(com.shg.trip.shgtrip.domain.place.entity.Place::getName)
+                    .containsExactly("제주신라호텔");
+        }
+
+        @Test
+        @DisplayName("같은 region 후보가 4개 미만이면 중심점 신뢰도 부족으로 필터하지 않고 통과")
+        void skipsWhenSampleTooSmall() {
+            var outlierHotel = hotel("서울호텔", "Jeju", 37.5665, 126.9780);
+            List<PlaceCandidate> few = List.of(
+                    candidate("Jeju", 33.5, 126.5),
+                    candidate("Jeju", 33.4, 126.4));
+
+            List<com.shg.trip.shgtrip.domain.place.entity.Place> kept =
+                    executor.filterAccommodationsByGeography(List.of(outlierHotel), few);
+
+            assertThat(kept).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("좌표가 없는 숙소는 판단 보류하고 보존")
+        void keepsNullCoordinateHotel() {
+            var noCoord = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                    .name("좌표없음호텔").region("Jeju").country("KR")
+                    .category("Travel and Transportation > Lodging > Hotel").build();
+
+            List<com.shg.trip.shgtrip.domain.place.entity.Place> kept =
+                    executor.filterAccommodationsByGeography(List.of(noCoord), jejuCandidates());
+
+            assertThat(kept).hasSize(1);
+        }
     }
 }

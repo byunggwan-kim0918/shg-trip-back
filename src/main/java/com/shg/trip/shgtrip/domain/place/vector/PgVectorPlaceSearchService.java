@@ -127,6 +127,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                 WHERE p.embedding IS NOT NULL
                   AND p.active = true
                   AND p.country = ?
+                  AND NOT (p.latitude = 0 AND p.longitude = 0)
                 """);
         params.add(vectorString);
         params.add(destination);
@@ -164,6 +165,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                   AND p.active = true
                   AND p.country = ?
                   AND p.region = ?
+                  AND NOT (p.latitude = 0 AND p.longitude = 0)
                 """);
         params.add(vectorString);
         params.add(country);

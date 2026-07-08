@@ -85,6 +85,7 @@ public class ClaudeAIService implements AIService {
                     input.themes(),
                     input.categories(),
                     input.pace() != null ? input.pace() : "normal",
+                    input.transportPref() != null ? input.transportPref() : "any",
                     input.budget(),
                     input.startDate(),
                     input.endDate(),
@@ -339,14 +340,18 @@ public class ClaudeAIService implements AIService {
 
     /**
      * 여행 일수에 따라 maxTokens를 동적으로 계산.
-     * step당 place(~150토큰) + alternatives 3~5개(~600토큰) + 교통/메타(~150토큰) ≈ 900토큰
-     * 하루 5~7step × 900 = 4,500~6,300토큰 → 안전하게 하루 6,000토큰 + 최상위 메타데이터 버퍼 2048.
-     * 최소 16384, 최대는 anthropic.models.max-output-tokens 설정값.
+     *
+     * 실측 기준:
+     *   step당 place(~70tok) + alternatives 4개(~540tok) + 교통/메타(~85tok) + notes(~50tok) ≈ 745토큰
+     *   하루 평균 5~6 steps × 745 = 3,700~4,500토큰
+     *   안전 여유(+30%): 하루 5,500토큰 + 메타데이터 버퍼 2,000
+     *
+     * 최소 12,000 (단기 여행도 충분), 최대는 max-output-tokens 설정값.
      */
     private int calculateMaxTokens(long days) {
         int limit = anthropicProperties.maxOutputTokens();
-        int estimated = (int) (days * 6000) + 2048;
-        return Math.max(16384, Math.min(estimated, limit));
+        int estimated = (int) (days * 5500) + 2000;
+        return Math.max(12000, Math.min(estimated, limit));
     }
 
     private String buildEnrichPrompt(ItineraryGenerateRequest input) {
@@ -358,6 +363,8 @@ public class ClaudeAIService implements AIService {
                 .replace("{budget}", formattedBudget)
                 .replace("{startDate}", input.startDate().toString())
                 .replace("{endDate}", input.endDate().toString())
+                .replace("{pace}", input.pace() != null ? input.pace() : "normal")
+                .replace("{transportPref}", input.transportPref() != null ? input.transportPref() : "any")
                 .replace("{description}", input.description() != null ? input.description() : "없음");
     }
 
@@ -389,7 +396,8 @@ public class ClaudeAIService implements AIService {
                 .replace("{enrichedContext}", input.enrichedContext() != null ? input.enrichedContext() : "")
                 .replace("{selectedPlacesSection}", selectedPlacesSection)
                 .replace("{manualModeRule}", manualModeRule)
-                .replace("{paceRule}", buildPaceRule(input.pace()));
+                .replace("{paceRule}", buildPaceRule(input.pace()))
+                .replace("{transportRule}", buildTransportRule(input.transportPref()));
     }
 
     private String buildPaceRule(String pace) {
@@ -397,6 +405,14 @@ public class ClaudeAIService implements AIService {
             case "tight" -> "하루 활동 단계(숙소·교통 허브 제외)를 반드시 4~5개로 엄격히 제한하세요. 이 범위를 절대 초과하지 마세요. 이동 최소화, 장소 간 시간 촘촘히 배분.";
             case "relaxed" -> "하루 활동 단계(숙소·교통 허브 제외)를 반드시 2~3개로 엄격히 제한하세요. 이 범위를 절대 초과하지 마세요. 각 장소에서 충분히 머물고, 카페·휴식 시간을 포함하세요.";
             default -> "하루 활동 단계(숙소·교통 허브 제외)를 반드시 3~4개로 엄격히 제한하세요. 이 범위를 절대 초과하지 마세요.";
+        };
+    }
+
+    private String buildTransportRule(String transportPref) {
+        return switch (transportPref != null ? transportPref : "any") {
+            case "walk" -> "도보/대중교통 우선: 같은 날 장소들은 도보로 이동 가능하거나 버스·지하철로 부담 없이 갈 만한 가까운 거리로만 묶으세요. 먼 장소는 다른 날로 분리하세요.";
+            case "car" -> "자동차 우선: 차량 이동을 전제로 동선을 넉넉하게 잡아도 됩니다. 거리가 멀어도 같은 테마/지역이면 같은 날에 묶을 수 있습니다.";
+            default -> "이동수단 상관없음: 거리 제약 없이 테마와 동선 효율을 우선으로 자유롭게 구성하세요.";
         };
     }
 
@@ -444,7 +460,8 @@ public class ClaudeAIService implements AIService {
                 .replace("{errors}", feedback.errors() != null ? String.join(", ", feedback.errors()) : "없음")
                 .replace("{warnings}", feedback.warnings() != null ? String.join(", ", feedback.warnings()) : "없음")
                 .replace("{feedback}", feedback.feedback() != null ? feedback.feedback() : "없음")
-                .replace("{paceRule}", buildPaceRule(input.pace()));
+                .replace("{paceRule}", buildPaceRule(input.pace()))
+                .replace("{transportRule}", buildTransportRule(input.transportPref()));
     }
 
     private String buildRegeneratePrompt(EnrichedInput input, String lastFailureReason, List<Place> selectedPlaces) {
@@ -480,7 +497,8 @@ public class ClaudeAIService implements AIService {
                 .replace("{selectedPlacesSection}", selectedPlacesSection)
                 .replace("{manualModeRule}", manualModeRule)
                 .replace("{failureReason}", failureReason)
-                .replace("{paceRule}", buildPaceRule(input.pace()));
+                .replace("{paceRule}", buildPaceRule(input.pace()))
+                .replace("{transportRule}", buildTransportRule(input.transportPref()));
     }
 
     /**
@@ -488,8 +506,10 @@ public class ClaudeAIService implements AIService {
      * ItineraryData 구조에 맞는 JSON Schema를 구성합니다.
      */
     private Tool buildItineraryTool() {
+        // strict 모드: additionalProperties:false 필수, minItems/maxItems 미지원(제거)
         Map<String, Object> placeSchema = Map.ofEntries(
                 Map.entry("type", "object"),
+                Map.entry("additionalProperties", false),
                 Map.entry("properties", Map.ofEntries(
                         Map.entry("name", Map.of("type", "string", "description", "장소 정식 명칭 (Google Maps에서 검색 가능한 공식 이름)")),
                         Map.entry("address", Map.of("type", "string", "description", "장소 전체 주소 (도로명 또는 지번)")),
@@ -502,6 +522,7 @@ public class ClaudeAIService implements AIService {
 
         Map<String, Object> alternativeSchema = Map.ofEntries(
                 Map.entry("type", "object"),
+                Map.entry("additionalProperties", false),
                 Map.entry("properties", Map.ofEntries(
                         Map.entry("name", Map.of("type", "string", "description", "장소 정식 명칭 (Google Maps에서 검색 가능한 공식 이름)")),
                         Map.entry("address", Map.of("type", "string", "description", "장소 전체 주소 (도로명 또는 지번)")),
@@ -516,14 +537,19 @@ public class ClaudeAIService implements AIService {
 
         Map<String, Object> stepSchema = Map.ofEntries(
                 Map.entry("type", "object"),
+                Map.entry("additionalProperties", false),
                 Map.entry("properties", Map.ofEntries(
                         Map.entry("stepOrder", Map.of("type", "integer", "description", "전체 일정에서의 순서 (1부터 연속 증가)")),
                         Map.entry("dayNumber", Map.of("type", "integer", "description", "여행 일차 (1부터 시작)")),
-                        Map.entry("startTime", Map.of("type", "string", "description", "HH:mm 형식 (예: 09:00)")),
-                        Map.entry("endTime", Map.of("type", "string", "description", "HH:mm 형식 (예: 11:00)")),
+                        Map.entry("startTime", Map.of("type", "string",
+                                "pattern", "^([01]\\d|2[0-3]):[0-5]\\d$",
+                                "description", "HH:mm 형식 (예: 09:00)")),
+                        Map.entry("endTime", Map.of("type", "string",
+                                "pattern", "^([01]\\d|2[0-3]):[0-5]\\d$",
+                                "description", "HH:mm 형식 (예: 11:00)")),
                         Map.entry("place", placeSchema),
+                        // strict 모드: minItems/maxItems 미지원 → 제거 (Java HardValidator가 3~5개 검증)
                         Map.entry("alternatives", Map.of("type", "array", "items", alternativeSchema,
-                                "minItems", 3, "maxItems", 5,
                                 "description", "메인 장소와 동일 카테고리의 대안 장소 3~5개. 각 대안마다 notes(추천 활동/팁)와 estimatedCost(예상 비용)를 반드시 포함하세요.")),
                         Map.entry("transportationMode", Map.of("type", "string",
                                 "enum", List.of("WALK", "CAR", "BUS", "TRAIN", "SUBWAY", "TAXI", "BIKE", "FLIGHT"),
@@ -551,12 +577,14 @@ public class ClaudeAIService implements AIService {
                 .type(JsonValue.from("object"))
                 .properties(properties)
                 .required(List.of("title", "destination", "estimatedCost", "tags", "steps"))
+                .putAdditionalProperty("additionalProperties", JsonValue.from(false))
                 .build();
 
         return Tool.builder()
                 .name("generate_itinerary")
                 .description("여행 일정을 생성합니다. 각 단계별 장소, 대안, 교통 정보를 포함한 구조화된 일정을 반환합니다.")
                 .inputSchema(inputSchema)
+                .strict(true)
                 .build();
     }
 

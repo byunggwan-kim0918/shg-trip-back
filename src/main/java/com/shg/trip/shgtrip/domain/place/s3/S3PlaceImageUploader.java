@@ -126,7 +126,6 @@ public class S3PlaceImageUploader implements PlaceImageUploader {
     public Optional<String> generatePresignedUrlForKey(String key) {
         String presignedUrl = generatePresignedUrl(key);
         if (presignedUrl != null) {
-            log.debug("Presigned URL 생성: key={}", key);
             return Optional.of(presignedUrl);
         }
         return Optional.empty();

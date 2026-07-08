@@ -79,6 +79,7 @@ class TravelPlannerServiceTest {
                 List.of("맛집", "관광"),
                 List.of("RESTAURANT", "TOURIST_ATTRACTION"),
                 "MEDIUM",
+                "any",
                 new BigDecimal("1000000"),
                 LocalDate.of(2025, 7, 1),
                 LocalDate.of(2025, 7, 3),

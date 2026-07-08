@@ -85,7 +85,9 @@ public class ItineraryGenerationExecutor {
 
         } catch (BusinessException e) {
             log.warn("Generation failed for job {}: {}", jobId, e.getErrorCode());
-            sendError(emitter, "요청 처리 중 문제가 발생했습니다.");
+            // BusinessException은 사용자에게 의미 있는 메시지를 담으므로 그대로 전달한다.
+            String msg = e.getMessage() != null ? e.getMessage() : "요청 처리 중 문제가 발생했습니다.";
+            sendError(emitter, msg);
         } catch (Exception e) {
             log.error("Unexpected error during generation for job {}", jobId, e);
             sendError(emitter, "일정 생성 중 예기치 않은 오류가 발생했습니다.");
