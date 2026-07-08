@@ -6,6 +6,7 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.place.s3.PlaceImageAsyncRecovery;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
@@ -24,7 +25,10 @@ import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 일정 관리 서비스.
@@ -37,6 +41,7 @@ public class ItineraryService {
     private static final int SHARE_EXPIRE_DAYS = 7;
 
     private final ItineraryRepository itineraryRepository;
+    private final PlaceRepository placeRepository;
     private final PlaceImageAsyncRecovery asyncRecovery;
 
     @PersistenceContext
@@ -58,9 +63,31 @@ public class ItineraryService {
 
     @Transactional(readOnly = true)
     public Page<ItinerarySummaryResponse> getMyItineraries(Long userId, Pageable pageable) {
-        return itineraryRepository
-                .findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
-                .map(ItinerarySummaryResponse::from);
+        Page<Itinerary> page = itineraryRepository
+                .findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable);
+
+        // 커버 place들의 현재 imageUrl을 한 번에 해소한다(만료되는 presigned URL을 저장하지 않고 read-time 조회).
+        List<Long> coverPlaceIds = page.getContent().stream()
+                .map(Itinerary::getCoverPlaceId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+
+        List<Place> coverPlaces = coverPlaceIds.isEmpty()
+                ? List.of()
+                : placeRepository.findAllById(coverPlaceIds);
+
+        Map<Long, String> coverUrlById = coverPlaces.stream()
+                .filter(p -> p.getImageUrl() != null)
+                .collect(Collectors.toMap(Place::getId, Place::getImageUrl));
+
+        // 아직 이미지가 없는 커버 place는 비동기 업로드를 트리거 — 다음 조회 때 채워진다.
+        coverPlaces.stream()
+                .filter(p -> p.getImageUrl() == null && p.getPhotoReference() != null)
+                .forEach(p -> asyncRecovery.tryUploadAsync(p.getId(), p.getPhotoReference()));
+
+        return page.map(i -> ItinerarySummaryResponse.from(
+                i, i.getCoverPlaceId() != null ? coverUrlById.get(i.getCoverPlaceId()) : null));
     }
 
     @Transactional

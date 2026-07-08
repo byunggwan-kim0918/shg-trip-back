@@ -6,6 +6,7 @@ import com.shg.trip.shgtrip.domain.place.vector.VectorSearchRequest;
 import com.shg.trip.shgtrip.domain.place.vector.VectorSearchResult;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
+import com.shg.trip.shgtrip.global.util.GeoUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Service;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +39,15 @@ public class VectorSearchQueryService {
     private static final int MAX_PER_CATEGORY = 20;
     private static final int MIN_TOTAL = 30;
     private static final int MAX_TOTAL = 80;
+
+    /**
+     * 지역 중심점(median)에서 이 거리(km)를 초과하는 후보는 오염 좌표로 보고 제거한다.
+     * city/island 규모 region 기준. 제주 실제 반경 ~40km라 정상 장소는 통과, 타지역 오태깅(수백 km)은 제거.
+     */
+    private static final double MAX_REGION_RADIUS_KM = 100.0;
+
+    /** 안정적 median 산출을 위한 region 그룹 최소 표본 수. 미만이면 과도 필터링 방지로 필터 skip. */
+    private static final int MIN_GROUP_FOR_OUTLIER_FILTER = 4;
 
     private final EmbeddingService embeddingService;
     private final PlaceVectorSearchService placeVectorSearchService;
@@ -86,7 +97,62 @@ public class VectorSearchQueryService {
 
         log.info("전체 벡터 검색 결과: {}개 장소 반환 (요청 총 limit: {})", allResults.size(), totalLimit);
 
-        return convertToCandidates(allResults);
+        List<VectorSearchResult> cleaned = filterGeographicOutliers(allResults);
+
+        return convertToCandidates(cleaned);
+    }
+
+    /**
+     * region 그룹별로 좌표 median 중심점을 구하고, 중심점에서 {@link #MAX_REGION_RADIUS_KM}를 초과하는
+     * 후보(예: region='Jeju'로 오태깅됐지만 좌표는 춘천/명동인 오염 레코드)를 제거한다.
+     *
+     * <p>평균이 아닌 median을 중심점으로 쓰므로 오염 좌표가 소수 섞여도 중심점이 흔들리지 않는다.
+     * 그룹 표본이 {@link #MIN_GROUP_FOR_OUTLIER_FILTER} 미만이면 중심점 신뢰도가 낮아 필터를 건너뛴다.
+     * 좌표가 없는 후보는 판단을 보류하고 보존한다.
+     */
+    List<VectorSearchResult> filterGeographicOutliers(List<VectorSearchResult> results) {
+        if (results == null || results.isEmpty()) {
+            return results;
+        }
+
+        Map<String, List<VectorSearchResult>> byRegion = new LinkedHashMap<>();
+        for (VectorSearchResult r : results) {
+            String key = r.region() == null ? "" : r.region();
+            byRegion.computeIfAbsent(key, k -> new ArrayList<>()).add(r);
+        }
+
+        List<VectorSearchResult> kept = new ArrayList<>(results.size());
+        for (Map.Entry<String, List<VectorSearchResult>> entry : byRegion.entrySet()) {
+            List<VectorSearchResult> group = entry.getValue();
+
+            List<VectorSearchResult> withCoord = group.stream()
+                    .filter(r -> r.latitude() != null && r.longitude() != null)
+                    .toList();
+
+            if (withCoord.size() < MIN_GROUP_FOR_OUTLIER_FILTER) {
+                kept.addAll(group); // 표본 부족 → 필터 skip
+                continue;
+            }
+
+            double centerLat = GeoUtils.median(withCoord.stream().map(r -> r.latitude().doubleValue()).toList());
+            double centerLng = GeoUtils.median(withCoord.stream().map(r -> r.longitude().doubleValue()).toList());
+
+            for (VectorSearchResult r : group) {
+                if (r.latitude() == null || r.longitude() == null) {
+                    kept.add(r); // 좌표 없으면 판단 보류
+                    continue;
+                }
+                double dist = GeoUtils.haversine(
+                        centerLat, centerLng, r.latitude().doubleValue(), r.longitude().doubleValue());
+                if (dist > MAX_REGION_RADIUS_KM) {
+                    log.info("좌표 아웃라이어 제거: region='{}', name='{}', 중심점에서 {}km",
+                            entry.getKey(), r.name(), String.format("%.1f", dist));
+                } else {
+                    kept.add(r);
+                }
+            }
+        }
+        return kept;
     }
 
     /**

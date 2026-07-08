@@ -32,6 +32,18 @@ public final class PlaceCategoryConstants {
     }
 
     /**
+     * 이름에 교통 허브 신호(역/공항/터미널/항구 등)가 있는지 판정한다.
+     * 카테고리만으로 판단하지 않는다 — Foursquare/Google 데이터에 "흰여울문화마을"이
+     * "Transport Hub > Bus Station"으로 오적재되는 사례가 있어, 실제 허브(공항·역·터미널)만
+     * 도착/출발 지점으로 쓰이도록 이름 기반으로 한 번 더 거른다.
+     */
+    public static boolean hasTransitNameSignal(String name) {
+        if (name == null) return false;
+        String lower = name.toLowerCase();
+        return TRANSIT_HUB_KEYWORDS.stream().anyMatch(lower::contains);
+    }
+
+    /**
      * DB 카테고리(Foursquare 계층 경로, 예: "Dining and Drinking > Restaurant > ...")를
      * 5개 대분류로 매핑한다. 대안 카테고리 매칭, 동선 재정렬 등에서 공통으로 사용한다.
      */

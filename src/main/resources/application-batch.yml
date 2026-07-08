@@ -69,6 +69,13 @@ anthropic:
     poll-interval-ms: 10000
     max-poll-duration-ms: 3600000
 
+# --- Google Places API 설정 (사전채움 배치가 사용) ---
+google:
+  places:
+    api-key: ${GOOGLE_PLACES_API_KEY:}
+    text-search-uri: https://places.googleapis.com/v1/places:searchText
+    details-base-uri: https://places.googleapis.com/v1/places
+
 # --- OpenAI API 설정 (임베딩 생성) ---
 openai:
   api-key: ${OPENAI_API_KEY:}
@@ -89,6 +96,13 @@ batch:
     # LLM 보강 실행 여부 (기본 false — 초기엔 임베딩만 수행)
     # 프로덕션에서 보강이 필요할 때 BATCH_ENRICH_ENABLED=true로 설정
     enabled: ${BATCH_ENRICH_ENABLED:false}
+  google-sync:
+    # Google Places 사전채움 실행 여부 (기본 false)
+    enabled: ${BATCH_GOOGLE_SYNC_ENABLED:false}
+    # 최근 N일 내 후보로 등장한 장소만 대상
+    recent-days: ${BATCH_GOOGLE_SYNC_RECENT_DAYS:90}
+    # 배치 1회 실행당 사전채움 상한 (Google 호출 폭주 방지)
+    daily-limit: ${BATCH_GOOGLE_SYNC_DAILY_LIMIT:500}
 
 # --- AWS S3 설정 (배치에서 Foursquare CSV 읽기) ---
 cloud:

@@ -31,6 +31,9 @@ import java.util.regex.Pattern;
 public class HardValidator {
 
     private static final Pattern TIME_PATTERN = Pattern.compile("^([01]\\d|2[0-3]):[0-5]\\d$");
+    // 한 destination 내 하루 이동으로는 비현실적인 구간거리(km). 초과 시 불량 좌표로 만들어진
+    // 일정으로 보고 검증 실패 처리 — 02:16 새벽시간/679분 같은 결과가 저장·노출되지 않게 한다.
+    private static final java.math.BigDecimal MAX_REASONABLE_LEG_KM = java.math.BigDecimal.valueOf(200);
 
 
     /**
@@ -105,7 +108,14 @@ public class HardValidator {
                 }
             }
 
-            // 7. 식사 라벨(notes)과 실제 시간 불일치 모니터링 (비차단 — errors에 추가하지 않음)
+            // 7. 비현실적 구간거리 검증 (불량 좌표로 인한 일정 붕괴 차단)
+            if (step.transportationDistance() != null
+                    && step.transportationDistance().compareTo(MAX_REASONABLE_LEG_KM) > 0) {
+                errors.add(prefix + String.format("이동거리(%skm)가 비현실적입니다 (한 여행지 내 %skm 초과).",
+                        step.transportationDistance().toPlainString(), MAX_REASONABLE_LEG_KM.toPlainString()));
+            }
+
+            // 8. 식사 라벨(notes)과 실제 시간 불일치 모니터링 (비차단 — errors에 추가하지 않음)
             logMealLabelMismatchIfAny(step);
 
             previousDayNumber = step.dayNumber();

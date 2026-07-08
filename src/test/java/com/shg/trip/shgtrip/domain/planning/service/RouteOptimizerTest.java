@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
@@ -63,6 +64,49 @@ class RouteOptimizerTest {
                 .count();
 
         assertThat(mainPlaceCount).isLessThanOrEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("좌표 (0,0) 불량 장소가 있어도 새벽시간 wrap·비현실 이동거리를 만들지 않는다")
+    void repairAndSchedule_invalidZeroCoordDoesNotBreakSchedule() {
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "정상A", "Landmarks and Outdoors > Park", 37.50, 127.00, "강남"),
+                place(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
+                // 좌표 (0,0) — Google fallback 등으로 유입될 수 있는 불량 장소
+                place(3, "불량장소", "Landmarks and Outdoors > Park", 0.0, 0.0, "강남"),
+                place(4, "Dinner", "Dining and Drinking > Restaurant > Korean", 37.503, 127.003, "강남"),
+                place(5, "Lodging", "Lodging > Hotel", 37.504, 127.004, "강남")
+        );
+
+        SelectionOutput selection = new SelectionOutput(
+                "도심 컨셉",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3, 4), 5, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+
+        // 1. 모든 스텝의 시작 시각이 일과 시작(09:00) 이후 — 새벽으로 wrap되지 않음
+        assertThat(steps).allSatisfy(s ->
+                assertThat(toMinutes(s.startTime())).isGreaterThanOrEqualTo(9 * 60));
+        // 2. 같은 날 시각이 단조 비감소
+        int prevEnd = -1;
+        for (StepData s : steps) {
+            assertThat(toMinutes(s.startTime())).isGreaterThanOrEqualTo(prevEnd);
+            prevEnd = toMinutes(s.endTime());
+        }
+        // 3. 비현실적 이동거리(>200km) 구간이 없음
+        assertThat(steps).allSatisfy(s -> {
+            if (s.transportationDistance() != null) {
+                assertThat(s.transportationDistance()).isLessThanOrEqualTo(BigDecimal.valueOf(200));
+            }
+        });
+    }
+
+    private int toMinutes(String hhmm) {
+        String[] p = hhmm.split(":");
+        return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
     }
 
     @Test
@@ -399,6 +443,234 @@ class RouteOptimizerTest {
         int restPos = names.indexOf("Rest");
 
         assertThat(Math.abs(restPos - highlightPos)).isEqualTo(1);
+    }
+
+    // ── A-2: day 클러스터링 분리 ──
+    @Test
+    @DisplayName("day가 동↔서 2-클러스터로 갈리면 소수 클러스터가 인접 day로 이동한다")
+    void repairAndSchedule_movesMinorityClusterToAdjacentDay() {
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "East1", "Landmarks and Outdoors > Park", 37.50, 127.000, "동"),
+                place(2, "East2", "Landmarks and Outdoors > Park", 37.5005, 127.0005, "동"),
+                place(3, "West", "Landmarks and Outdoors > Park", 37.50, 127.900, "서"),   // ~80km 서
+                place(4, "West2", "Landmarks and Outdoors > Park", 37.50, 127.905, "서"),
+                place(5, "Lodging", "Lodging > Hotel", 37.50, 127.900, "서")
+        );
+
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(
+                        new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3), null, null),
+                        new SelectionOutput.DayPlan(2, null, List.of(4), 5, null)
+                ),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+
+        int westDay = steps.stream().filter(s -> "West".equals(s.place().name()))
+                .map(StepData::dayNumber).findFirst().orElseThrow();
+        assertThat(westDay).isEqualTo(2); // 서쪽 소수 클러스터가 day2로 이동
+    }
+
+    // ── A-1: 시간 배분 ──
+    @Test
+    @DisplayName("활동이 많아도 모든 스텝 시작 시각은 저녁 상한(22:00) 이내다")
+    void repairAndSchedule_noStepStartsAfterEveningCap() {
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.50, 127.000, "강남"),
+                place(2, "Dinner", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
+                place(3, "P1", "Landmarks and Outdoors > Park", 37.502, 127.002, "강남"),
+                place(4, "P2", "Landmarks and Outdoors > Park", 37.503, 127.003, "강남"),
+                place(5, "P3", "Landmarks and Outdoors > Park", 37.504, 127.004, "강남"),
+                place(6, "P4", "Landmarks and Outdoors > Park", 37.505, 127.005, "강남"),
+                place(7, "P5", "Landmarks and Outdoors > Park", 37.506, 127.006, "강남"),
+                place(8, "P6", "Landmarks and Outdoors > Park", 37.507, 127.007, "강남"),
+                place(9, "Lodging", "Lodging > Hotel", 37.508, 127.008, "강남")
+        );
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3, 4, 5, 6, 7, 8), 9, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "tight");
+
+        assertThat(steps).allSatisfy(s ->
+                assertThat(toMinutes(s.startTime())).isLessThanOrEqualTo(22 * 60));
+    }
+
+    @Test
+    @DisplayName("하루 DINING이 4개 이상이면 3개(아침/점심/저녁)만 스텝에 남는다")
+    void repairAndSchedule_capsDiningToThreePerDay() {
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "D1", "Dining and Drinking > Restaurant > Korean", 37.50, 127.000, "강남"),
+                place(2, "D2", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
+                place(3, "D3", "Dining and Drinking > Restaurant > Korean", 37.502, 127.002, "강남"),
+                place(4, "D4", "Dining and Drinking > Restaurant > Korean", 37.503, 127.003, "강남"),
+                place(5, "Park", "Landmarks and Outdoors > Park", 37.504, 127.004, "강남"),
+                place(6, "Lodging", "Lodging > Hotel", 37.505, 127.005, "강남")
+        );
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3, 4, 5), 6, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+
+        long diningSteps = steps.stream()
+                .filter(s -> s.place().category().startsWith("Dining and Drinking"))
+                .count();
+        assertThat(diningSteps).isLessThanOrEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("야경 테마면 저녁 상한이 넓어져 더 많은 활동이 스케줄된다")
+    void repairAndSchedule_nightThemeExtendsEveningCapacity() {
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.50, 127.000, "강남"),
+                place(2, "Dinner", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
+                place(3, "P1", "Landmarks and Outdoors > Park", 37.502, 127.002, "강남"),
+                place(4, "P2", "Landmarks and Outdoors > Park", 37.503, 127.003, "강남"),
+                place(5, "P3", "Landmarks and Outdoors > Park", 37.504, 127.004, "강남"),
+                place(6, "P4", "Landmarks and Outdoors > Park", 37.505, 127.005, "강남"),
+                place(7, "P5", "Landmarks and Outdoors > Park", 37.506, 127.006, "강남"),
+                place(8, "Lodging", "Lodging > Hotel", 37.507, 127.007, "강남")
+        );
+        // 2 식사 + 5 활동 → 기본 저녁 상한(22:00)이면 활동 4개만 수용(1개 트림),
+        // 야경 테마(23:00)면 5개 전부 수용 → 스텝 수가 더 많다.
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3, 4, 5, 6, 7), 8, null)),
+                List.of(),
+                List.of()
+        );
+
+        long defaultSteps = routeOptimizer.repairAndSchedule(
+                selection, candidates, "tight", "any", null, List.of()).size();
+        long nightSteps = routeOptimizer.repairAndSchedule(
+                selection, candidates, "tight", "any", null, List.of("야경")).size();
+
+        assertThat(nightSteps).isGreaterThan(defaultSteps);
+    }
+
+    // ── A-0-2: 메인 스텝 중복 제거 ──
+    @Test
+    @DisplayName("같은 장소가 placeIndices에 두 번 있어도 스텝엔 한 번만 나온다")
+    void repairAndSchedule_dedupesRepeatedMainPlace() {
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "A1", "Landmarks and Outdoors > Park", 37.50, 127.000, "강남"),
+                place(2, "A2", "Landmarks and Outdoors > Park", 37.501, 127.001, "강남"),
+                place(3, "Lodging", "Lodging > Hotel", 37.502, 127.002, "강남")
+        );
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 1, 2), 3, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+
+        long a1Count = steps.stream().filter(s -> "A1".equals(s.place().name())).count();
+        assertThat(a1Count).isEqualTo(1);
+    }
+
+    // ── C: 대안 품질 ──
+    @Test
+    @DisplayName("대안은 중복 없고 모두 메인과 같은 대분류이며 반경(car 30km) 이내다")
+    void buildAlternatives_areDistinctSameCategoryAndNearby() {
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "MainRest", "Dining and Drinking > Restaurant > Korean", 37.500, 127.000, "강남"),
+                place(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
+                place(3, "Lodging", "Lodging > Hotel", 37.502, 127.002, "강남"),
+                // spare 대안 후보: 같은 대분류(DINING) 3곳(근처) + 먼 곳 1 + 다른 카테고리 1
+                place(4, "AltA", "Dining and Drinking > Restaurant > Korean", 37.503, 127.003, "강남"),
+                place(5, "AltB", "Dining and Drinking > Restaurant > BBQ", 37.504, 127.004, "강남"),
+                place(6, "AltC", "Dining and Drinking > Restaurant > Seafood", 37.505, 127.005, "강남"),
+                place(7, "FarRest", "Dining and Drinking > Restaurant > Korean", 38.50, 128.50, "부산"), // ~140km
+                place(8, "AltPark", "Landmarks and Outdoors > Park", 37.506, 127.006, "강남")
+        );
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2), 3, null)),
+                List.of(),
+                List.of(4, 5, 6, 7, 8)
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(
+                selection, candidates, "relaxed", "car", null, List.of());
+
+        StepData mainStep = steps.stream().filter(s -> "MainRest".equals(s.place().name()))
+                .findFirst().orElseThrow();
+        List<AlternativeData> alts = mainStep.alternatives();
+
+        // 중복 없음
+        assertThat(alts.stream().map(AlternativeData::name).distinct().count())
+                .isEqualTo(alts.size());
+        // 모두 DINING(대분류 일치) — AltPark(관광) 배제
+        assertThat(alts).allSatisfy(a ->
+                assertThat(a.category()).startsWith("Dining and Drinking"));
+        // 먼 부산 식당 배제(car 30km 반경)
+        assertThat(alts.stream().map(AlternativeData::name)).doesNotContain("FarRest");
+    }
+
+    @Test
+    @DisplayName("저녁 활동이 없으면 숙소에 가까운 오후 활동이 마지막에 배치돼 저녁→숙소 이동이 짧아진다")
+    void repairAndSchedule_endsDayNearAccommodationWhenNoEveningActivity() {
+        // 숙소는 서쪽(127.000). 두 식당과 FarPark는 동쪽(숙소에서 멂), NearHotel만 숙소 옆.
+        // 활동이 2개라 afternoon 버킷이 채워지고, 저녁 버킷이 비어 endDayNearAccommodation이 발동한다.
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "Meal1", "Dining and Drinking > Restaurant > Korean", 37.50, 127.010, "강남"),
+                place(2, "NearHotel", "Landmarks and Outdoors > Park", 37.50, 127.001, "강남"),
+                place(3, "Meal2", "Dining and Drinking > Restaurant > Korean", 37.50, 127.030, "강남"),
+                place(4, "FarPark", "Landmarks and Outdoors > Park", 37.50, 127.035, "강남"),
+                place(5, "Hotel", "Lodging > Hotel", 37.50, 127.000, "강남")
+        );
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3, 4), 5, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+
+        List<String> nonHotel = steps.stream()
+                .filter(s -> !"Hotel".equals(s.place().name()))
+                .map(s -> s.place().name())
+                .collect(Collectors.toList());
+        // 마지막 비숙소 스텝은 숙소에 가까운 NearHotel (저녁 식당이 아님)
+        assertThat(nonHotel.get(nonHotel.size() - 1)).isEqualTo("NearHotel");
+    }
+
+    @Test
+    @DisplayName("반경 내 같은 대분류 대안이 없으면 반경 밖에서라도 대안을 채운다(대안 0개 회피)")
+    void buildAlternatives_fallsBackBeyondRadiusWhenNoneNearby() {
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "MainRest", "Dining and Drinking > Restaurant > Korean", 37.500, 127.000, "강남"),
+                place(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
+                place(3, "Lodging", "Lodging > Hotel", 37.502, 127.002, "강남"),
+                // 유일한 같은 대분류 대안이 walk 반경(3km) 밖에 있음
+                place(4, "FarAlt", "Dining and Drinking > Restaurant > BBQ", 37.60, 127.20, "경기")
+        );
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2), 3, null)),
+                List.of(),
+                List.of(4)
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(
+                selection, candidates, "relaxed", "walk", null, List.of());
+
+        StepData mainStep = steps.stream().filter(s -> "MainRest".equals(s.place().name()))
+                .findFirst().orElseThrow();
+        assertThat(mainStep.alternatives().stream().map(AlternativeData::name)).contains("FarAlt");
     }
 
     @Test

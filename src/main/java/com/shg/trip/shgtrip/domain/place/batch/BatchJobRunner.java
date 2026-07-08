@@ -21,9 +21,13 @@ public class BatchJobRunner implements CommandLineRunner {
     private final FoursquareSeeder foursquareSeeder;
     private final EmbeddingBatchJob embeddingBatchJob;
     private final BatchEnrichScheduler batchEnrichScheduler;
+    private final GooglePlaceSyncScheduler googlePlaceSyncScheduler;
 
     @Value("${batch.enrich.enabled:false}")
     private boolean enrichEnabled;
+
+    @Value("${batch.google-sync.enabled:false}")
+    private boolean googleSyncEnabled;
 
     @Override
     public void run(String... args) {
@@ -46,11 +50,23 @@ public class BatchJobRunner implements CommandLineRunner {
         }
 
         if (enrichEnabled) {
-            log.info("[3/3] 태그/설명 배치 보강 시작");
+            log.info("[3/4] 태그/설명 배치 보강 시작");
             batchEnrichScheduler.enrich();
-            log.info("[3/3] 태그/설명 배치 보강 완료");
+            log.info("[3/4] 태그/설명 배치 보강 완료");
         } else {
-            log.info("[3/3] 태그/설명 배치 보강 건너뜀 (batch.enrich.enabled=false)");
+            log.info("[3/4] 태그/설명 배치 보강 건너뜀 (batch.enrich.enabled=false)");
+        }
+
+        if (googleSyncEnabled) {
+            log.info("[4/4] Google Places 사전채움 시작");
+            try {
+                googlePlaceSyncScheduler.sync();
+                log.info("[4/4] Google Places 사전채움 완료");
+            } catch (Exception e) {
+                log.error("[4/4] Google Places 사전채움 실패: {}", e.getMessage(), e);
+            }
+        } else {
+            log.info("[4/4] Google Places 사전채움 건너뜀 (batch.google-sync.enabled=false)");
         }
 
         log.info("=== 배치 파이프라인 완료 ===");

@@ -363,4 +363,112 @@ class VectorSearchQueryServiceTest {
             assertThat(candidates.get(4).index()).isEqualTo(5);
         }
     }
+
+    @Nested
+    @DisplayName("filterGeographicOutliers - 지역 중심점 기준 좌표 아웃라이어 제거")
+    class FilterGeographicOutliersTests {
+
+        /** region='Jeju'로 지정하고 주어진 좌표를 갖는 결과 생성 */
+        private VectorSearchResult jeju(String name, double lat, double lng) {
+            return result(name, "Jeju", lat, lng);
+        }
+
+        private VectorSearchResult result(String name, String region, double lat, double lng) {
+            return new VectorSearchResult(
+                    (long) name.hashCode(), name, name + " 주소", "restaurant",
+                    List.of("태그"), region, "KR",
+                    lat == 0 && lng == 0 ? null : BigDecimal.valueOf(lat),
+                    lat == 0 && lng == 0 ? null : BigDecimal.valueOf(lng),
+                    name + " 설명", BigDecimal.valueOf(4.0), 0.9
+            );
+        }
+
+        @Test
+        @DisplayName("제주 다수 + 오염 소수(명동/춘천) → 오염만 제거되고 제주 후보는 전부 보존")
+        void jejuMajorityWithFewOutliers_removesOnlyOutliers() {
+            List<VectorSearchResult> results = List.of(
+                    jeju("제주공항", 33.5063, 126.4931),
+                    jeju("성산일출봉", 33.4587, 126.9426),
+                    jeju("협재해변", 33.3940, 126.2396),
+                    jeju("한라산", 33.3617, 126.5292),
+                    jeju("올레길", 33.2450, 126.5600),
+                    jeju("공차 명동역점", 37.5609, 126.9861),   // 서울 명동 (~450km)
+                    jeju("남문식당(춘천)", 37.7904, 127.5254)     // 강원 춘천
+            );
+
+            List<VectorSearchResult> filtered = service.filterGeographicOutliers(results);
+
+            assertThat(filtered)
+                    .extracting(VectorSearchResult::name)
+                    .containsExactly("제주공항", "성산일출봉", "협재해변", "한라산", "올레길")
+                    .doesNotContain("공차 명동역점", "남문식당(춘천)");
+        }
+
+        @Test
+        @DisplayName("그룹 표본이 4개 미만이면 중심점 신뢰도 부족으로 필터를 건너뛰어 전부 보존")
+        void smallGroup_skipsFilter() {
+            List<VectorSearchResult> results = List.of(
+                    jeju("제주공항", 33.5063, 126.4931),
+                    jeju("성산일출봉", 33.4587, 126.9426),
+                    jeju("공차 명동역점", 37.5609, 126.9861) // 오염이지만 표본<4라 skip
+            );
+
+            List<VectorSearchResult> filtered = service.filterGeographicOutliers(results);
+
+            assertThat(filtered).hasSize(3);
+        }
+
+        @Test
+        @DisplayName("좌표가 없는(null) 후보는 판단을 보류하고 보존한다")
+        void nullCoordinate_isPreserved() {
+            List<VectorSearchResult> results = List.of(
+                    jeju("제주공항", 33.5063, 126.4931),
+                    jeju("성산일출봉", 33.4587, 126.9426),
+                    jeju("협재해변", 33.3940, 126.2396),
+                    jeju("한라산", 33.3617, 126.5292),
+                    jeju("좌표없음", 0, 0) // lat/lng null
+            );
+
+            List<VectorSearchResult> filtered = service.filterGeographicOutliers(results);
+
+            assertThat(filtered).extracting(VectorSearchResult::name).contains("좌표없음");
+        }
+
+        @Test
+        @DisplayName("서로 다른 region은 각자의 중심점으로 독립 판정한다 (다지역 여행)")
+        void multipleRegions_filteredIndependently() {
+            List<VectorSearchResult> results = new java.util.ArrayList<>();
+            // Seoul 그룹 (정상 4개 + 제주 좌표 오염 1개)
+            results.add(result("경복궁", "Seoul", 37.5796, 126.9770));
+            results.add(result("명동", "Seoul", 37.5636, 126.9850));
+            results.add(result("남산타워", "Seoul", 37.5512, 126.9882));
+            results.add(result("홍대", "Seoul", 37.5563, 126.9236));
+            results.add(result("제주오염", "Seoul", 33.4587, 126.9426)); // 서울 그룹에 제주 좌표
+            // Busan 그룹 (정상 4개)
+            results.add(result("해운대", "Busan", 35.1587, 129.1604));
+            results.add(result("광안리", "Busan", 35.1532, 129.1187));
+            results.add(result("감천문화마을", "Busan", 35.0975, 129.0108));
+            results.add(result("자갈치시장", "Busan", 35.0966, 129.0306));
+
+            List<VectorSearchResult> filtered = service.filterGeographicOutliers(results);
+
+            assertThat(filtered).extracting(VectorSearchResult::name)
+                    .doesNotContain("제주오염")
+                    .contains("해운대", "광안리", "감천문화마을", "자갈치시장", "경복궁");
+        }
+
+        @Test
+        @DisplayName("빈 목록/전부 정상이면 원본 그대로 반환")
+        void emptyOrAllValid_returnsAll() {
+            assertThat(service.filterGeographicOutliers(List.of())).isEmpty();
+
+            List<VectorSearchResult> valid = List.of(
+                    jeju("제주공항", 33.5063, 126.4931),
+                    jeju("성산일출봉", 33.4587, 126.9426),
+                    jeju("협재해변", 33.3940, 126.2396),
+                    jeju("한라산", 33.3617, 126.5292)
+            );
+            assertThat(service.filterGeographicOutliers(valid)).hasSize(4);
+        }
+    }
 }

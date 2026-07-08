@@ -19,7 +19,11 @@ public record ItinerarySummaryResponse(
         String status,
         OffsetDateTime createdAt
 ) {
-    public static ItinerarySummaryResponse from(Itinerary itinerary) {
+    /**
+     * @param coverImage 조회 시점에 coverPlaceId로 해소한 현재 imageUrl(presigned). 없으면 null.
+     *                   저장된 coverImage 컬럼(과거의 깨진 프록시 URL)은 사용하지 않는다.
+     */
+    public static ItinerarySummaryResponse from(Itinerary itinerary, String coverImage) {
         return new ItinerarySummaryResponse(
                 itinerary.getId(),
                 itinerary.getTitle(),
@@ -27,7 +31,7 @@ public record ItinerarySummaryResponse(
                 itinerary.getStartDate(),
                 itinerary.getEndDate(),
                 itinerary.getEstimatedCost(),
-                itinerary.getCoverImage(),
+                coverImage,
                 itinerary.getTags(),
                 itinerary.getStatus().name(),
                 itinerary.getCreatedAt()

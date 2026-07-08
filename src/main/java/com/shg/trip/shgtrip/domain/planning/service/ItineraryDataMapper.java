@@ -5,6 +5,7 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.place.client.GooglePlaceDetail;
 import com.shg.trip.shgtrip.domain.place.client.GooglePlacesClient;
+import com.shg.trip.shgtrip.domain.place.client.PlaceIdNotFoundException;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
@@ -36,6 +37,7 @@ public class ItineraryDataMapper {
     private final PlacePersistenceHelper placePersistenceHelper;
     private final RouteOptimizer routeOptimizer;
     private final ItineraryAutoFixer autoFixer;
+    private final DestinationCoordCache destinationCoordCache;
 
     /**
      * 여행지 기준 "엉뚱한 장소" 판정 거리(km). 기존 500km는 한국 내 도시 단위 오매칭
@@ -215,13 +217,26 @@ public class ItineraryDataMapper {
 
     /**
      * 여행지 이름으로 기준 좌표를 조회.
+     * Redis 캐시(TTL 30일) 우선 조회 — 도시 좌표는 불변이므로 같은 목적지 반복 생성 시 API 호출 생략.
+     * 미스 시에만 Basic 필드마스크(가장 저렴한 SKU)로 Google 조회 후 캐시에 적재.
      * 실패 시 null 반환 — 거리 검증 skip (서비스 중단 방지).
      */
     private double[] resolveDestinationCoord(String destination) {
+        if (destination == null || destination.isBlank()) return null;
+
+        Optional<double[]> cached = destinationCoordCache.get(destination);
+        if (cached.isPresent()) {
+            return cached.get();
+        }
+
         try {
-            Optional<GooglePlaceDetail> detail = googlePlacesClient.searchAndGetDetail(destination);
-            if (detail.isPresent() && detail.get().lat() != 0.0) {
-                return new double[]{detail.get().lat(), detail.get().lng()};
+            Optional<GooglePlaceDetail> detail = googlePlacesClient.searchLocationOnly(destination);
+            // (0,0)은 파싱 실패 마커 — 다른 경로(isFallbackPlace 등)와 동일하게 AND 조건으로 판정
+            if (detail.isPresent() && (detail.get().lat() != 0.0 || detail.get().lng() != 0.0)) {
+                double lat = detail.get().lat();
+                double lng = detail.get().lng();
+                destinationCoordCache.put(destination, lat, lng);
+                return new double[]{lat, lng};
             }
         } catch (Exception e) {
             log.warn("여행지 기준 좌표 조회 실패: destination={}, error={}", destination, e.getMessage());
@@ -238,25 +253,61 @@ public class ItineraryDataMapper {
      */
     private Place refreshFromGoogle(Place stalePlace, PlaceData placeData, double[] destinationCoord) {
         try {
-            Optional<GooglePlaceDetail> detail =
-                    googlePlacesClient.searchAndGetDetail(placeData.name() + " " + placeData.address());
+            // place_id가 있으면 Details 직조회(저렴+오매칭 없음), 404면 리셋 후 Text Search 재매칭
+            Optional<GooglePlaceDetail> detail = fetchDetailForStale(stalePlace, placeData);
             if (detail.isPresent()) {
                 GooglePlaceDetail d = detail.get();
+                // 좌표 (0,0)은 Details 응답에 location이 없는 파손 결과 — 정상 좌표를 파괴하지 않도록 갱신 스킵
+                if (d.lat() == 0.0 && d.lng() == 0.0) {
+                    log.warn("Google 갱신 결과 좌표가 (0,0)이라 적용하지 않고 기존 데이터 유지: name={}", stalePlace.getName());
+                    return markAttemptAndKeep(stalePlace);
+                }
                 if (isFarFromDestination(BigDecimal.valueOf(d.lat()), BigDecimal.valueOf(d.lng()), destinationCoord)) {
                     log.warn("Google 갱신 결과가 여행지에서 너무 멀어 적용하지 않고 기존 데이터 유지: name={}", stalePlace.getName());
-                    return stalePlace;
+                    return markAttemptAndKeep(stalePlace);
                 }
-                stalePlace.update(d.address(), d.lat(), d.lng(), d.rating(),
+                stalePlace.update(d.placeId(), d.address(), d.lat(), d.lng(), d.rating(),
                         d.priceLevel(), d.openingHours(), d.photoReference(), d.sourceUrl(),
-                        d.editorialSummary());
+                        null);   // description: refresh 시엔 갱신 안 함 (임베딩 이미 생성됨)
+                stalePlace.setSource("google");
                 return placePersistenceHelper.updateAndSave(stalePlace);
             }
+            // 무매칭(결정적 실패): 시도 이력을 남기지 않으면 매 생성마다 무한 재호출됨
+            log.warn("Google 무매칭으로 만료된 장소 데이터 그대로 사용 ({}일 후 재시도): name={}", Place.STALENESS_DAYS, stalePlace.getName());
+            return markAttemptAndKeep(stalePlace);
         } catch (com.shg.trip.shgtrip.global.exception.BusinessException e) {
+            // API 장애(일시적 실패)는 시도 이력을 남기지 않고 다음 기회에 재시도
             log.warn("Google Places API 장애로 stale 데이터 유지: name={}, error={}", stalePlace.getName(), e.getMessage());
         } catch (Exception e) {
             log.warn("Google Places 갱신 실패: name={}, error={}", stalePlace.getName(), e.getMessage());
         }
-        log.warn("만료된 장소 데이터 그대로 사용: name={}", stalePlace.getName());
+        return stalePlace;
+    }
+
+    /** stale 장소 refresh 시 place_id 우선 Details 조회, 404면 리셋 후 Text Search(refresh 마스크) 재매칭. */
+    private Optional<GooglePlaceDetail> fetchDetailForStale(Place stalePlace, PlaceData placeData) {
+        if (stalePlace.getGooglePlaceId() != null) {
+            try {
+                return googlePlacesClient.getPlaceDetails(stalePlace.getGooglePlaceId());
+            } catch (PlaceIdNotFoundException e) {
+                log.info("Place {} google_place_id 폐기 감지, Text Search 재매칭", stalePlace.getName());
+                stalePlace.clearGooglePlaceId();
+            }
+        }
+        return googlePlacesClient.searchForRefresh(placeData.name() + " " + placeData.address());
+    }
+
+    /**
+     * 무매칭·오매칭 등 결정적 실패 시 데이터는 유지하되 시도 이력만 기록.
+     * 이 메서드는 트랜잭션 밖에서 실행되므로 더티체킹이 없어 REQUIRES_NEW 헬퍼로 명시 저장한다.
+     */
+    private Place markAttemptAndKeep(Place stalePlace) {
+        try {
+            stalePlace.markSyncAttempted();
+            placePersistenceHelper.updateAndSave(stalePlace);
+        } catch (Exception e) {
+            log.warn("동기화 시도 이력 저장 실패: name={}, error={}", stalePlace.getName(), e.getMessage());
+        }
         return stalePlace;
     }
 
@@ -297,7 +348,8 @@ public class ItineraryDataMapper {
                 if (existing.isPresent()) {
                     Place ex = existing.get();
                     if (ex.isStale()) {
-                        ex.update(d.address(), d.lat(), d.lng(), d.rating(),
+                        // 신규 첫 매칭 경로이므로 editorialSummary(description) 포함해 임베딩 품질 유지
+                        ex.update(d.placeId(), d.address(), d.lat(), d.lng(), d.rating(),
                                 d.priceLevel(), d.openingHours(), d.photoReference(), d.sourceUrl(),
                                 d.editorialSummary());
                         return placePersistenceHelper.updateAndSave(ex);
@@ -306,6 +358,7 @@ public class ItineraryDataMapper {
                 }
 
                 Place place = Place.builder()
+                        .googlePlaceId(d.placeId())   // 이후 refresh가 Details ID 직조회로 가도록 저장
                         .name(d.name())
                         .address(d.address())
                         .latitude(BigDecimal.valueOf(d.lat()))
@@ -318,8 +371,10 @@ public class ItineraryDataMapper {
                         .openingHours(d.openingHours())
                         .photoReference(d.photoReference())
                         .sourceUrl(d.sourceUrl())
+                        .description(d.editorialSummary())   // 신규 장소 임베딩 텍스트 품질용
                         .source("google")
                         .savedAt(OffsetDateTime.now())
+                        .googleSyncedAt(OffsetDateTime.now())
                         .build();
                 return placeRepository.save(place);
             }

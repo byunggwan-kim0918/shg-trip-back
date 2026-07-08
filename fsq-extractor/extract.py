@@ -18,22 +18,18 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
-S3_BUCKET   = os.environ.get("S3_BUCKET", "shgtrip-data")
-S3_PREFIX   = os.environ.get("S3_PREFIX", "foursquare")
-AWS_REGION  = os.environ.get("AWS_REGION", "ap-northeast-2")
-OUTPUT_FILE = "/tmp/foursquare-places.csv"
+S3_BUCKET       = os.environ.get("S3_BUCKET", "shgtrip-data")
+S3_PREFIX       = os.environ.get("S3_PREFIX", "foursquare")
+AWS_REGION      = os.environ.get("AWS_REGION", "ap-northeast-2")
+AWS_ENDPOINT_URL = os.environ.get("AWS_ENDPOINT_URL")  # LocalStack 엔드포인트
+OUTPUT_FILE     = "/tmp/foursquare-places.csv"
 
 TABLE_PATH = "places.datasets.places_os"
 
 PRIORITY_CITIES = {
-    # 한국
+    # 한국만
     "Seoul", "Busan", "Jeju", "Incheon", "Daegu", "Daejeon",
     "Gwangju", "Suwon", "Gangneung", "Gyeongju", "Jeonju", "Yeosu",
-    # 일본
-    "Tokyo", "Osaka", "Kyoto", "Fukuoka", "Sapporo",
-    "Nagoya", "Yokohama", "Kobe", "Nara", "Hiroshima",
-    "Okinawa", "Kanazawa", "Hakone", "Kamakura", "Nikko",
-    "Sendai", "Nagasaki", "Kagoshima", "Beppu", "Takayama",
 }
 
 
@@ -109,7 +105,14 @@ def upload_to_s3(row_count: int) -> str:
     s3_key = f"{S3_PREFIX}/dt={dt}/foursquare-places.csv"
 
     log.info("S3 업로드 시작: s3://%s/%s", S3_BUCKET, s3_key)
-    s3 = boto3.client("s3", region_name=AWS_REGION)
+
+    # LocalStack 또는 실제 AWS S3에 업로드
+    s3_kwargs = {"region_name": AWS_REGION}
+    if AWS_ENDPOINT_URL:
+        s3_kwargs["endpoint_url"] = AWS_ENDPOINT_URL
+        log.info("LocalStack S3 엔드포인트 사용: %s", AWS_ENDPOINT_URL)
+
+    s3 = boto3.client("s3", **s3_kwargs)
     s3.upload_file(
         OUTPUT_FILE,
         S3_BUCKET,

@@ -52,6 +52,7 @@ class OptimizedGenerationExecutorTest {
     @Mock private CancellationRegistry cancellationRegistry;
     @Mock private com.shg.trip.shgtrip.domain.place.service.PlaceRefreshService placeRefreshService;
     @Mock private com.shg.trip.shgtrip.domain.place.repository.PlaceRepository placeRepository;
+    @Mock private com.shg.trip.shgtrip.domain.planning.service.validation.PlaceRegionValidator placeRegionValidator;
     @Mock private Executor googleSyncExecutor;
     @Mock private ScheduledExecutorService sseHeartbeatScheduler;
 
@@ -148,7 +149,7 @@ class OptimizedGenerationExecutorTest {
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any())).thenReturn(fixedSteps);
+        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any())).thenReturn(fixedSteps);
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
@@ -162,7 +163,7 @@ class OptimizedGenerationExecutorTest {
         verify(optimizedClaudeAIService).enrichInput(request);
         verify(vectorSearchQueryService).search(vectorEnrichedInput);
         verify(selectionCallGenerator).selectPlaces(eq(vectorEnrichedInput), anyList());
-        verify(routeOptimizer).repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any());
+        verify(routeOptimizer).repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any());
         verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true));
         verify(resultStore).save("job-1", 42L);
         verify(storyGenerationService).generateAndAttach(
@@ -211,7 +212,7 @@ class OptimizedGenerationExecutorTest {
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any())).thenReturn(fixedSteps);
+        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any())).thenReturn(fixedSteps);
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.fail("일부 검증 경고"));
@@ -262,7 +263,7 @@ class OptimizedGenerationExecutorTest {
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any())).thenReturn(fixedSteps);
+        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any())).thenReturn(fixedSteps);
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
@@ -285,5 +286,72 @@ class OptimizedGenerationExecutorTest {
         assertThat(captured.startDate()).isEqualTo(LocalDate.of(2025, 7, 1));
         assertThat(captured.endDate()).isEqualTo(LocalDate.of(2025, 7, 4));
         assertThat(captured.enrichedContext()).isEqualTo("도쿄 여행 컨텍스트");
+    }
+
+    @org.junit.jupiter.api.Nested
+    @DisplayName("filterAccommodationsByGeography - 보완 숙소 좌표 sanity")
+    class AccommodationGeoFilter {
+
+        private com.shg.trip.shgtrip.domain.place.entity.Place hotel(String name, String region, double lat, double lng) {
+            return com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                    .name(name).region(region).country("KR")
+                    .latitude(BigDecimal.valueOf(lat)).longitude(BigDecimal.valueOf(lng))
+                    .category("Travel and Transportation > Lodging > Hotel")
+                    .build();
+        }
+
+        private PlaceCandidate candidate(String region, double lat, double lng) {
+            return new PlaceCandidate(0, 1L, "후보", "주소", "attraction", List.of(),
+                    region, "KR", BigDecimal.valueOf(lat), BigDecimal.valueOf(lng),
+                    "설명", BigDecimal.valueOf(4.0), 0.9, null, null);
+        }
+
+        private List<PlaceCandidate> jejuCandidates() {
+            return List.of(
+                    candidate("Jeju", 33.5063, 126.4931),
+                    candidate("Jeju", 33.4587, 126.9426),
+                    candidate("Jeju", 33.3940, 126.2396),
+                    candidate("Jeju", 33.3617, 126.5292));
+        }
+
+        @Test
+        @DisplayName("지역 중심점에서 100km 초과 숙소(오태깅)는 제외, 정상 제주 숙소는 보존")
+        void removesOutlierHotelKeepsValid() {
+            var validHotel = hotel("제주신라호텔", "Jeju", 33.2470, 126.4100);
+            var outlierHotel = hotel("서울호텔(오태깅)", "Jeju", 37.5665, 126.9780); // 제주 region인데 서울 좌표
+
+            List<com.shg.trip.shgtrip.domain.place.entity.Place> kept =
+                    executor.filterAccommodationsByGeography(List.of(validHotel, outlierHotel), jejuCandidates());
+
+            assertThat(kept).extracting(com.shg.trip.shgtrip.domain.place.entity.Place::getName)
+                    .containsExactly("제주신라호텔");
+        }
+
+        @Test
+        @DisplayName("같은 region 후보가 4개 미만이면 중심점 신뢰도 부족으로 필터하지 않고 통과")
+        void skipsWhenSampleTooSmall() {
+            var outlierHotel = hotel("서울호텔", "Jeju", 37.5665, 126.9780);
+            List<PlaceCandidate> few = List.of(
+                    candidate("Jeju", 33.5, 126.5),
+                    candidate("Jeju", 33.4, 126.4));
+
+            List<com.shg.trip.shgtrip.domain.place.entity.Place> kept =
+                    executor.filterAccommodationsByGeography(List.of(outlierHotel), few);
+
+            assertThat(kept).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("좌표가 없는 숙소는 판단 보류하고 보존")
+        void keepsNullCoordinateHotel() {
+            var noCoord = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                    .name("좌표없음호텔").region("Jeju").country("KR")
+                    .category("Travel and Transportation > Lodging > Hotel").build();
+
+            List<com.shg.trip.shgtrip.domain.place.entity.Place> kept =
+                    executor.filterAccommodationsByGeography(List.of(noCoord), jejuCandidates());
+
+            assertThat(kept).hasSize(1);
+        }
     }
 }

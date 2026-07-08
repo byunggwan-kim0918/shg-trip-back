@@ -17,6 +17,7 @@ public record PlaceResponse(
         Integer priceLevel,
         String openingHours,
         String imageUrl,
+        String region,
         OffsetDateTime savedAt
 ) {
     public static PlaceResponse from(Place place) {
@@ -32,6 +33,7 @@ public record PlaceResponse(
                 place.getPriceLevel(),
                 place.getOpeningHours(),
                 place.getImageUrl(),
+                place.getRegion(),
                 place.getSavedAt()
         );
     }

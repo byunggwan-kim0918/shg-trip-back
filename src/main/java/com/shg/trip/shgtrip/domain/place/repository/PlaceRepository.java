@@ -114,19 +114,48 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /**
      * 벡터 검색 후보 중 Google API 동기화가 필요한 place 조회.
-     * 조건: source='foursquare' OR stale(7일 이상)
+     * 조건: googleSyncedAt IS NULL(동기화 시도 이력 없음) OR 마지막 시도가 staleThreshold 이전.
+     * source='foursquare' 조건을 쓰지 않는 이유: Google 무매칭 장소는 source가 영구히
+     * 'foursquare'로 남아 매 생성마다 무한 재호출됐음 — 실패 시에도 googleSyncedAt을
+     * 기록(markSyncAttempted)하고 이 컬럼만으로 재시도 주기를 판단한다.
      * @param placeIds 벡터 검색 결과 place ID 목록
-     * @param sevenDaysAgo 7일 전 시각
+     * @param staleThreshold stale 판정 기준 시각 (now - STALENESS_DAYS)
      * @return 동기화 대상 place 목록
      */
     @Query("""
             SELECT p FROM Place p
             WHERE p.id IN :placeIds
-            AND (p.source = 'foursquare' OR p.savedAt < :sevenDaysAgo)
+            AND (p.googleSyncedAt IS NULL OR p.googleSyncedAt < :staleThreshold)
             AND p.active = true
             """)
     List<Place> findByIdAndNeedsSync(@Param("placeIds") List<Long> placeIds,
-                                      @Param("sevenDaysAgo") OffsetDateTime sevenDaysAgo);
+                                      @Param("staleThreshold") OffsetDateTime staleThreshold);
+
+    /**
+     * 벡터 검색 후보로 등장한 장소들의 last_candidate_at을 일괄 갱신 (인기도 추적).
+     * 생성당 1회 벌크 UPDATE.
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE Place p SET p.lastCandidateAt = :now WHERE p.id IN :placeIds")
+    void markCandidateAppearance(@Param("placeIds") List<Long> placeIds, @Param("now") OffsetDateTime now);
+
+    /**
+     * 월배치 사전채움 대상 조회: 최근 후보로 등장(last_candidate_at >= recentThreshold)했고
+     * 동기화가 필요한(googleSyncedAt IS NULL OR < staleThreshold) 활성 장소를,
+     * 최근 등장순으로 상위 N개(Pageable limit). "인기 장소 우선" 사전채움에 사용.
+     */
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.active = true
+            AND p.lastCandidateAt IS NOT NULL
+            AND p.lastCandidateAt >= :recentThreshold
+            AND (p.googleSyncedAt IS NULL OR p.googleSyncedAt < :staleThreshold)
+            ORDER BY p.lastCandidateAt DESC
+            """)
+    List<Place> findPrefetchTargets(@Param("recentThreshold") OffsetDateTime recentThreshold,
+                                    @Param("staleThreshold") OffsetDateTime staleThreshold,
+                                    Pageable pageable);
 
     /**
      * 미보강(enriched_at IS NULL)이고 활성 상태인 장소 페이징 조회 — BatchEnrichScheduler 사용.

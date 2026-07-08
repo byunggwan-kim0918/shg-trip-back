@@ -59,6 +59,7 @@ google:
   places:
     api-key: test
     text-search-uri: https://places.googleapis.com/v1/places:searchText
+    details-base-uri: https://places.googleapis.com/v1/places
 
 planning:
   validation:

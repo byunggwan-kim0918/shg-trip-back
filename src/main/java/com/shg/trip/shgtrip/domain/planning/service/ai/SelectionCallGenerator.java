@@ -161,11 +161,12 @@ public class SelectionCallGenerator {
         }
 
         sb.append("\n## 후보 장소 목록 (").append(candidates.size()).append("개)\n");
-        sb.append("형식: ID | 이름 | 카테고리 | #태그 | 지역\n");
+        sb.append("형식: ID | 이름 | 카테고리 | 평점 | #태그 | 지역\n");
         for (PlaceCandidate candidate : candidates) {
             sb.append(candidate.index()).append(" | ")
                     .append(candidate.name()).append(" | ")
                     .append(summarizeCategory(candidate.category())).append(" | ")
+                    .append(formatRating(candidate.rating())).append(" | ")
                     .append(formatTags(candidate.tags())).append(" | ")
                     .append(candidate.region() != null ? candidate.region() : "")
                     .append("\n");
@@ -180,6 +181,11 @@ public class SelectionCallGenerator {
      * Foursquare 풀 경로에서 리프 노드만 추출하여 토큰을 절감한다.
      * "Dining and Drinking > Restaurant > Korean Restaurant" → "Korean Restaurant"
      */
+    /** 평점을 "⭐4.2" 형태로. 평점 없으면 "평점없음"(모델이 저품질/미검증 장소를 인지하도록). */
+    private String formatRating(java.math.BigDecimal rating) {
+        return rating != null ? "⭐" + rating.toPlainString() : "평점없음";
+    }
+
     private String formatTags(List<String> tags) {
         if (tags == null || tags.isEmpty()) return "";
         return tags.stream()
