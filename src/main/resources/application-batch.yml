@@ -64,7 +64,8 @@ anthropic:
     sonnet: claude-sonnet-4-6
     max-output-tokens: 64000
   batch:
-    model: claude-sonnet-4-20250514
+    # 장소 태그/설명/시간대 보강용 — 단순 구조화 생성이라 Haiku로 충분 (Batch API 50% 할인 병행)
+    model: claude-haiku-4-5-20251001
     max-tokens-per-request: 1024
     poll-interval-ms: 10000
     max-poll-duration-ms: 3600000
@@ -96,6 +97,19 @@ batch:
     # LLM 보강 실행 여부 (기본 false — 초기엔 임베딩만 수행)
     # 프로덕션에서 보강이 필요할 때 BATCH_ENRICH_ENABLED=true로 설정
     enabled: ${BATCH_ENRICH_ENABLED:false}
+    # 지역 스코프 (쉼표 구분, 예: "Jeju,Gangneung"). 비우면 전체 —
+    # 전량 보강은 LLM 비용이 크므로 관광지 데이터가 빈약한 지역부터 점진 실행 권장.
+    regions: ${BATCH_ENRICH_REGIONS:}
+  tourapi:
+    # 한국관광공사 TourAPI 관광지 시딩 (Foursquare의 빈약한 관광지 커버리지 보완)
+    enabled: ${BATCH_TOURAPI_ENABLED:false}
+    # data.go.kr 발급 서비스키 — URL 인코딩된 키를 그대로 입력
+    service-key: ${TOUR_API_SERVICE_KEY:}
+    # 시딩 대상 areaCode (쉼표 구분): 1=서울 2=인천 3=대전 4=대구 5=광주 6=부산 39=제주
+    # 기본은 전국(region 매핑이 1:1인 광역시+제주 전체) — Foursquare처럼 매 배치마다 전 지역 반영
+    area-codes: ${BATCH_TOURAPI_AREA_CODES:1,2,3,4,5,6,39}
+    # areaCode×타입당 최대 수집 행 수
+    max-rows-per-type: ${BATCH_TOURAPI_MAX_ROWS:500}
   google-sync:
     # Google Places 사전채움 실행 여부 (기본 false)
     enabled: ${BATCH_GOOGLE_SYNC_ENABLED:false}

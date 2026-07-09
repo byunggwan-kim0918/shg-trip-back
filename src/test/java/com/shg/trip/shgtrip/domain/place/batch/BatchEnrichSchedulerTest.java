@@ -38,6 +38,7 @@ class BatchEnrichSchedulerTest {
         scheduler = new BatchEnrichScheduler(placeRepository, objectMapper);
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
         ReflectionTestUtils.setField(scheduler, "anthropicApiKey", "test-api-key");
+        ReflectionTestUtils.setField(scheduler, "enrichModel", "claude-haiku-4-5-20251001");
     }
 
     @Test
@@ -133,6 +134,30 @@ class BatchEnrichSchedulerTest {
         assertThat(place.getDescription()).contains("도쿄에서 가장 오래된 사찰");
         assertThat(place.getRecommendedTimeSlots()).containsExactly("morning", "afternoon");
         assertThat(place.getEnrichedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("applyEnrichment는 recommended_duration_minutes를 파싱하고, 없거나 비정수면 null로 둔다")
+    void applyEnrichment_parsesDurationMinutes() {
+        Place withDuration = createPlace(1L, "사라오름", "관광", "제주", "KR");
+        scheduler.applyEnrichment(withDuration, """
+                {"tags": ["오름"], "description": "설명", "recommended_time_slots": ["morning"],
+                 "recommended_duration_minutes": 180}
+                """);
+        assertThat(withDuration.getRecommendedDurationMinutes()).isEqualTo(180);
+
+        Place withoutDuration = createPlace(2L, "카페", "카페", "제주", "KR");
+        scheduler.applyEnrichment(withoutDuration, """
+                {"tags": ["카페"], "description": "설명", "recommended_time_slots": ["afternoon"]}
+                """);
+        assertThat(withoutDuration.getRecommendedDurationMinutes()).isNull();
+
+        Place invalidDuration = createPlace(3L, "해변", "관광", "제주", "KR");
+        scheduler.applyEnrichment(invalidDuration, """
+                {"tags": ["해변"], "description": "설명", "recommended_time_slots": ["morning"],
+                 "recommended_duration_minutes": "약 두 시간"}
+                """);
+        assertThat(invalidDuration.getRecommendedDurationMinutes()).isNull();
     }
 
     @Test

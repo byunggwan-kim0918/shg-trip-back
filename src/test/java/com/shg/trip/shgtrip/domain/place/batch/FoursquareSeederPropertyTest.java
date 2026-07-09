@@ -65,7 +65,7 @@ class FoursquareSeederPropertyTest {
         assertThat(result[0]).isEqualTo(1);
         verify(mockRepo, times(1)).upsertFoursquarePlace(
                 anyString(), anyString(), anyString(), any(), any(),
-                anyString(), anyString(), anyString(), anyString(), anyString());
+                anyString(), anyString(), anyString(), anyString(), anyString(), any());
     }
 
     /**

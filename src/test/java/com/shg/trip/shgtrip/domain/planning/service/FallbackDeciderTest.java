@@ -77,6 +77,40 @@ class FallbackDeciderTest {
     }
 
     @Nested
+    @DisplayName("assess - 후보 풀 품질 3단계 판정")
+    class AssessTests {
+
+        @Test
+        @DisplayName("유효 관광지가 days×2 이상이면 SUFFICIENT")
+        void enoughValidAttractions_returnsSufficient() {
+            List<PlaceCandidate> candidates = new ArrayList<>();
+            candidates.addAll(createCandidates(1, CAT_ATTRACTION, 6)); // 공원 6 ≥ 3일×2
+            candidates.addAll(createCandidates(7, CAT_RESTAURANT, 8));
+            candidates.addAll(createCandidates(15, CAT_LODGING, 3));
+            assertThat(decider.assess(candidates, 3)).isEqualTo(FallbackDecider.PoolQuality.SUFFICIENT);
+        }
+
+        @Test
+        @DisplayName("attraction 수량은 충족해도 골프장/마구간/우물뿐이면 COMPACT")
+        void onlyLowValueAttractions_returnsCompact() {
+            List<PlaceCandidate> candidates = new ArrayList<>();
+            // 수량으로는 shouldFallback 통과(≥ days), 그러나 전부 저가치 시설
+            candidates.addAll(createCandidates(1, "Sports and Recreation > Golf > Golf Course", 2));
+            candidates.addAll(createCandidates(3, "Landmarks and Outdoors > Stable", 2));
+            candidates.addAll(createCandidates(5, "Landmarks and Outdoors > Well", 2));
+            candidates.addAll(createCandidates(7, CAT_RESTAURANT, 8));
+            candidates.addAll(createCandidates(15, CAT_LODGING, 3));
+            assertThat(decider.assess(candidates, 3)).isEqualTo(FallbackDecider.PoolQuality.COMPACT);
+        }
+
+        @Test
+        @DisplayName("구조적 최소치 미달이면 FALLBACK")
+        void structuralMinimumNotMet_returnsFallback() {
+            assertThat(decider.assess(List.of(), 3)).isEqualTo(FallbackDecider.PoolQuality.FALLBACK);
+        }
+    }
+
+    @Nested
     @DisplayName("shouldFallback - 엣지 케이스")
     class EdgeCaseTests {
 

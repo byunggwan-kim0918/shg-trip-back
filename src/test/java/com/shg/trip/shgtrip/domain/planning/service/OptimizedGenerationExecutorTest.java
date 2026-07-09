@@ -76,6 +76,8 @@ class OptimizedGenerationExecutorTest {
 
         lenient().when(indexResultMapper.fillMissingAccommodation(any(), any()))
                 .thenAnswer(i -> i.getArgument(0));
+        lenient().when(indexResultMapper.injectRequiredPlaces(any(), any()))
+                .thenAnswer(i -> i.getArgument(0));
 
         request = new ItineraryGenerateRequest(
                 ItineraryGenerateRequest.PlanningMode.AUTO,
@@ -88,7 +90,8 @@ class OptimizedGenerationExecutorTest {
                 LocalDate.of(2025, 7, 1),
                 LocalDate.of(2025, 7, 4),
                 "도쿄 여행",
-                null
+                null,
+        null  // customPlaceNames
         );
 
         emitter = new SseEmitter(300000L);
@@ -144,12 +147,12 @@ class OptimizedGenerationExecutorTest {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
-        when(fallbackDecider.shouldFallback(candidates, 4L)).thenReturn(false);
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
         when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any())).thenReturn(fixedSteps);
+        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean())).thenReturn(fixedSteps);
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
@@ -163,7 +166,7 @@ class OptimizedGenerationExecutorTest {
         verify(optimizedClaudeAIService).enrichInput(request);
         verify(vectorSearchQueryService).search(vectorEnrichedInput);
         verify(selectionCallGenerator).selectPlaces(eq(vectorEnrichedInput), anyList());
-        verify(routeOptimizer).repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any());
+        verify(routeOptimizer).repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean());
         verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true));
         verify(resultStore).save("job-1", 42L);
         verify(storyGenerationService).generateAndAttach(
@@ -192,7 +195,7 @@ class OptimizedGenerationExecutorTest {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
-        when(fallbackDecider.shouldFallback(candidates, 4L)).thenReturn(true);
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.FALLBACK);
 
         executor.execute("job-3", request, 1L, emitter);
 
@@ -207,12 +210,12 @@ class OptimizedGenerationExecutorTest {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
-        when(fallbackDecider.shouldFallback(candidates, 4L)).thenReturn(false);
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
         when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any())).thenReturn(fixedSteps);
+        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean())).thenReturn(fixedSteps);
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.fail("일부 검증 경고"));
@@ -258,12 +261,12 @@ class OptimizedGenerationExecutorTest {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
-        when(fallbackDecider.shouldFallback(candidates, 4L)).thenReturn(false);
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
         when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any())).thenReturn(fixedSteps);
+        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean())).thenReturn(fixedSteps);
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());

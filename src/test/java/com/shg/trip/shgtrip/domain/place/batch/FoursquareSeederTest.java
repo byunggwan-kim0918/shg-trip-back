@@ -150,7 +150,21 @@ class FoursquareSeederTest {
             assertThat(record.country()).isEqualTo("Japan");
             assertThat(record.region()).isEqualTo("Tokyo");
             assertThat(record.category()).isEqualTo("Temple");
-            assertThat(record.tags()).containsExactly("Temple", "관광", "사찰");
+            // 카테고리는 별도 컬럼에 있으므로 태그로 복사하지 않는다 (임베딩 텍스트 중복 방지)
+            assertThat(record.tags()).containsExactly("관광", "사찰");
+        }
+
+        @Test
+        @DisplayName("description이 URL이면 sourceUrl로 분리하고 description은 비운다")
+        void mapToRecord_urlDescriptionMovedToSourceUrl() {
+            String[] fields = {"fsq_url", "쉼표", "33.3953", "126.2419", "South Korea", "Jeju", "Cafe",
+                    "제주 한경면", "", "http://blog.naver.com/jejucomma"};
+
+            FoursquareSeeder.FoursquareRecord record = seeder.mapToRecord(fields, columnIndex);
+
+            assertThat(record).isNotNull();
+            assertThat(record.description()).isNull();
+            assertThat(record.sourceUrl()).isEqualTo("http://blog.naver.com/jejucomma");
         }
 
         @Test
@@ -241,31 +255,40 @@ class FoursquareSeederTest {
     class TagParsing {
 
         @Test
-        @DisplayName("세미콜론으로 구분된 태그를 파싱한다")
+        @DisplayName("세미콜론으로 구분된 태그를 파싱한다 (카테고리는 복사하지 않음)")
         void parseTags_semicolonDelimited() {
             List<String> tags = seeder.parseTags("관광;맛집;쇼핑", "Cafe");
-            assertThat(tags).containsExactly("Cafe", "관광", "맛집", "쇼핑");
+            assertThat(tags).containsExactly("관광", "맛집", "쇼핑");
         }
 
         @Test
         @DisplayName("쉼표로 구분된 태그를 파싱한다")
         void parseTags_commaDelimited() {
             List<String> tags = seeder.parseTags("sightseeing,food", "Restaurant");
-            assertThat(tags).containsExactly("Restaurant", "sightseeing", "food");
+            assertThat(tags).containsExactly("sightseeing", "food");
         }
 
         @Test
-        @DisplayName("태그가 null이면 카테고리만 포함한다")
+        @DisplayName("태그가 null이면 빈 목록을 반환한다 (한국어 태그는 enrich 배치가 채움)")
         void parseTags_null() {
             List<String> tags = seeder.parseTags(null, "Cafe");
-            assertThat(tags).containsExactly("Cafe");
+            assertThat(tags).isEmpty();
         }
 
         @Test
-        @DisplayName("카테고리가 이미 태그에 있으면 중복 추가하지 않는다")
+        @DisplayName("카테고리와 동일한 태그는 제외한다 (임베딩 텍스트 중복 방지)")
         void parseTags_categoryAlreadyPresent() {
             List<String> tags = seeder.parseTags("Cafe;커피", "Cafe");
-            assertThat(tags).containsExactly("Cafe", "커피");
+            assertThat(tags).containsExactly("커피");
+        }
+
+        @Test
+        @DisplayName("카테고리 경로('>' 포함)가 tags에 들어있으면 통째로 버린다 — 경로명 안의 쉼표로 파편 태그가 생기는 것 방지")
+        void parseTags_discardsCategoryPathTags() {
+            List<String> tags = seeder.parseTags(
+                    "Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop",
+                    "Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop");
+            assertThat(tags).isEmpty();
         }
     }
 
@@ -325,7 +348,8 @@ class FoursquareSeederTest {
                     eq("Tokyo"),
                     eq("Temple"),
                     anyString(),
-                    eq("유명 사찰")
+                    eq("유명 사찰"),
+                    isNull() // description이 URL이 아니므로 sourceUrl 없음
             );
         }
 
@@ -346,7 +370,7 @@ class FoursquareSeederTest {
             assertThat(result[0]).isEqualTo(1); // 중복 제거되어 1건만 처리
             verify(placeRepository, times(1)).upsertFoursquarePlace(
                     eq("fsq_same"), eq("7-Eleven"), anyString(), any(), any(),
-                    eq("Japan"), eq("Tokyo"), eq("Store"), anyString(), anyString());
+                    eq("Japan"), eq("Tokyo"), eq("Store"), anyString(), anyString(), any());
         }
     }
 
@@ -377,7 +401,7 @@ class FoursquareSeederTest {
             seeder.seed();
             verify(placeRepository, atLeastOnce()).upsertFoursquarePlace(
                     anyString(), anyString(), anyString(), any(), any(),
-                    anyString(), anyString(), anyString(), anyString(), anyString());
+                    anyString(), anyString(), anyString(), anyString(), anyString(), any());
         }
 
         @Test
@@ -388,7 +412,7 @@ class FoursquareSeederTest {
             seeder.seed();
             verify(placeRepository, never()).upsertFoursquarePlace(
                     any(), any(), any(), any(), any(),
-                    any(), any(), any(), any(), any());
+                    any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -398,7 +422,7 @@ class FoursquareSeederTest {
             seeder.seed();
             verify(placeRepository, never()).upsertFoursquarePlace(
                     any(), any(), any(), any(), any(),
-                    any(), any(), any(), any(), any());
+                    any(), any(), any(), any(), any(), any());
         }
     }
 }

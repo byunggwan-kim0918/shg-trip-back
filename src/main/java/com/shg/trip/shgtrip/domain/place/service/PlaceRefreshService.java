@@ -63,6 +63,7 @@ public class PlaceRefreshService {
                             null   // description: refresh 시엔 갱신 안 함 (임베딩 이미 생성됨, 프론트 미표시)
                     );
                     place.setSource("google");
+                    adoptKoreanName(place, detail);
                     if (detail.photoReference() != null) {
                         try {
                             placeImageUploader.uploadIfAbsent(placeId, detail.photoReference())
@@ -121,6 +122,24 @@ public class PlaceRefreshService {
     /** Google 응답 좌표가 (0,0) 파손 결과가 아닌지 — 정상 좌표를 (0,0)으로 덮어쓰는 것을 방지. */
     private boolean hasValidCoords(GooglePlaceDetail detail) {
         return detail.lat() != 0.0 || detail.lng() != 0.0;
+    }
+
+    /**
+     * Google(languageCode=ko)이 준 한글 공식 명칭을 채택한다 — 기존 이름이 비한글이고 Google
+     * 이름에 한글이 있을 때만(역방향 금지). Foursquare 원본에 영문/한자 이름만 있는 장소가
+     * 사용자에게 "南門食堂"처럼 노출되던 문제의 해소. 오매칭 방어는 place_id 직조회·좌표
+     * 근접 검색·isSimilarName 게이트가 이미 담당한다.
+     */
+    private void adoptKoreanName(Place place, GooglePlaceDetail detail) {
+        if (detail.name() == null || detail.name().isBlank()) return;
+        if (containsHangul(place.getName()) || !containsHangul(detail.name())) return;
+        log.info("Place {} 한글명 채택: '{}' → '{}'", place.getId(), place.getName(), detail.name());
+        place.updateName(detail.name().trim());
+    }
+
+    private boolean containsHangul(String s) {
+        return s != null && s.codePoints()
+                .anyMatch(cp -> Character.UnicodeScript.of(cp) == Character.UnicodeScript.HANGUL);
     }
 
     /**

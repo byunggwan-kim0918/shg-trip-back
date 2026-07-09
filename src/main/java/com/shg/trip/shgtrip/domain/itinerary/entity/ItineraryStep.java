@@ -119,4 +119,12 @@ public class ItineraryStep extends BaseTimeEntity {
     public void updateTransportationDistance(BigDecimal distance) {
         this.transportationDistance = distance;
     }
+
+    /** 교통 정보 일괄 업데이트 (대안 선택 시 거리·시간·비용·모드를 함께 재계산) */
+    public void updateTransportation(String mode, Integer durationMin, BigDecimal distanceKm, BigDecimal cost) {
+        this.transportationMode = mode;
+        this.transportationDuration = durationMin;
+        this.transportationDistance = distanceKm;
+        this.transportationCost = cost;
+    }
 }

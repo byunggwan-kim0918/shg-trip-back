@@ -162,6 +162,25 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      */
     Page<Place> findByEnrichedAtIsNullAndActiveTrue(Pageable pageable);
 
+    /** TourAPI 시딩 중복 방지 — 같은 지역에 같은 이름의 장소가 이미 있으면 삽입하지 않는다. */
+    boolean existsByNameAndRegion(String name, String region);
+
+    /**
+     * 지역 스코프 미보강 장소 페이징 조회 — 전량(수만 건) LLM 보강 비용을 통제하기 위해
+     * BATCH_ENRICH_REGIONS로 지역 단위(예: Jeju부터) 점진 실행할 때 사용.
+     */
+    Page<Place> findByEnrichedAtIsNullAndActiveTrueAndRegionIn(List<String> regions, Pageable pageable);
+
+    /**
+     * 보강 성공 장소의 임베딩을 초기화한다 — 임베딩 텍스트가 tags/description을 포함하므로
+     * 보강 내용이 벡터 검색에 반영되려면 재임베딩이 필요하다(embedding 컬럼은 updatable=false라
+     * 엔티티 flush로는 못 바꿈). NULL이 되면 다음 임베딩 배치가 자동으로 다시 잡는다.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = "UPDATE places SET embedding = NULL WHERE id IN (:ids)", nativeQuery = true)
+    int resetEmbeddings(@Param("ids") List<Long> ids);
+
     /**
      * 배치 시작 시각 이후 신규 등록된 장소 수 (inserted).
      * created_at >= since 이고 created_at = updated_at 이면 이번 배치에서 처음 생성된 row.
@@ -190,26 +209,35 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * Foursquare 시딩용 네이티브 upsert.
      * fsq_place_id(FSQ 전역 고유 ID) 충돌 시 메타데이터만 갱신하고 핵심 필드는 보존한다.
      * 주소가 없는 체인점도 지점별 fsq_place_id로 정확히 구분되며, 청크 간/동시성 중복을 DB가 처리한다.
+     *
+     * <p>enrich 배치가 채운 한국어 tags/description은 재시딩이 덮어쓰지 않는다
+     * (enriched_at IS NOT NULL 가드) — CSV의 tags는 카테고리 복사/파편이라 LLM 보강 결과보다
+     * 항상 저품질이다. name도 마찬가지 — Google 동기화(languageCode=ko)가 채택한 한글명을
+     * CSV의 영문명이 되돌리지 않도록 "기존 한글명 보존" CASE 가드를 둔다.
      */
     @Modifying
     @Transactional
     @Query(value = """
             INSERT INTO places
                 (fsq_place_id, name, address, latitude, longitude, country, region, category,
-                 tags, description, source, active, saved_at, created_at, updated_at)
+                 tags, description, source_url, source, active, saved_at, created_at, updated_at)
             VALUES
                 (:fsqPlaceId, :name, :address, :latitude, :longitude, :country, :region, :category,
-                 CAST(:tags AS TEXT[]), :description, 'foursquare', true, now(), now(), now())
+                 CAST(:tags AS TEXT[]), :description, :sourceUrl, 'foursquare', true, now(), now(), now())
             ON CONFLICT (fsq_place_id) DO UPDATE SET
-                name = EXCLUDED.name,
+                name = CASE WHEN places.name ~ '[가-힣]' THEN places.name
+                            ELSE EXCLUDED.name END,
                 address = EXCLUDED.address,
                 latitude = EXCLUDED.latitude,
                 longitude = EXCLUDED.longitude,
                 country = EXCLUDED.country,
                 region = EXCLUDED.region,
                 category = EXCLUDED.category,
-                tags = EXCLUDED.tags,
-                description = COALESCE(NULLIF(EXCLUDED.description, ''), places.description),
+                tags = CASE WHEN places.enriched_at IS NOT NULL THEN places.tags
+                            ELSE EXCLUDED.tags END,
+                description = CASE WHEN places.enriched_at IS NOT NULL THEN places.description
+                                   ELSE COALESCE(NULLIF(EXCLUDED.description, ''), places.description) END,
+                source_url = COALESCE(EXCLUDED.source_url, places.source_url),
                 source = 'foursquare',
                 saved_at = now(),
                 updated_at = now()
@@ -224,6 +252,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             @Param("region") String region,
             @Param("category") String category,
             @Param("tags") String tags,
-            @Param("description") String description
+            @Param("description") String description,
+            @Param("sourceUrl") String sourceUrl
     );
 }

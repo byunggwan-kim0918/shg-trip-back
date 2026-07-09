@@ -123,7 +123,8 @@ class TravelPlannerServiceTest {
                 LocalDate.of(2025, 7, 1),
                 LocalDate.of(2025, 7, 3),
                 null,
-                null
+                null,
+        null  // customPlaceNames
         );
     }
 }

@@ -92,6 +92,14 @@ public class Place extends BaseTimeEntity {
     @JdbcTypeCode(SqlTypes.ARRAY)
     private List<String> recommendedTimeSlots;
 
+    /** 권장 체류시간(분, 배치 보강으로 생성) — 등산형 오름(150~240)과 해변 산책(60)을 구분 */
+    @Column(name = "recommended_duration_minutes")
+    private Integer recommendedDurationMinutes;
+
+    /** 입장료(원, 배치 보강으로 생성) — 무료 명소는 0, 유료는 실제 입장료. 관광지 비용 산정용 */
+    @Column(name = "admission_fee")
+    private Integer admissionFee;
+
     /** 배치 보강 완료 시각 */
     @Column(name = "enriched_at")
     private OffsetDateTime enrichedAt;
@@ -188,9 +196,23 @@ public class Place extends BaseTimeEntity {
     }
 
     /**
-     * Anthropic Batch API 보강 결과를 반영한다.
+     * Anthropic Batch API 보강 결과를 반영한다. (기존 호환 — 체류시간·입장료 없이)
      */
     public void enrichWith(List<String> newTags, String newDescription, List<String> newTimeSlots) {
+        enrichWith(newTags, newDescription, newTimeSlots, null, null);
+    }
+
+    /** 기존 호환 — 입장료 없이. */
+    public void enrichWith(List<String> newTags, String newDescription, List<String> newTimeSlots,
+                           Integer durationMinutes) {
+        enrichWith(newTags, newDescription, newTimeSlots, durationMinutes, null);
+    }
+
+    /**
+     * Anthropic Batch API 보강 결과를 반영한다.
+     */
+    public void enrichWith(List<String> newTags, String newDescription, List<String> newTimeSlots,
+                           Integer durationMinutes, Integer admissionFeeWon) {
         if (newTags != null && !newTags.isEmpty()) {
             this.tags = new java.util.ArrayList<>(newTags);
         }
@@ -200,7 +222,24 @@ public class Place extends BaseTimeEntity {
         if (newTimeSlots != null && !newTimeSlots.isEmpty()) {
             this.recommendedTimeSlots = new java.util.ArrayList<>(newTimeSlots);
         }
+        if (durationMinutes != null && durationMinutes > 0) {
+            this.recommendedDurationMinutes = durationMinutes;
+        }
+        // 입장료는 0(무료)도 유효값이라 null만 스킵 — "무료"와 "미보강"을 구분한다.
+        if (admissionFeeWon != null && admissionFeeWon >= 0) {
+            this.admissionFee = admissionFeeWon;
+        }
         this.enrichedAt = OffsetDateTime.now();
+    }
+
+    /**
+     * 장소명을 갱신한다 — Google Places(languageCode=ko)가 준 한글 공식 명칭 채택 전용.
+     * 호출부(PlaceRefreshService)가 "기존 이름 비한글 && 새 이름 한글" 방향만 허용한다.
+     */
+    public void updateName(String newName) {
+        if (newName != null && !newName.isBlank()) {
+            this.name = newName;
+        }
     }
 
     /**

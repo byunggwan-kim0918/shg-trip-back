@@ -54,7 +54,8 @@ class OptimizedClaudeAIServiceTest {
                 LocalDate.of(2026, 8, 1),
                 LocalDate.of(2026, 8, 3),
                 "도쿄 여행",
-                null
+                null,
+        null  // customPlaceNames
         );
     }
 

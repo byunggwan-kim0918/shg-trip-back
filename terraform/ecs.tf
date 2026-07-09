@@ -115,6 +115,10 @@ resource "aws_ecs_task_definition" "batch" {
       { name = "AWS_REGION", value = var.aws_region },
       # GooglePlaceSyncScheduler(@Profile("batch"))가 이미지 업로드 시 정적 URL 생성에 사용
       { name = "CLOUDFRONT_DOMAIN", value = aws_cloudfront_distribution.images.domain_name },
+      # 운영 배치는 임베딩 전 LLM enrich(태그·설명·체류시간·입장료)를 항상 수행한다.
+      # 로컬은 이 task 정의를 안 쓰므로 기본값 false 유지 → enrich 없이 적재.
+      # 대상은 enriched_at IS NULL인 장소라 신규 유입분만 매 실행 보강된다(1회성 아님, 증분).
+      { name = "BATCH_ENRICH_ENABLED", value = "true" },
     ]
 
     # 배치 프로필은 spring.config.import 미사용 → 개별 환경변수로 시크릿 주입 필요

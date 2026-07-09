@@ -38,7 +38,6 @@ public class BatchEnrichScheduler {
     private static final int MAX_RETRIES = 3;
     private static final long POLL_INTERVAL_MS = 10_000; // 10초
     private static final long MAX_POLL_DURATION_MS = 3_600_000; // 1시간
-    private static final String ENRICH_MODEL = "claude-sonnet-4-20250514";
 
     private final PlaceRepository placeRepository;
     private final ObjectMapper objectMapper;
@@ -49,6 +48,21 @@ public class BatchEnrichScheduler {
 
     @Value("${batch.enrich.chunk-size:1000}")
     private int chunkSize;
+
+    /**
+     * 보강용 모델. 기존엔 "claude-sonnet-4-20250514" 하드코딩 상수였는데 모델이 은퇴되면서
+     * 전건 not_found_error로 실패했고(실측 484/484), yml의 anthropic.batch.model 설정은
+     * 코드가 읽지 않는 설정 표류 상태였다. 설정으로 일원화 — 태그/설명 생성은 Haiku 4.5로 충분.
+     */
+    @Value("${anthropic.batch.model:claude-haiku-4-5-20251001}")
+    private String enrichModel;
+
+    /**
+     * 지역 스코프(쉼표 구분, 예: "Jeju,Gangneung"). 비어 있으면 전체 대상.
+     * 전량(수만 건) LLM 보강은 비용이 커서 관광지 데이터가 빈약한 지역부터 점진 실행한다.
+     */
+    @Value("${batch.enrich.regions:}")
+    private String enrichRegions;
 
     public BatchEnrichScheduler(PlaceRepository placeRepository, ObjectMapper objectMapper) {
         this.placeRepository = placeRepository;
@@ -78,15 +92,19 @@ public class BatchEnrichScheduler {
             return;
         }
 
-        log.info("BatchEnrichScheduler 시작 - chunkSize={}", chunkSize);
+        List<String> regions = parseRegions();
+        log.info("BatchEnrichScheduler 시작 - chunkSize={}, regions={}",
+                chunkSize, regions.isEmpty() ? "전체" : regions);
 
         int totalProcessed = 0;
         int totalFailed = 0;
         Set<Long> excludedIds = new HashSet<>();
 
         while (true) {
-            Page<Place> page = placeRepository.findByEnrichedAtIsNullAndActiveTrue(
-                    PageRequest.of(0, chunkSize));
+            Page<Place> page = regions.isEmpty()
+                    ? placeRepository.findByEnrichedAtIsNullAndActiveTrue(PageRequest.of(0, chunkSize))
+                    : placeRepository.findByEnrichedAtIsNullAndActiveTrueAndRegionIn(
+                            regions, PageRequest.of(0, chunkSize));
 
             if (page.isEmpty()) {
                 break;
@@ -110,6 +128,14 @@ public class BatchEnrichScheduler {
         }
 
         log.info("BatchEnrichScheduler 완료 - 보강 성공: {}건, 실패: {}건", totalProcessed, totalFailed);
+    }
+
+    private List<String> parseRegions() {
+        if (enrichRegions == null || enrichRegions.isBlank()) return List.of();
+        return Arrays.stream(enrichRegions.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
     }
 
     /**
@@ -161,7 +187,7 @@ public class BatchEnrichScheduler {
             Map<String, Object> request = Map.of(
                     "custom_id", "place_" + place.getId(),
                     "params", Map.of(
-                            "model", ENRICH_MODEL,
+                            "model", enrichModel,
                             "max_tokens", 1024,
                             "messages", List.of(
                                     Map.of("role", "user", "content", prompt)
@@ -197,9 +223,14 @@ public class BatchEnrichScheduler {
         sb.append("{\n");
         sb.append("  \"tags\": [\"태그1\", \"태그2\", ...],  // 5~10개 관련 태그 (한국어)\n");
         sb.append("  \"description\": \"장소에 대한 2~3문장 설명 (한국어)\",\n");
-        sb.append("  \"recommended_time_slots\": [\"morning\", \"afternoon\", \"evening\"]  // 추천 방문 시간대\n");
+        sb.append("  \"recommended_time_slots\": [\"morning\", \"afternoon\", \"evening\"],  // 추천 방문 시간대\n");
+        sb.append("  \"recommended_duration_minutes\": 90,  // 평균 체류시간(분, 정수)\n");
+        sb.append("  \"admission_fee\": 0  // 입장료(원, 정수). 무료면 0, 유료면 성인 1인 기준 실제 입장료\n");
         sb.append("}\n");
         sb.append("\n추천 시간대는 다음 중에서 선택: morning, afternoon, evening, night, all_day");
+        sb.append("\n체류시간 가이드: 등산·오름·트레킹 150~240 / 해변·시장 60 / 박물관·미술관 90 / 카페 60 / 식당 70");
+        sb.append("\n입장료 가이드: 오름·해변·포구·공원·산책로 등 자연 명소는 대부분 0(무료). "
+                + "성산일출봉 5000, 산방산 1000처럼 관리되는 유료 명소만 실제 금액. 식당·카페·숙소는 0.");
         return sb.toString();
     }
 
@@ -367,6 +398,7 @@ public class BatchEnrichScheduler {
             int success = 0;
             int failed = 0;
             List<Long> failedIds = new ArrayList<>();
+            List<Long> succeededIds = new ArrayList<>();
 
             // JSONL 형식으로 한 줄씩 처리
             String[] lines = response.body().split("\n");
@@ -407,6 +439,7 @@ public class BatchEnrichScheduler {
                     // JSON 파싱 및 장소 보강
                     if (applyEnrichment(place, content)) {
                         placeRepository.save(place);
+                        succeededIds.add(placeId);
                         success++;
                     } else {
                         failed++;
@@ -417,6 +450,12 @@ public class BatchEnrichScheduler {
                     log.warn("결과 행 처리 중 오류: {}", e.getMessage());
                     failed++;
                 }
+            }
+
+            // 보강 성공분은 임베딩을 초기화해 다음 임베딩 단계가 새 tags/description으로
+            // 재임베딩하게 한다(embedding 컬럼은 updatable=false라 save()로는 반영 불가).
+            if (!succeededIds.isEmpty()) {
+                placeRepository.resetEmbeddings(succeededIds);
             }
 
             log.info("배치 결과 처리 완료 - 성공: {}건, 실패: {}건", success, failed);
@@ -485,7 +524,21 @@ public class BatchEnrichScheduler {
                 }
             }
 
-            place.enrichWith(tags, description, timeSlots);
+            Integer durationMinutes = null;
+            JsonNode durationNode = root.get("recommended_duration_minutes");
+            if (durationNode != null && durationNode.canConvertToInt()) {
+                int parsed = durationNode.asInt();
+                if (parsed > 0) durationMinutes = parsed;
+            }
+
+            Integer admissionFee = null;
+            JsonNode feeNode = root.get("admission_fee");
+            if (feeNode != null && feeNode.canConvertToInt()) {
+                int parsed = feeNode.asInt();
+                if (parsed >= 0) admissionFee = parsed; // 0(무료)도 유효값
+            }
+
+            place.enrichWith(tags, description, timeSlots, durationMinutes, admissionFee);
             return true;
 
         } catch (Exception e) {
