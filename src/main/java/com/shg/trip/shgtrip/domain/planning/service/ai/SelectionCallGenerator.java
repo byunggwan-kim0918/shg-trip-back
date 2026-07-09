@@ -165,7 +165,12 @@ public class SelectionCallGenerator {
 
         sb.append("\n## 후보 장소 목록 (").append(candidates.size()).append("개)\n");
         sb.append("형식: ID | 이름 | 카테고리 | 평점 | #태그 | 지역\n");
+        boolean hasUserSelected = false;
         for (PlaceCandidate candidate : candidates) {
+            if (candidate.userSelected()) {
+                sb.append("★");
+                hasUserSelected = true;
+            }
             sb.append(candidate.index()).append(" | ")
                     .append(candidate.name()).append(" | ")
                     .append(summarizeCategory(candidate.category())).append(" | ")
@@ -173,6 +178,12 @@ public class SelectionCallGenerator {
                     .append(formatTags(candidate.tags())).append(" | ")
                     .append(candidate.region() != null ? candidate.region() : "")
                     .append("\n");
+        }
+
+        if (hasUserSelected) {
+            sb.append("\n★ 표시된 후보는 사용자가 직접 선택한 **필수 방문 장소**입니다. ")
+                    .append("숙소(LODGING)면 accommodationIndex로, 그 외에는 반드시 어느 날의 placeIndices에 포함하고 ")
+                    .append("spareIndices에 넣지 마세요. 동선이 다소 불리해도 포함이 우선입니다.\n");
         }
 
         sb.append("\nconcept을 먼저 정의한 뒤, select_places 도구를 호출하여 날짜별 장소를 선택하세요.\n");

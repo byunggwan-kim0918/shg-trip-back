@@ -193,6 +193,15 @@ public class ItineraryService {
         }
     }
 
+    // 한 destination 내 하루 이동으로는 비현실적인 구간거리 임계값(RouteOptimizer와 동일).
+    private static final double MAX_REASONABLE_LEG_KM = 200.0;
+
+    /**
+     * 대안 선택으로 장소가 바뀐 스텝의 교통 정보를 재계산한다. 거리뿐 아니라 시간·비용·모드를
+     * RouteOptimizer 생성 경로와 동일한 공식({@link GeoUtils#estimateLeg})으로 함께 갱신해야
+     * 프론트 예산 합산(장소비+이동비)이 어긋나지 않는다(대안 선택 후 거리는 새 장소·비용은 옛
+     * 장소로 어긋나던 버그). transportPref는 저장돼 있지 않아 기본 "any"(혼합 단가)로 재계산한다.
+     */
     private void updateDistance(ItineraryStep from, ItineraryStep to) {
         Place fromPlace = from.getPlace();
         Place toPlace = to.getPlace();
@@ -201,13 +210,14 @@ public class ItineraryService {
         if (GeoUtils.isZeroCoord(fromPlace.getLatitude(), fromPlace.getLongitude())
                 || GeoUtils.isZeroCoord(toPlace.getLatitude(), toPlace.getLongitude())) return;
 
-        double dist = GeoUtils.haversine(
-                fromPlace.getLatitude().doubleValue(), fromPlace.getLongitude().doubleValue(),
-                toPlace.getLatitude().doubleValue(), toPlace.getLongitude().doubleValue()
-        );
-        to.updateTransportationDistance(BigDecimal.valueOf(dist).setScale(2, RoundingMode.HALF_UP));
-        log.debug("Recalculated distance: {} → {} = {}km", fromPlace.getName(), toPlace.getName(),
-                String.format("%.2f", dist));
+        GeoUtils.TransportLeg leg = GeoUtils.estimateLeg(
+                new double[]{fromPlace.getLatitude().doubleValue(), fromPlace.getLongitude().doubleValue()},
+                new double[]{toPlace.getLatitude().doubleValue(), toPlace.getLongitude().doubleValue()},
+                "any", MAX_REASONABLE_LEG_KM);
+        if (leg == null) return; // 비현실 구간 — 기존 교통정보 유지
+        to.updateTransportation(leg.mode(), leg.durationMin(), leg.distanceKm(), leg.cost());
+        log.debug("Recalculated transport: {} → {} = {}km, {}원", fromPlace.getName(), toPlace.getName(),
+                leg.distanceKm(), leg.cost());
     }
 
     private Itinerary findAndVerifyOwner(Long itineraryId, Long userId) {

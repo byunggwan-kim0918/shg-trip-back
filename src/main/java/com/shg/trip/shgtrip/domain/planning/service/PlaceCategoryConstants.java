@@ -20,6 +20,22 @@ public final class PlaceCategoryConstants {
             "역", "공항", "터미널", "항구", "airport", "station", "terminal", "port"
     );
 
+    /**
+     * 허브 본체가 아닌 부속 시설 POI 신호. Foursquare에 "Immigration Check"/"Check-in
+     * Counters"/"주차장" 같은 하위 POI가 공항과 같은 카테고리로 섞여 있어, 도착/출발 허브로
+     * 쓰이면 일정 첫 스텝이 "출입국심사대"가 되는 사고가 난다.
+     */
+    private static final Set<String> HUB_SUB_FACILITY_KEYWORDS = Set.of(
+            "immigration", "check-in", "checkin", "security", "gate", "counter",
+            "baggage", "lounge", "parking", "주차", "수하물", "출입국", "심사", "탑승구"
+    );
+
+    /** 야간 방문이 부적합한 야외/주간 성격 카테고리 신호 (일몰 전 버킷에만 배치). */
+    private static final Set<String> DAYTIME_OUTDOOR_KEYWORDS = Set.of(
+            "beach", "golf", "trail", "hiking", "garden", "farm", "stable",
+            "well", "campground", "scenic", "mountain", "island", "waterfall"
+    );
+
     public static boolean isAccommodation(String category) {
         if (category == null) return false;
         String lower = category.toLowerCase();
@@ -41,6 +57,44 @@ public final class PlaceCategoryConstants {
         if (name == null) return false;
         String lower = name.toLowerCase();
         return TRANSIT_HUB_KEYWORDS.stream().anyMatch(lower::contains);
+    }
+
+    /** 허브 카테고리이지만 본체가 아닌 부속 시설(심사대/체크인/주차 등)인지 판정. */
+    public static boolean isHubSubFacility(String name) {
+        if (name == null) return false;
+        String lower = name.toLowerCase();
+        return HUB_SUB_FACILITY_KEYWORDS.stream().anyMatch(lower::contains);
+    }
+
+    /**
+     * Bar 계열(맥주바/펍/와인바 등) 판정. 대분류는 DINING이지만 식사 슬롯(특히 점심)에
+     * 배치되면 부적합하므로 scheduleDay에서 식사가 아닌 저녁 활동으로 다룬다.
+     */
+    public static boolean isBar(String category) {
+        if (category == null) return false;
+        String lower = category.toLowerCase();
+        return lower.contains("> bar") || lower.contains("nightlife")
+                || lower.endsWith("bar") || lower.contains("pub");
+    }
+
+    /**
+     * 카테고리 기반 체류시간 휴리스틱(분) — enrich 권장 체류시간이 없을 때의 폴백.
+     * 등산·트레킹류는 길게, 해변·시장은 짧게, 그 외 관광지는 기존 90분 유지.
+     */
+    public static int heuristicVisitMinutes(String category) {
+        if (category == null) return 90;
+        String lower = category.toLowerCase();
+        if (lower.contains("hiking") || lower.contains("trail") || lower.contains("mountain")) return 150;
+        if (lower.contains("beach") || lower.contains("market")) return 60;
+        return 90;
+    }
+
+    /** 야간 방문이 부적합한 야외/주간 성격 장소인지 판정(해변/골프/등산로 등). */
+    public static boolean isDaytimeOutdoor(String category) {
+        if (category == null) return false;
+        String lower = category.toLowerCase();
+        if (!"ATTRACTION".equals(majorCategory(category))) return false;
+        return DAYTIME_OUTDOOR_KEYWORDS.stream().anyMatch(lower::contains);
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.planning.dto.*;
+import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -138,7 +139,133 @@ public class IndexResultMapper {
             }
         }
 
-        return new SelectionOutput(selection.concept(), fixedDays, selection.pairs(), selection.spareIndices());
+        // 4-인자 생성자는 highlight/rest를 빈 리스트로 만들어 Sonnet의 서사 가중치를 유실한다 — 보존.
+        return new SelectionOutput(selection.concept(), fixedDays, selection.pairs(),
+                selection.spareIndices(), selection.highlightIndices(), selection.restIndices());
+    }
+
+    /**
+     * 사용자 필수 방문 장소(userSelected)가 Sonnet 출력에서 누락된 경우 결정론적으로 주입한다
+     * (LLM 재호출 없음). 프롬프트의 ★ 지시는 강한 힌트일 뿐 보장이 아니므로 코드가 최종 보증한다.
+     * <ul>
+     *   <li>일반 장소: 어느 day의 placeIndices에도 없으면 spare에서 제거하고, day 장소들의
+     *       centroid가 가장 가까운 day에 append (좌표 불명이면 장소 수가 가장 적은 day)</li>
+     *   <li>LODGING: 어느 day의 accommodationIndex도 아니면 첫 day의 숙소로 교체
+     *       (≤3일 여행은 repairAccommodationContinuity가 전 일정으로 전파)</li>
+     *   <li>TRANSIT_HUB: 방문 개념이 아니므로 제외</li>
+     * </ul>
+     */
+    public SelectionOutput injectRequiredPlaces(SelectionOutput selection, List<PlaceCandidate> allCandidates) {
+        if (selection == null || selection.days() == null || selection.days().isEmpty()) {
+            return selection;
+        }
+        List<PlaceCandidate> required = allCandidates.stream()
+                .filter(PlaceCandidate::userSelected)
+                .filter(c -> !"TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category())))
+                .toList();
+        if (required.isEmpty()) return selection;
+
+        List<SelectionOutput.DayPlan> days = new ArrayList<>();
+        for (SelectionOutput.DayPlan d : selection.days()) {
+            days.add(new SelectionOutput.DayPlan(d.dayNumber(), d.arrivalHubIndex(),
+                    new ArrayList<>(d.placeIndices() != null ? d.placeIndices() : List.of()),
+                    d.accommodationIndex(), d.departureHubIndex()));
+        }
+        List<Integer> spare = new ArrayList<>(
+                selection.spareIndices() != null ? selection.spareIndices() : List.of());
+
+        for (PlaceCandidate cand : required) {
+            int idx = cand.index();
+            boolean isLodging = "LODGING".equals(PlaceCategoryConstants.majorCategory(cand.category()));
+
+            if (isLodging) {
+                boolean usedAsAccommodation = days.stream()
+                        .anyMatch(d -> Integer.valueOf(idx).equals(d.accommodationIndex()));
+                if (!usedAsAccommodation) {
+                    // 마지막날(귀가일, accommodationIndex=null)을 제외한 모든 날의 숙소를 사용자
+                    // 필수 숙소로 교체한다. 첫날만 바꾸면 4일+ 여행에서 나머지 날이 다른 숙소로
+                    // 남는다(repairAccommodationContinuity는 ≤3일만 전파). 밀려난 원래 숙소
+                    // 인덱스는 spare로 회수해 대안·트림에서 계속 활용되게 한다(후보 누수 방지).
+                    Set<Integer> displaced = new HashSet<>();
+                    for (int i = 0; i < days.size(); i++) {
+                        SelectionOutput.DayPlan d = days.get(i);
+                        if (d.accommodationIndex() == null) continue; // 귀가일
+                        if (Integer.valueOf(idx).equals(d.accommodationIndex())) continue;
+                        displaced.add(d.accommodationIndex());
+                        days.set(i, new SelectionOutput.DayPlan(d.dayNumber(), d.arrivalHubIndex(),
+                                d.placeIndices(), idx, d.departureHubIndex()));
+                    }
+                    spare.remove(Integer.valueOf(idx));
+                    // 다른 어디에도 안 쓰인 원래 숙소만 spare로 회수
+                    Set<Integer> stillUsed = collectAllUsedIndices(
+                            new SelectionOutput(selection.concept(), days, selection.pairs(), spare));
+                    for (Integer old : displaced) {
+                        if (!stillUsed.contains(old) && !spare.contains(old)) spare.add(old);
+                    }
+                    log.warn("사용자 필수 숙소 누락 → 전 일정 숙소로 교체 주입: index={} ({})", idx, cand.name());
+                }
+                continue;
+            }
+
+            boolean included = days.stream().anyMatch(d -> d.placeIndices().contains(idx));
+            if (included) {
+                spare.remove(Integer.valueOf(idx)); // 메인·spare 중복 기재 정리
+                continue;
+            }
+
+            SelectionOutput.DayPlan target = pickNearestDay(days, allCandidates, cand);
+            target.placeIndices().add(idx);
+            spare.remove(Integer.valueOf(idx));
+            log.warn("사용자 필수 장소 누락 → day={}에 주입: index={} ({})",
+                    target.dayNumber(), idx, cand.name());
+        }
+
+        return new SelectionOutput(selection.concept(), days, selection.pairs(), spare,
+                selection.highlightIndices(), selection.restIndices());
+    }
+
+    /** 필수 장소와 day centroid가 가장 가까운 day. 좌표 불명이면 장소 수가 가장 적은 day. */
+    private SelectionOutput.DayPlan pickNearestDay(List<SelectionOutput.DayPlan> days,
+                                                   List<PlaceCandidate> allCandidates,
+                                                   PlaceCandidate cand) {
+        double[] target = coordsOf(cand);
+        if (target != null) {
+            SelectionOutput.DayPlan best = null;
+            double bestDist = Double.MAX_VALUE;
+            for (SelectionOutput.DayPlan d : days) {
+                double[] centroid = centroidOf(d.placeIndices(), allCandidates);
+                if (centroid == null) continue;
+                double dist = GeoUtils.haversine(centroid, target);
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    best = d;
+                }
+            }
+            if (best != null) return best;
+        }
+        return days.stream()
+                .min(Comparator.comparingInt(d -> d.placeIndices().size()))
+                .orElse(days.get(0));
+    }
+
+    private double[] coordsOf(PlaceCandidate c) {
+        if (c == null || c.latitude() == null || c.longitude() == null) return null;
+        if (c.latitude().signum() == 0 && c.longitude().signum() == 0) return null;
+        return new double[]{c.latitude().doubleValue(), c.longitude().doubleValue()};
+    }
+
+    private double[] centroidOf(List<Integer> indices, List<PlaceCandidate> allCandidates) {
+        double lat = 0, lng = 0;
+        int n = 0;
+        for (Integer idx : indices) {
+            if (idx == null || idx < 1 || idx > allCandidates.size()) continue;
+            double[] coord = coordsOf(allCandidates.get(idx - 1)); // index는 1-based 위치(byIndex 규약)
+            if (coord == null) continue;
+            lat += coord[0];
+            lng += coord[1];
+            n++;
+        }
+        return n == 0 ? null : new double[]{lat / n, lng / n};
     }
 
     private Set<Integer> collectAllUsedIndices(SelectionOutput selection) {

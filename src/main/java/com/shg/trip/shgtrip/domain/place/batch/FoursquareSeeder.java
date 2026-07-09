@@ -70,7 +70,7 @@ public class FoursquareSeeder {
     public record FoursquareRecord(
             String fsqPlaceId, String name, BigDecimal latitude, BigDecimal longitude,
             String country, String region, String category,
-            String address, List<String> tags, String description
+            String address, List<String> tags, String description, String sourceUrl
     ) {}
 
     public void seed() {
@@ -182,7 +182,8 @@ public class FoursquareSeeder {
                     record.region(),
                     record.category(),
                     toPostgresArray(record.tags()),
-                    record.description() != null ? record.description() : ""
+                    record.description() != null ? record.description() : "",
+                    record.sourceUrl()
             );
             processed++;
         }
@@ -244,9 +245,17 @@ public class FoursquareSeeder {
         String description = getField(fields, columnIndex, "description");
         List<String> tags = parseTags(tagsRaw, category);
 
+        // CSV의 description 필드에는 실제 설명이 아니라 웹사이트 URL이 들어있는 경우가 흔하다
+        // (실측 1.7만 건). URL은 임베딩 텍스트에 노이즈이므로 source_url로 분리 저장한다.
+        String sourceUrl = null;
+        if (description != null && description.trim().matches("(?i)^https?://\\S+$")) {
+            sourceUrl = description.trim();
+            description = null;
+        }
+
         return new FoursquareRecord(fsqPlaceId.trim(), name.trim(), latitude, longitude,
                 country.trim(), truncate(region.trim(), 255), truncate(category.trim(), 255),
-                address != null ? address.trim() : null, tags, description);
+                address != null ? address.trim() : null, tags, description, sourceUrl);
     }
 
     private String truncate(String value, int maxLength) {
@@ -254,16 +263,26 @@ public class FoursquareSeeder {
         return value.length() > maxLength ? value.substring(0, maxLength) : value;
     }
 
+    /**
+     * CSV tags 필드에서 유의미한 태그만 추출한다.
+     *
+     * <p>기존 구현은 ① category 경로를 태그로 통째 복사하고(임베딩 텍스트에 같은 내용이 2번
+     * 들어감) ② 경로명 안의 쉼표("Cafe, Coffee, and Tea House")를 구분자로 오인해 "Coffee",
+     * "and Tea House" 같은 파편 태그를 만들었다(실측 3,311행 — 유의미한 태그는 0건).
+     * category는 별도 컬럼에 이미 있으므로 복사하지 않고, '>'가 포함된 tagsRaw는 카테고리
+     * 경로의 나열이므로 통째로 버린다. 한국어 의미 태그는 enrich 배치가 채운다.
+     */
     public List<String> parseTags(String tagsRaw, String category) {
         List<String> result = new ArrayList<>();
-        if (category != null && !category.isBlank()) result.add(category.trim());
-
         if (tagsRaw == null || tagsRaw.isBlank()) return result;
+        if (tagsRaw.contains(">")) return result;
 
         String delimiter = tagsRaw.contains(";") ? ";" : ",";
         for (String part : tagsRaw.split(delimiter)) {
             String trimmed = part.trim();
-            if (!trimmed.isEmpty() && !result.contains(trimmed)) result.add(trimmed);
+            if (!trimmed.isEmpty() && !trimmed.equalsIgnoreCase(category) && !result.contains(trimmed)) {
+                result.add(trimmed);
+            }
         }
         return result;
     }

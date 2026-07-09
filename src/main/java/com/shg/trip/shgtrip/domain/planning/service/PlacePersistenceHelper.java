@@ -29,4 +29,20 @@ public class PlacePersistenceHelper {
     public Place updateAndSave(Place place) {
         return placeRepository.save(place);
     }
+
+    /**
+     * (name, address)로 기존 Place를 찾고 없으면 저장한다. 독립 트랜잭션(REQUIRES_NEW)으로
+     * 실행해 부모(@Async 생성 파이프라인, 논트랜잭션)와 분리하고, 동시 요청이 같은 자유입력
+     * 장소를 넣는 경합에서 (name,address) 유니크 위반은 재조회로 멱등 복구한다.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Place findOrCreate(String name, String address, java.util.function.Supplier<Place> factory) {
+        java.util.Optional<Place> existing = placeRepository.findByNameAndAddress(name, address);
+        if (existing.isPresent()) return existing.get();
+        try {
+            return placeRepository.save(factory.get());
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            return placeRepository.findByNameAndAddress(name, address).orElseThrow(() -> e);
+        }
+    }
 }
