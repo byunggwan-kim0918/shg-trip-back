@@ -78,6 +78,25 @@ public class ItineraryController {
         return ApiResponse.success(itineraryService.selectAlternative(id, stepId, request.alternativeId(), principal.id()));
     }
 
+    @PatchMapping("/{id}/steps/reorder")
+    public ApiResponse<ItineraryResponse> reorderSteps(
+            @PathVariable Long id,
+            @Valid @RequestBody StepReorderRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        verifyPrincipal(principal);
+        return ApiResponse.success(
+                itineraryService.reorderSteps(id, principal.id(), request.dayNumber(), request.orderedStepIds()));
+    }
+
+    @DeleteMapping("/{id}/steps/{stepId}")
+    public ApiResponse<ItineraryResponse> deleteStep(
+            @PathVariable Long id,
+            @PathVariable Long stepId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        verifyPrincipal(principal);
+        return ApiResponse.success(itineraryService.deleteStep(id, principal.id(), stepId));
+    }
+
     @PostMapping("/{id}/share")
     public ApiResponse<ShareLinkResponse> generateShareLink(
             @PathVariable Long id,

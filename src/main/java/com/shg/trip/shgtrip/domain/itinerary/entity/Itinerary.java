@@ -79,6 +79,11 @@ public class Itinerary extends BaseTimeEntity {
         step.setItinerary(this);
     }
 
+    /** 스텝 제거 (orphanRemoval=true 이므로 컬렉션에서 빼면 DELETE 된다). */
+    public void removeStep(ItineraryStep step) {
+        steps.remove(step);
+    }
+
     public void softDelete() {
         this.deletedAt = OffsetDateTime.now();
     }

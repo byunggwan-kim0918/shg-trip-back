@@ -115,6 +115,11 @@ public class ItineraryStep extends BaseTimeEntity {
         }
     }
 
+    /** 스텝 순서 재배정 (드래그 재정렬·삭제 후 재정렬용). 시간(startTime/endTime)은 자리 고정이므로 건드리지 않는다. */
+    public void assignOrder(int order) {
+        this.stepOrder = order;
+    }
+
     /** 교통 거리 업데이트 (대안 선택 시 재계산용) */
     public void updateTransportationDistance(BigDecimal distance) {
         this.transportationDistance = distance;
