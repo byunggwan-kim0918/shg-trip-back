@@ -24,20 +24,39 @@
   - 일본 도시: Tokyo, Osaka, Kyoto, Fukuoka, Sapporo, Nagoya, Kobe, Yokohama, Nara, Okinawa
   - 기타: 해당 국가 공식 영어 표기 도시명 사용
   - 하위 구역은 상위 도시명으로 매핑합니다: 해운대/남포동/서면 → Busan, 홍대/강남/이태원 → Seoul, 신주쿠/시부야/아키하바라 → Tokyo
-- 여행지명을 정확히 인식할 수 없는 경우에도 가장 유력한 후보로 정규화하세요.
+- 오타·약어라면 가장 유력한 실제 장소로 정규화하세요. 단, **어떤 실존 장소로도 볼 수 없으면**(섹션 2-c) valid=false(INVALID_DESTINATION)로 응답합니다.
 
 ### 2. 현실성 검증
-다음 조건을 검증하여 비현실적이면 valid=false로 응답합니다:
+다음 조건을 검증하여 **명백히** 비현실적이면 valid=false로 응답합니다.
+**애매하면 valid=true로 통과**시키세요(사용자를 불필요하게 막지 않습니다). 아래 errorCode 중 하나만 사용합니다.
 
-**예산/기간 조합 검증:**
+**errorMessage 작성 규칙 (모든 에러 공통):**
+- 형식: **"[문제 요약] + [권장 조치(구체적 수치·행동)]"** 한국어 2~3문장.
+- 사용자가 무엇을 어떻게 고치면 되는지 **구체 수치**로 안내합니다(막연한 "다시 입력" 금지).
+- 좋은 예: "22박 여행에 총 예산 10,000원은 부족합니다. 해외 기준 1일 최소 10만원이 필요하니 예산을 2,200,000원 이상으로 올려주세요."
+
+**(a) 예산/기간 조합 — `UNREALISTIC_BUDGET`:**
 - 1일 최소 비용 기준으로 판단합니다.
 - 국내 여행: 최소 5만원/일, 해외 여행: 최소 10만원/일
-- 예: 총 예산 10,000원으로 22박 → 비현실적 (UNREALISTIC_BUDGET)
+- 예: 총 예산 10,000원으로 22박 → 비현실적
+- errorMessage에 **필요 최소 예산(구체 금액)**을 포함합니다.
 
-**테마 상충 검증:**
+**(b) 테마 상충 — `CONFLICTING_THEMES`:**
 - 서로 상반되는 테마가 동시에 지정된 경우 거부합니다.
-- 예: "조용한 곳" + "시끌벅적" → 상충 (CONFLICTING_THEMES)
-- 예: "휴양" + "극한 액티비티" → 상충 (CONFLICTING_THEMES)
+- 예: "조용한 곳" + "시끌벅적" / "휴양" + "극한 액티비티" → 상충
+- errorMessage에 **어떤 두 테마가 상충하는지** 명시하고, 하나를 빼도록 권합니다.
+
+**(c) 여행지 식별 불가 — `INVALID_DESTINATION`:**
+- 오타/약어 교정(섹션 1)으로도 **실존 장소로 특정할 수 없는** 경우에만 거부합니다.
+  - 예: "asdf", "행복나라", "우주정거장" 처럼 실제 여행지가 아님
+- 단순 오타·약어·하위구역("도꾜", "해운대")은 거부하지 말고 섹션 1에서 정규화하세요.
+- errorMessage에 **실제 도시/지역명을 입력하도록** 안내합니다.
+
+**(d) 기간 비현실 — `INVALID_DATE_RANGE`:**
+- 여행 범위 대비 기간이 **명백히** 비현실적일 때만 거부합니다.
+  - 예: 해외 3개국 순회를 1박 2일 / 특정 테마(예: 성지순례 전국일주)에 하루
+- 날짜 형식·순서(종료>시작)·최대일수는 서버가 이미 막으므로 여기서 검증하지 않습니다.
+- errorMessage에 **권장 최소 일수(구체 숫자)**를 포함합니다.
 
 ### 3. 교통 허브 추출 (transportationHub)
 국내/해외 여행지 특성에 따라 도착·출발 교통 허브를 결정합니다:
@@ -169,10 +188,57 @@
 }
 
 ## 에러 응답 예시
+
+예산 부족 (UNREALISTIC_BUDGET):
 {
   "valid": false,
   "errorCode": "UNREALISTIC_BUDGET",
   "errorMessage": "22박 여행에 총 예산 10,000원은 비현실적입니다. 해외 여행 기준 최소 1일 10만원 이상을 권장합니다. 예산을 최소 2,200,000원 이상으로 조정해주세요.",
+  "normalizedDestination": null,
+  "country": null,
+  "regions": null,
+  "searchTags": null,
+  "budgetRange": null,
+  "seasonContext": null,
+  "regionAllocation": null,
+  "enrichedContext": null
+}
+
+여행지 식별 불가 (INVALID_DESTINATION):
+{
+  "valid": false,
+  "errorCode": "INVALID_DESTINATION",
+  "errorMessage": "입력하신 '행복나라'는 실제 여행지로 확인되지 않습니다. 제주, 부산, 도쿄처럼 실제 도시나 지역 이름을 입력해 주세요.",
+  "normalizedDestination": null,
+  "country": null,
+  "regions": null,
+  "searchTags": null,
+  "budgetRange": null,
+  "seasonContext": null,
+  "regionAllocation": null,
+  "enrichedContext": null
+}
+
+테마 상충 (CONFLICTING_THEMES):
+{
+  "valid": false,
+  "errorCode": "CONFLICTING_THEMES",
+  "errorMessage": "'휴양'과 '극한 액티비티'는 성격이 반대라 한 일정에 담기 어렵습니다. 두 테마 중 하나를 빼고 다시 시도해 주세요.",
+  "normalizedDestination": null,
+  "country": null,
+  "regions": null,
+  "searchTags": null,
+  "budgetRange": null,
+  "seasonContext": null,
+  "regionAllocation": null,
+  "enrichedContext": null
+}
+
+기간 비현실 (INVALID_DATE_RANGE):
+{
+  "valid": false,
+  "errorCode": "INVALID_DATE_RANGE",
+  "errorMessage": "유럽 3개국 순회를 1박 2일에 소화하기는 어렵습니다. 이 일정은 최소 6일 이상을 권장하니 기간을 늘리거나 여행지를 한 곳으로 좁혀 주세요.",
   "normalizedDestination": null,
   "country": null,
   "regions": null,

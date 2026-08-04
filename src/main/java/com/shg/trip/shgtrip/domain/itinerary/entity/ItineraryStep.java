@@ -115,6 +115,21 @@ public class ItineraryStep extends BaseTimeEntity {
         }
     }
 
+    /** 스텝 순서 재배정 (삭제 후 남은 스텝 재시퀀싱용). 시간(startTime/endTime)은 건드리지 않는다. */
+    public void assignOrder(int order) {
+        this.stepOrder = order;
+    }
+
+    /**
+     * 드래그 재정렬 시 시간 슬롯 고정 — 이동한 스텝이 그 위치(슬롯)의 stepOrder와 시간을 함께 물려받는다.
+     * 시간을 스텝에 붙여 옮기면 타임라인이 비단조(예: 15:00이 09:00 위)로 보이므로, 슬롯의 시간을 재배정한다.
+     */
+    public void assignSlot(int order, String startTime, String endTime) {
+        this.stepOrder = order;
+        this.startTime = startTime;
+        this.endTime = endTime;
+    }
+
     /** 교통 거리 업데이트 (대안 선택 시 재계산용) */
     public void updateTransportationDistance(BigDecimal distance) {
         this.transportationDistance = distance;

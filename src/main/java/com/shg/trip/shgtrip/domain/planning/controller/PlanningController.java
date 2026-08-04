@@ -2,7 +2,12 @@ package com.shg.trip.shgtrip.domain.planning.controller;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.planning.dto.GenerateJobResponse;
+import com.shg.trip.shgtrip.domain.planning.dto.GenerationQuotaResponse;
+import com.shg.trip.shgtrip.domain.planning.dto.SentenceParseRequest;
+import com.shg.trip.shgtrip.domain.planning.dto.SentenceParseResponse;
+import com.shg.trip.shgtrip.domain.planning.service.GenerationPolicyService;
 import com.shg.trip.shgtrip.domain.planning.service.TravelPlannerService;
+import com.shg.trip.shgtrip.domain.planning.service.ai.SentenceParseService;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import com.shg.trip.shgtrip.global.response.ApiResponse;
@@ -21,6 +26,22 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class PlanningController {
 
     private final TravelPlannerService travelPlannerService;
+    private final SentenceParseService sentenceParseService;
+    private final GenerationPolicyService generationPolicyService;
+
+    /**
+     * 자연어 문장 → 구조화 필드 파싱 (NewTripShell 실시간 패널·마법사 프리필).
+     * 콘텐츠 실패는 200 + empty()로 반환(디바운스 루프 4xx 스팸 방지).
+     */
+    @PostMapping("/parse")
+    public ApiResponse<SentenceParseResponse> parseSentence(
+            @Valid @RequestBody SentenceParseRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        if (principal == null) {
+            throw new BusinessException(ErrorCode.INVALID_TOKEN, "인증 정보가 없습니다.");
+        }
+        return ApiResponse.success(sentenceParseService.parse(request.sentence()));
+    }
 
     @PostMapping("/generate")
     public ApiResponse<GenerateJobResponse> generateItinerary(
@@ -47,6 +68,18 @@ public class PlanningController {
         response.setContentType("text/event-stream;charset=UTF-8");
 
         return travelPlannerService.getEmitter(jobId);
+    }
+
+    /**
+     * 생성 쿼터/차단 잔여 조회 (NewTripShell·ConfirmStep 배지). R1 차단 정보(blockedUntil) 겸용.
+     */
+    @GetMapping("/generation-quota")
+    public ApiResponse<GenerationQuotaResponse> getGenerationQuota(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        if (principal == null) {
+            throw new BusinessException(ErrorCode.INVALID_TOKEN, "인증 정보가 없습니다.");
+        }
+        return ApiResponse.success(generationPolicyService.getStatus(principal.id()));
     }
 
     @GetMapping("/generate/{jobId}/result")

@@ -1,7 +1,9 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.planning.dto.ItineraryData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
+import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -126,5 +128,31 @@ class IndexResultMapperTest {
         // 밀려난 기본호텔(4)은 어디에도 안 쓰이므로 spare로 회수
         assertThat(fixed.spareIndices()).contains(4);
         assertThat(fixed.spareIndices()).doesNotContain(5);
+    }
+
+    // ── toDraftItineraryData 태그 시드 (tags 회귀 방지) ──
+    // StorySaveHelper가 비동기 story에서 title/tags를 더 이상 덮지 않으므로, 구조 저장 시점에
+    // 태그를 시드하지 않으면 AI 생성 일정의 tags가 빈값으로 남는다(실측 회귀). 시드+정규화를 고정한다.
+
+    @Test
+    @DisplayName("toDraftItineraryData: searchTags 시드가 tags로 정규화되어 채워진다(공백/중복 제거·trim·최대 8개)")
+    void toDraftItineraryData_seedsAndNormalizesTags() {
+        List<String> seed = List.of(
+                "맛집", " 카페 ", "맛집", "  ", "오름", "해변", "야경", "드라이브", "포토스팟", "로컬", "시장");
+
+        ItineraryData data = mapper.toDraftItineraryData(
+                List.<StepData>of(), "제주", "제주 힐링 여행", seed);
+
+        assertThat(data.tags())
+                .containsExactly("맛집", "카페", "오름", "해변", "야경", "드라이브", "포토스팟", "로컬"); // 공백/중복 제거·trim·9→8
+        assertThat(data.title()).isEqualTo("제주 힐링 여행");
+        assertThat(data.destination()).isEqualTo("제주");
+    }
+
+    @Test
+    @DisplayName("toDraftItineraryData: 태그 시드가 null이면 빈 리스트로 안전 처리")
+    void toDraftItineraryData_nullSeedGivesEmptyTags() {
+        ItineraryData data = mapper.toDraftItineraryData(List.<StepData>of(), "제주", "c", null);
+        assertThat(data.tags()).isEmpty();
     }
 }

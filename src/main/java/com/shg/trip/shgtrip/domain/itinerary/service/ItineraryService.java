@@ -24,9 +24,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -162,6 +164,119 @@ public class ItineraryService {
     }
 
     /**
+     * 같은 day 내 스텝 드래그 재정렬 (F3).
+     * 시간 슬롯 고정 — 시간(startTime/endTime)은 위치(슬롯)에 고정되고 장소만 슬롯에 재배치된다.
+     * (시간을 스텝에 붙여 옮기면 타임라인이 비단조로 보이므로, 이동한 스텝이 그 위치의 시간을 물려받는다.)
+     * 이동(교통) 정보는 새 순서 기준으로 재계산한다.
+     * orderedStepIds는 해당 day의 전체 스텝 집합과 정확히 일치해야 한다(누락·중복·타 day/타 일정 주입 거부).
+     */
+    @Transactional
+    public ItineraryResponse reorderSteps(Long itineraryId, Long userId, Integer dayNumber, List<Long> orderedStepIds) {
+        Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+
+        List<ItineraryStep> daySteps = itinerary.getSteps().stream()
+                .filter(s -> dayNumber.equals(s.getDayNumber()))
+                .toList();
+        if (daySteps.isEmpty()) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "해당 날짜의 일정 단계를 찾을 수 없습니다.");
+        }
+
+        // 요청 순서가 해당 day 스텝 집합과 정확히 일치하는지 검증
+        Set<Long> dayStepIds = daySteps.stream().map(ItineraryStep::getId).collect(Collectors.toSet());
+        Set<Long> requestedIds = new LinkedHashSet<>(orderedStepIds);
+        if (requestedIds.size() != orderedStepIds.size() || !requestedIds.equals(dayStepIds)) {
+            throw new BusinessException(ErrorCode.INVALID_INPUT,
+                    "재정렬 요청이 해당 날짜의 단계 목록과 일치하지 않습니다.");
+        }
+
+        // 이 day가 점유한 (stepOrder, 시간) 슬롯을 그대로 새 순서에 재배정 → 다른 day의 위치는 불변.
+        // 시간은 슬롯(위치)에 고정 → 이동한 스텝이 그 위치의 startTime/endTime을 물려받는다.
+        // 슬롯 시간을 스텝 변경 전에 먼저 캡처(stepOrder→시간)해 뮤테이션 중 값이 섞이지 않게 한다.
+        List<Integer> slots = daySteps.stream()
+                .map(ItineraryStep::getStepOrder)
+                .sorted()
+                .toList();
+        Map<Integer, String[]> slotTimes = daySteps.stream()
+                .collect(Collectors.toMap(
+                        ItineraryStep::getStepOrder,
+                        s -> new String[]{s.getStartTime(), s.getEndTime()}));
+        Map<Long, ItineraryStep> byId = daySteps.stream()
+                .collect(Collectors.toMap(ItineraryStep::getId, s -> s));
+        for (int i = 0; i < orderedStepIds.size(); i++) {
+            int slot = slots.get(i);
+            String[] times = slotTimes.get(slot);
+            byId.get(orderedStepIds.get(i)).assignSlot(slot, times[0], times[1]);
+        }
+        entityManager.flush();
+
+        recalculateDayTransportation(itinerary.getSteps(), dayNumber);
+        return ItineraryResponse.from(itinerary);
+    }
+
+    /**
+     * 스텝(스톱) 삭제 (F3). 남은 스텝의 순서를 재정렬하고 해당 day의 이동 정보를 재계산한다.
+     * day 최소 1스텝을 보장(마지막 1개는 삭제 불가).
+     */
+    @Transactional
+    public ItineraryResponse deleteStep(Long itineraryId, Long userId, Long stepId) {
+        Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+
+        ItineraryStep target = itinerary.getSteps().stream()
+                .filter(s -> s.getId().equals(stepId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "일정 단계를 찾을 수 없습니다."));
+
+        Integer dayNumber = target.getDayNumber();
+        long dayStepCount = itinerary.getSteps().stream()
+                .filter(s -> dayNumber.equals(s.getDayNumber()))
+                .count();
+        if (dayStepCount <= 1) {
+            throw new BusinessException(ErrorCode.INVALID_INPUT, "해당 날짜의 마지막 일정은 삭제할 수 없습니다.");
+        }
+
+        itinerary.removeStep(target);
+        entityManager.flush(); // orphanRemoval DELETE를 재정렬 UPDATE보다 먼저 확정
+
+        // 남은 스텝 stepOrder를 (day, order) 기준 0..N-1로 재정렬해 빈 슬롯 제거
+        List<ItineraryStep> remaining = itinerary.getSteps().stream()
+                .sorted(Comparator.comparingInt(ItineraryStep::getDayNumber)
+                        .thenComparingInt(ItineraryStep::getStepOrder))
+                .toList();
+        for (int i = 0; i < remaining.size(); i++) {
+            remaining.get(i).assignOrder(i);
+        }
+        entityManager.flush();
+
+        recalculateDayTransportation(itinerary.getSteps(), dayNumber);
+        return ItineraryResponse.from(itinerary);
+    }
+
+    /**
+     * 한 day 전체의 이동(교통) 정보를 순서대로 재계산한다(F3 reorder/delete 공용).
+     * day 첫 스텝은 인바운드 leg가 없으므로 교통정보를 비우고(생성 파이프라인과 동일 시맨틱),
+     * 이후 스텝은 직전 스텝과의 좌표 거리로 재계산한다. 좌표가 없어 계산 불가하면 비운다(스테일 leg 방지).
+     */
+    private void recalculateDayTransportation(List<ItineraryStep> allSteps, Integer dayNumber) {
+        List<ItineraryStep> daySteps = allSteps.stream()
+                .filter(s -> dayNumber.equals(s.getDayNumber()))
+                .sorted(Comparator.comparingInt(ItineraryStep::getStepOrder))
+                .toList();
+        for (int i = 0; i < daySteps.size(); i++) {
+            ItineraryStep step = daySteps.get(i);
+            if (i == 0) {
+                step.updateTransportation(null, null, null, null);
+                continue;
+            }
+            GeoUtils.TransportLeg leg = computeLeg(daySteps.get(i - 1), step);
+            if (leg != null) {
+                step.updateTransportation(leg.mode(), leg.durationMin(), leg.distanceKm(), leg.cost());
+            } else {
+                step.updateTransportation(null, null, null, null);
+            }
+        }
+    }
+
+    /**
      * 대안 선택 후 인접 step의 교통 거리를 재계산. 일차 경계를 넘는 경우 skip.
      */
     private void recalculateTransportation(List<ItineraryStep> allSteps, ItineraryStep changedStep) {
@@ -203,21 +318,29 @@ public class ItineraryService {
      * 장소로 어긋나던 버그). transportPref는 저장돼 있지 않아 기본 "any"(혼합 단가)로 재계산한다.
      */
     private void updateDistance(ItineraryStep from, ItineraryStep to) {
+        GeoUtils.TransportLeg leg = computeLeg(from, to);
+        if (leg == null) return; // 좌표 없음·비현실 구간 — 기존 교통정보 유지
+        to.updateTransportation(leg.mode(), leg.durationMin(), leg.distanceKm(), leg.cost());
+        log.debug("Recalculated transport: {} → {} = {}km, {}원",
+                from.getPlace().getName(), to.getPlace().getName(), leg.distanceKm(), leg.cost());
+    }
+
+    /**
+     * 두 스텝 간 이동 leg를 좌표 기반으로 계산한다. 좌표가 없거나(0,0 포함) 비현실 구간이면 null.
+     * transportPref는 저장돼 있지 않아 기본 "any"(혼합 단가)로 계산(RouteOptimizer 생성 경로와 동일 공식).
+     */
+    private GeoUtils.TransportLeg computeLeg(ItineraryStep from, ItineraryStep to) {
         Place fromPlace = from.getPlace();
         Place toPlace = to.getPlace();
-        if (fromPlace == null || toPlace == null) return;
-        if (fromPlace.getLatitude() == null || toPlace.getLatitude() == null) return;
+        if (fromPlace == null || toPlace == null) return null;
+        if (fromPlace.getLatitude() == null || toPlace.getLatitude() == null) return null;
         if (GeoUtils.isZeroCoord(fromPlace.getLatitude(), fromPlace.getLongitude())
-                || GeoUtils.isZeroCoord(toPlace.getLatitude(), toPlace.getLongitude())) return;
+                || GeoUtils.isZeroCoord(toPlace.getLatitude(), toPlace.getLongitude())) return null;
 
-        GeoUtils.TransportLeg leg = GeoUtils.estimateLeg(
+        return GeoUtils.estimateLeg(
                 new double[]{fromPlace.getLatitude().doubleValue(), fromPlace.getLongitude().doubleValue()},
                 new double[]{toPlace.getLatitude().doubleValue(), toPlace.getLongitude().doubleValue()},
                 "any", MAX_REASONABLE_LEG_KM);
-        if (leg == null) return; // 비현실 구간 — 기존 교통정보 유지
-        to.updateTransportation(leg.mode(), leg.durationMin(), leg.distanceKm(), leg.cost());
-        log.debug("Recalculated transport: {} → {} = {}km, {}원", fromPlace.getName(), toPlace.getName(),
-                leg.distanceKm(), leg.cost());
     }
 
     private Itinerary findAndVerifyOwner(Long itineraryId, Long userId) {

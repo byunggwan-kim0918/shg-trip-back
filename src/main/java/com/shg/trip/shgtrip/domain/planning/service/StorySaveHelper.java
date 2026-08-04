@@ -1,6 +1,5 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
-import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryStepRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.AssemblyItineraryOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
@@ -14,10 +13,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Story(notes/title/tags) 저장 전용 빈.
+ * Story(notes) 저장 전용 빈.
  * StoryGenerationService(@Async)에서 자기 호출 없이 @Transactional을 적용하기 위해 분리
- * (ItinerarySaveHelper와 동일한 이유). 스텝별 notes 업데이트 + title/tags 업데이트를 단일
- * 트랜잭션으로 묶어, 중간에 예외가 나도 일부 스텝만 story가 채워진 채로 남는 상태를 막는다.
+ * (ItinerarySaveHelper와 동일한 이유). 스텝별 notes 업데이트를 단일 트랜잭션으로 묶어,
+ * 중간에 예외가 나도 일부 스텝만 story가 채워진 채로 남는 상태를 막는다.
+ * title/tags는 구조 저장 시점에 이미 확정되므로 여기서 건드리지 않는다(사용자 편집 유실 방지).
  */
 @Slf4j
 @Component
@@ -25,7 +25,6 @@ import java.util.Map;
 public class StorySaveHelper {
 
     private final ItineraryStepRepository itineraryStepRepository;
-    private final ItineraryRepository itineraryRepository;
 
     @Transactional
     public void saveStory(Long itineraryId, List<StepData> fixedSteps, AssemblyItineraryOutput storyOutput) {
@@ -57,8 +56,8 @@ public class StorySaveHelper {
             log.warn("story 갱신 불일치 - 기대 {}건, 실제 적용 {}건 (itineraryId={})", expected, updated, itineraryId);
         }
 
-        if (storyOutput.title() != null && storyOutput.tags() != null) {
-            itineraryRepository.updateTitleAndTags(itineraryId, storyOutput.title(), storyOutput.tags());
-        }
+        // title/tags는 구조 저장(complete) 시점에 이미 확정된다. 여기서 다시 덮어쓰면 complete 직후
+        // 사용자가 한 제목/태그 편집(updateInfo)이 몇 초 뒤 비동기 story에 조용히 유실된다(낙관락도
+        // 안 걸림 — JPQL UPDATE라 @Version 미증가). 그래서 story는 notes만 채우고 title/tags는 건드리지 않는다.
     }
 }
