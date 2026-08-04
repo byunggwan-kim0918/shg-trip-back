@@ -62,6 +62,9 @@ logging:
   level:
     "[com.shg.trip]": INFO
     "[org.springframework.security]": WARN
+  pattern:
+    # MDC jobId를 로그 레벨 슬롯에 주입 — 파이프라인 로그 상관관계 추적용 (값 없으면 빈 [])
+    level: "%5p [%X{jobId:-}]"
 
 jwt:
   secret: ${JWT_SECRET}

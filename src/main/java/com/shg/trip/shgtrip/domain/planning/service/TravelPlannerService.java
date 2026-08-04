@@ -54,15 +54,18 @@ public class TravelPlannerService {
     private final GenerationResultStore resultStore;
     private final CancellationRegistry cancellationRegistry;
     private final StringRedisTemplate redisTemplate;
+    private final GenerationPolicyService generationPolicyService;
 
     public TravelPlannerService(OptimizedGenerationExecutor optimizedGenerationExecutor,
                                 GenerationResultStore resultStore,
                                 CancellationRegistry cancellationRegistry,
-                                StringRedisTemplate redisTemplate) {
+                                StringRedisTemplate redisTemplate,
+                                GenerationPolicyService generationPolicyService) {
         this.optimizedGenerationExecutor = optimizedGenerationExecutor;
         this.resultStore = resultStore;
         this.cancellationRegistry = cancellationRegistry;
         this.redisTemplate = redisTemplate;
+        this.generationPolicyService = generationPolicyService;
     }
 
     /** jobId → JobEntry (emitter는 이 인스턴스에 물리적으로 묶여 인메모리로만 관리) */
@@ -79,6 +82,9 @@ public class TravelPlannerService {
      * 동일 유저의 기존 진행 중 작업이 있으면 취소 후 새 작업 시작.
      */
     public GenerateJobResponse startGeneration(ItineraryGenerateRequest request, Long userId) {
+        // R1/R2 차단 체크(동기) — 기존 job을 건드리기 전에 먼저 거부(TOO_MANY_REQUESTS).
+        generationPolicyService.checkAllowed(userId);
+
         String jobId = UUID.randomUUID().toString();
 
         // 유저의 활성 jobId를 새 jobId로 원자적 교체하고, 직전 값(기존 job)을 얻는다.

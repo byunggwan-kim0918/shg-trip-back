@@ -165,7 +165,9 @@ public class ItineraryService {
 
     /**
      * 같은 day 내 스텝 드래그 재정렬 (F3).
-     * 시간(startTime/endTime)은 자리 고정 — 순서만 바뀌고 해당 day의 이동(교통) 정보만 재계산한다.
+     * 시간 슬롯 고정 — 시간(startTime/endTime)은 위치(슬롯)에 고정되고 장소만 슬롯에 재배치된다.
+     * (시간을 스텝에 붙여 옮기면 타임라인이 비단조로 보이므로, 이동한 스텝이 그 위치의 시간을 물려받는다.)
+     * 이동(교통) 정보는 새 순서 기준으로 재계산한다.
      * orderedStepIds는 해당 day의 전체 스텝 집합과 정확히 일치해야 한다(누락·중복·타 day/타 일정 주입 거부).
      */
     @Transactional
@@ -187,15 +189,23 @@ public class ItineraryService {
                     "재정렬 요청이 해당 날짜의 단계 목록과 일치하지 않습니다.");
         }
 
-        // 이 day가 점유한 stepOrder 슬롯을 그대로 새 순서에 재배정 → 다른 day의 위치는 불변
+        // 이 day가 점유한 (stepOrder, 시간) 슬롯을 그대로 새 순서에 재배정 → 다른 day의 위치는 불변.
+        // 시간은 슬롯(위치)에 고정 → 이동한 스텝이 그 위치의 startTime/endTime을 물려받는다.
+        // 슬롯 시간을 스텝 변경 전에 먼저 캡처(stepOrder→시간)해 뮤테이션 중 값이 섞이지 않게 한다.
         List<Integer> slots = daySteps.stream()
                 .map(ItineraryStep::getStepOrder)
                 .sorted()
                 .toList();
+        Map<Integer, String[]> slotTimes = daySteps.stream()
+                .collect(Collectors.toMap(
+                        ItineraryStep::getStepOrder,
+                        s -> new String[]{s.getStartTime(), s.getEndTime()}));
         Map<Long, ItineraryStep> byId = daySteps.stream()
                 .collect(Collectors.toMap(ItineraryStep::getId, s -> s));
         for (int i = 0; i < orderedStepIds.size(); i++) {
-            byId.get(orderedStepIds.get(i)).assignOrder(slots.get(i));
+            int slot = slots.get(i);
+            String[] times = slotTimes.get(slot);
+            byId.get(orderedStepIds.get(i)).assignSlot(slot, times[0], times[1]);
         }
         entityManager.flush();
 

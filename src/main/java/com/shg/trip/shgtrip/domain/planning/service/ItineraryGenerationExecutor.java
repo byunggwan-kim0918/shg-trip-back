@@ -11,12 +11,17 @@ import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,6 +38,7 @@ public class ItineraryGenerationExecutor {
     private final PlaceRepository placeRepository;
     private final GenerationResultStore resultStore;
     private final CancellationRegistry cancellationRegistry;
+    private final GenerationPolicyService generationPolicyService;
     private final ScheduledExecutorService heartbeatExecutor;
 
     public ItineraryGenerationExecutor(
@@ -42,6 +48,7 @@ public class ItineraryGenerationExecutor {
             PlaceRepository placeRepository,
             GenerationResultStore resultStore,
             CancellationRegistry cancellationRegistry,
+            GenerationPolicyService generationPolicyService,
             @Qualifier("sseHeartbeatScheduler") ScheduledExecutorService heartbeatExecutor) {
         this.aiService = aiService;
         this.validationService = validationService;
@@ -49,11 +56,13 @@ public class ItineraryGenerationExecutor {
         this.placeRepository = placeRepository;
         this.resultStore = resultStore;
         this.cancellationRegistry = cancellationRegistry;
+        this.generationPolicyService = generationPolicyService;
         this.heartbeatExecutor = heartbeatExecutor;
     }
 
     @Async("planningExecutor")
     public void execute(String jobId, ItineraryGenerateRequest request, Long userId, SseEmitter emitter) {
+        MDC.put("jobId", jobId);
         try {
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 20, "분석 중...", "ENRICHING");
@@ -75,11 +84,16 @@ public class ItineraryGenerationExecutor {
 
             validateSelectedPlacesIncluded(validated, selectedPlaces);
 
+            // [F4] 확정된 뼈대를 day별 step-stream으로 전송 (optimized 경로와 동일 계약)
+            sendStepStream(emitter, validated.steps());
+
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 90, "일정을 저장하고 있습니다...", "SAVING");
             Itinerary saved = saveHelper.save(validated, enrichedInput, userId);
 
             resultStore.save(jobId, saved.getId());
+            // R1/R2: 성공 시 실패 카운트 리셋 + 30일 쿼터 소모(optimized 성공 지점과 상호배타 → 정확히 1회)
+            generationPolicyService.recordSuccess(userId);
             sendProgress(emitter, 100, "일정 생성이 완료되었습니다.", "COMPLETE");
             sendComplete(emitter);
 
@@ -91,6 +105,8 @@ public class ItineraryGenerationExecutor {
         } catch (Exception e) {
             log.error("Unexpected error during generation for job {}", jobId, e);
             sendError(emitter, "일정 생성 중 예기치 않은 오류가 발생했습니다.");
+        } finally {
+            MDC.remove("jobId");
         }
     }
 
@@ -160,6 +176,37 @@ public class ItineraryGenerationExecutor {
             return task.call();
         } finally {
             heartbeatFuture.cancel(false);
+        }
+    }
+
+    /**
+     * [F4] 확정된 뼈대를 day별 step-stream 이벤트로 전송 (OptimizedGenerationExecutor와 동일 계약).
+     * payload: {@code { dayNumber, steps: [{name, startTime, category}] }}.
+     */
+    private void sendStepStream(SseEmitter emitter, List<StepData> steps) {
+        if (steps == null || steps.isEmpty()) return;
+
+        Map<Integer, List<Map<String, String>>> byDay = new LinkedHashMap<>();
+        steps.stream()
+                .sorted(Comparator.comparingInt(StepData::dayNumber).thenComparingInt(StepData::stepOrder))
+                .forEach(s -> {
+                    String name = s.place() != null ? s.place().name() : null;
+                    if (name == null) return;
+                    Map<String, String> info = new HashMap<>();
+                    info.put("name", name);
+                    info.put("startTime", s.startTime());
+                    info.put("category", s.place() != null ? s.place().category() : null);
+                    byDay.computeIfAbsent(s.dayNumber(), k -> new ArrayList<>()).add(info);
+                });
+
+        for (Map.Entry<Integer, List<Map<String, String>>> entry : byDay.entrySet()) {
+            try {
+                emitter.send(SseEmitter.event()
+                        .name("step-stream")
+                        .data(Map.of("dayNumber", entry.getKey(), "steps", entry.getValue())));
+            } catch (IOException | IllegalStateException e) {
+                log.debug("step-stream 전송 실패 (day={}): {}", entry.getKey(), e.getMessage());
+            }
         }
     }
 

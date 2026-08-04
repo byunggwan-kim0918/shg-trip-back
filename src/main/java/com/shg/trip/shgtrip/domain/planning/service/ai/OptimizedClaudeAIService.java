@@ -266,9 +266,12 @@ public class OptimizedClaudeAIService {
                    - normalizedDestination: 오타/약어/외래어만 교정. 하위 구역은 그대로 유지. ("해운대" → "해운대", "홍대" → "홍대")
                    - country: ISO 3166-1 alpha-2 코드 (KR, JP, US 등)
                    - regions: DB 매칭용 영어 상위 도시명. 하위 구역은 상위 도시로 매핑. (해운대 → Busan, 홍대 → Seoul, 신주쿠 → Tokyo)
-                2. 현실성 검증:
-                   - 예산/기간 조합 (1일 최소 비용 기준 검증)
-                   - 테마 상충 여부
+                2. 현실성 검증 (명백히 비현실적일 때만 valid=false, 애매하면 통과):
+                   - 예산/기간 조합 (1일 최소 비용 기준) → UNREALISTIC_BUDGET
+                   - 테마 상충 여부 → CONFLICTING_THEMES
+                   - 실존하지 않는 여행지(오타 교정으로도 특정 불가) → INVALID_DESTINATION
+                   - 여행 범위 대비 기간이 명백히 비현실적 → INVALID_DATE_RANGE
+                   - errorMessage는 "문제 요약 + 권장 조치(구체 수치)" 형식
                 3. 검색 힌트 생성:
                    - searchTags: 벡터 검색용 태그 5~10개. 하위 구역 입력 시 해당 구역명과 주변 명소 키워드를 앞쪽에 배치.
                    - budgetRange: LOW(<50만/일), MEDIUM(50~150만/일), HIGH(150~300만/일), LUXURY(300만+/일)
@@ -279,8 +282,8 @@ public class OptimizedClaudeAIService {
                 ## 응답 (반드시 JSON만 출력하세요)
                 {
                   "valid": true/false,
-                  "errorCode": "UNREALISTIC_BUDGET" | "CONFLICTING_THEMES" | null,
-                  "errorMessage": "수정 제안 텍스트" | null,
+                  "errorCode": "UNREALISTIC_BUDGET" | "CONFLICTING_THEMES" | "INVALID_DESTINATION" | "INVALID_DATE_RANGE" | null,
+                  "errorMessage": "문제 요약 + 권장 조치(구체 수치)" | null,
                   "normalizedDestination": "해운대",
                   "country": "KR",
                   "regions": ["Busan"],

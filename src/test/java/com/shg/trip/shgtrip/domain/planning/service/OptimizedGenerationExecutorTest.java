@@ -50,6 +50,7 @@ class OptimizedGenerationExecutorTest {
     @Mock private StoryGenerationService storyGenerationService;
     @Mock private GenerationResultStore resultStore;
     @Mock private CancellationRegistry cancellationRegistry;
+    @Mock private GenerationPolicyService generationPolicyService;
     @Mock private com.shg.trip.shgtrip.domain.place.service.PlaceRefreshService placeRefreshService;
     @Mock private com.shg.trip.shgtrip.domain.place.repository.PlaceRepository placeRepository;
     @Mock private com.shg.trip.shgtrip.domain.planning.service.validation.PlaceRegionValidator placeRegionValidator;
@@ -153,7 +154,7 @@ class OptimizedGenerationExecutorTest {
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
         when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean())).thenReturn(fixedSteps);
-        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList()))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
 
@@ -216,7 +217,7 @@ class OptimizedGenerationExecutorTest {
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
         when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean())).thenReturn(fixedSteps);
-        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList()))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.fail("일부 검증 경고"));
 
@@ -267,7 +268,7 @@ class OptimizedGenerationExecutorTest {
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
         when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean())).thenReturn(fixedSteps);
-        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept())))
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList()))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
 

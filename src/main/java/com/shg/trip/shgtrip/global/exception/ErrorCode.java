@@ -30,10 +30,6 @@ public enum ErrorCode {
     PLACE_NOT_FOUND("PLACE_001", "장소를 찾을 수 없습니다.", HttpStatus.NOT_FOUND),
     PLACE_REGION_MISMATCH("PLACE_002", "선택한 장소가 여행지와 다른 지역입니다.", HttpStatus.BAD_REQUEST),
 
-    // Wishlist
-    WISHLIST_ALREADY_EXISTS("WISHLIST_001", "이미 찜한 장소입니다.", HttpStatus.CONFLICT),
-    WISHLIST_NOT_FOUND("WISHLIST_002", "찜 목록에 없는 장소입니다.", HttpStatus.NOT_FOUND),
-
     // AI
     AI_SERVICE_ERROR("AI_001", "AI 서비스 오류가 발생했습니다.", HttpStatus.SERVICE_UNAVAILABLE),
     AI_SERVICE_TIMEOUT("AI_002", "AI 서비스 응답 시간이 초과되었습니다.", HttpStatus.GATEWAY_TIMEOUT),
@@ -41,6 +37,8 @@ public enum ErrorCode {
     // Planning
     GENERATION_ALREADY_IN_PROGRESS("PLANNING_001", "이미 일정 생성이 진행 중입니다.", HttpStatus.CONFLICT),
     GENERATION_CANCELLED("PLANNING_002", "일정 생성이 취소되었습니다.", HttpStatus.BAD_REQUEST),
+    GENERATION_BLOCKED("PLANNING_003", "입력 검증에 반복 실패해 일시적으로 생성이 제한됩니다.", HttpStatus.TOO_MANY_REQUESTS),
+    GENERATION_QUOTA_EXCEEDED("PLANNING_004", "30일 생성 한도(5회)를 초과했습니다.", HttpStatus.TOO_MANY_REQUESTS),
 
     // External
     EXTERNAL_API_ERROR("EXTERNAL_001", "외부 API 오류가 발생했습니다.", HttpStatus.BAD_GATEWAY),

@@ -78,12 +78,28 @@ public class IndexResultMapper {
      * 구조만 먼저 저장할 때 사용 — story는 비어있고 title/tags는 임시값.
      * Haiku 비동기 단계가 끝나기 전, SSE complete 시점에 구조 일정을 저장하기 위함.
      */
-    public ItineraryData toDraftItineraryData(List<StepData> fixedSteps, String destination, String concept) {
+    public ItineraryData toDraftItineraryData(
+            List<StepData> fixedSteps, String destination, String concept, List<String> tagSeed) {
         BigDecimal totalCost = fixedSteps.stream()
                 .map(StepData::estimatedCost)
                 .filter(java.util.Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        return new ItineraryData(concept, destination, totalCost, List.of(), fixedSteps);
+        return new ItineraryData(concept, destination, totalCost, normalizeTags(tagSeed), fixedSteps);
+    }
+
+    /**
+     * 구조 저장 시점 태그 시드 정규화 — 공백/중복 제거 후 최대 8개(프론트 MAX_TAGS와 동일).
+     * story(notes)는 비동기로 채우되 title/tags는 여기서 확정하므로(StorySaveHelper가 덮지 않음),
+     * enrich의 searchTags를 태그 시드로 넘겨 AI 생성 일정의 태그가 빈값으로 저장되는 것을 막는다.
+     */
+    private List<String> normalizeTags(List<String> raw) {
+        if (raw == null) return List.of();
+        return raw.stream()
+                .filter(t -> t != null && !t.isBlank())
+                .map(String::trim)
+                .distinct()
+                .limit(8)
+                .toList();
     }
 
     /**

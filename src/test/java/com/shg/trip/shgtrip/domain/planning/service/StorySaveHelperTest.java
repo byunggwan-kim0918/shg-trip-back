@@ -1,6 +1,5 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
-import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryStepRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.AssemblyItineraryOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
@@ -23,14 +22,12 @@ class StorySaveHelperTest {
 
     @Mock
     private ItineraryStepRepository itineraryStepRepository;
-    @Mock
-    private ItineraryRepository itineraryRepository;
 
     private StorySaveHelper helper;
 
     @BeforeEach
     void setUp() {
-        helper = new StorySaveHelper(itineraryStepRepository, itineraryRepository);
+        helper = new StorySaveHelper(itineraryStepRepository);
     }
 
     private StepData step(int order) {
@@ -40,8 +37,8 @@ class StorySaveHelperTest {
     }
 
     @Test
-    @DisplayName("모든 스텝의 story와 title/tags를 갱신한다")
-    void saveStory_allMatched_updatesEverything() {
+    @DisplayName("모든 스텝의 story(notes)를 갱신한다")
+    void saveStory_allMatched_updatesNotes() {
         List<StepData> steps = List.of(step(1), step(2));
         AssemblyItineraryOutput output = new AssemblyItineraryOutput(
                 "제목", List.of("태그1"),
@@ -57,11 +54,29 @@ class StorySaveHelperTest {
 
         verify(itineraryStepRepository).updateNotesByItineraryIdAndStepOrder(42L, 1, "이야기1");
         verify(itineraryStepRepository).updateNotesByItineraryIdAndStepOrder(42L, 2, "이야기2");
-        verify(itineraryRepository).updateTitleAndTags(42L, "제목", List.of("태그1"));
     }
 
     @Test
-    @DisplayName("LLM이 반환한 stepOrder가 실제 step과 어긋나면(0행 갱신) 해당 step은 건너뛰고 나머지는 정상 처리한다")
+    @DisplayName("story는 title/tags를 절대 건드리지 않는다 — 구조 저장 후 사용자 편집 유실 방지(회귀 가드)")
+    void saveStory_neverOverwritesTitleOrTags() {
+        // storyOutput에 title/tags가 있어도 notes만 갱신하고 itinerary의 title/tags는 덮어쓰지 않는다.
+        // (덮어쓰면 complete 직후 사용자의 제목/태그 편집이 비동기로 유실됨)
+        List<StepData> steps = List.of(step(1));
+        AssemblyItineraryOutput output = new AssemblyItineraryOutput(
+                "새 제목", List.of("새태그"),
+                List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기")));
+        when(itineraryStepRepository.updateNotesByItineraryIdAndStepOrder(eq(42L), eq(1), eq("이야기")))
+                .thenReturn(1);
+
+        helper.saveStory(42L, steps, output);
+
+        // notes만 호출되고 그 외 상호작용은 없다 (title/tags 갱신 경로 자체가 제거됨).
+        verify(itineraryStepRepository).updateNotesByItineraryIdAndStepOrder(42L, 1, "이야기");
+        verifyNoMoreInteractions(itineraryStepRepository);
+    }
+
+    @Test
+    @DisplayName("LLM stepOrder가 실제 step과 어긋나면(0행 갱신) 해당 step만 건너뛰고 나머지는 정상 처리한다")
     void saveStory_stepOrderMismatch_skipsThatStepOnly() {
         // fixedSteps는 stepOrder 1,2를 갖지만 LLM은 1,3을 반환 — 3은 존재하지 않는 stepOrder
         List<StepData> steps = List.of(step(1), step(2));
@@ -75,24 +90,8 @@ class StorySaveHelperTest {
 
         helper.saveStory(42L, steps, output);
 
-        // stepOrder=2는 LLM 응답에 없으므로 호출 자체가 안 됨, stepOrder=3은 fixedSteps에 없어 루프 대상이 아님
+        // stepOrder=2는 LLM 응답에 없어 호출 안 됨, stepOrder=3은 fixedSteps에 없어 루프 대상이 아님
         verify(itineraryStepRepository, times(1)).updateNotesByItineraryIdAndStepOrder(anyLong(), anyInt(), anyString());
         verify(itineraryStepRepository).updateNotesByItineraryIdAndStepOrder(42L, 1, "이야기1");
-        // title/tags가 null이면 업데이트 호출 자체를 안 함
-        verifyNoInteractions(itineraryRepository);
-    }
-
-    @Test
-    @DisplayName("title/tags가 없으면 itineraryRepository를 호출하지 않는다")
-    void saveStory_noTitleOrTags_doesNotUpdateItinerary() {
-        List<StepData> steps = List.of(step(1));
-        AssemblyItineraryOutput output = new AssemblyItineraryOutput(
-                null, null, List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기")));
-        when(itineraryStepRepository.updateNotesByItineraryIdAndStepOrder(eq(42L), eq(1), eq("이야기")))
-                .thenReturn(1);
-
-        helper.saveStory(42L, steps, output);
-
-        verifyNoInteractions(itineraryRepository);
     }
 }

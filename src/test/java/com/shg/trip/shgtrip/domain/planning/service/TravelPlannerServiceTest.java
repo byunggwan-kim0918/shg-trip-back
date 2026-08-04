@@ -46,13 +46,17 @@ class TravelPlannerServiceTest {
     @Mock
     private ValueOperations<String, String> valueOperations;
 
+    @Mock
+    private GenerationPolicyService generationPolicyService;
+
     private TravelPlannerService service;
 
     @BeforeEach
     void setUp() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         service = new TravelPlannerService(
-                optimizedGenerationExecutor, resultStore, cancellationRegistry, redisTemplate);
+                optimizedGenerationExecutor, resultStore, cancellationRegistry, redisTemplate,
+                generationPolicyService);
     }
 
     @Test

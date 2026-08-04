@@ -54,7 +54,7 @@ public class StoryGenerationService {
 
             sendStoryReady(emitter, itineraryId);
         } catch (Exception e) {
-            log.error("비동기 story 생성 실패 (itineraryId={}): 구조 일정은 이미 저장됨", itineraryId, e);
+            log.error("비동기 story 생성 실패 (jobId={}, itineraryId={}): 구조 일정은 이미 저장됨", jobId, itineraryId, e);
             sendStoryFailed(emitter, itineraryId);
         }
     }

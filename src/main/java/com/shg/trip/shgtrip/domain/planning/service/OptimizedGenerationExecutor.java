@@ -15,6 +15,7 @@ import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -53,6 +54,7 @@ public class OptimizedGenerationExecutor {
     private final StoryGenerationService storyGenerationService;
     private final GenerationResultStore resultStore;
     private final CancellationRegistry cancellationRegistry;
+    private final GenerationPolicyService generationPolicyService;
     private final PlaceRefreshService placeRefreshService;
     private final PlaceRepository placeRepository;
     private final PlaceRegionValidator placeRegionValidator;
@@ -70,6 +72,9 @@ public class OptimizedGenerationExecutor {
 
     @Async("planningExecutor")
     public void execute(String jobId, ItineraryGenerateRequest request, Long userId, SseEmitter emitter) {
+        MDC.put("jobId", jobId);
+        final long pipelineStart = System.nanoTime();
+        long stageMark = pipelineStart;
         try {
             // [10%] Haiku enrichInput
             if (cancellationRegistry.isCancelled(jobId)) return;
@@ -79,12 +84,18 @@ public class OptimizedGenerationExecutor {
                     () -> optimizedClaudeAIService.enrichInput(request));
 
             if (!enrichResult.valid()) {
+                // R1: 입력 검증 실패(비현실 입력)만 카운트 → 5회 도달 시 24h 차단.
+                // 모든 요청이 이 경로를 먼저 지나므로 여기가 유일한 실패 카운트 지점이다
+                // (fallback 재-enrich는 이미 valid한 입력을 다루므로 카운트하지 않음).
+                // errorCode를 넘겨 사용자 입력 문제일 때만 집계(AI 오탐/포맷오류는 정책 서비스가 제외).
+                generationPolicyService.recordValidationFailure(userId, enrichResult.errorCode());
                 sendSseError(emitter, enrichResult.errorCode(), enrichResult.errorMessage());
                 return;
             }
 
             VectorEnrichedInput enrichedInput = enrichResult.enrichedInput();
             long days = ChronoUnit.DAYS.between(enrichedInput.startDate(), enrichedInput.endDate()) + 1;
+            stageMark = logStage("enrich", stageMark);
 
             // [20%] 카테고리별 벡터 검색
             if (cancellationRegistry.isCancelled(jobId)) return;
@@ -102,6 +113,7 @@ public class OptimizedGenerationExecutor {
                     () -> resolveCustomPlaces(request, enrichedInput, candidatesRaw, emitter)));
             placeRegionValidator.validate(selectedPlaces, enrichedInput); // 불일치 시 BusinessException → SSE error
             List<PlaceCandidate> candidates = mergeSelectedPlaces(candidatesRaw, selectedPlaces);
+            stageMark = logStage("search", stageMark);
 
             // [25%] Fallback/컴팩트 분기 판단
             if (cancellationRegistry.isCancelled(jobId)) return;
@@ -150,6 +162,7 @@ public class OptimizedGenerationExecutor {
             final List<PlaceCandidate> enrichedCandidates = dedupePhysicalCandidates(
                     ensureAccommodationCandidates(
                             enrichCandidatesFromDb(candidates), enrichedInput.regions()));
+            stageMark = logStage("sync", stageMark);
 
             // [50%] Call 1: Sonnet selectPlaces
             if (cancellationRegistry.isCancelled(jobId)) return;
@@ -162,6 +175,7 @@ public class OptimizedGenerationExecutor {
             final SelectionOutput selectionOutput = indexResultMapper.injectRequiredPlaces(
                     indexResultMapper.fillMissingAccommodation(rawSelectionOutput, enrichedCandidates),
                     enrichedCandidates);
+            stageMark = logStage("select", stageMark);
 
             // [65%] Backend Repair·Optimizer: day/순서/시간/교통/대안 전부 결정론적으로 확정
             // (LLM 재호출 없음 — pace quota·pair·거리이탈·연속숙소·허브를 fixpoint로 수리 후 NN+2-opt)
@@ -175,14 +189,23 @@ public class OptimizedGenerationExecutor {
                             enrichedInput.transportPref(), enrichedInput.startDate(),
                             enrichedInput.themes(), enrichedInput.transportationHub(), compact));
 
+            // [F4] 확정된 뼈대(장소·시간·Day구성)를 day별로 스트리밍 → 프론트 스켈레톤→실카드 교체.
+            // 65%에 이미 실데이터가 완성돼 있으므로 연출(가짜 delay) 아님. 인위적 sleep 금지(SSE 스레드 blocking).
+            sendStepStream(emitter, fixedSteps);
+            stageMark = logStage("optimize", stageMark);
+
             // [80%] 구조 검증(안전망 — 결정론적 코드이므로 실패 시 재시도가 아니라 버그로 취급)
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "VALIDATING", 80, "일정을 검증하고 있습니다...");
 
             String destination = enrichedInput.normalizedDestination() != null
                     ? enrichedInput.normalizedDestination() : enrichedInput.destination();
+            // 태그 시드: enrich의 searchTags(한국어 표시용 태그) → 없으면 themes 폴백.
+            // StorySaveHelper가 title/tags를 더 이상 덮지 않으므로 여기서 확정하지 않으면 tags가 빈값으로 남는다.
+            List<String> tagSeed = enrichedInput.searchTags() != null && !enrichedInput.searchTags().isEmpty()
+                    ? enrichedInput.searchTags() : enrichedInput.themes();
             ItineraryData draftData = indexResultMapper.toDraftItineraryData(
-                    fixedSteps, destination, selectionOutput.concept());
+                    fixedSteps, destination, selectionOutput.concept(), tagSeed);
             HardValidationResult validationResult = hardValidator.validate(draftData);
             if (!validationResult.valid()) {
                 log.error("Optimized 경로 구조 검증 실패 (결정론적 로직 버그 가능성): {}", validationResult.failureReason());
@@ -195,14 +218,18 @@ public class OptimizedGenerationExecutor {
 
             EnrichedInput legacyInput = toLegacyEnrichedInput(enrichedInput);
             Itinerary saved = saveHelper.save(draftData, legacyInput, userId, true);
+            stageMark = logStage("save", stageMark);
 
             // [100%] 구조 완료 — emitter는 닫지 않고 story-ready까지 유지
             resultStore.save(jobId, saved.getId());
+            // R1/R2: 성공 시 실패 카운트 리셋 + 30일 쿼터 소모(성공 시에만)
+            generationPolicyService.recordSuccess(userId);
             sendSseEvent(emitter, "COMPLETE", 100, "일정 생성이 완료되었습니다.");
             sendCompleteKeepOpen(emitter, saved.getId());
 
             log.info("OptimizedGeneration 구조 완료: jobId={}, itineraryId={}, days={}",
                     jobId, saved.getId(), days);
+            log.info("stage=total elapsedMs={}", (System.nanoTime() - pipelineStart) / 1_000_000);
 
             // 비동기 스토리텔링 — critical path 밖에서 진행, 완료 시 story-ready emit 후 emitter 종료
             storyGenerationService.generateAndAttach(
@@ -214,10 +241,19 @@ public class OptimizedGenerationExecutor {
         } catch (Exception e) {
             log.error("OptimizedGeneration 예기치 않은 오류 (jobId={})", jobId, e);
             sendSseError(emitter, "UNEXPECTED_ERROR", "일정 생성 중 오류가 발생했습니다.");
+        } finally {
+            MDC.remove("jobId");
         }
     }
 
     // ── Private helpers ──
+
+    /** 파이프라인 단계 소요시간(ms)을 로깅하고, 다음 구간 측정을 위한 기준 시각(nanoTime)을 반환한다. */
+    private long logStage(String stage, long sinceNanos) {
+        long now = System.nanoTime();
+        log.info("stage={} elapsedMs={}", stage, (now - sinceNanos) / 1_000_000);
+        return now;
+    }
 
     private void syncAllPlaces(List<Place> places) {
         log.info("Google Places 동기화 시작: {}건", places.size());
@@ -710,6 +746,38 @@ public class OptimizedGenerationExecutor {
                     )));
         } catch (IOException | IllegalStateException e) {
             log.debug("SSE 이벤트 전송 실패 (status={}): {}", status, e.getMessage());
+        }
+    }
+
+    /**
+     * [F4] 확정된 뼈대를 day별 step-stream 이벤트로 전송한다.
+     * payload: {@code { dayNumber, steps: [{name, startTime, category}] }} — 프론트가 Day 스켈레톤을 실카드로 교체.
+     * 장소명이 없는 스텝은 건너뛴다. 전송 실패는 조용히 무시(critical path 아님).
+     */
+    private void sendStepStream(SseEmitter emitter, List<StepData> steps) {
+        if (steps == null || steps.isEmpty()) return;
+
+        Map<Integer, List<Map<String, String>>> byDay = new LinkedHashMap<>();
+        steps.stream()
+                .sorted(Comparator.comparingInt(StepData::dayNumber).thenComparingInt(StepData::stepOrder))
+                .forEach(s -> {
+                    String name = s.place() != null ? s.place().name() : null;
+                    if (name == null) return;
+                    Map<String, String> info = new HashMap<>();
+                    info.put("name", name);
+                    info.put("startTime", s.startTime());
+                    info.put("category", s.place() != null ? s.place().category() : null);
+                    byDay.computeIfAbsent(s.dayNumber(), k -> new ArrayList<>()).add(info);
+                });
+
+        for (Map.Entry<Integer, List<Map<String, String>>> entry : byDay.entrySet()) {
+            try {
+                emitter.send(SseEmitter.event()
+                        .name("step-stream")
+                        .data(Map.of("dayNumber", entry.getKey(), "steps", entry.getValue())));
+            } catch (IOException | IllegalStateException e) {
+                log.debug("step-stream 전송 실패 (day={}): {}", entry.getKey(), e.getMessage());
+            }
         }
     }
 
