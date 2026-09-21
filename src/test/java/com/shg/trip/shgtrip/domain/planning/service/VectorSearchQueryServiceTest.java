@@ -331,6 +331,123 @@ class VectorSearchQueryServiceTest {
             // restaurant + cafe + accommodation + culture 테마 관광 + 기본 관광 = 5슬롯
             verify(placeVectorSearchService, times(5)).search(any());
         }
+
+        /**
+         * 실측 회귀(제주 5일): enrich가 regionAllocation에 행정동·지형·랜드마크를 돌려줬는데
+         * 그 값이 그대로 {@code p.region = ?} 필터로 들어가 전 슬롯이 조회=0이 됐다.
+         * DB의 region 값은 'Jeju' 하나뿐이라 '제주시'·'용담동'은 어떤 행과도 매칭되지 않는다.
+         */
+        @Test
+        @DisplayName("regionAllocation 값이 regions 어휘에 없으면 DB 지역 필터로 쓰지 않는다")
+        void search_subRegionNames_neverBecomeHardFilter() {
+            VectorEnrichedInput input = jejuLongTripInput();
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(createMockResults(5));
+
+            service.search(input);
+
+            verify(placeVectorSearchService, atLeastOnce()).search(requestCaptor.capture());
+            for (VectorSearchRequest request : requestCaptor.getAllValues()) {
+                if (request.regions() == null) continue;
+                assertThat(request.regions()).containsOnly("Jeju");
+            }
+        }
+
+        @Test
+        @DisplayName("필터로 못 쓰는 세부 지명은 쿼리 텍스트에 얹혀 유사도로 반영된다")
+        void search_subRegionNames_becomeQueryHints() {
+            VectorEnrichedInput input = jejuLongTripInput();
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(createMockResults(5));
+
+            service.search(input);
+
+            ArgumentCaptor<List<String>> textCaptor = ArgumentCaptor.forClass(List.class);
+            verify(embeddingService).embedBatch(textCaptor.capture());
+            assertThat(textCaptor.getValue())
+                    .anyMatch(text -> text.contains("제주시") && text.contains("용담동"))
+                    .anyMatch(text -> text.contains("성산일출봉"));
+        }
+
+        @Test
+        @DisplayName("지역 필터가 0건을 만들면 상위 지역으로 완화해 재조회한다")
+        void search_emptyRegionFilter_retriesWithoutIt() {
+            VectorEnrichedInput input = multiCityInput();
+            givenBatchEmbeddings();
+            // Busan 단독 필터만 0건 — 상위 지역으로 완화한 재조회는 정상 (fail-open 경로 강제)
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willAnswer(inv -> {
+                        VectorSearchRequest request = inv.getArgument(0);
+                        return List.of("Busan").equals(request.regions())
+                                ? List.of()
+                                : createMockResults(5);
+                    });
+
+            List<PlaceCandidate> result = service.search(input);
+
+            verify(placeVectorSearchService, atLeastOnce()).search(requestCaptor.capture());
+            assertThat(requestCaptor.getAllValues())
+                    .as("Busan 슬롯이 0건이면 상위 지역 전체로 완화한 재조회가 뒤따라야 한다")
+                    .anyMatch(r -> r.regions() != null
+                            && r.regions().containsAll(List.of("Seoul", "Busan")));
+            assertThat(result).isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("지역 단위끼리 겹친 결과가 랭킹 상위를 잠식해 후보 풀을 얕게 만들지 않는다")
+        void search_duplicateAcrossRegionUnits_doesNotShrinkPool() {
+            // 세부 지명은 힌트로만 쓰이므로 3개 단위가 모두 같은 'Jeju' 필터로 조회하고, 같은
+            // 장소가 3번 돌아온다. 중복을 안 걸러내면 슬롯 limit을 같은 장소가 3칸씩 차지해
+            // 실제 고유 장소 수가 1/3로 줄어든다 — "그날 반경에 식당이 없음"의 직접 원인이다.
+            VectorEnrichedInput input = jejuLongTripInput();
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(createMockResults(30));
+
+            List<PlaceCandidate> result = service.search(input);
+
+            // 중복 제거 시 슬롯 limit(최대 20)까지 고유 장소가 채워져 20개가 나온다.
+            // 제거하지 않으면 같은 장소 3벌이 상위 20칸을 차지해 고유 7개 수준으로 떨어진다.
+            assertThat(result)
+                    .as("고유 장소 30개가 있는데 중복에 밀려 한 자릿수로 줄면 안 된다")
+                    .hasSizeGreaterThanOrEqualTo(15);
+            assertThat(result.stream().map(PlaceCandidate::placeId).filter(java.util.Objects::nonNull))
+                    .doesNotHaveDuplicates();
+        }
+
+        /** 제주 5일 — regions는 DB 실재값 'Jeju' 하나, regionAllocation은 세부 지명(실측 형태). */
+        private VectorEnrichedInput jejuLongTripInput() {
+            return new VectorEnrichedInput(
+                    "제주", List.of("자연", "맛집"), List.of("음식", "관광", "숙소"),
+                    "normal", "any", null,
+                    LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 5),
+                    "제주 5일 여행", null,
+                    "제주", "KR", List.of("Jeju"),
+                    List.of("제주 맛집", "제주 관광"),
+                    Map.of("1-2", List.of("제주시", "용담동"),
+                           "3-4", List.of("한라산", "올레길"),
+                           "5", List.of("성산일출봉")),
+                    "MEDIUM", "여름", "제주 5일 컨텍스트",
+                    null, null
+            );
+        }
+
+        /** 서울+부산 5일 — regionAllocation 값이 regions 어휘 그대로라 분리 검색이 유지돼야 한다. */
+        private VectorEnrichedInput multiCityInput() {
+            return new VectorEnrichedInput(
+                    "서울부산", List.of("맛집"), List.of("음식", "관광", "숙소"),
+                    "normal", "any", BigDecimal.valueOf(1000000),
+                    LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 5),
+                    "서울 부산 5일", null,
+                    "서울부산", "KR", List.of("Seoul", "Busan"),
+                    List.of("맛집"),
+                    Map.of("1-3", List.of("Seoul"), "4-5", List.of("Busan")),
+                    "MEDIUM", "여름", "서울 부산 컨텍스트",
+                    null, null
+            );
+        }
     }
 
     @Nested

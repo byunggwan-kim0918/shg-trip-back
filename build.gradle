@@ -56,6 +56,10 @@ tasks.named('test') {
     useJUnitPlatform {
         excludeTags 'integration'
     }
+    // 골든 마스터 스냅샷 갱신 플래그를 테스트 JVM으로 전달한다.
+    // (Gradle은 -D를 데몬 JVM에만 주므로 명시적으로 넘겨야 한다)
+    //   ./gradlew test --tests "*GoldenMaster*" -Dgolden.update=true
+    systemProperty 'golden.update', System.getProperty('golden.update') ?: 'false'
     finalizedBy jacocoTestReport
 }
 

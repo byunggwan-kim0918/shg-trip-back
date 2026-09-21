@@ -17,9 +17,11 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 벡터 검색 쿼리 오케스트레이션 서비스.
@@ -95,37 +97,60 @@ public class VectorSearchQueryService {
         List<SearchSlot> slots = SearchQueryBuilder.buildSearchSlots(input);
         Map<String, Integer> slotLimits = buildSlotLimits(slots, totalLimit, calculateTripDays(input));
 
-        log.info("검색 슬롯 {}개, 슬롯별 limit={}", slots.size(), slotLimits);
+        List<SearchUnit> units = buildSearchUnits(input, slots);
+        int unitsPerSlot = Math.max(1, units.size() / Math.max(1, slots.size()));
+
+        log.info("검색 슬롯 {}개, 실행 단위 {}개, 슬롯별 limit={}", slots.size(), units.size(), slotLimits);
 
         // A5: 슬롯 수만큼 순차 호출하던 임베딩을 1회 배치 호출로 (슬롯이 늘어도 지연이 늘지 않게)
         List<float[]> queryVectors = embeddingService.embedBatch(
-                slots.stream().map(SearchSlot::queryText).toList());
-        if (queryVectors.size() != slots.size()) {
-            log.warn("임베딩 배치 결과 수 불일치: slots={}, vectors={} — 부족분은 건너뜀",
-                    slots.size(), queryVectors.size());
+                units.stream().map(SearchUnit::queryText).toList());
+        if (queryVectors.size() != units.size()) {
+            log.warn("임베딩 배치 결과 수 불일치: units={}, vectors={} — 부족분은 건너뜀",
+                    units.size(), queryVectors.size());
         }
 
-        // 같은 장소가 여러 슬롯에 걸릴 수 있으므로(관광 하위유형끼리 겹침) placeId 기준으로 최고 점수만 유지
-        Map<Long, ScoredResult> bestByPlace = new LinkedHashMap<>();
-        List<ScoredResult> withoutId = new ArrayList<>();
+        // 임계값·랭킹은 슬롯 단위로 적용한다 — 지역별로 나눠 조회해도 채택 기준은 슬롯 하나로 본다
+        Map<String, List<VectorSearchResult>> rawBySlot = new LinkedHashMap<>();
 
-        for (int i = 0; i < slots.size() && i < queryVectors.size(); i++) {
-            SearchSlot slot = slots.get(i);
-            int limit = slotLimits.getOrDefault(slot.key(), MIN_PER_ATTRACTION_SLOT);
+        for (int i = 0; i < units.size() && i < queryVectors.size(); i++) {
+            SearchUnit unit = units.get(i);
+            SearchSlot slot = unit.slot();
             float[] queryVector = queryVectors.get(i);
             if (queryVector == null || queryVector.length == 0) {
                 log.warn("슬롯 '{}' 임베딩 없음 — 건너뜀", slot.key());
                 continue;
             }
 
+            int limit = slotLimits.getOrDefault(slot.key(), MIN_PER_ATTRACTION_SLOT);
             int overfetch = Math.min(MAX_OVERFETCH, limit * OVERFETCH_FACTOR);
-            List<VectorSearchResult> raw = shouldSplitByRegion(input)
-                    ? searchByRegionAndSlot(input, queryVector, slot, overfetch)
-                    : placeVectorSearchService.search(buildRequest(input, queryVector, null, slot, overfetch));
+            int unitLimit = Math.max(1, overfetch / unitsPerSlot);
 
-            List<ScoredResult> accepted = applyThresholdAndRank(slot, raw, limit);
+            List<VectorSearchResult> raw = placeVectorSearchService.search(
+                    buildRequest(input, queryVector, unit.filterRegions(), slot, unitLimit));
 
-            for (ScoredResult scored : accepted) {
+            // fail-open: 지역 필터가 0건을 만들면 그 필터를 떨어뜨리고 상위 지역으로 재조회한다.
+            // 필터 하나가 어긋나 후보 풀이 통째로 비는 것(→ fallback)보다 범위가 넓은 편이 낫다.
+            if (raw.isEmpty() && unit.filterRegions() != null) {
+                raw = placeVectorSearchService.search(
+                        buildRequest(input, queryVector, null, slot, unitLimit));
+                log.info("지역 필터 0건 → 상위 지역으로 완화 재조회: 슬롯={}, 필터={}, 재조회={}건",
+                        slot.key(), unit.filterRegions(), raw.size());
+            }
+
+            rawBySlot.computeIfAbsent(slot.key(), k -> new ArrayList<>()).addAll(raw);
+        }
+
+        // 같은 장소가 여러 슬롯에 걸릴 수 있으므로(관광 하위유형끼리 겹침) placeId 기준으로 최고 점수만 유지
+        Map<Long, ScoredResult> bestByPlace = new LinkedHashMap<>();
+        List<ScoredResult> withoutId = new ArrayList<>();
+
+        for (SearchSlot slot : slots) {
+            List<VectorSearchResult> raw = dedupeByPlace(rawBySlot.get(slot.key()));
+            if (raw.isEmpty()) continue;
+
+            int limit = slotLimits.getOrDefault(slot.key(), MIN_PER_ATTRACTION_SLOT);
+            for (ScoredResult scored : applyThresholdAndRank(slot, raw, limit)) {
                 Long placeId = scored.result().placeId();
                 if (placeId == null) {
                     withoutId.add(scored);
@@ -371,29 +396,93 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 지역별 및 슬롯별 분리 검색을 수행한다.
-     * regionAllocation 맵의 각 엔트리(일차범위 → 지역 리스트)마다 해당 슬롯 검색을 수행.
+     * 한 슬롯이 여러 실행 단위로 나뉘어 조회한 결과에서 같은 장소를 하나로 합친다(최고 유사도 유지).
+     *
+     * <p>세부 지명은 필터가 아니라 쿼리 힌트로만 쓰이므로, 한 도시 안에서 구역을 나눈 여행은
+     * 모든 단위가 <b>같은 지역 필터</b>로 조회한다 — 인기 장소가 단위 수만큼 중복으로 돌아온다.
+     * 그대로 두면 랭킹 상위 N을 같은 장소가 차지해 후보 풀이 실제보다 얕아지고, 그 얕은 풀이
+     * "그날 반경 안에 식당이 없음"으로 이어진다.
      */
-    private List<VectorSearchResult> searchByRegionAndSlot(VectorEnrichedInput input,
-                                                           float[] queryVector,
-                                                           SearchSlot slot,
-                                                           int slotLimit) {
-        Map<String, List<String>> regionAllocation = input.regionAllocation();
-        int regionCount = regionAllocation.size();
-        int limitPerRegion = Math.max(1, slotLimit / regionCount);
+    private static List<VectorSearchResult> dedupeByPlace(List<VectorSearchResult> results) {
+        if (results == null || results.isEmpty()) return List.of();
 
-        List<VectorSearchResult> allResults = new ArrayList<>();
+        Map<Long, VectorSearchResult> bestById = new LinkedHashMap<>();
+        List<VectorSearchResult> withoutId = new ArrayList<>();
+        for (VectorSearchResult r : results) {
+            if (r.placeId() == null) {
+                withoutId.add(r);
+                continue;
+            }
+            VectorSearchResult prev = bestById.get(r.placeId());
+            if (prev == null || r.similarityScore() > prev.similarityScore()) {
+                bestById.put(r.placeId(), r);
+            }
+        }
+        List<VectorSearchResult> merged = new ArrayList<>(bestById.values());
+        merged.addAll(withoutId);
+        return merged;
+    }
 
-        for (Map.Entry<String, List<String>> entry : regionAllocation.entrySet()) {
-            List<String> regions = entry.getValue();
-            log.debug("지역·슬롯 검색 - 슬롯: {}, 일차: {}, 지역: {}, limit: {}",
-                    slot.key(), entry.getKey(), regions, limitPerRegion);
+    /**
+     * 검색 실행 단위. 지역 분리가 없으면 슬롯당 1개, 있으면 (슬롯 × regionAllocation 엔트리)마다 1개다.
+     *
+     * @param slot          결과를 묶을 슬롯 — 임계값·랭킹은 이 단위로 적용한다
+     * @param queryText     임베딩할 쿼리. 지역 분리 시 필터로 못 쓰는 세부 지명이 뒤에 붙는다
+     * @param filterRegions DB {@code place.region} 하드 필터로 쓸 값. null이면 {@code input.regions()}
+     */
+    private record SearchUnit(SearchSlot slot, String queryText, List<String> filterRegions) {}
 
-            VectorSearchRequest request = buildRequest(input, queryVector, regions, slot, limitPerRegion);
-            allResults.addAll(placeVectorSearchService.search(request));
+    /**
+     * 슬롯 목록을 실제 검색 실행 단위로 펼친다.
+     *
+     * <p>지역 분리(5일+)일 때 regionAllocation 값을 <b>필터 축</b>과 <b>랭킹 축</b>으로 가르는 것이
+     * 이 메서드의 핵심이다. DB의 {@code place.region}은 enrich가 주는 영어 상위 도시명(Seoul·Jeju…)
+     * 한 축뿐인데, regionAllocation에는 행정동(용담동)·지형(한라산)·경로(올레길)·랜드마크(성산일출봉)가
+     * 섞여 온다. 이 값들을 그대로 {@code p.region = ?}에 넣으면 전 슬롯이 0건이 되고, 예외 하나 없이
+     * 빈 후보 풀이 만들어진다(실측: 제주 5일 여행이 전 슬롯 조회=0 → fallback → 생성 실패).
+     *
+     * <p>그래서 {@link VectorEnrichedInput#regions()} 어휘에 실재하는 값만 필터로 승격하고, 나머지는
+     * 쿼리 텍스트에 얹어 벡터 유사도로만 반영한다. 서울+부산처럼 값이 그대로 상위 도시명인 진짜
+     * 다지역 여행은 종전과 똑같이 지역별 분리 검색이 유지된다.
+     */
+    private List<SearchUnit> buildSearchUnits(VectorEnrichedInput input, List<SearchSlot> slots) {
+        if (!shouldSplitByRegion(input)) {
+            return slots.stream()
+                    .map(slot -> new SearchUnit(slot, slot.queryText(), null))
+                    .toList();
         }
 
-        return allResults;
+        Set<String> knownRegions = new HashSet<>();
+        if (input.regions() != null) {
+            input.regions().stream()
+                    .filter(r -> r != null && !r.isBlank())
+                    .forEach(r -> knownRegions.add(r.trim().toLowerCase()));
+        }
+
+        List<SearchUnit> units = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : input.regionAllocation().entrySet()) {
+            List<String> values = entry.getValue() != null ? entry.getValue() : List.<String>of();
+            List<String> filterRegions = new ArrayList<>();
+            List<String> hints = new ArrayList<>();
+            for (String value : values) {
+                if (value == null || value.isBlank()) continue;
+                if (knownRegions.contains(value.trim().toLowerCase())) {
+                    filterRegions.add(value.trim());
+                } else {
+                    hints.add(value.trim());
+                }
+            }
+
+            log.debug("지역 분리 - 일차: {}, 필터: {}, 유사도 힌트: {}",
+                    entry.getKey(), filterRegions, hints);
+
+            String suffix = hints.isEmpty() ? "" : " " + String.join(" ", hints);
+            for (SearchSlot slot : slots) {
+                units.add(new SearchUnit(slot, slot.queryText() + suffix,
+                        filterRegions.isEmpty() ? null : List.copyOf(filterRegions)));
+            }
+        }
+        return units;
     }
 
     /**

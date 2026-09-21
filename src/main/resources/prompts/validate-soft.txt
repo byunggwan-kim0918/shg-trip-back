@@ -4,7 +4,7 @@
 - 여행지: {destination}
 - 기간: {startDate} ~ {endDate}
 - 테마: {themes}
-- 예산: {budget}원 (숙박비 포함)
+- 예산: {budget} (숙박비 포함)
 
 ## 평가할 일정 (JSON)
 {itinerary}

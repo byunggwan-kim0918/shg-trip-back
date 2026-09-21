@@ -217,7 +217,10 @@ public class OptimizedClaudeAIService {
     // ── Private helpers ──
 
     private String buildEnrichPrompt(ItineraryGenerateRequest input) {
-        String formattedBudget = String.format("%,.0f", input.budget());
+        // 예산은 선택 입력 — null이면 "%,.0f"가 문자열 "null"을 찍어 프롬프트에 "예산: null"이 들어간다.
+        String formattedBudget = input.budget() != null
+                ? String.format("%,.0f원", input.budget())
+                : "선택 없음";
         return enrichPromptTemplate
                 .replace("{destination}", input.destination())
                 .replace("{themes}", String.join(", ", input.themes()))
@@ -255,7 +258,7 @@ public class OptimizedClaudeAIService {
                 - 여행지: {destination}
                 - 테마: {themes}
                 - 카테고리: {categories}
-                - 예산: {budget}원
+                - 예산: {budget}
                 - 기간: {startDate} ~ {endDate}
                 - 페이스: {pace}
                 - 이동수단 선호: {transportPref} (walk=도보/버스 우선, car=자동차 우선, any=상관없음)

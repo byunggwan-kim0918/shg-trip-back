@@ -21,6 +21,7 @@ import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -289,7 +290,7 @@ public class ClaudeAIService implements AIService {
                 .replace("{startDate}", input.startDate().toString())
                 .replace("{endDate}", input.endDate().toString())
                 .replace("{themes}", String.join(", ", input.themes()))
-                .replace("{budget}", input.budget().toPlainString())
+                .replace("{budget}", budgetText(input.budget()))
                 .replace("{itinerary}", itineraryJson);
 
         try {
@@ -354,8 +355,18 @@ public class ClaudeAIService implements AIService {
         return Math.max(12000, Math.min(estimated, limit));
     }
 
+    /**
+     * 예산은 선택 입력이라 null일 수 있다(마법사에서 "상관없음" 선택).
+     * 템플릿이 단위까지 플레이스홀더에 포함하므로 "선택 없음원" 같은 문장이 생기지 않는다.
+     */
+    private static String budgetText(BigDecimal budget) {
+        return budget != null ? budget.toPlainString() + "원" : "선택 없음";
+    }
+
     private String buildEnrichPrompt(ItineraryGenerateRequest input) {
-        String formattedBudget = String.format("%,.0f", input.budget());
+        String formattedBudget = input.budget() != null
+                ? String.format("%,.0f원", input.budget())
+                : "선택 없음";
         return enrichInputPromptTemplate
                 .replace("{destination}", input.destination())
                 .replace("{themes}", String.join(", ", input.themes()))
@@ -389,7 +400,7 @@ public class ClaudeAIService implements AIService {
                 .replace("{destination}", input.destination())
                 .replace("{themes}", String.join(", ", input.themes()))
                 .replace("{categories}", String.join(", ", input.categories()))
-                .replace("{budget}", input.budget().toPlainString())
+                .replace("{budget}", budgetText(input.budget()))
                 .replace("{startDate}", input.startDate().toString())
                 .replace("{endDate}", input.endDate().toString())
                 .replace("{description}", input.description() != null ? input.description() : "없음")
@@ -452,7 +463,7 @@ public class ClaudeAIService implements AIService {
                 .replace("{destination}", input.destination())
                 .replace("{themes}", String.join(", ", input.themes()))
                 .replace("{categories}", String.join(", ", input.categories()))
-                .replace("{budget}", input.budget().toPlainString())
+                .replace("{budget}", budgetText(input.budget()))
                 .replace("{startDate}", input.startDate().toString())
                 .replace("{endDate}", input.endDate().toString())
                 .replace("{existingItinerary}", existingItinerary)
@@ -489,7 +500,7 @@ public class ClaudeAIService implements AIService {
                 .replace("{destination}", input.destination())
                 .replace("{themes}", String.join(", ", input.themes()))
                 .replace("{categories}", String.join(", ", input.categories()))
-                .replace("{budget}", input.budget().toPlainString())
+                .replace("{budget}", budgetText(input.budget()))
                 .replace("{startDate}", input.startDate().toString())
                 .replace("{endDate}", input.endDate().toString())
                 .replace("{description}", input.description() != null ? input.description() : "없음")

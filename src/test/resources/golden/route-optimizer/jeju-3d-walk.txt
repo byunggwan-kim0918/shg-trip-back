@@ -1,0 +1,42 @@
+== day 1 ==
+  #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
+      이동: - -분 -km -원
+      비용: 0원 / 메모: -
+  #2  11:30-12:40  명품진전복해물탕 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
+      이동: CAR 10분 6.21km 4970원
+      비용: 13000원 / 메모: -
+  #3  12:45-14:15  사라봉공원 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
+      이동: CAR 5분 2.99km 2390원
+      비용: 0원 / 메모: -
+  #4  14:31-16:01  제주별빛누리공원 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
+      이동: CAR 16분 10.32km 8253원
+      비용: 0원 / 메모: -
+  #5  17:30-18:40  아레 한국 식당 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
+      이동: CAR 15분 9.76km 7806원
+      비용: 13000원 / 메모: -
+  #6  18:43-19:13  제주R호텔 | Travel and Transportation > Lodging > Hotel | 제주시 | Jeju
+      이동: CAR 3분 1.85km 1480원
+      비용: 120000원 / 메모: -
+== day 2 ==
+  #7  11:30-12:40  양가형제 | Dining and Drinking > Restaurant | 제주시 | Jeju
+      이동: CAR 64분 42.25km 33804원
+      비용: 13000원 / 메모: -
+  #8  17:30-18:40  대금식당 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
+      이동: CAR 21분 13.77km 11013원
+      비용: 13000원 / 메모: -
+  #9  19:33-20:03  제주R호텔 | Travel and Transportation > Lodging > Hotel | 제주시 | Jeju
+      이동: CAR 53분 35.11km 28092원
+      비용: 120000원 / 메모: -
+  #10 20:04-20:34  제주R호텔 | Travel and Transportation > Lodging > Hotel | 제주시 | Jeju
+      이동: WALK 1분 0km 0원
+      비용: 120000원 / 메모: -
+== day 3 ==
+  #11 11:30-12:40  어멍 | Dining and Drinking > Restaurant > BBQ Joint | 제주시 | Jeju
+      이동: CAR 30분 19.57km 15659원
+      비용: 13000원 / 메모: -
+-- notices (5) --
+  2일차에 넣을 만한 관광지를 찾지 못했어요.
+  2일차 이동이 91km로 다소 깁니다.
+  3일차에 넣을 만한 관광지를 찾지 못했어요.
+  3일차 이동이 20km로 다소 깁니다.
+  3일차 일정이 12:40에 일찍 끝납니다.
