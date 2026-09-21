@@ -17,21 +17,18 @@ public final class SelectionToolSchema {
      * 날짜별 장소 선택 Tool을 빌드한다.
      */
     public static Tool buildSelectionTool() {
+        // 숙소·도착/출발 허브는 스키마에서 제외한다(B3). 백엔드가 결정론적으로 채우고 덮어쓰므로
+        // (fillMissingAccommodation / repairHubs / repairNamedHubs / repairAccommodationByProximity)
+        // 모델이 채워봐야 버려지고, 그 자리를 채우느라 토큰과 주의만 낭비된다.
         Map<String, Object> dayPlanSchema = Map.ofEntries(
                 Map.entry("type", "object"),
                 Map.entry("additionalProperties", false),
                 Map.entry("properties", Map.ofEntries(
                         Map.entry("dayNumber", Map.of("type", "integer",
                                 "description", "여행 일차 (1부터)")),
-                        Map.entry("arrivalHubIndex", Map.of("type", "integer",
-                                "description", "도착 허브 인덱스 (첫날만, nullable)")),
                         Map.entry("placeIndices", Map.of("type", "array",
                                 "items", Map.of("type", "integer"),
-                                "description", "방문 장소 인덱스 (순서대로)")),
-                        Map.entry("accommodationIndex", Map.of("type", "integer",
-                                "description", "숙소 인덱스 (마지막날은 null)")),
-                        Map.entry("departureHubIndex", Map.of("type", "integer",
-                                "description", "출발 허브 인덱스 (마지막날만, nullable)"))
+                                "description", "방문 장소 인덱스 (순서대로). 숙소·공항/역/터미널은 넣지 말 것 — 백엔드가 배정함"))
                 )),
                 Map.entry("required", List.of("dayNumber", "placeIndices"))
         );

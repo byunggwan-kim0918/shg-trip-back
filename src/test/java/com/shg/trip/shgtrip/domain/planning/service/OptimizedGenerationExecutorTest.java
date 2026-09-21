@@ -75,6 +75,10 @@ class OptimizedGenerationExecutorTest {
         doReturn(noopFuture).when(sseHeartbeatScheduler)
                 .scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any());
 
+        lenient().when(indexResultMapper.stripCodeOwnedFields(any()))
+                .thenAnswer(i -> i.getArgument(0));
+        lenient().when(indexResultMapper.stripMealIneligibleAggregates(any(), any()))
+                .thenAnswer(i -> i.getArgument(0));
         lenient().when(indexResultMapper.fillMissingAccommodation(any(), any()))
                 .thenAnswer(i -> i.getArgument(0));
         lenient().when(indexResultMapper.injectRequiredPlaces(any(), any()))
@@ -153,22 +157,23 @@ class OptimizedGenerationExecutorTest {
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean())).thenReturn(fixedSteps);
-        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList()))
+        when(routeOptimizer.schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList(), anyList()))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(42L);
-        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true))).thenReturn(mockItinerary);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any())).thenReturn(mockItinerary);
 
         executor.execute("job-1", request, 1L, emitter);
 
         verify(optimizedClaudeAIService).enrichInput(request);
         verify(vectorSearchQueryService).search(vectorEnrichedInput);
         verify(selectionCallGenerator).selectPlaces(eq(vectorEnrichedInput), anyList());
-        verify(routeOptimizer).repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean());
-        verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true));
+        verify(routeOptimizer).schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any());
+        verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any());
         verify(resultStore).save("job-1", 42L);
         verify(storyGenerationService).generateAndAttach(
                 eq("job-1"), eq(emitter), eq(42L), eq(fixedSteps), eq(selectionOutput.concept()), eq(vectorEnrichedInput));
@@ -187,7 +192,7 @@ class OptimizedGenerationExecutorTest {
         verify(optimizedClaudeAIService).enrichInput(request);
         verify(vectorSearchQueryService, never()).search(any());
         verify(selectionCallGenerator, never()).selectPlaces(any(), any());
-        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
     }
 
     @Test
@@ -202,7 +207,7 @@ class OptimizedGenerationExecutorTest {
 
         verify(fallbackExecutor).execute("job-3", request, 1L, emitter);
         verify(selectionCallGenerator, never()).selectPlaces(any(), any());
-        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
     }
 
     @Test
@@ -216,18 +221,19 @@ class OptimizedGenerationExecutorTest {
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean())).thenReturn(fixedSteps);
-        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList()))
+        when(routeOptimizer.schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList(), anyList()))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.fail("일부 검증 경고"));
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(99L);
-        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true))).thenReturn(mockItinerary);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any())).thenReturn(mockItinerary);
 
         executor.execute("job-4", request, 1L, emitter);
 
-        verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true));
+        verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any());
         verify(resultStore).save("job-4", 99L);
         verify(storyGenerationService).generateAndAttach(eq("job-4"), any(), eq(99L), any(), any(), any());
     }
@@ -241,7 +247,7 @@ class OptimizedGenerationExecutorTest {
 
         verify(optimizedClaudeAIService, never()).enrichInput(any());
         verify(vectorSearchQueryService, never()).search(any());
-        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
     }
 
     @Test
@@ -253,7 +259,7 @@ class OptimizedGenerationExecutorTest {
 
         executor.execute("job-7", request, 1L, emitter);
 
-        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
     }
 
     @Test
@@ -267,19 +273,20 @@ class OptimizedGenerationExecutorTest {
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.repairAndSchedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean())).thenReturn(fixedSteps);
-        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList()))
+        when(routeOptimizer.schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList(), anyList()))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(50L);
-        when(saveHelper.save(any(), any(EnrichedInput.class), eq(1L), eq(true))).thenReturn(mockItinerary);
+        when(saveHelper.save(any(), any(EnrichedInput.class), eq(1L), eq(true), any())).thenReturn(mockItinerary);
 
         executor.execute("job-8", request, 1L, emitter);
 
         ArgumentCaptor<EnrichedInput> inputCaptor = ArgumentCaptor.forClass(EnrichedInput.class);
-        verify(saveHelper).save(eq(draftData), inputCaptor.capture(), eq(1L), eq(true));
+        verify(saveHelper).save(eq(draftData), inputCaptor.capture(), eq(1L), eq(true), any());
 
         EnrichedInput captured = inputCaptor.getValue();
         assertThat(captured.destination()).isEqualTo("도쿄");

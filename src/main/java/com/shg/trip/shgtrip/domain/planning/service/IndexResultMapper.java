@@ -80,11 +80,22 @@ public class IndexResultMapper {
      */
     public ItineraryData toDraftItineraryData(
             List<StepData> fixedSteps, String destination, String concept, List<String> tagSeed) {
+        return toDraftItineraryData(fixedSteps, destination, concept, tagSeed, List.of());
+    }
+
+    /**
+     * @param qualityNotices RouteOptimizer가 끝내 해소하지 못한 품질 문제의 사용자 안내 문구.
+     *                       일정과 함께 저장돼 상세 화면에서 노출된다.
+     */
+    public ItineraryData toDraftItineraryData(
+            List<StepData> fixedSteps, String destination, String concept, List<String> tagSeed,
+            List<String> qualityNotices) {
         BigDecimal totalCost = fixedSteps.stream()
                 .map(StepData::estimatedCost)
                 .filter(java.util.Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        return new ItineraryData(concept, destination, totalCost, normalizeTags(tagSeed), fixedSteps);
+        return new ItineraryData(concept, destination, totalCost, normalizeTags(tagSeed), fixedSteps,
+                qualityNotices != null ? qualityNotices : List.of());
     }
 
     /**
@@ -103,12 +114,79 @@ public class IndexResultMapper {
     }
 
     /**
+     * 백엔드가 소유하는 필드(숙소·도착/출발 허브)를 비운다(B3).
+     *
+     * <p>세 필드는 Tool Use 스키마에서 제거됐지만, 모델이 규약 밖 필드를 보내거나 fallback 경로가
+     * 값을 채워 넘길 수 있다. 어느 경우든 뒤따르는 결정론적 보정(fillMissingAccommodation /
+     * repairHubs / repairNamedHubs / repairAccommodationByProximity)이 최종 값을 정하므로,
+     * 중간 상태에 모델 값이 섞여 판단이 흔들리지 않도록 진입 시점에 한 번 비운다.
+     * placeIndices에 잘못 들어온 숙소·허브는 RouteOptimizer가 별도로 정리한다.
+     */
+    public SelectionOutput stripCodeOwnedFields(SelectionOutput selection) {
+        if (selection == null || selection.days() == null || selection.days().isEmpty()) {
+            return selection;
+        }
+        List<SelectionOutput.DayPlan> stripped = new ArrayList<>(selection.days().size());
+        for (SelectionOutput.DayPlan d : selection.days()) {
+            stripped.add(new SelectionOutput.DayPlan(d.dayNumber(), null,
+                    d.placeIndices() != null ? d.placeIndices() : List.of(), null, null));
+        }
+        return new SelectionOutput(selection.concept(), stripped, selection.pairs(),
+                selection.spareIndices(), selection.highlightIndices(), selection.restIndices());
+    }
+
+    /**
+     * Sonnet이 식당으로 오인해 고른 <b>집합 POI</b>(음식거리·먹자골목처럼 개별 가게가 아니라
+     * 구역을 가리키는 장소)를 방문 목록에서 빼고 spare로 돌린다.
+     *
+     * <p>검색 슬롯은 SQL로, 최종 보정 패스는 {@code mealEligible}로 이미 걸러내지만 선택 결과에는
+     * 검사가 없어서, Sonnet이 고르면 그대로 통과해 저녁 시간대를 차지했다(실측 58 day2
+     * "Seogwipo's food streets" 18:23). 세 경로가 같은 기준을 보도록 여기서도 같은 판정을 쓴다.
+     * 좌표가 구역 중심이라 동선까지 왜곡되므로 활동으로도 남기지 않는다.
+     */
+    public SelectionOutput stripMealIneligibleAggregates(SelectionOutput selection,
+                                                        List<PlaceCandidate> allCandidates) {
+        if (selection == null || selection.days() == null || selection.days().isEmpty()) {
+            return selection;
+        }
+        List<SelectionOutput.DayPlan> days = new ArrayList<>(selection.days().size());
+        List<Integer> spare = new ArrayList<>(
+                selection.spareIndices() != null ? selection.spareIndices() : List.of());
+        boolean changed = false;
+
+        for (SelectionOutput.DayPlan d : selection.days()) {
+            List<Integer> kept = new ArrayList<>();
+            for (Integer idx : d.placeIndices() != null ? d.placeIndices() : List.<Integer>of()) {
+                PlaceCandidate c = idx != null && idx >= 1 && idx <= allCandidates.size()
+                        ? allCandidates.get(idx - 1) : null;
+                if (c != null && PlaceCategoryConstants.isAggregatePoi(c.name(), c.category())) {
+                    if (!spare.contains(idx)) spare.add(idx);
+                    changed = true;
+                    log.info("집합 POI 선택 제외: day={} {} (개별 가게가 아니라 구역)", d.dayNumber(), c.name());
+                    continue;
+                }
+                kept.add(idx);
+            }
+            days.add(new SelectionOutput.DayPlan(d.dayNumber(), d.arrivalHubIndex(), kept,
+                    d.accommodationIndex(), d.departureHubIndex()));
+        }
+        if (!changed) return selection;
+        return new SelectionOutput(selection.concept(), days, selection.pairs(), spare,
+                selection.highlightIndices(), selection.restIndices());
+    }
+
+    /**
      * 마지막 날을 제외한 모든 날에 accommodationIndex가 채워지도록 보정한다.
      * Sonnet이 중간 날 숙소를 누락하는 경우(Tool Use 스키마가 강제하지 않음)를
      * 추가 LLM 호출 없이 코드로 메운다.
      *
      * 1) 직전 날에 배정된 accommodationIndex가 있으면 재사용(연박 가정)
-     * 2) 없으면 아직 쓰이지 않은 LODGING 카테고리 후보를 새로 배정
+     * 2) 없으면 방문 스텝으로 쓰이지 않은 LODGING 카테고리 후보를 새로 배정
+     *
+     * <p><b>spare에 있는 숙소도 배정 대상이다.</b> 예전엔 {@link #collectAllUsedIndices}(spare 포함)로
+     * 걸러서, 프롬프트가 "남는 숙소는 전부 spareIndices에 넣어라"고 지시한 대로 동작한 Sonnet 출력에서
+     * LODGING이 전량 탈락해 숙소 스텝이 0개가 됐다(실측: itinerary 60·66·67). spare는 "메인 스텝으로
+     * 쓰지 않음"을 뜻할 뿐이고, 숙소는 애초에 메인 스텝이 아니라 별도 슬롯이라 무관하다.
      *
      * @return 보정된 SelectionOutput (변경 없으면 원본과 동일한 내용의 새 인스턴스)
      */
@@ -121,7 +199,7 @@ public class IndexResultMapper {
                 .mapToInt(SelectionOutput.DayPlan::dayNumber)
                 .max().orElse(0);
 
-        Set<Integer> usedIndices = collectAllUsedIndices(selection);
+        Set<Integer> usedIndices = collectMainStepIndices(selection);
 
         List<SelectionOutput.DayPlan> fixedDays = new ArrayList<>();
         Integer lastKnownAccommodation = null;
@@ -138,10 +216,16 @@ public class IndexResultMapper {
                     accomIdx = findUnusedAccommodation(allCandidates, usedIndices);
                     if (accomIdx != null) {
                         usedIndices.add(accomIdx);
-                        log.warn("day={} accommodationIndex 누락 → 신규 숙소(index={}) 자동 배정",
-                                day.dayNumber(), accomIdx);
+                        log.info("day={} 숙소 자동 배정: index={}", day.dayNumber(), accomIdx);
                     } else {
-                        log.error("day={} accommodationIndex 누락, 보충할 LODGING 후보도 없음", day.dayNumber());
+                        // 마지막 안전망 — 방문 스텝으로 쓰인 숙소밖에 없더라도 "숙소 없는 숙박일"보다는 낫다.
+                        accomIdx = findAnyAccommodation(allCandidates);
+                        if (accomIdx != null) {
+                            log.warn("day={} 미사용 LODGING 없음 → 방문 스텝과 중복이지만 최선책 배정: index={}",
+                                    day.dayNumber(), accomIdx);
+                        } else {
+                            log.error("day={} 숙소 배정 불가 — 후보 풀에 LODGING이 0개", day.dayNumber());
+                        }
                     }
                 }
                 fixedDays.add(new SelectionOutput.DayPlan(
@@ -296,12 +380,39 @@ public class IndexResultMapper {
         return used;
     }
 
+    /**
+     * 메인 방문 스텝으로 점유된 인덱스만 모은다 — <b>spare는 제외</b>.
+     *
+     * <p>{@link #collectAllUsedIndices}는 "한 장소는 전체 일정에서 1회"라는 방문 스텝 유일성을 위한
+     * 것이라 spare까지 점유로 센다. 숙소 배정은 다른 질문("이 호텔을 호텔로 쓸 수 있나")이라 그 집합을
+     * 쓰면 안 된다 — spare에 있다고 해서 숙소로 못 쓸 이유가 없다.
+     */
+    private Set<Integer> collectMainStepIndices(SelectionOutput selection) {
+        Set<Integer> used = new HashSet<>();
+        for (SelectionOutput.DayPlan day : selection.days()) {
+            if (day.arrivalHubIndex() != null) used.add(day.arrivalHubIndex());
+            if (day.placeIndices() != null) used.addAll(day.placeIndices());
+            if (day.departureHubIndex() != null) used.add(day.departureHubIndex());
+        }
+        return used;
+    }
+
+    /** 방문 스텝으로 쓰이지 않은 LODGING 중 평점이 가장 높은 후보. */
     private Integer findUnusedAccommodation(List<PlaceCandidate> allCandidates, Set<Integer> usedIndices) {
-        return allCandidates.stream()
+        return bestAccommodation(allCandidates.stream()
+                .filter(c -> !usedIndices.contains(c.index())));
+    }
+
+    /** 점유 여부를 무시한 최선책 LODGING — 숙소 없는 숙박일을 만들지 않기 위한 마지막 수단. */
+    private Integer findAnyAccommodation(List<PlaceCandidate> allCandidates) {
+        return bestAccommodation(allCandidates.stream());
+    }
+
+    private Integer bestAccommodation(java.util.stream.Stream<PlaceCandidate> candidates) {
+        return candidates
                 .filter(c -> "LODGING".equals(PlaceCategoryConstants.majorCategory(c.category())))
-                .filter(c -> !usedIndices.contains(c.index()))
+                .max(Comparator.comparing(c -> c.rating() != null ? c.rating() : BigDecimal.ZERO))
                 .map(PlaceCandidate::index)
-                .findFirst()
                 .orElse(null);
     }
 

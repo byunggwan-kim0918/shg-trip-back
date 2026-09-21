@@ -65,6 +65,19 @@ public class DestinationCoordCache {
         }
     }
 
+    /**
+     * 잘못 캐시된 좌표를 폐기한다. Google Text Search가 도시명으로 엉뚱한 상호(예: 도시명이
+     * 들어간 타지역 식당)를 1위로 준 경우, TTL 30일 내내 모든 거리 검증이 오판하므로
+     * 후보 좌표 median과의 교차검증에서 벗어나면 즉시 지운다.
+     */
+    public void evict(String destination) {
+        try {
+            redisTemplate.delete(key(destination));
+        } catch (Exception e) {
+            log.warn("목적지 좌표 캐시 삭제 실패 (무시): destination={}, error={}", destination, e.getMessage());
+        }
+    }
+
     /** "제주", " 제주 ", "제주도"를 구분 없이 맞추진 않되, 공백/대소문자 차이만 정규화한다. */
     private String key(String destination) {
         return KEY_PREFIX + destination.trim().toLowerCase(Locale.ROOT);

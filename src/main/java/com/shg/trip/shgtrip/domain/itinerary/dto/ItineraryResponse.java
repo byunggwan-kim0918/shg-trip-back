@@ -19,6 +19,8 @@ public record ItineraryResponse(
         String coverImage,
         List<String> tags,
         String status,
+        /** 생성 시 해소하지 못한 품질 문제 안내(없으면 빈 목록) — 상세 화면에서 노출한다. */
+        List<String> qualityNotices,
         List<ItineraryStepResponse> steps
 ) {
     public static ItineraryResponse from(Itinerary itinerary) {
@@ -33,6 +35,7 @@ public record ItineraryResponse(
                 itinerary.getCoverImage(),
                 itinerary.getTags(),
                 itinerary.getStatus().name(),
+                itinerary.getQualityNotices() != null ? itinerary.getQualityNotices() : List.of(),
                 // (dayNumber, stepOrder)로 정렬 — 초기 로드엔 @OrderBy로 이미 정렬돼 no-op이고,
                 // reorder처럼 stepOrder 필드만 mutate된 경우 배열 순서를 실제 순서와 일치시킨다.
                 itinerary.getSteps().stream()
