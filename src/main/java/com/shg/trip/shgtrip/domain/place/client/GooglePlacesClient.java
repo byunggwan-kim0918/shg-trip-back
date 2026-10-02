@@ -35,12 +35,18 @@ public class GooglePlacesClient {
             "places.photos,places.googleMapsUri,places.types,places.editorialSummary";
 
     /**
-     * Basic Data SKU만 사용하는 필드 마스크 (좌표 확인 등 상세 정보가 불필요한 조회 전용).
-     * rating/priceLevel/regularOpeningHours/photos/editorialSummary(Atmosphere·Enterprise SKU)를
-     * 빼면 Google이 가장 저렴한 단가로 청구한다.
+     * 여행지 기준 좌표 조회 전용 마스크. Basic SKU에 types만 추가해, 결과가 행정구역(도시/지역)인지
+     * 검증할 수 있게 한다 — "제주" 검색 1위가 명동 식당("제주흑돈")이라 서울 좌표가 30일 캐시되고
+     * 모든 거리 검증이 오판한 사고의 재발 방지.
      */
-    private static final String BASIC_FIELD_MASK =
-            "places.id,places.displayName,places.formattedAddress,places.location";
+    private static final String LOCATION_TYPED_FIELD_MASK =
+            "places.id,places.displayName,places.formattedAddress,places.location,places.types";
+
+    /** 행정구역(도시·지역) 결과로 인정할 Google Place type 신호. */
+    private static final List<String> ADMINISTRATIVE_TYPES = List.of(
+            "locality", "political", "administrative_area_level_1", "administrative_area_level_2",
+            "administrative_area_level_3", "sublocality", "country", "natural_feature",
+            "geocode", "neighborhood", "postal_town");
 
     /**
      * 재동기화(refresh) 전용 Text Search 필드 마스크. editorialSummary를 제외해 Atmosphere 티어를
@@ -70,13 +76,6 @@ public class GooglePlacesClient {
     }
 
     /**
-     * 좌표 확인 등 위치 정보만 필요한 조회 전용 — Basic Data SKU로 청구되어 가장 저렴하다.
-     */
-    public Optional<GooglePlaceDetail> searchLocationOnly(String query) {
-        return searchAndGetDetail(query, BASIC_FIELD_MASK);
-    }
-
-    /**
      * 재동기화 전용 Text Search — editorialSummary 제외 마스크로 한 티어 저렴하게 청구.
      * place_id가 없는(첫 매칭 이력 없는) 장소의 refresh나, Details 404 fallback에 쓰인다.
      */
@@ -84,7 +83,35 @@ public class GooglePlacesClient {
         return searchAndGetDetail(query, SEARCH_REFRESH_FIELD_MASK);
     }
 
+    /**
+     * 여행지 기준 좌표 조회 — <b>행정구역 타입 결과만</b> 반환한다.
+     * 최대 5건을 받아 types에 political/locality 계열이 있는 첫 결과를 고르고, 없으면
+     * empty를 반환한다(상호명 오매칭 좌표를 기준값으로 쓰지 않기 위함).
+     */
+    public Optional<GooglePlaceDetail> searchAdministrativeArea(String query) {
+        List<Map<String, Object>> places = searchTextRaw(query, LOCATION_TYPED_FIELD_MASK, 5);
+        for (Map<String, Object> place : places) {
+            Object typesObj = place.get("types");
+            if (!(typesObj instanceof List<?> types)) continue;
+            boolean administrative = types.stream()
+                    .map(t -> String.valueOf(t).toLowerCase())
+                    .anyMatch(ADMINISTRATIVE_TYPES::contains);
+            if (administrative) {
+                return Optional.of(GooglePlaceDetail.from(place));
+            }
+        }
+        log.warn("여행지 기준 좌표: 행정구역 타입 결과 없음 — 기준 좌표로 채택하지 않음 (query='{}')", query);
+        return Optional.empty();
+    }
+
     private Optional<GooglePlaceDetail> searchAndGetDetail(String query, String fieldMask) {
+        List<Map<String, Object>> places = searchTextRaw(query, fieldMask, 1);
+        if (places.isEmpty()) return Optional.empty();
+        return Optional.of(GooglePlaceDetail.from(places.get(0)));
+    }
+
+    /** Text Search 원시 결과 목록. 호출부가 결과를 직접 검증할 수 있도록 map 그대로 반환한다. */
+    private List<Map<String, Object>> searchTextRaw(String query, String fieldMask, int maxResultCount) {
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> response = restClient.post()
@@ -92,20 +119,19 @@ public class GooglePlacesClient {
                     .header("X-Goog-Api-Key", properties.apiKey())
                     .header("X-Goog-FieldMask", fieldMask)
                     .header("Content-Type", "application/json")
-                    .body(Map.of("textQuery", query, "languageCode", "ko", "maxResultCount", 1))
+                    .body(Map.of("textQuery", query, "languageCode", "ko", "maxResultCount", maxResultCount))
                     .retrieve()
                     .body(Map.class);
 
-            if (response == null) return Optional.empty();
+            if (response == null) return List.of();
 
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> places = (List<Map<String, Object>>) response.get("places");
             if (places == null || places.isEmpty()) {
                 log.debug("Places API (New): no results for query='{}'", query);
-                return Optional.empty();
+                return List.of();
             }
-
-            return Optional.of(GooglePlaceDetail.from(places.get(0)));
+            return places;
 
         } catch (ResourceAccessException e) {
             log.warn("Places API (New) timeout: query='{}'", query);

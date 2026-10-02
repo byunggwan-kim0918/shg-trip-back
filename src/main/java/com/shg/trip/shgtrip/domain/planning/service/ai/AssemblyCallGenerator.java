@@ -127,15 +127,29 @@ public class AssemblyCallGenerator {
 
         sb.append("## 여행 컨셉\n").append(concept).append("\n\n");
         sb.append("## 여행 정보\n");
-        sb.append("- 여행지: ").append(input.normalizedDestination()).append("\n\n");
+        sb.append("- 여행지: ").append(input.normalizedDestination()).append("\n");
+        if (input.themes() != null && !input.themes().isEmpty()) {
+            sb.append("- 테마: ").append(String.join(", ", input.themes())).append("\n");
+        }
+        // 계절·시즌은 story가 "지금이 어느 계절인지"를 지어내지 않도록 입력으로 명시한다.
+        if (input.seasonContext() != null && !input.seasonContext().isBlank()) {
+            sb.append("- 시즌: ").append(input.seasonContext()).append("\n");
+        }
+        sb.append("\n");
 
         sb.append("## 확정된 일정 (순서·시간 변경 절대 불가, story만 작성)\n");
+        sb.append("형식: [stepOrder N] D일차 시작-종료 장소명 (세부지역) · 카테고리 · 설명\n");
         for (StepData step : fixedSteps) {
             sb.append("[stepOrder ").append(step.stepOrder()).append("] ")
                     .append(step.dayNumber()).append("일차 ")
                     .append(step.startTime()).append("-").append(step.endTime()).append(" ")
                     .append(step.place().name())
-                    .append(" (").append(step.place().region()).append(")\n");
+                    .append(" (").append(displayRegion(step)).append(")");
+            String category = leafCategory(step.place().category());
+            if (category != null) sb.append(" · ").append(category);
+            String description = shortDescription(step.place().description());
+            if (description != null) sb.append(" · ").append(description);
+            sb.append("\n");
         }
 
         sb.append("\n주어진 concept을 관통하는 하나의 여행 이야기로서, 각 stepOrder에 대해 ")
@@ -143,6 +157,29 @@ public class AssemblyCallGenerator {
                 .append("일반적인 감성 문구가 아니라, 위 concept에 종속된 narrative여야 합니다.\n");
 
         return sb.toString();
+    }
+
+    /** 표시 지역: 세부지역(시/군/구) 우선, 없으면 상위 region. */
+    private String displayRegion(StepData step) {
+        String sub = step.place().subRegion();
+        if (sub != null && !sub.isBlank()) return sub;
+        return step.place().region() != null ? step.place().region() : "";
+    }
+
+    /** Foursquare 계층 경로에서 리프만 (토큰 절감 + 장소 성격 전달). */
+    private String leafCategory(String category) {
+        if (category == null || category.isBlank()) return null;
+        int lastArrow = category.lastIndexOf('>');
+        String leaf = lastArrow >= 0 ? category.substring(lastArrow + 1).trim() : category.trim();
+        return leaf.isEmpty() ? null : leaf;
+    }
+
+    /** 장소 설명 한 줄 — 너무 길면 잘라 토큰을 아낀다. URL만 있는 값은 버린다. */
+    private String shortDescription(String description) {
+        if (description == null || description.isBlank()) return null;
+        String trimmed = description.trim().replaceAll("\\s+", " ");
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return null;
+        return trimmed.length() > 60 ? trimmed.substring(0, 60) + "…" : trimmed;
     }
 
     private String loadPromptTemplate(String path) {

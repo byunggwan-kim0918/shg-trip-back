@@ -23,6 +23,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.times;
@@ -74,6 +75,37 @@ class VectorSearchQueryServiceTest {
         );
     }
 
+    /** 슬롯 수만큼의 임베딩 벡터를 배치로 돌려주는 스텁. */
+    private void givenBatchEmbeddings() {
+        given(embeddingService.embedBatch(anyList())).willAnswer(inv -> {
+            List<?> texts = inv.getArgument(0);
+            List<float[]> vectors = new java.util.ArrayList<>();
+            for (int i = 0; i < texts.size(); i++) vectors.add(MOCK_VECTOR);
+            return vectors;
+        });
+    }
+
+    /** 테마·카테고리만 바꾼 3일 입력. */
+    private VectorEnrichedInput inputWith(List<String> themes, List<String> categories) {
+        LocalDate start = LocalDate.of(2026, 8, 1);
+        return new VectorEnrichedInput(
+                "도쿄", themes, categories,
+                "normal", "any", BigDecimal.valueOf(1000000), start, start.plusDays(2),
+                "도쿄 여행", null,
+                "도쿄", "일본", List.of("시부야"),
+                List.of("맛집"), null,
+                "MEDIUM", "여름", "컨텍스트",
+                null, null
+        );
+    }
+
+    private VectorSearchResult resultWithSimilarity(long id, String name, double similarity) {
+        return new VectorSearchResult(
+                id, name, "주소", "Dining and Drinking > Restaurant", List.of(),
+                "시부야", "일본", BigDecimal.valueOf(35.6), BigDecimal.valueOf(139.7),
+                "설명", BigDecimal.valueOf(4.0), similarity);
+    }
+
     private List<VectorSearchResult> createMockResults(int count) {
         List<VectorSearchResult> results = new java.util.ArrayList<>();
         for (int i = 0; i < count; i++) {
@@ -96,41 +128,115 @@ class VectorSearchQueryServiceTest {
     }
 
     @Nested
-    @DisplayName("search - 기본 검색 파이프라인")
+    @DisplayName("search - 슬롯 기반 검색 파이프라인")
     class SearchTests {
 
         @Test
-        @DisplayName("기본 검색 파이프라인이 올바르게 동작한다 (카테고리별 검색)")
-        void search_basicPipeline_returnsPlaceCandidates() {
+        @DisplayName("임베딩은 슬롯 수와 무관하게 embedBatch 1회로 생성된다")
+        void search_embedsAllSlotQueriesInOneBatch() {
             VectorEnrichedInput input = createBasicInput(3);
-            given(embeddingService.embed(anyString())).willReturn(MOCK_VECTOR);
+            givenBatchEmbeddings();
             given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
                     .willReturn(createMockResults(10));
 
-            List<PlaceCandidate> result = service.search(input);
+            service.search(input);
 
-            assertThat(result).hasSize(10);
-            verify(embeddingService, atLeastOnce()).embed(anyString());
+            verify(embeddingService, times(1)).embedBatch(anyList());
+            verify(embeddingService, org.mockito.Mockito.never()).embed(anyString());
+        }
+
+        @Test
+        @DisplayName("고정 역할 슬롯(식당/카페/숙소) + 사용자 카테고리·테마별 관광 슬롯으로 분리 검색한다")
+        void search_splitsAttractionSlotsByUserInput() {
+            VectorEnrichedInput input = inputWith(
+                    List.of("ocean", "nightview"),               // 검색 의미가 있는 테마 2개
+                    List.of("restaurant", "cafe", "beach", "viewpoint"));
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(createMockResults(5));
+
+            service.search(input);
+
+            // 식당 + 카페 + 숙소 + 관광(beach, viewpoint, ocean, nightview, 기본) = 8슬롯
+            verify(placeVectorSearchService, times(8)).search(requestCaptor.capture());
+            assertThat(requestCaptor.getAllValues()).hasSize(8);
+        }
+
+        @Test
+        @DisplayName("슬롯마다 '명백히 틀린 대분류' 배제 패턴이 요청에 실린다 (하드 카테고리 필터는 없음)")
+        void search_passesSlotExclusionsNotCategoryFilter() {
+            VectorEnrichedInput input = createBasicInput(3);
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(createMockResults(5));
+
+            service.search(input);
+
             verify(placeVectorSearchService, atLeastOnce()).search(requestCaptor.capture());
-
-            // 카테고리별 검색이므로 여러 요청이 발생
-            List<VectorSearchRequest> capturedRequests = requestCaptor.getAllValues();
-            assertThat(capturedRequests).isNotEmpty();
-
-            // 모든 요청이 같은 destination과 budgetRange를 가져야 함
-            for (VectorSearchRequest req : capturedRequests) {
-                assertThat(req.queryVector()).isEqualTo(MOCK_VECTOR);
+            for (VectorSearchRequest req : requestCaptor.getAllValues()) {
                 assertThat(req.destination()).isEqualTo("일본");
                 assertThat(req.budgetRange()).isEqualTo("MEDIUM");
-                assertThat(req.categories()).isNotEmpty();
+                // 마법사 카테고리 id ↔ DB category 형식이 달라 하드 필터는 쓰지 않는다
+                assertThat(req.categories()).isNull();
+                assertThat(req.excludedCategoryPatterns()).isNotEmpty();
             }
+        }
+
+        @Test
+        @DisplayName("최소 유사도 미만 결과는 버려진다 (데이터 부족 시 limit 채우려 무관 장소를 끌어오지 않음)")
+        void search_dropsResultsBelowSimilarityThreshold() {
+            VectorEnrichedInput input = createBasicInput(3);
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(List.of(
+                            resultWithSimilarity(1L, "충분히 유사한 곳", 0.80),
+                            resultWithSimilarity(2L, "무관한 곳", 0.10)));
+
+            List<PlaceCandidate> result = service.search(input);
+
+            assertThat(result).extracting(PlaceCandidate::name).containsOnly("충분히 유사한 곳");
+        }
+
+        @Test
+        @DisplayName("여러 슬롯에 중복 등장한 같은 장소는 1회만 후보가 된다")
+        void search_dedupesSamePlaceAcrossSlots() {
+            VectorEnrichedInput input = inputWith(List.of("ocean"), List.of("beach", "viewpoint"));
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(createMockResults(4)); // 모든 슬롯이 같은 placeId 1~4를 반환
+
+            List<PlaceCandidate> result = service.search(input);
+
+            assertThat(result).hasSize(4);
+            assertThat(result).extracting(PlaceCandidate::placeId).doesNotHaveDuplicates();
+        }
+
+        @Test
+        @DisplayName("하이브리드 랭킹: 유사도가 조금 낮아도 평점이 높으면 위로 올라온다")
+        void search_hybridRankingBoostsHighRating() {
+            VectorEnrichedInput input = createBasicInput(3);
+            givenBatchEmbeddings();
+            VectorSearchResult lowRated = new VectorSearchResult(
+                    1L, "무평점 유사", "주소1", "Dining and Drinking > Restaurant", List.of(),
+                    "시부야", "일본", BigDecimal.valueOf(35.6), BigDecimal.valueOf(139.7),
+                    "설명", null, 0.62);
+            VectorSearchResult highRated = new VectorSearchResult(
+                    2L, "고평점", "주소2", "Dining and Drinking > Restaurant", List.of(),
+                    "시부야", "일본", BigDecimal.valueOf(35.6), BigDecimal.valueOf(139.7),
+                    "설명", BigDecimal.valueOf(4.9), 0.60);
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(List.of(lowRated, highRated));
+
+            List<PlaceCandidate> result = service.search(input);
+
+            assertThat(result.get(0).name()).isEqualTo("고평점");
         }
 
         @Test
         @DisplayName("검색 결과가 1-based 연속 인덱스를 가진다")
         void search_resultHasOneBasedContinuousIndex() {
             VectorEnrichedInput input = createBasicInput(3);
-            given(embeddingService.embed(anyString())).willReturn(MOCK_VECTOR);
+            givenBatchEmbeddings();
             given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
                     .willReturn(createMockResults(5));
 
@@ -142,13 +248,13 @@ class VectorSearchQueryServiceTest {
         }
 
         @Test
-        @DisplayName("VectorSearchResult 필드가 PlaceCandidate로 올바르게 매핑된다")
+        @DisplayName("VectorSearchResult 필드가 PlaceCandidate로 올바르게 매핑되고 주소에서 세부지역이 추출된다")
         void search_fieldsAreMappedCorrectly() {
             VectorEnrichedInput input = createBasicInput(3);
-            given(embeddingService.embed(anyString())).willReturn(MOCK_VECTOR);
+            givenBatchEmbeddings();
 
             VectorSearchResult result = new VectorSearchResult(
-                    42L, "센소지", "아사쿠사 2-3-1", "관광",
+                    42L, "센소지", "제주특별자치도 서귀포시 성산읍 1", "Landmarks and Outdoors > Temple",
                     List.of("사찰", "역사"), "아사쿠사", "일본",
                     BigDecimal.valueOf(35.7148), BigDecimal.valueOf(139.7967),
                     "유명한 사찰", BigDecimal.valueOf(4.5), 0.92
@@ -163,7 +269,6 @@ class VectorSearchQueryServiceTest {
             assertThat(candidate.index()).isEqualTo(1);
             assertThat(candidate.placeId()).isEqualTo(42L);
             assertThat(candidate.name()).isEqualTo("센소지");
-            assertThat(candidate.category()).isEqualTo("관광");
             assertThat(candidate.tags()).containsExactly("사찰", "역사");
             assertThat(candidate.region()).isEqualTo("아사쿠사");
             assertThat(candidate.country()).isEqualTo("일본");
@@ -172,6 +277,8 @@ class VectorSearchQueryServiceTest {
             assertThat(candidate.description()).isEqualTo("유명한 사찰");
             assertThat(candidate.rating()).isEqualByComparingTo(BigDecimal.valueOf(4.5));
             assertThat(candidate.similarityScore()).isEqualTo(0.92);
+            assertThat(candidate.subRegion()).isEqualTo("서귀포시");
+            assertThat(candidate.displayRegion()).isEqualTo("서귀포시");
         }
     }
 
@@ -180,54 +287,166 @@ class VectorSearchQueryServiceTest {
     class RegionSplitSearchTests {
 
         @Test
-        @DisplayName("5일+ 여행 시 regionAllocation에 따라 지역별 분리 검색을 수행한다 (카테고리별 추가)")
+        @DisplayName("5일+ 여행 시 regionAllocation에 따라 슬롯마다 지역별 분리 검색을 수행한다")
         void search_longTrip_searchesByRegion() {
             VectorEnrichedInput input = createLongTripInput();
-            given(embeddingService.embed(anyString())).willReturn(MOCK_VECTOR);
+            givenBatchEmbeddings();
             given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
                     .willReturn(createMockResults(5));
 
             List<PlaceCandidate> result = service.search(input);
 
-            // 카테고리별 + 지역별 분리 검색이므로 여러 호출 발생
-            // 최소 2회 이상의 검색 호출이 있어야 함
+            // 슬롯 수 × regionAllocation 엔트리 수만큼 호출
             verify(placeVectorSearchService, atLeast(2)).search(requestCaptor.capture());
-
-            List<VectorSearchRequest> requests = requestCaptor.getAllValues();
-            assertThat(requests).isNotEmpty();
-
-            // 결과가 정상적으로 반환되어야 함
+            assertThat(requestCaptor.getAllValues()).isNotEmpty();
             assertThat(result).isNotEmpty();
         }
 
         @Test
-        @DisplayName("지역별 분리 검색 결과를 합산하여 연속 인덱스를 부여한다")
+        @DisplayName("지역별 분리 검색 결과를 합산해도 인덱스는 1-based 연속이다")
         void search_regionSplit_mergedResultsHaveContinuousIndex() {
             VectorEnrichedInput input = createLongTripInput();
-            given(embeddingService.embed(anyString())).willReturn(MOCK_VECTOR);
+            givenBatchEmbeddings();
             given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
-                    .willReturn(createMockResults(3))
-                    .willReturn(createMockResults(4));
+                    .willReturn(createMockResults(3));
 
             List<PlaceCandidate> result = service.search(input);
 
-            assertThat(result).hasSize(7);
+            assertThat(result).isNotEmpty();
             for (int i = 0; i < result.size(); i++) {
                 assertThat(result.get(i).index()).isEqualTo(i + 1);
             }
         }
 
         @Test
-        @DisplayName("regionAllocation이 없으면 단일 검색을 수행한다")
-        void search_noRegionAllocation_singleSearch() {
-            VectorEnrichedInput input = createBasicInput(7); // 7일이지만 regionAllocation 없음
-            given(embeddingService.embed(anyString())).willReturn(MOCK_VECTOR);
+        @DisplayName("regionAllocation이 없으면 슬롯당 1회씩만 검색한다")
+        void search_noRegionAllocation_singleSearchPerSlot() {
+            VectorEnrichedInput input = inputWith(List.of("culture"), List.of("restaurant"));
+            givenBatchEmbeddings();
             given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
                     .willReturn(createMockResults(10));
 
             service.search(input);
 
-            verify(placeVectorSearchService, times(1)).search(any());
+            // restaurant + cafe + accommodation + culture 테마 관광 + 기본 관광 = 5슬롯
+            verify(placeVectorSearchService, times(5)).search(any());
+        }
+
+        /**
+         * 실측 회귀(제주 5일): enrich가 regionAllocation에 행정동·지형·랜드마크를 돌려줬는데
+         * 그 값이 그대로 {@code p.region = ?} 필터로 들어가 전 슬롯이 조회=0이 됐다.
+         * DB의 region 값은 'Jeju' 하나뿐이라 '제주시'·'용담동'은 어떤 행과도 매칭되지 않는다.
+         */
+        @Test
+        @DisplayName("regionAllocation 값이 regions 어휘에 없으면 DB 지역 필터로 쓰지 않는다")
+        void search_subRegionNames_neverBecomeHardFilter() {
+            VectorEnrichedInput input = jejuLongTripInput();
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(createMockResults(5));
+
+            service.search(input);
+
+            verify(placeVectorSearchService, atLeastOnce()).search(requestCaptor.capture());
+            for (VectorSearchRequest request : requestCaptor.getAllValues()) {
+                if (request.regions() == null) continue;
+                assertThat(request.regions()).containsOnly("Jeju");
+            }
+        }
+
+        @Test
+        @DisplayName("필터로 못 쓰는 세부 지명은 쿼리 텍스트에 얹혀 유사도로 반영된다")
+        void search_subRegionNames_becomeQueryHints() {
+            VectorEnrichedInput input = jejuLongTripInput();
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(createMockResults(5));
+
+            service.search(input);
+
+            ArgumentCaptor<List<String>> textCaptor = ArgumentCaptor.forClass(List.class);
+            verify(embeddingService).embedBatch(textCaptor.capture());
+            assertThat(textCaptor.getValue())
+                    .anyMatch(text -> text.contains("제주시") && text.contains("용담동"))
+                    .anyMatch(text -> text.contains("성산일출봉"));
+        }
+
+        @Test
+        @DisplayName("지역 필터가 0건을 만들면 상위 지역으로 완화해 재조회한다")
+        void search_emptyRegionFilter_retriesWithoutIt() {
+            VectorEnrichedInput input = multiCityInput();
+            givenBatchEmbeddings();
+            // Busan 단독 필터만 0건 — 상위 지역으로 완화한 재조회는 정상 (fail-open 경로 강제)
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willAnswer(inv -> {
+                        VectorSearchRequest request = inv.getArgument(0);
+                        return List.of("Busan").equals(request.regions())
+                                ? List.of()
+                                : createMockResults(5);
+                    });
+
+            List<PlaceCandidate> result = service.search(input);
+
+            verify(placeVectorSearchService, atLeastOnce()).search(requestCaptor.capture());
+            assertThat(requestCaptor.getAllValues())
+                    .as("Busan 슬롯이 0건이면 상위 지역 전체로 완화한 재조회가 뒤따라야 한다")
+                    .anyMatch(r -> r.regions() != null
+                            && r.regions().containsAll(List.of("Seoul", "Busan")));
+            assertThat(result).isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("지역 단위끼리 겹친 결과가 랭킹 상위를 잠식해 후보 풀을 얕게 만들지 않는다")
+        void search_duplicateAcrossRegionUnits_doesNotShrinkPool() {
+            // 세부 지명은 힌트로만 쓰이므로 3개 단위가 모두 같은 'Jeju' 필터로 조회하고, 같은
+            // 장소가 3번 돌아온다. 중복을 안 걸러내면 슬롯 limit을 같은 장소가 3칸씩 차지해
+            // 실제 고유 장소 수가 1/3로 줄어든다 — "그날 반경에 식당이 없음"의 직접 원인이다.
+            VectorEnrichedInput input = jejuLongTripInput();
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(createMockResults(30));
+
+            List<PlaceCandidate> result = service.search(input);
+
+            // 중복 제거 시 슬롯 limit(최대 20)까지 고유 장소가 채워져 20개가 나온다.
+            // 제거하지 않으면 같은 장소 3벌이 상위 20칸을 차지해 고유 7개 수준으로 떨어진다.
+            assertThat(result)
+                    .as("고유 장소 30개가 있는데 중복에 밀려 한 자릿수로 줄면 안 된다")
+                    .hasSizeGreaterThanOrEqualTo(15);
+            assertThat(result.stream().map(PlaceCandidate::placeId).filter(java.util.Objects::nonNull))
+                    .doesNotHaveDuplicates();
+        }
+
+        /** 제주 5일 — regions는 DB 실재값 'Jeju' 하나, regionAllocation은 세부 지명(실측 형태). */
+        private VectorEnrichedInput jejuLongTripInput() {
+            return new VectorEnrichedInput(
+                    "제주", List.of("자연", "맛집"), List.of("음식", "관광", "숙소"),
+                    "normal", "any", null,
+                    LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 5),
+                    "제주 5일 여행", null,
+                    "제주", "KR", List.of("Jeju"),
+                    List.of("제주 맛집", "제주 관광"),
+                    Map.of("1-2", List.of("제주시", "용담동"),
+                           "3-4", List.of("한라산", "올레길"),
+                           "5", List.of("성산일출봉")),
+                    "MEDIUM", "여름", "제주 5일 컨텍스트",
+                    null, null
+            );
+        }
+
+        /** 서울+부산 5일 — regionAllocation 값이 regions 어휘 그대로라 분리 검색이 유지돼야 한다. */
+        private VectorEnrichedInput multiCityInput() {
+            return new VectorEnrichedInput(
+                    "서울부산", List.of("맛집"), List.of("음식", "관광", "숙소"),
+                    "normal", "any", BigDecimal.valueOf(1000000),
+                    LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 5),
+                    "서울 부산 5일", null,
+                    "서울부산", "KR", List.of("Seoul", "Busan"),
+                    List.of("맛집"),
+                    Map.of("1-3", List.of("Seoul"), "4-5", List.of("Busan")),
+                    "MEDIUM", "여름", "서울 부산 컨텍스트",
+                    null, null
+            );
         }
     }
 

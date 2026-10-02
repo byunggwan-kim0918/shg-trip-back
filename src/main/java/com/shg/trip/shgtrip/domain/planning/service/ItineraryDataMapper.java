@@ -48,6 +48,12 @@ public class ItineraryDataMapper {
     private static final double DESTINATION_DISTANCE_THRESHOLD_KM = 150;
 
     /**
+     * 여행지 기준 좌표와 후보 median 중심점의 허용 이탈(km). 이를 넘으면 기준 좌표 쪽이 틀린
+     * 것으로 보고(후보 수십 건의 median이 단일 검색 결과보다 신뢰도가 높다) 캐시를 폐기한다.
+     */
+    private static final double REFERENCE_CROSS_CHECK_KM = 100;
+
+    /**
      * ItineraryData → Itinerary 엔티티 변환.
      * 1) 모든 PlaceData를 수집 → 중복 제거
      * 2) DB 배치 조회 → 미존재분만 Google API 호출 (트랜잭션 밖)
@@ -58,7 +64,7 @@ public class ItineraryDataMapper {
      * 저장 트랜잭션은 ItinerarySaveHelper.save()가 담당.
      */
     public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId) {
-        return toEntity(data, input, userId, false);
+        return toEntity(data, input, userId, false, null);
     }
 
     /**
@@ -68,11 +74,22 @@ public class ItineraryDataMapper {
      *                          깨질 수 있으므로 건너뛴다(Optimized 파이프라인 경로).
      */
     public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId, boolean alreadyOptimized) {
+        return toEntity(data, input, userId, alreadyOptimized, null);
+    }
+
+    /**
+     * @param referenceCoord 후보 장소 좌표의 median 중심점(있으면). 캐시·Google이 준 여행지 기준
+     *                       좌표가 이 중심점에서 {@link #REFERENCE_CROSS_CHECK_KM} 이상 벗어나면
+     *                       기준 좌표를 신뢰하지 않고 median을 기준으로 쓴다 — "안전장치가 검증되지
+     *                       않은 기준값을 신뢰"해 후보 전체가 fallback 처리되던 사고의 재발 방지.
+     */
+    public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId,
+                              boolean alreadyOptimized, double[] referenceCoord) {
         // 1. 모든 PlaceData 수집 + 중복 제거
         Map<String, PlaceData> uniquePlaces = collectUniquePlaces(data);
 
         // 2. 배치로 Place 엔티티 resolve (여행지 기준 좌표로 엉뚱한 장소 필터링)
-        Map<String, Place> placeCache = batchResolvePlaces(uniquePlaces, input.destination());
+        Map<String, Place> placeCache = batchResolvePlaces(uniquePlaces, input.destination(), referenceCoord);
 
         List<StepData> optimizedSteps;
         if (alreadyOptimized) {
@@ -94,6 +111,7 @@ public class ItineraryDataMapper {
                 .totalBudget(input.budget())
                 .estimatedCost(data.estimatedCost())
                 .tags(data.tags())
+                .qualityNotices(data.qualityNotices())
                 .build();
 
         if (optimizedSteps != null) {
@@ -150,13 +168,14 @@ public class ItineraryDataMapper {
      * 2) 미존재분 + 만료분: Google API 호출 (신규 저장 or 기존 업데이트)
      * 3) Google 실패 시 fallback 처리
      */
-    private Map<String, Place> batchResolvePlaces(Map<String, PlaceData> uniquePlaces, String destination) {
+    private Map<String, Place> batchResolvePlaces(Map<String, PlaceData> uniquePlaces, String destination,
+                                                  double[] referenceCoord) {
         Map<String, Place> cache = new HashMap<>();
         Map<String, Place> stalePlaces = new HashMap<>();
         int fallbackCount = 0;
 
         // 여행지 기준 좌표 조회 (Google API로 1회 검색) — 엉뚱한 장소 필터링에 사용
-        double[] destinationCoord = resolveDestinationCoord(destination);
+        double[] destinationCoord = resolveDestinationCoord(destination, referenceCoord);
 
         // 1. DB 배치 조회 — 유효/만료 분류. 여행지에서 너무 먼 기존 DB row(오매칭/오래된 잘못된
         // 데이터)는 캐시에 그대로 쓰지 않고 "못 찾음"으로 취급해 2단계에서 재해결하게 한다.
@@ -221,27 +240,45 @@ public class ItineraryDataMapper {
      * 미스 시에만 Basic 필드마스크(가장 저렴한 SKU)로 Google 조회 후 캐시에 적재.
      * 실패 시 null 반환 — 거리 검증 skip (서비스 중단 방지).
      */
-    private double[] resolveDestinationCoord(String destination) {
-        if (destination == null || destination.isBlank()) return null;
+    private double[] resolveDestinationCoord(String destination, double[] referenceCoord) {
+        if (destination == null || destination.isBlank()) return referenceCoord;
 
         Optional<double[]> cached = destinationCoordCache.get(destination);
         if (cached.isPresent()) {
-            return cached.get();
+            double[] coord = cached.get();
+            if (isConsistentWithReference(coord, referenceCoord)) return coord;
+            log.warn("여행지 기준 좌표 캐시가 후보 중심점에서 {}km 이탈 — 캐시 폐기 후 후보 median 사용: destination={}",
+                    String.format("%.0f", GeoUtils.haversine(coord, referenceCoord)), destination);
+            destinationCoordCache.evict(destination);
+            return referenceCoord;
         }
 
         try {
-            Optional<GooglePlaceDetail> detail = googlePlacesClient.searchLocationOnly(destination);
+            // 행정구역(도시/지역) 타입 결과만 채택 — 상호명 오매칭 좌표를 기준값으로 쓰지 않는다.
+            Optional<GooglePlaceDetail> detail = googlePlacesClient.searchAdministrativeArea(destination);
             // (0,0)은 파싱 실패 마커 — 다른 경로(isFallbackPlace 등)와 동일하게 AND 조건으로 판정
             if (detail.isPresent() && (detail.get().lat() != 0.0 || detail.get().lng() != 0.0)) {
                 double lat = detail.get().lat();
                 double lng = detail.get().lng();
+                double[] coord = new double[]{lat, lng};
+                if (!isConsistentWithReference(coord, referenceCoord)) {
+                    log.warn("Google 여행지 좌표가 후보 중심점에서 {}km 이탈 — 캐시하지 않고 후보 median 사용: destination={}",
+                            String.format("%.0f", GeoUtils.haversine(coord, referenceCoord)), destination);
+                    return referenceCoord;
+                }
                 destinationCoordCache.put(destination, lat, lng);
-                return new double[]{lat, lng};
+                return coord;
             }
         } catch (Exception e) {
             log.warn("여행지 기준 좌표 조회 실패: destination={}, error={}", destination, e.getMessage());
         }
-        return null;
+        return referenceCoord;
+    }
+
+    /** 기준 좌표가 후보 median 중심점과 같은 지역인지. 중심점이 없으면 판단 보류(true). */
+    private boolean isConsistentWithReference(double[] coord, double[] referenceCoord) {
+        if (coord == null || referenceCoord == null) return true;
+        return GeoUtils.haversine(coord, referenceCoord) <= REFERENCE_CROSS_CHECK_KM;
     }
 
     /**

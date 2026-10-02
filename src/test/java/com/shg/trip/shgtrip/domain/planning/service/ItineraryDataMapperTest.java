@@ -78,7 +78,7 @@ class ItineraryDataMapperTest {
     void rejectsFarDbCacheAndResolvesViaGoogle() {
         // 여행지 좌표 조회 (제주) — 캐시 미스 → Basic 필드마스크 조회
         when(destinationCoordCache.get("제주")).thenReturn(Optional.empty());
-        when(googlePlacesClient.searchLocationOnly("제주"))
+        when(googlePlacesClient.searchAdministrativeArea("제주"))
                 .thenReturn(Optional.of(new GooglePlaceDetail(
                         "dest", "제주", "제주", JEJU_LAT, JEJU_LNG, null, null, null, null, null, List.of(), null)));
 
@@ -111,7 +111,7 @@ class ItineraryDataMapperTest {
     @DisplayName("만료된(stale) 장소를 Google로 갱신할 때 결과가 여행지에서 너무 멀면 갱신을 적용하지 않고 기존 좌표를 유지한다")
     void keepsStaleDataWhenGoogleRefreshReturnsFarPlace() {
         when(destinationCoordCache.get("제주")).thenReturn(Optional.empty());
-        when(googlePlacesClient.searchLocationOnly("제주"))
+        when(googlePlacesClient.searchAdministrativeArea("제주"))
                 .thenReturn(Optional.of(new GooglePlaceDetail(
                         "dest", "제주", "제주", JEJU_LAT, JEJU_LNG, null, null, null, null, null, List.of(), null)));
 
@@ -215,7 +215,7 @@ class ItineraryDataMapperTest {
 
         assertThat(itinerary.getSteps().get(0).getPlace().getName()).isEqualTo("캐시장소");
         // 목적지 좌표 조회용 Google 호출이 없어야 함
-        verify(googlePlacesClient, never()).searchLocationOnly(anyString());
+        verify(googlePlacesClient, never()).searchAdministrativeArea(anyString());
         verify(destinationCoordCache, never()).put(anyString(), anyDouble(), anyDouble());
     }
 
@@ -223,7 +223,7 @@ class ItineraryDataMapperTest {
     @DisplayName("목적지 좌표 캐시 미스 시 Basic 필드마스크로 조회 후 캐시에 적재한다")
     void cachesDestinationCoordOnMiss() {
         when(destinationCoordCache.get("제주")).thenReturn(Optional.empty());
-        when(googlePlacesClient.searchLocationOnly("제주"))
+        when(googlePlacesClient.searchAdministrativeArea("제주"))
                 .thenReturn(Optional.of(new GooglePlaceDetail(
                         "dest", "제주", "제주", JEJU_LAT, JEJU_LNG, null, null, null, null, null, List.of(), null)));
 
@@ -238,7 +238,7 @@ class ItineraryDataMapperTest {
 
         mapper.toEntity(data, jejuInput(), 1L, true);
 
-        verify(googlePlacesClient).searchLocationOnly("제주");
+        verify(googlePlacesClient).searchAdministrativeArea("제주");
         verify(destinationCoordCache).put("제주", JEJU_LAT, JEJU_LNG);
     }
 }

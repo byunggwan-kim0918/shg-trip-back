@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
+import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -47,16 +48,12 @@ public class TourApiSeeder {
      */
     private static final Map<Integer, String> CONTENT_TYPE_CATEGORY = Map.of(
             12, "Landmarks and Outdoors > Tourist Attraction",
-            14, "Arts and Entertainment > Cultural Center"
-    );
-
-    /**
-     * 관광지 타입(contentTypeId=12)에 혼입되는 교통시설 이름 신호. 여객터미널이 "관광 스텝
-     * 90분"으로 배치되는 사고(실측: 성산포항 종합여객터미널) 방지 — 시딩 단계에서 스킵한다.
-     * "역"/"항" 단독 글자는 오탐(예: 삼양역사관)이 커서 제외.
-     */
-    private static final Set<String> TRANSPORT_NAME_KEYWORDS = Set.of(
-            "터미널", "여객", "선착장", "부두", "공항", "도선", "카페리"
+            14, "Arts and Entertainment > Cultural Center",
+            // 39=음식점, 32=숙박. Foursquare 시딩만으로는 제주 식당/숙소가 각각 10곳대라
+            // 식사 슬롯·숙소 동선 최적화가 선택지 없이 돌았다(하루 40km 식사 원정, 숙소 복귀 35km).
+            // majorCategory가 DINING/LODGING으로 판정하는 경로 형식을 그대로 쓴다.
+            39, "Dining and Drinking > Restaurant",
+            32, "Travel and Transportation > Lodging"
     );
 
     /**
@@ -139,7 +136,7 @@ public class TourApiSeeder {
             for (JsonNode item : items) {
                 if (fetched >= maxRowsPerType) break; // 페이지 중간에서도 상한 준수
                 fetched++;
-                Place place = toPlace(item, region, category);
+                Place place = toPlace(item, region, category, contentTypeId);
                 if (place == null) continue;
                 if (placeRepository.existsByNameAndRegion(place.getName(), region)) {
                     skipped++;
@@ -198,15 +195,17 @@ public class TourApiSeeder {
     }
 
     /** TourAPI 아이템 → Place. 좌표/이름이 없으면 null. */
-    private Place toPlace(JsonNode item, String region, String category) {
+    private Place toPlace(JsonNode item, String region, String category, int contentTypeId) {
         String name = item.path("title").asText(null);
         double lng = item.path("mapx").asDouble(0); // TourAPI: mapx=경도, mapy=위도
         double lat = item.path("mapy").asDouble(0);
         if (name == null || name.isBlank() || lat == 0 || lng == 0) return null;
 
-        // 관광지 타입에 혼입된 교통시설(여객터미널 등)은 관광 스텝 후보가 되면 안 되므로 스킵
-        final String nameForFilter = name;
-        if (TRANSPORT_NAME_KEYWORDS.stream().anyMatch(nameForFilter::contains)) {
+        // 관광지 타입(12/14)에 혼입된 교통시설(여객터미널 등)은 관광 스텝 후보가 되면 안 되므로 스킵.
+        // 음식점(39)·숙박(32)에는 적용하지 않는다 — "제주공항 흑돼지" 같은 정상 상호가 잘린다.
+        // 판정 기준은 PlaceCategoryConstants 한 곳에 있다(시딩·동선·검증이 같은 규칙을 보도록).
+        if ((contentTypeId == 12 || contentTypeId == 14)
+                && (PlaceCategoryConstants.isPassengerFacility(name) || name.contains("공항"))) {
             log.debug("TourAPI 교통시설 스킵: {}", name);
             return null;
         }

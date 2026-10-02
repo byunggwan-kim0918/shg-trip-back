@@ -16,6 +16,13 @@ import java.math.RoundingMode;
 import java.util.*;
 import java.util.stream.Collectors;
 
+import static com.shg.trip.shgtrip.domain.planning.service.InvariantChecker.departsAfterDinner;
+import static com.shg.trip.shgtrip.domain.planning.service.InvariantChecker.hasMealInWindow;
+import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTimes.byIndex;
+import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTimes.formatMinutes;
+import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTimes.toMinutesOrZero;
+import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.*;
+
 /**
  * 같은 날 장소들을 좌표 기반 Nearest Neighbor 알고리즘으로 재정렬.
  * AI가 생성한 일정의 동선 효율성을 후처리로 보정한다.
@@ -23,6 +30,9 @@ import java.util.stream.Collectors;
 @Slf4j
 @Component
 public class RouteOptimizer {
+
+    /** 판정은 검사기에 맡긴다 — 이 클래스는 고치는 일만 한다. */
+    private final InvariantChecker invariantChecker = new InvariantChecker();
 
     /**
      * 같은 날 step들을 좌표 기반으로 재정렬한 새 리스트를 반환.
@@ -32,12 +42,6 @@ public class RouteOptimizer {
      * @param placeCache 장소명+주소 → Place 엔티티 캐시 (좌표 포함)
      * @return 동선 최적화된 step 리스트
      */
-    // 식사 시간대 pinning 기준 (HH:mm 파싱 후 분 단위 비교)
-    private static final int LUNCH_START  = 11 * 60 + 30; // 11:30
-    private static final int LUNCH_END    = 13 * 60 + 30; // 13:30
-    private static final int DINNER_START = 17 * 60 + 30; // 17:30
-    private static final int DINNER_END   = 19 * 60 + 30; // 19:30
-
     public List<StepData> optimize(List<StepData> steps, Map<String, Place> placeCache) {
         if (steps == null || steps.size() <= 1) return steps;
 
@@ -323,68 +327,8 @@ public class RouteOptimizer {
     // Repair & Schedule: Sonnet의 day 구성(힌트)을 받아 하드제약 위반을 수리하고
     // day 내 순서·시간·교통·대안을 전부 결정론적으로 확정한다 (LLM 재호출 없음).
     // 산출된 StepData.notes는 비어있으며, 이후 Haiku가 비동기로 story를 채운다.
+    // 튜닝 상수는 ScheduleTuning, 위반 판정은 InvariantChecker에 있다.
     // ========================================================================================
-
-    private static final Map<String, int[]> PACE_RANGE = Map.of(
-            "tight", new int[]{5, 7},
-            "normal", new int[]{4, 5},
-            "relaxed", new int[]{2, 3}
-    );
-    // day 내 장소들이 day 중심에서 이 배수 이상 떨어지면 이상치로 보고 인접 day로 재배치한다.
-    // walk: 도보/버스로 다닐 만한 거리로 좁게 묶음. car: 차로 이동하므로 넉넉하게 허용.
-    private static final Map<String, Double> TRANSPORT_DISTANCE_MULTIPLIER = Map.of(
-            "walk", 1.5,
-            "car", 3.0,
-            "any", 2.0
-    );
-    private static final int MAX_FIXPOINT_ITERATIONS = 5;
-    // day가 지리적으로 두 덩어리로 갈릴 때, 두 서브클러스터 중심 거리가 이 값(그리고 내부 spread ×
-    // 이동수단 배수) 이상이면 "2-클러스터 day"로 보고 소수 클러스터를 인접일로 옮긴다. 도심 밀집 day를
-    // 잘못 쪼개지 않도록 하한을 둔다.
-    private static final double MIN_CLUSTER_SPLIT_KM = 10.0;
-    private static final int DAY_START_MINUTES = 9 * 60; // 09:00
-    private static final int DEFAULT_VISIT_MINUTES = 90;
-    private static final int DINING_VISIT_MINUTES = 70;
-    // 한 destination 내 하루 이동으로는 비현실적인 구간거리 임계값. 초과 시 불량 좌표로 보고
-    // 해당 leg의 교통정보를 비운다(시간 누적 폭주 → 새벽시간 wrap 방지).
-    private static final double MAX_REASONABLE_LEG_KM = 200.0;
-    // 하루 시각 표기의 하한/상한(분). 누적 시간이 자정을 넘겨 02:16처럼 wrap되는 것을 막는다.
-    private static final int END_OF_DAY_MINUTES = 23 * 60 + 59; // 23:59
-    // 도보(walk) 선호 시, 익일 첫 방문지가 전날 숙소에서 이 거리를 넘으면 "숙소에서 아침 출발"로
-    // 보정한다(전날 숙소를 그날 첫 스텝으로 prepend). car/any는 어느 정도 떨어져도 허용.
-    private static final double WALK_CONTINUITY_THRESHOLD_KM = 2.0;
-    // 아침에 숙소에서 출발하는 스텝의 체류 시간(분). 실제 관광 체류(90분)와 달리 짧게 잡는다.
-    private static final int MORNING_DEPARTURE_MINUTES = 30;
-    // A-1 시간 배분: 활동 1개가 차지하는 대략 시간(체류 90 + 이동 추정 ~20). 시간창 용량 산정용.
-    private static final int ACTIVITY_SLOT_MINUTES = 110;
-    private static final int DEFAULT_EVENING_CAP_MINUTES = 22 * 60; // 22:00
-    private static final int LATE_EVENING_CAP_MINUTES = 23 * 60;    // 야경/야시장류 테마
-    private static final int EARLY_MORNING_START_MINUTES = 8 * 60;  // 일출/등산류 테마
-    private static final Set<String> NIGHT_THEME_KEYWORDS = Set.of(
-            "야경", "야시장", "나이트", "클럽", "포차", "술", "nightlife", "bar", "pub", "night");
-    private static final Set<String> EARLY_THEME_KEYWORDS = Set.of(
-            "일출", "새벽", "등산", "하이킹", "트레킹", "sunrise", "hiking", "trekking");
-    // 거리 절대 상한 [단일 구간 km, 일일 총주행 km]. TRANSPORT_DISTANCE_MULTIPLIER는 day 중심
-    // 상대 기준이라 이미 흩어진 day일수록 허용치가 커지는 자기무력화 문제가 있어(실측: 하루 190km,
-    // 저녁 67km 카페 원정), 상대 기준과 별개로 절대 상한을 둔다.
-    private static final Map<String, double[]> TRANSPORT_ABS_LIMITS = Map.of(
-            "walk", new double[]{8, 30},
-            "car", new double[]{50, 150},
-            "any", new double[]{40, 120}
-    );
-    // 전역 지리 재배치(rebalanceDaysByGeography): 방문지가 다른 day centroid에 이 값 이상
-    // 가까워질 때만 이동한다. 미세 차이로 장소가 날짜 사이를 진동하는 것을 막는 히스테리시스.
-    private static final double REBALANCE_MIN_GAIN_KM = 15.0;
-    // 저녁(dinner 이후) 활동이 숙소-저녁식당 거리보다 이만큼 이상 숙소에서 멀어지면 spare로 뺀다.
-    private static final double EVENING_AWAY_TOLERANCE_KM = 5.0;
-    // 하루를 마치고 숙소에 도착하는 스텝의 체류 시간(분). 관광 체류(90분)로 잡으면 "23:45 체크인"
-    // 같은 어색한 시간이 나온다.
-    private static final int ACCOMMODATION_ARRIVAL_MINUTES = 30;
-    // 도로거리 환산(GeoUtils.ROAD_DISTANCE_FACTOR)은 이동시간·비용·표시거리에 적용되지만, 거리
-    // "예산"(TRANSPORT_ABS_LIMITS 등)·클러스터 판정은 직선 기준 임계값이라 적용하지 않는다(이중 보정 방지).
-    // 식사 슬롯 전 빈 시간이 이 값 이상이면 spare에서 활동을 삽입해 메운다.
-    // ACTIVITY_SLOT_MINUTES(110, 버킷 용량 산정용)와 분리 — 실측에서 98/107분 공백이 미발동됐다.
-    private static final int GAP_FILL_THRESHOLD_MINUTES = 90;
 
     public List<StepData> repairAndSchedule(SelectionOutput selection, List<PlaceCandidate> candidates, String pace) {
         return repairAndSchedule(selection, candidates, pace, "any", null);
@@ -429,6 +373,34 @@ public class RouteOptimizer {
                                              String pace, String transportPref, java.time.LocalDate startDate,
                                              List<String> themes, TransportationHub hub,
                                              boolean compactMode) {
+        return repairAndSchedule(selection, candidates, pace, transportPref, startDate, themes, hub,
+                compactMode, List.of());
+    }
+
+    /**
+     * @param userCategories 사용자가 마법사에서 고른 카테고리 id 목록. 일정에 한 번도 등장하지
+     *                       않은 카테고리를 spare에서 보충하는 데 쓴다(C2). 빈 값이면 커버리지
+     *                       보충을 건너뛴다.
+     */
+    public List<StepData> repairAndSchedule(SelectionOutput selection, List<PlaceCandidate> candidates,
+                                             String pace, String transportPref, java.time.LocalDate startDate,
+                                             List<String> themes, TransportationHub hub,
+                                             boolean compactMode, List<String> userCategories) {
+        return schedule(selection, candidates, pace, transportPref, startDate, themes, hub,
+                compactMode, userCategories).steps();
+    }
+
+    /**
+     * 확정된 스텝과 함께 <b>끝내 해소하지 못한 품질 문제</b>를 돌려준다.
+     *
+     * <p>지금까지는 위반을 로그로만 남겨서, 숙소 없는 일정이 그대로 사용자에게 나갔다.
+     * graceful degradation의 나머지 절반 — "저장하되 알린다" — 을 위해 호출부가 소비할 수 있는
+     * 형태로 내보낸다.
+     */
+    public ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates,
+                                   String pace, String transportPref, java.time.LocalDate startDate,
+                                   List<String> themes, TransportationHub hub,
+                                   boolean compactMode, List<String> userCategories) {
         int[] range = PACE_RANGE.getOrDefault(pace, PACE_RANGE.get("normal"));
         int minPerDay = compactMode ? Math.min(range[0], 3) : range[0];
         int maxPerDay = range[1];
@@ -487,6 +459,10 @@ public class RouteOptimizer {
         repairClosedDayPlaces(days, candidates, spare, startDate, pairs);
         // 동일 장소가 메인 스텝에 두 번 이상 나오지 않게 정리(A-0-2) — 허브/숙소는 대상 아님.
         dedupeMainStepsAcrossItinerary(days, candidates, spare);
+        // 같은 세부 유형(폭포만 4개)·경유형(해안도로 7곳) 반복을 상한으로 자르고 다른 유형으로 보충(C1).
+        enforceTypeDiversity(days, candidates, spare, pairs);
+        // 사용자가 고른 카테고리 중 일정에 0개인 것을 spare에서 보충(C2).
+        ensureCategoryCoverage(days, candidates, spare, userCategories, maxPerDay);
         // 하루 일과 용량(테마 반영 시간창) 초과 활동을 인접 day로 이월(A-1) — 실패분은 scheduleDay가 트림.
         ScheduleConfig cfg = scheduleConfig(themes);
         repairDayCapacity(days, candidates, cfg, maxPerDay);
@@ -502,6 +478,940 @@ public class RouteOptimizer {
         // 장소가 다른 스텝의 대안으로 재등장한다(대안 선택 시 같은 곳 2회 방문). 여기서 정리한다.
         spare.removeAll(usedIndices);
 
+        // spare 원본 스냅샷 — 최종 불변식 패스에서 day를 다시 스케줄할 때 같은 조건으로 재실행한다.
+        List<Integer> spareBaseline = new ArrayList<>(spare);
+
+        List<StepData> steps = scheduleAllDays(days, candidates, pairs, highlights, rests,
+                spare, usedIndices, cfg, transportPref, maxPerDay);
+
+        // [최종 불변식 패스] 확정된 스텝을 기준으로 하루 필수 슬롯·연속 대분류·카테고리 커버리지·
+        // 유형 상한을 다시 검사한다. 앞 단계의 보정은 전부 "확정 전" 기준이라, scheduleDay의 버킷
+        // 용량·거리 예산 트림이 그 결과를 다시 깨뜨릴 수 있다(실측: 커버리지로 넣은 전망대가
+        // 트림돼 최종 0개). 고치면 그 day만 다시 스케줄해 가드를 자동으로 재통과시킨다.
+        InvariantMemo memo = new InvariantMemo();
+        for (int pass = 0; pass < MAX_INVARIANT_PASSES; pass++) {
+            // 낮은 우선순위 수리(커버리지·유형 상한)가 높은 우선순위 불변식(식사·거리)을 깨면
+            // 되돌리기 위해, 패스 시작 시점의 day 구성과 불변식 충족 상태를 스냅샷으로 잡는다.
+            DaySnapshot snapshot = DaySnapshot.of(days);
+            Map<Integer, DayStatus> before = invariantChecker.evaluate(days, steps, transportPref, candidates);
+
+            RepairOutcome outcome = enforceFinalInvariants(days, steps, candidates, spare, usedIndices,
+                    pace, transportPref, maxPerDay, userCategories, startDate, memo);
+            if (!outcome.changed()) break;
+
+            resetSpare(spare, spareBaseline, days);
+            steps = scheduleAllDays(days, candidates, pairs, highlights, rests,
+                    spare, usedIndices, cfg, transportPref, maxPerDay);
+
+            // 우선순위 역전 검사: 낮은 등급 수리 때문에 식사·거리 불변식이 새로 깨졌으면 그 수리를 취소한다.
+            if (outcome.lowestPriorityRepair() != null) {
+                Map<Integer, DayStatus> after = invariantChecker.evaluate(days, steps, transportPref, candidates);
+                String regression = invariantChecker.findPriorityRegression(before, after);
+                if (regression != null) {
+                    log.info("우선순위 역전 — 수리 취소: {} (원인: {})", outcome.lowestPriorityRepair(), regression);
+                    snapshot.restore(days);
+                    memo.rejectAll(outcome.insertedIndices());
+                    resetSpare(spare, spareBaseline, days);
+                    steps = scheduleAllDays(days, candidates, pairs, highlights, rests,
+                            spare, usedIndices, cfg, transportPref, maxPerDay);
+                    memo.clearPending();
+                    continue;
+                }
+            }
+            // 이번 패스에 넣었는데 거리·시간 가드에 잘린 장소는 "그 day에는 못 넣는다"로 기억한다.
+            // 기억하지 않으면 보충 → 트림 → 보충이 매 패스 반복되며 수렴하지 않는다.
+            memo.settle(days);
+        }
+        List<String> notices = invariantChecker.summarize(days, steps, pace, transportPref, candidates, cfg);
+
+        // 대안은 day 순서대로 생성되므로, 뒤쪽 day의 갭 필/거리 교체로 나중에 본일정에 편입된
+        // 장소가 앞쪽 day의 대안에 이미 들어가 있을 수 있다(실측: 3일차 갭 필로 들어간 카페가
+        // 1일차 카페의 대안으로 잔존 — 스왑 시 같은 곳 2회 방문). 최종 스텝 기준으로 걸러낸다.
+        Set<String> usedPlaceKeys = steps.stream()
+                .map(StepData::place)
+                .filter(Objects::nonNull)
+                .map(p -> placeKey(p.name(), p.address()))
+                .collect(Collectors.toSet());
+        List<StepData> deduped = new ArrayList<>(steps.size());
+        for (StepData s : steps) {
+            deduped.add(withoutUsedAlternatives(s, usedPlaceKeys));
+        }
+        steps = deduped;
+
+        int order = 1;
+        List<StepData> renumbered = new ArrayList<>(steps.size());
+        for (StepData s : steps) {
+            renumbered.add(withStepOrder(s, order++));
+        }
+
+        log.info("RouteOptimizer.repairAndSchedule 완료: {}개 step, {}개 day", renumbered.size(), days.size());
+        return new ScheduleResult(renumbered, notices);
+    }
+
+    /**
+     * 확정 스텝 + 끝내 해소하지 못한 품질 문제(사용자 안내 문구).
+     * notices가 비어 있으면 모든 구조적 불변식을 만족한 일정이다.
+     */
+    public record ScheduleResult(List<StepData> steps, List<String> notices) {}
+
+    /**
+     * [최종 불변식 패스] 확정된 스텝을 기준으로 하루 구성을 검사하고, 위반이 있으면 해당 day의
+     * placeIndices를 고쳐 재스케줄이 필요함을 알린다(true 반환).
+     *
+     * <p>검사 항목:
+     * <ol>
+     *   <li>점심(11:30~13:30)·저녁(17:30~19:30) DINING 각 1개. 마지막날 저녁은 출발 허브 시각이
+     *       19:30 이후일 때만 필수.</li>
+     *   <li>관광(ATTRACTION) 최소 1개 — relaxed 페이스는 제외.</li>
+     *   <li>하루 종료가 17:00 이전이면 오후 활동 보충.</li>
+     *   <li>같은 대분류 {@value ScheduleTuning#MAX_CONSECUTIVE_SAME_MAJOR}개 이상 연속 금지 — 중간을 교체.</li>
+     *   <li>사용자 카테고리 커버리지·세부 유형 상한을 <b>최종 산출물 기준으로</b> 재적용.</li>
+     * </ol>
+     *
+     * <p>삽입한 장소가 거리 예산·시간대 가드를 통과하는지는 재스케줄이 판정한다 — 통과하지 못해
+     * 트림되면 다음 패스에서 같은 위반이 다시 잡히고, 대체 후보가 없으면 로그만 남기고 끝난다.
+     */
+    /**
+     * 최종 보정 패스를 <b>우선순위 순</b>으로 적용한다(3차 1번).
+     *
+     * <p>우선순위(높음→낮음): <b>식사 슬롯 &gt; 하루 거리 예산 &gt; 시간대 가드 &gt; 카테고리 커버리지
+     * &gt; 유형 상한</b>. 거리 예산·시간대 가드는 재스케줄(enforceDistanceBudget/버킷 배분)이 강제하므로
+     * 여기서는 그 둘을 <b>깨뜨리지 않도록</b> 하위 수리를 제한하는 방식으로 지킨다:
+     * <ul>
+     *   <li>식사 슬롯을 채우고 있는 스텝은 커버리지·유형 상한 교체 대상에서 제외</li>
+     *   <li>유형 상한 교체는 같은 대분류 안에서만(관광↔식당, 식당↔카페 교체 금지)</li>
+     *   <li>커버리지 삽입·교체는 대상 day centroid 최근접을 고르고, 그 day의 구간/일일 예산을
+     *       넘기면 삽입하지 않는다(왕복을 만드느니 미충족 로그가 낫다)</li>
+     * </ul>
+     * 그래도 재스케줄 결과가 상위 불변식을 깨면 호출부가 스냅샷으로 되돌린다.
+     */
+    private RepairOutcome enforceFinalInvariants(List<DayState> days, List<StepData> steps,
+                                                 List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                                 Set<Integer> usedIndices, String pace, String transportPref,
+                                                 int maxPerDay, List<String> userCategories,
+                                                 java.time.LocalDate startDate, InvariantMemo memo) {
+        Map<Integer, List<StepData>> byDay = steps.stream()
+                .collect(Collectors.groupingBy(StepData::dayNumber, LinkedHashMap::new, Collectors.toList()));
+        boolean changed = false;
+
+        int typeCap = (int) Math.ceil(days.size() / 2.0) + TYPE_CAP_BASE;
+        Map<String, Integer> globalTypeCount = countSubTypes(days, candidates);
+        java.util.function.Predicate<PlaceCandidate> underTypeCap =
+                c -> !isSpecificType(subTypeOf(c)) || globalTypeCount.getOrDefault(subTypeOf(c), 0) < typeCap;
+
+        // ── 1순위: 식사 슬롯 + 숙소 ───────────────────────────────────────
+        for (int i = 0; i < days.size(); i++) {
+            DayState day = days.get(i);
+            List<StepData> daySteps = byDay.getOrDefault(day.dayNumber, List.of());
+            if (daySteps.isEmpty()) continue;
+            boolean lastDay = i == days.size() - 1;
+            changed |= ensureMealSlots(day, daySteps, candidates, spare, usedIndices, maxPerDay,
+                    lastDay, startDate, transportPref, memo);
+            changed |= ensureAccommodation(day, candidates, lastDay);
+        }
+        if (changed) return RepairOutcome.highPriority(memo.pendingIndices());
+
+        // ── 3순위: 시간대·구성 가드(관광 최소 1개, 조기 종료) ─────────────
+        for (int i = 0; i < days.size(); i++) {
+            DayState day = days.get(i);
+            List<StepData> daySteps = byDay.getOrDefault(day.dayNumber, List.of());
+            if (daySteps.isEmpty()) continue;
+            java.util.function.Predicate<PlaceCandidate> fillable =
+                    insertableFilter(day, candidates, startDate, transportPref, memo).and(underTypeCap);
+            changed |= ensureAttraction(day, daySteps, candidates, spare, usedIndices, maxPerDay, pace,
+                    fillable, memo);
+            changed |= ensureNotFinishingEarly(day, daySteps, candidates, spare, usedIndices, maxPerDay,
+                    fillable, memo);
+        }
+        if (changed) return RepairOutcome.highPriority(memo.pendingIndices());
+
+        // ── 4순위: 카테고리 커버리지 ──────────────────────────────────────
+        if (reapplyCoverageOnFinalSteps(days, steps, candidates, spare, usedIndices,
+                userCategories, maxPerDay, startDate, memo, transportPref)) {
+            return RepairOutcome.lowPriority("카테고리 커버리지 보충", memo.pendingIndices());
+        }
+
+        // ── 5순위: 유형 상한·같은 종류 연속 ───────────────────────────────
+        if (reapplyTypeCapOnFinalSteps(days, steps, candidates, spare, usedIndices, startDate, memo,
+                transportPref)) {
+            return RepairOutcome.lowPriority("세부 유형 상한 교체", memo.pendingIndices());
+        }
+        for (int i = 0; i < days.size(); i++) {
+            DayState day = days.get(i);
+            List<StepData> daySteps = byDay.getOrDefault(day.dayNumber, List.of());
+            if (daySteps.isEmpty()) continue;
+            java.util.function.Predicate<PlaceCandidate> fillable =
+                    insertableFilter(day, candidates, startDate, transportPref, memo).and(underTypeCap);
+            if (breakConsecutiveSameMajor(day, daySteps, candidates, spare, usedIndices, fillable)) {
+                return RepairOutcome.lowPriority("같은 종류 연속 해소", memo.pendingIndices());
+            }
+        }
+        return RepairOutcome.none();
+    }
+
+
+
+    /**
+     * 그 day에 넣어도 되는 후보인지 판정하는 공통 필터 — 정기휴무, 이미 거부된 조합, 동선 반경,
+     * 그리고 <b>거리 예산</b>을 모두 본다. 예산 검사가 없으면 커버리지가 왕복 93km짜리 장소를
+     * 집어넣고 다음 패스에서 트림되는 왕복이 생긴다(실측 58 day1).
+     */
+    private java.util.function.Predicate<PlaceCandidate> insertableFilter(
+            DayState day, List<PlaceCandidate> candidates, java.time.LocalDate startDate,
+            String transportPref, InvariantMemo memo) {
+        return insertableFilter(day, candidates, startDate, transportPref, memo, RelaxLevel.L1);
+    }
+
+
+    private java.util.function.Predicate<PlaceCandidate> insertableFilter(
+            DayState day, List<PlaceCandidate> candidates, java.time.LocalDate startDate,
+            String transportPref, InvariantMemo memo, RelaxLevel level) {
+        double[] centroid = centroidOf(day.placeIndices, candidates);
+        double radius = altRadiusKm(transportPref) * (level == RelaxLevel.L2 ? 2 : 1);
+
+        java.util.function.Predicate<PlaceCandidate> filter = openOnDayFilter(startDate, day.dayNumber)
+                .and(c -> !memo.isRejected(day.dayNumber, c.index()));
+        if (level != RelaxLevel.L3) {
+            filter = filter
+                    .and(c -> centroid == null || coordsOf(c) == null
+                            || haversine(centroid, coordsOf(c)) <= radius)
+                    .and(c -> !wouldExceedDayBudget(day, c, candidates, transportPref));
+        }
+        return filter;
+    }
+
+    /**
+     * 후보를 그 day에 넣었을 때 구간·일일 거리 예산을 넘기는지 추정한다.
+     * 삽입 위치는 "우회가 가장 작은 자리"로 가정한다(실제 순서는 재스케줄이 정하므로 하한 추정).
+     */
+    private boolean wouldExceedDayBudget(DayState day, PlaceCandidate cand, List<PlaceCandidate> candidates,
+                                         String transportPref) {
+        double[] coord = coordsOf(cand);
+        if (coord == null) return false; // 좌표 불명이면 판단 보류
+
+        double[] limits = TRANSPORT_ABS_LIMITS.getOrDefault(transportPref, TRANSPORT_ABS_LIMITS.get("any"));
+        List<double[]> path = new ArrayList<>();
+        // 도착 허브 → 방문지 → 숙소 → 출발 허브. 허브를 빼고 재면 마지막날 공항 왕복이 통째로
+        // 누락돼 "예산 안"으로 오판한다(실측 67 day3: 허브 제외 시 상한 내, 포함 시 초과).
+        double[] arrivalHub = day.arrivalHubIndex != null
+                ? coordsOf(byIndex(candidates, day.arrivalHubIndex)) : null;
+        if (arrivalHub != null) path.add(arrivalHub);
+        for (Integer idx : day.placeIndices) {
+            double[] c = coordsOf(byIndex(candidates, idx));
+            if (c != null) path.add(c);
+        }
+        double[] hotel = accommodationCoords(day, candidates);
+        if (hotel != null) path.add(hotel);
+        double[] departureHub = day.departureHubIndex != null
+                ? coordsOf(byIndex(candidates, day.departureHubIndex)) : null;
+        if (departureHub != null) path.add(departureHub);
+        if (path.isEmpty()) return false;
+
+        double current = 0;
+        for (int i = 1; i < path.size(); i++) current += haversine(path.get(i - 1), path.get(i));
+
+        // 최소 우회 삽입 비용 + 삽입으로 생기는 최장 구간
+        double bestDetour = Double.MAX_VALUE;
+        double bestNewLeg = 0;
+        for (int i = 0; i <= path.size(); i++) {
+            double[] prev = i > 0 ? path.get(i - 1) : null;
+            double[] next = i < path.size() ? path.get(i) : null;
+            double detour = detourVia(prev, coord, next);
+            if (prev != null && next != null) detour -= haversine(prev, next);
+            double newLeg = Math.max(prev != null ? haversine(prev, coord) : 0,
+                    next != null ? haversine(coord, next) : 0);
+            if (detour < bestDetour) {
+                bestDetour = detour;
+                bestNewLeg = newLeg;
+            }
+        }
+        if (bestDetour == Double.MAX_VALUE) return false;
+        return current + bestDetour > limits[1] || bestNewLeg > limits[0];
+    }
+
+    /**
+     * 숙박일에 숙소가 배정됐는지 확인하고, 없으면 그날 방문지 중심에 가장 가까운 LODGING을 배정한다.
+     *
+     * <p>앞단(IndexResultMapper.fillMissingAccommodation)이 실패했을 때의 최종 안전망이다. 숙소는
+     * 지금까지 불변식 검사 항목이 아니어서 "4일 전부 숙소 없음"이 위반 없이 통과했다(실측 60·66·67).
+     * 여기서는 거리·예산 가드를 걸지 않는다 — 숙소는 하루의 종착점이라 "먼 숙소"가 "숙소 없음"보다 낫다.
+     */
+    private boolean ensureAccommodation(DayState day, List<PlaceCandidate> candidates, boolean lastDay) {
+        if (lastDay || day.accommodationIndex != null) return false;
+
+        double[] centroid = centroidOf(day.placeIndices, candidates);
+        Set<Integer> visited = new HashSet<>(day.placeIndices);
+        PlaceCandidate best = candidates.stream()
+                .filter(c -> "LODGING".equals(PlaceCategoryConstants.majorCategory(c.category())))
+                .filter(c -> !visited.contains(c.index()))   // 방문지로 쓰인 숙소는 이중 등장 방지
+                .min(Comparator.comparingDouble(c -> centroid == null || coordsOf(c) == null
+                        ? Double.MAX_VALUE : haversine(centroid, coordsOf(c))))
+                .orElse(null);
+
+        if (best == null) {
+            log.warn("숙소 보충 실패(LODGING 후보 없음): day={}", day.dayNumber);
+            return false;
+        }
+        day.accommodationIndex = best.index();
+        log.info("숙소 보충: day={} {}", day.dayNumber, best.name());
+        return true;
+    }
+
+    /** 점심·저녁 슬롯에 DINING이 있는지 확인하고, 없으면 근처 식당을 넣는다. */
+    private boolean ensureMealSlots(DayState day, List<StepData> daySteps, List<PlaceCandidate> candidates,
+                                    Deque<Integer> spare, Set<Integer> usedIndices, int maxPerDay,
+                                    boolean lastDay, java.time.LocalDate startDate, String transportPref,
+                                    InvariantMemo memo) {
+        boolean changed = false;
+
+        if (!hasMealInWindow(daySteps, LUNCH_START, LUNCH_END)) {
+            // Collections.singletonList — centroid는 좌표 불명 day에서 null일 수 있고 List.of는 null을 거부한다
+            changed |= insertMealWithRelaxation(day, candidates, spare, usedIndices, maxPerDay,
+                    Collections.singletonList(centroidOf(day.placeIndices, candidates)),
+                    "점심", startDate, transportPref, memo);
+        }
+
+        // 마지막날 저녁은 귀가 시각이 늦을 때만 필요하다(출발 허브 도착이 19:30 전이면 저녁을 먹지 않음)
+        boolean dinnerRequired = !lastDay || departsAfterDinner(daySteps, candidates, day);
+        if (dinnerRequired && !hasMealInWindow(daySteps, DINNER_START, DINNER_END)) {
+            // 앵커 우선순위: 숙소 → 출발 허브 → 방문지 중심.
+            // 마지막날은 숙소가 없어 centroid로만 찾았는데, 그러면 공항 가는 길목 식당이 후보에
+            // 들어오지 않는다(실측 67 day3: 저녁 보충 실패).
+            List<double[]> anchors = new ArrayList<>();
+            anchors.add(accommodationCoords(day, candidates));
+            if (day.departureHubIndex != null) {
+                anchors.add(coordsOf(byIndex(candidates, day.departureHubIndex)));
+            }
+            anchors.add(centroidOf(day.placeIndices, candidates));
+            changed |= insertMealWithRelaxation(day, candidates, spare, usedIndices, maxPerDay,
+                    anchors, "저녁", startDate, transportPref, memo);
+        }
+        return changed;
+    }
+
+    /**
+     * 필수 식사 슬롯을 채운다 — 후보가 없으면 제약을 단계적으로 완화해 재시도한다(L1 → L2 → L3).
+     * 구조적 불변식이라 "채우는 것"이 우선이고, 세 단계 모두 실패해야 미충족으로 기록한다.
+     */
+    private boolean insertMealWithRelaxation(DayState day, List<PlaceCandidate> candidates,
+                                             Deque<Integer> spare, Set<Integer> usedIndices, int maxPerDay,
+                                             List<double[]> anchors, String slotName,
+                                             java.time.LocalDate startDate, String transportPref,
+                                             InvariantMemo memo) {
+        for (RelaxLevel level : RelaxLevel.values()) {
+            java.util.function.Predicate<PlaceCandidate> filter =
+                    insertableFilter(day, candidates, startDate, transportPref, memo, level);
+            for (double[] anchor : anchors) {
+                if (anchor == null) continue;
+                if (insertMeal(day, candidates, spare, usedIndices, maxPerDay, anchor, slotName, filter, memo)) {
+                    if (level != RelaxLevel.L1) {
+                        log.info("{} 슬롯 보충에 제약 완화 {} 적용: day={}", slotName, level, day.dayNumber);
+                    }
+                    return true;
+                }
+            }
+        }
+        logMealFillFailure(day, candidates, usedIndices, slotName);
+        return false;
+    }
+
+
+
+    /**
+     * 출발 허브 도착이 {@value ScheduleTuning#DEPARTURE_HUB_LATEST_MINUTES}분(21:00)을 넘을 것으로 추정되면,
+     * 보호 대상이 아닌 활동을 <b>뒤에서부터</b> 잘라 귀가를 앞당긴다.
+     *
+     * <p>거리 예산과는 다른 축이다 — 하루 이동이 상한 안이어도 체류시간이 쌓이면 심야 귀가가 된다
+     * (실측 itinerary 67 day3: 직선 83km로 상한 내인데 공항 도착 23:25).
+     * 확정 루프 전에 돌려 시간 계산을 한 번만 하고, 최대 3회까지만 시도해 수렴시킨다.
+     */
+    private void trimSequenceForDepartureTime(DayState day, List<Integer> seq, List<PlaceCandidate> candidates,
+                                              Deque<Integer> spareIndices, ScheduleConfig cfg,
+                                              PlaceCandidate origin, String transportPref,
+                                              Set<Integer> protectedIdx,
+                                              Integer breakfastIdx, Integer lunchIdx, Integer dinnerIdx) {
+        if (day.departureHubIndex == null) return;
+
+        for (int guard = 0; guard < 3; guard++) {
+            int arrival = estimateDepartureHubArrival(day, seq, candidates, cfg, origin, transportPref,
+                    breakfastIdx, lunchIdx, dinnerIdx);
+            if (arrival <= DEPARTURE_HUB_LATEST_MINUTES) return;
+
+            Integer victim = null;
+            for (int i = seq.size() - 1; i >= 0; i--) {
+                Integer idx = seq.get(i);
+                if (protectedIdx.contains(idx)) continue;
+                PlaceCandidate c = byIndex(candidates, idx);
+                if (c == null || c.userSelected()) continue;
+                victim = idx;
+                break;
+            }
+            if (victim == null) {
+                log.info("귀가 시각 초과({}) — 트림 가능한 활동 없음: day={}",
+                        formatMinutes(Math.min(arrival, END_OF_DAY_MINUTES)), day.dayNumber);
+                return;
+            }
+            seq.remove(victim);
+            day.placeIndices.remove(victim);
+            spareIndices.addLast(victim);
+            log.info("귀가 시각 초과({} > {}) — 트림: day={} {}",
+                    formatMinutes(Math.min(arrival, END_OF_DAY_MINUTES)),
+                    formatMinutes(DEPARTURE_HUB_LATEST_MINUTES), day.dayNumber, nameOf(candidates, victim));
+        }
+    }
+
+    /** 확정 루프와 같은 규칙(체류+이동+식사 슬롯 하한)으로 출발 허브 도착 시각을 추정한다. */
+    private int estimateDepartureHubArrival(DayState day, List<Integer> seq, List<PlaceCandidate> candidates,
+                                            ScheduleConfig cfg, PlaceCandidate origin, String transportPref,
+                                            Integer breakfastIdx, Integer lunchIdx, Integer dinnerIdx) {
+        int minutes = cfg.morningStart;
+        PlaceCandidate prev = origin;
+
+        for (Integer idx : seq) {
+            PlaceCandidate cand = byIndex(candidates, idx);
+            if (cand == null) continue;
+
+            TransportLeg leg = computeLeg(prev, cand, transportPref, day.dayNumber);
+            if (leg != null) minutes += leg.durationMin();
+
+            if (isSameIndex(breakfastIdx, idx)) minutes = Math.max(minutes, cfg.morningStart);
+            if (isSameIndex(lunchIdx, idx)) minutes = Math.max(minutes, LUNCH_START);
+            if (isSameIndex(dinnerIdx, idx)) minutes = Math.max(minutes, DINNER_START);
+
+            if (isSameIndex(day.departureHubIndex, idx)) return minutes;
+
+            if (isSameIndex(day.accommodationIndex, idx)
+                    || PlaceCategoryConstants.isAccommodation(cand.category())) {
+                minutes += ACCOMMODATION_ARRIVAL_MINUTES;
+            } else if (isDiningCand(cand)) {
+                minutes += DINING_VISIT_MINUTES;
+            } else {
+                minutes += resolveVisitMinutes(cand);
+            }
+            prev = cand;
+        }
+        return minutes;
+    }
+
+    /** null-safe 인덱스 비교 — 허브·숙소·식사 슬롯은 미배정(null)일 수 있다. */
+    private boolean isSameIndex(Integer slot, int idx) {
+        return slot != null && slot == idx;
+    }
+
+    /**
+     * 야외·주간 장소의 시작 상한. 테마가 정한 하루 종료(eveningCap)에서 역산하며, 어떤 테마에서도
+     * 15:00 아래로는 내리지 않는다. 여행지 고유 규칙이 아니라 <b>사용자가 고른 테마에서만</b> 파생된다.
+     */
+    private int daytimeLatestStart(ScheduleConfig cfg) {
+        int cap = cfg != null ? cfg.eveningCap : DEFAULT_EVENING_CAP_MINUTES;
+        return Math.max(15 * 60, cap - 180);
+    }
+
+    /** 그 스텝이 점심·저녁 슬롯을 채우고 있는지 — 교체·트림 보호 대상 판정용. */
+    private boolean isMealSlotStep(StepData step) {
+        if (step.place() == null) return false;
+        if (!PlaceCategoryConstants.isMealPlace(step.place().name(), step.place().category())) return false;
+        int start = toMinutesOrZero(step.startTime());
+        return (start >= LUNCH_START - 60 && start <= LUNCH_END)
+                || (start >= DINNER_START - 60 && start <= DINNER_END);
+    }
+
+    /** 필수 식사 삽입 — pace 상한을 {@value ScheduleTuning#MEAL_QUOTA_SLACK}개까지 넘어도 포함을 우선한다. */
+    private boolean insertMeal(DayState day, List<PlaceCandidate> candidates,
+                               Deque<Integer> spare, Set<Integer> usedIndices, int maxPerDay,
+                               double[] anchor, String slotName,
+                               java.util.function.Predicate<PlaceCandidate> openOnDay, InvariantMemo memo) {
+        Integer pick = pickNearbyCandidate(candidates, spare, usedIndices, anchor,
+                openOnDay.and(PlaceCandidate::mealEligible));
+        // 실패 로그는 호출부(insertMealWithRelaxation)가 완화 단계를 전부 소진한 뒤에 남긴다 —
+        // 여기서 찍으면 L1 실패마다 "보충 실패"가 나와 실제 결과를 오인하게 된다.
+        if (pick == null) return false;
+
+        if (day.placeIndices.size() < maxPerDay + MEAL_QUOTA_SLACK) {
+            addToDay(day, pick, spare, usedIndices);
+            memo.recordInsert(day.dayNumber, pick);
+            log.info("{} 슬롯 보충: day={} {}", slotName, day.dayNumber, nameOf(candidates, pick));
+            return true;
+        }
+
+        // quota가 꽉 찼다고 끼니를 통째로 빼는 건 여행 일정으로 성립하지 않는다 — 개수를 늘리는
+        // 대신 그날 가장 많이 반복된 비식사 장소와 교체한다(pace 상한 유지 + 필수 슬롯 확보).
+        Integer victim = mostRepeatedNonMeal(day, candidates);
+        if (victim == null) {
+            log.info("{} 슬롯 보충 실패(quota 여유 없음·교체 대상 없음): day={}", slotName, day.dayNumber);
+            return false;
+        }
+        replaceInDay(day, victim, pick);
+        spare.remove(pick);
+        spare.addLast(victim);
+        usedIndices.add(pick);
+        usedIndices.remove(victim);
+        memo.recordInsert(day.dayNumber, pick);
+        log.info("{} 슬롯 교체 보충: day={} {} → {}", slotName, day.dayNumber,
+                nameOf(candidates, victim), nameOf(candidates, pick));
+        return true;
+    }
+
+    /**
+     * 식사 보충이 후보를 못 찾았을 때 "무엇이 막았는지"를 단계별 잔여 수로 남긴다.
+     * "후보 없음"만 찍히면 데이터 부족인지 필터가 과한지 구분할 수 없다.
+     */
+    private void logMealFillFailure(DayState day, List<PlaceCandidate> candidates,
+                                    Set<Integer> usedIndices, String slotName) {
+        long meal = candidates.stream().filter(PlaceCandidate::mealEligible).count();
+        long unused = candidates.stream()
+                .filter(PlaceCandidate::mealEligible)
+                .filter(c -> !usedIndices.contains(c.index()))
+                .count();
+        log.info("{} 슬롯 보충 실패: day={} (식사가능 {}곳 중 미사용 {}곳 — 반경·예산·휴무 필터를 모두 통과한 후보 0)",
+                slotName, day.dayNumber, meal, unused);
+    }
+
+    /** 그날에서 같은 세부 유형이 가장 많이 반복된 비식사 방문지(사용자 필수 제외). 없으면 null. */
+    private Integer mostRepeatedNonMeal(DayState day, List<PlaceCandidate> candidates) {
+        Map<String, Integer> counts = new HashMap<>();
+        for (Integer idx : day.placeIndices) {
+            PlaceCandidate c = byIndex(candidates, idx);
+            if (c != null) counts.merge(subTypeOf(c), 1, Integer::sum);
+        }
+        Integer best = null;
+        int bestCount = 0;
+        for (Integer idx : day.placeIndices) {
+            PlaceCandidate c = byIndex(candidates, idx);
+            if (c == null || c.userSelected() || isDiningCand(c)) continue;
+            int count = counts.getOrDefault(subTypeOf(c), 0);
+            if (count > bestCount) {
+                bestCount = count;
+                best = idx;
+            }
+        }
+        return best;
+    }
+
+    /** 전 일정의 세부 유형별 개수(허브·숙소 제외). */
+    private Map<String, Integer> countSubTypes(List<DayState> days, List<PlaceCandidate> candidates) {
+        Map<String, Integer> counts = new HashMap<>();
+        for (DayState d : days) {
+            for (Integer idx : d.placeIndices) {
+                PlaceCandidate c = byIndex(candidates, idx);
+                if (c != null) counts.merge(subTypeOf(c), 1, Integer::sum);
+            }
+        }
+        return counts;
+    }
+
+    /** 관광(ATTRACTION)이 하루도 없으면 보충한다. relaxed 페이스는 검사하지 않는다. */
+    private boolean ensureAttraction(DayState day, List<StepData> daySteps, List<PlaceCandidate> candidates,
+                                     Deque<Integer> spare, Set<Integer> usedIndices, int maxPerDay,
+                                     String pace, java.util.function.Predicate<PlaceCandidate> openOnDay,
+                                     InvariantMemo memo) {
+        if ("relaxed".equals(pace)) return false;
+        boolean has = daySteps.stream().anyMatch(s -> s.place() != null
+                && "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(s.place().category())));
+        if (has) return false;
+        if (day.placeIndices.size() >= maxPerDay) {
+            log.info("관광 보충 실패(quota 여유 없음): day={}", day.dayNumber);
+            return false;
+        }
+        Integer pick = pickNearbyCandidate(candidates, spare, usedIndices,
+                centroidOf(day.placeIndices, candidates),
+                openOnDay.and(c -> "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(c.category()))
+                        && !PlaceCategoryConstants.isViaRoute(c.name(), c.category(), c.tags())));
+        if (pick == null) {
+            log.info("관광 보충 실패(후보 없음): day={}", day.dayNumber);
+            return false;
+        }
+        addToDay(day, pick, spare, usedIndices);
+        memo.recordInsert(day.dayNumber, pick);
+        log.info("관광 보충: day={} {}", day.dayNumber, nameOf(candidates, pick));
+        return true;
+    }
+
+    /** 하루가 너무 일찍 끝나면(17:00 이전) 주간 활동을 하나 더 넣는다. */
+    private boolean ensureNotFinishingEarly(DayState day, List<StepData> daySteps,
+                                            List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                            Set<Integer> usedIndices, int maxPerDay,
+                                            java.util.function.Predicate<PlaceCandidate> openOnDay,
+                                            InvariantMemo memo) {
+        int end = daySteps.stream().mapToInt(s -> toMinutesOrZero(s.endTime())).max().orElse(0);
+        if (end == 0 || end >= EARLY_FINISH_MINUTES) return false;
+        if (day.placeIndices.size() >= maxPerDay) return false;
+
+        Integer pick = pickNearbyCandidate(candidates, spare, usedIndices,
+                centroidOf(day.placeIndices, candidates),
+                openOnDay.and(c -> isVisitableFill(c) && timePreference(c) != TimePreference.EVENING));
+        if (pick == null) {
+            log.info("조기 종료({}) 보충 실패(후보 없음): day={}", formatMinutes(end), day.dayNumber);
+            return false;
+        }
+        addToDay(day, pick, spare, usedIndices);
+        memo.recordInsert(day.dayNumber, pick);
+        log.info("조기 종료({}) 보충: day={} {}", formatMinutes(end), day.dayNumber, nameOf(candidates, pick));
+        return true;
+    }
+
+    /**
+     * 같은 종류가 연속 {@value ScheduleTuning#MAX_CONSECUTIVE_SAME_MAJOR}개 이상이면 연속 구간 중간을 다른
+     * 종류의 근접 spare로 교체한다. 교체할 후보가 없으면 그대로 두고 로그만 남긴다.
+     *
+     * <p>"같은 종류"의 기준은 대분류가 아니라 <b>체감 기준</b>으로 잡는다:
+     * <ul>
+     *   <li>식음료(DINING/CAFE): 대분류 연속 — 카페 3연속은 그 자체로 단조롭다</li>
+     *   <li>관광(ATTRACTION): 세부 유형 연속 — 박물관·해변·공원이 이어지는 건 정상이고,
+     *       문제는 "오름 3연속"처럼 같은 유형이 반복될 때다</li>
+     * </ul>
+     */
+    private boolean breakConsecutiveSameMajor(DayState day, List<StepData> daySteps,
+                                              List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                              Set<Integer> usedIndices,
+                                              java.util.function.Predicate<PlaceCandidate> openOnDay) {
+        List<StepData> visits = daySteps.stream()
+                .filter(s -> s.place() != null)
+                .filter(s -> {
+                    String m = PlaceCategoryConstants.majorCategory(s.place().category());
+                    return !"TRANSIT_HUB".equals(m) && !"LODGING".equals(m);
+                })
+                .collect(Collectors.toList());
+        if (visits.size() < MAX_CONSECUTIVE_SAME_MAJOR) return false;
+
+        int runStart = 0;
+        for (int i = 1; i <= visits.size(); i++) {
+            String prevKind = consecutiveKind(visits.get(i - 1));
+            String curKind = i < visits.size() ? consecutiveKind(visits.get(i)) : null;
+            if (curKind != null && curKind.equals(prevKind)) continue;
+
+            int runLength = i - runStart;
+            if (runLength >= MAX_CONSECUTIVE_SAME_MAJOR) {
+                StepData middle = visits.get(runStart + runLength / 2);
+                if (replaceStepWithSameKindBroken(day, middle, prevKind, candidates, spare, usedIndices, openOnDay)) {
+                    return true;
+                }
+                log.info("{} {}개 연속 해소 실패(다른 종류 후보 없음): day={}",
+                        prevKind, runLength, day.dayNumber);
+            }
+            runStart = i;
+        }
+        return false;
+    }
+
+    /** 연속 판정 키: 식음료는 대분류, 관광은 세부 유형. */
+    private String consecutiveKind(StepData step) {
+        String major = PlaceCategoryConstants.majorCategory(step.place().category());
+        if ("DINING".equals(major) || "CAFE".equals(major)) return major;
+        return PlaceCategoryConstants.subType(
+                step.place().name(), step.place().category(), List.of(), step.place().description());
+    }
+
+    /** 스텝 하나를 "연속을 끊는 다른 종류"의 근접 spare로 교체. 사용자 필수 장소는 건드리지 않는다. */
+    private boolean replaceStepWithSameKindBroken(DayState day, StepData step, String kind,
+                                                  List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                                  Set<Integer> usedIndices,
+                                                  java.util.function.Predicate<PlaceCandidate> openOnDay) {
+        Integer target = indexOfStep(step, day, candidates);
+        if (target == null) return false;
+        PlaceCandidate targetCand = byIndex(candidates, target);
+        if (targetCand == null || targetCand.userSelected()) return false;
+
+        Integer pick = pickNearbyCandidate(candidates, spare, usedIndices, coordsOf(targetCand),
+                openOnDay.and(c -> isVisitableFill(c) && !kind.equals(kindOf(c))));
+        if (pick == null) return false;
+
+        replaceInDay(day, target, pick);
+        spare.remove(pick);
+        spare.addLast(target);
+        usedIndices.add(pick);
+        usedIndices.remove(target);
+        log.info("{} 연속 해소: day={} {} → {}", kind, day.dayNumber, targetCand.name(),
+                nameOf(candidates, pick));
+        return true;
+    }
+
+    /** 후보의 연속 판정 키(consecutiveKind와 같은 기준). */
+    private String kindOf(PlaceCandidate c) {
+        String major = PlaceCategoryConstants.majorCategory(c.category());
+        if ("DINING".equals(major) || "CAFE".equals(major)) return major;
+        return subTypeOf(c);
+    }
+
+    /**
+     * 최종 스텝 기준 사용자 카테고리 커버리지 재적용 — 트림으로 사라진 카테고리를 다시 채운다.
+     *
+     * <p>보호 규칙(3차 1번): 후보는 <b>대상 day centroid 최근접</b>으로 고르고, 그 day의 구간·일일
+     * 거리 예산을 넘기면 넣지 않는다. 실측 58 day1에서 제주시 공원을 동쪽 끝 오름으로 바꿔 왕복
+     * 93km가 생겼는데, 커버리지 한 칸을 채우려고 하루 동선을 무너뜨리는 건 손해다 —
+     * 그럴 바엔 미충족 로그를 남긴다.
+     */
+    private boolean reapplyCoverageOnFinalSteps(List<DayState> days, List<StepData> steps,
+                                                List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                                Set<Integer> usedIndices, List<String> userCategories,
+                                                int maxPerDay, java.time.LocalDate startDate,
+                                                InvariantMemo memo, String transportPref) {
+        if (userCategories == null || userCategories.isEmpty()) return false;
+
+        for (String categoryId : userCategories) {
+            if (categoryId == null || categoryId.isBlank()) continue;
+            boolean covered = steps.stream().anyMatch(s -> s.place() != null
+                    && PlaceCategoryConstants.matchesUserCategory(
+                            categoryId, s.place().name(), s.place().category(), List.of()));
+            if (!covered && "accommodation".equalsIgnoreCase(categoryId.trim())) {
+                covered = days.stream().anyMatch(d -> d.accommodationIndex != null);
+            }
+            if (covered) continue;
+
+            // (day, 후보) 조합을 함께 고른다 — "가장 좋은 후보"가 아니라 "어느 day에 넣었을 때
+            // centroid에 가장 가까운가"가 기준이어야 동선이 망가지지 않는다.
+            DayState bestDay = null;
+            Integer bestPick = null;
+            double bestDist = Double.MAX_VALUE;
+            for (DayState d : days) {
+                if (d.placeIndices.size() >= maxPerDay) continue;
+                double[] centroid = centroidOf(d.placeIndices, candidates);
+                java.util.function.Predicate<PlaceCandidate> insertable =
+                        insertableFilter(d, candidates, startDate, transportPref, memo);
+                for (Integer idx : spare) {
+                    PlaceCandidate c = byIndex(candidates, idx);
+                    if (c == null || !isVisitableFill(c)) continue;
+                    if (!PlaceCategoryConstants.matchesUserCategory(
+                            categoryId, c.name(), c.category(), c.tags())) continue;
+                    if (!insertable.test(c)) continue;
+                    double dist = centroid == null || coordsOf(c) == null
+                            ? 0 : haversine(centroid, coordsOf(c));
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestDay = d;
+                        bestPick = idx;
+                    }
+                }
+            }
+
+            if (bestDay != null) {
+                addToDay(bestDay, bestPick, spare, usedIndices);
+                memo.recordInsert(bestDay.dayNumber, bestPick);
+                log.info("최종 커버리지 보충: {} → day={} {} (centroid에서 {}km)", categoryId,
+                        bestDay.dayNumber, nameOf(candidates, bestPick), String.format("%.0f", bestDist));
+                return true; // 한 번에 하나씩 — 재스케줄 후 다음 패스에서 나머지를 본다
+            }
+            // 자리가 없으면 "가장 많이 반복된 유형" 하나와 교체한다 — quota를 늘리지 않으면서
+            // 커버리지와 다양성을 동시에 개선하는 유일한 수단(추가가 아니라 대체).
+            if (replaceMostRepeatedForCoverage(days, candidates, spare, usedIndices, categoryId, startDate,
+                    memo, transportPref, steps)) {
+                return true;
+            }
+            log.info("최종 커버리지 미충족(예산·자리 제약으로 삽입·교체 불가): {}", categoryId);
+        }
+        return false;
+    }
+
+    /**
+     * 커버리지 후보를 넣을 자리가 없을 때, 전체 일정에서 가장 많이 반복된 세부 유형의 장소 하나와
+     * 맞바꾼다. 식사·허브·숙소·사용자 필수 장소는 교체하지 않고, 반복이 2회 미만이면 교체하지 않는다
+     * (다양성을 해치면서까지 커버리지를 채우지는 않는다).
+     */
+    private boolean replaceMostRepeatedForCoverage(List<DayState> days, List<PlaceCandidate> candidates,
+                                                   Deque<Integer> spare, Set<Integer> usedIndices,
+                                                   String categoryId, java.time.LocalDate startDate,
+                                                   InvariantMemo memo, String transportPref,
+                                                   List<StepData> steps) {
+        Map<String, Integer> typeCount = countSubTypes(days, candidates);
+        // 식사 슬롯을 채우고 있는 장소 이름 — 교체하면 끼니가 사라지므로 대상에서 뺀다.
+        Set<String> mealSlotNames = steps.stream()
+                .filter(this::isMealSlotStep)
+                .map(st -> normalizeName(st.place().name()))
+                .collect(Collectors.toSet());
+
+        DayState bestDay = null;
+        Integer bestVictim = null;
+        Integer bestPick = null;
+        int bestCount = 1; // 2회 이상 반복된 유형만 교체 대상
+
+        for (DayState d : days) {
+            java.util.function.Predicate<PlaceCandidate> insertable =
+                    insertableFilter(d, candidates, startDate, transportPref, memo);
+            Integer pick = spare.stream()
+                    .map(i -> byIndex(candidates, i))
+                    .filter(Objects::nonNull)
+                    .filter(this::isVisitableFill)
+                    .filter(c -> PlaceCategoryConstants.matchesUserCategory(
+                            categoryId, c.name(), c.category(), c.tags()))
+                    .filter(insertable)
+                    .min(Comparator.comparingDouble(c -> {
+                        double[] centroid = centroidOf(d.placeIndices, candidates);
+                        return centroid == null || coordsOf(c) == null ? 0 : haversine(centroid, coordsOf(c));
+                    }))
+                    .map(PlaceCandidate::index)
+                    .orElse(null);
+            if (pick == null) continue;
+
+            for (Integer idx : d.placeIndices) {
+                PlaceCandidate c = byIndex(candidates, idx);
+                if (c == null || c.userSelected()) continue;
+                if (isDiningCand(c)) continue;                                  // 식사 대분류는 제외
+                if (mealSlotNames.contains(normalizeName(c.name()))) continue;   // 식사 슬롯 점유분 제외
+                int count = typeCount.getOrDefault(subTypeOf(c), 0);
+                if (count > bestCount) {
+                    bestCount = count;
+                    bestDay = d;
+                    bestVictim = idx;
+                    bestPick = pick;
+                }
+            }
+        }
+        if (bestDay == null) return false;
+
+        replaceInDay(bestDay, bestVictim, bestPick);
+        spare.remove(bestPick);
+        spare.addLast(bestVictim);
+        usedIndices.add(bestPick);
+        usedIndices.remove(bestVictim);
+        memo.recordInsert(bestDay.dayNumber, bestPick);
+        log.info("최종 커버리지 교체 보충: {} → day={} {} → {} ({} {}회 반복)", categoryId, bestDay.dayNumber,
+                nameOf(candidates, bestVictim), nameOf(candidates, bestPick),
+                subTypeOf(byIndex(candidates, bestVictim)), bestCount);
+        return true;
+    }
+
+    /**
+     * 최종 스텝 기준 세부 유형 상한 재적용 — 상한 초과분을 <b>같은 대분류의</b> 다른 세부 유형으로 교체.
+     *
+     * <p>보호 규칙(3차 1번): ① 식사 슬롯을 채우는 스텝은 교체하지 않는다(끼니가 사라진다)
+     * ② 교체는 같은 대분류 안에서만 — 관광을 식당으로, 식당을 카페로 바꾸면 상위 불변식이 깨진다
+     * (실측: day4 저녁 식당 → 카페 교체 후 "저녁 없음", day3 오름 → 식당 교체).
+     */
+    private boolean reapplyTypeCapOnFinalSteps(List<DayState> days, List<StepData> steps,
+                                               List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                               Set<Integer> usedIndices, java.time.LocalDate startDate,
+                                               InvariantMemo memo, String transportPref) {
+        int typeCap = (int) Math.ceil(days.size() / 2.0) + TYPE_CAP_BASE;
+        Map<String, Integer> typeCount = new HashMap<>();
+
+        for (StepData step : steps) {
+            if (step.place() == null) continue;
+            String major = PlaceCategoryConstants.majorCategory(step.place().category());
+            if ("TRANSIT_HUB".equals(major) || "LODGING".equals(major)) continue;
+
+            String type = PlaceCategoryConstants.subType(
+                    step.place().name(), step.place().category(), List.of(), step.place().description());
+            int count = typeCount.merge(type, 1, Integer::sum);
+            if (!isSpecificType(type) || count <= typeCap) continue;
+
+            if (isMealSlotStep(step)) {
+                log.info("최종 유형 상한 초과({} {}회) — 식사 슬롯이라 교체하지 않음: {}",
+                        type, count, step.place().name());
+                continue;
+            }
+
+            DayState day = findDayContainingStep(days, step, candidates);
+            if (day == null) continue;
+            if (replaceStepWithDifferentSubType(day, step, type, major, typeCap, typeCount, candidates, spare,
+                    usedIndices, insertableFilter(day, candidates, startDate, transportPref, memo), memo)) {
+                return true; // 한 번에 하나씩
+            }
+            log.info("최종 유형 상한 초과({} {}회) 해소 실패(같은 대분류 대체 후보 없음): {}",
+                    type, count, step.place().name());
+        }
+        return false;
+    }
+
+    private boolean replaceStepWithDifferentSubType(DayState day, StepData step, String type, String major,
+                                                    int typeCap, Map<String, Integer> typeCount,
+                                                    List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                                    Set<Integer> usedIndices,
+                                                    java.util.function.Predicate<PlaceCandidate> insertable,
+                                                    InvariantMemo memo) {
+        Integer target = indexOfStep(step, day, candidates);
+        if (target == null) return false;
+        PlaceCandidate targetCand = byIndex(candidates, target);
+        if (targetCand == null || targetCand.userSelected()) return false;
+
+        Integer pick = pickNearbyCandidate(candidates, spare, usedIndices, coordsOf(targetCand),
+                insertable.and(c -> isVisitableFill(c)
+                        // 같은 대분류 안에서만 교체 — 대분류가 바뀌면 식사·관광 구성이 무너진다
+                        && major.equals(PlaceCategoryConstants.majorCategory(c.category()))
+                        && !type.equals(subTypeOf(c))
+                        && typeCount.getOrDefault(subTypeOf(c), 0) < typeCap));
+        if (pick == null) return false;
+
+        replaceInDay(day, target, pick);
+        spare.remove(pick);
+        spare.addLast(target);
+        usedIndices.add(pick);
+        usedIndices.remove(target);
+        memo.recordInsert(day.dayNumber, pick);
+        typeCount.merge(type, -1, Integer::sum);
+        log.info("최종 유형 상한({} {}회 초과) 교체: day={} {} → {} (대분류 {} 유지)", type, typeCap,
+                day.dayNumber, targetCand.name(), nameOf(candidates, pick), major);
+        return true;
+    }
+
+    /** 스텝(place 이름 기준)에 대응하는 day.placeIndices의 인덱스. 허브·숙소는 대상 아님. */
+    private Integer indexOfStep(StepData step, DayState day, List<PlaceCandidate> candidates) {
+        if (step.place() == null || step.place().name() == null) return null;
+        String name = normalizeName(step.place().name());
+        for (Integer idx : day.placeIndices) {
+            PlaceCandidate c = byIndex(candidates, idx);
+            if (c != null && normalizeName(c.name()).equals(name)) return idx;
+        }
+        return null;
+    }
+
+    private DayState findDayContainingStep(List<DayState> days, StepData step, List<PlaceCandidate> candidates) {
+        for (DayState d : days) {
+            if (d.dayNumber == step.dayNumber() && indexOfStep(step, d, candidates) != null) return d;
+        }
+        return null;
+    }
+
+    /** anchor에 가장 가까운, 조건을 만족하는 미사용 후보(spare 우선 → 전체 미사용). */
+    private Integer pickNearbyCandidate(List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                        Set<Integer> usedIndices, double[] anchor,
+                                        java.util.function.Predicate<PlaceCandidate> predicate) {
+        Integer fromSpare = nearestMatching(spare.stream().map(i -> byIndex(candidates, i)).toList(),
+                usedIndices, anchor, predicate);
+        if (fromSpare != null) return fromSpare;
+        // spare에 없으면 아직 어디에도 쓰이지 않은 후보까지 넓힌다(검색 결과를 끝까지 활용)
+        return nearestMatching(candidates, usedIndices, anchor, predicate);
+    }
+
+    private Integer nearestMatching(List<PlaceCandidate> pool, Set<Integer> usedIndices, double[] anchor,
+                                    java.util.function.Predicate<PlaceCandidate> predicate) {
+        return pool.stream()
+                .filter(Objects::nonNull)
+                .filter(c -> !usedIndices.contains(c.index()))
+                .filter(predicate)
+                .filter(c -> anchor == null || coordsOf(c) != null)
+                .min(Comparator.comparingDouble(c -> anchor == null || coordsOf(c) == null
+                        ? Double.MAX_VALUE : haversine(anchor, coordsOf(c))))
+                .map(PlaceCandidate::index)
+                .orElse(null);
+    }
+
+
+
+
+
+    /** 그날 영업하는 장소만 통과시키는 필터. startDate가 없으면 판단 보류(전부 통과). */
+    private java.util.function.Predicate<PlaceCandidate> openOnDayFilter(java.time.LocalDate startDate,
+                                                                        int dayNumber) {
+        if (startDate == null) return c -> true;
+        java.time.DayOfWeek dow = startDate.plusDays(dayNumber - 1L).getDayOfWeek();
+        return c -> !isClosedOnDay(c.openingHours(), dow);
+    }
+
+    private void addToDay(DayState day, Integer idx, Deque<Integer> spare, Set<Integer> usedIndices) {
+        day.placeIndices.add(idx);
+        spare.remove(idx);
+        usedIndices.add(idx);
+    }
+
+    /**
+     * 전체 day를 순회하며 순서 확정 → 거리 예산 → 시간 배정을 수행한다. 최종 불변식 패스가
+     * 같은 조건으로 다시 부를 수 있도록 부작용을 spare/usedIndices로 한정한 순수 재실행 단위다.
+     */
+    private List<StepData> scheduleAllDays(List<DayState> days, List<PlaceCandidate> candidates,
+                                            List<List<Integer>> pairs, Set<Integer> highlights,
+                                            Set<Integer> rests, Deque<Integer> spare,
+                                            Set<Integer> usedIndices, ScheduleConfig cfg,
+                                            String transportPref, int maxPerDay) {
         List<StepData> steps = new ArrayList<>();
         for (int i = 0; i < days.size(); i++) {
             DayState day = days.get(i);
@@ -526,29 +1436,19 @@ public class RouteOptimizer {
             steps.addAll(scheduleDay(day, ordered, candidates, spare, cfg,
                     dayCentroid, usedIndices, transportPref, startFrom, maxPerDay));
         }
+        return steps;
+    }
 
-        // 대안은 day 순서대로 생성되므로, 뒤쪽 day의 갭 필/거리 교체로 나중에 본일정에 편입된
-        // 장소가 앞쪽 day의 대안에 이미 들어가 있을 수 있다(실측: 3일차 갭 필로 들어간 카페가
-        // 1일차 카페의 대안으로 잔존 — 스왑 시 같은 곳 2회 방문). 최종 스텝 기준으로 걸러낸다.
-        Set<String> usedPlaceKeys = steps.stream()
-                .map(StepData::place)
-                .filter(Objects::nonNull)
-                .map(p -> placeKey(p.name(), p.address()))
-                .collect(Collectors.toSet());
-        List<StepData> deduped = new ArrayList<>(steps.size());
-        for (StepData s : steps) {
-            deduped.add(withoutUsedAlternatives(s, usedPlaceKeys));
+    /**
+     * spare를 원본 스냅샷으로 되돌리되, 그 사이 day에 편입된 인덱스는 뺀다.
+     * 되돌리지 않으면 이전 패스에서 트림된 장소가 spare에 중복 누적돼 같은 장소가 두 번 채워진다.
+     */
+    private void resetSpare(Deque<Integer> spare, List<Integer> baseline, List<DayState> days) {
+        Set<Integer> used = collectUsedIndices(days);
+        spare.clear();
+        for (Integer idx : baseline) {
+            if (!used.contains(idx) && !spare.contains(idx)) spare.addLast(idx);
         }
-        steps = deduped;
-
-        int order = 1;
-        List<StepData> renumbered = new ArrayList<>(steps.size());
-        for (StepData s : steps) {
-            renumbered.add(withStepOrder(s, order++));
-        }
-
-        log.info("RouteOptimizer.repairAndSchedule 완료: {}개 step, {}개 day", renumbered.size(), days.size());
-        return renumbered;
     }
 
     private StepData withoutUsedAlternatives(StepData s, Set<String> usedPlaceKeys) {
@@ -634,9 +1534,21 @@ public class RouteOptimizer {
                 .orElse(null);
     }
 
-    /** quota 보충으로 방문 스텝에 넣어도 되는 대분류인지(식당/카페/관광지만 허용). */
+    /**
+     * quota 보충으로 방문 스텝에 넣어도 되는 후보인지(식당/카페/관광지만 허용).
+     * 경유형(해안도로·드라이브코스)은 어떤 자동 보충 경로로도 넣지 않는다 — Sonnet이 처음 고른
+     * 1개는 유지하되(enforceTypeDiversity의 상한), 코드가 스스로 늘리지는 않는다는 규칙.
+     */
     private boolean isVisitableFill(PlaceCandidate c) {
         String major = PlaceCategoryConstants.majorCategory(c.category());
+        if (PlaceCategoryConstants.isViaRoute(c.name(), c.category(), c.tags())) return false;
+        // 집합 POI(음식거리·먹자골목)도 자동 보충으로 넣지 않는다 — 선택 단계에서 뺀 장소를
+        // 최종 패스가 활동으로 되살리면 같은 규칙이 경로마다 다르게 적용되는 셈이다
+        // (실측: 선택에서 제외된 "Seogwipo's food streets"가 조기 종료 보충으로 재유입).
+        if (PlaceCategoryConstants.isAggregatePoi(c.name(), c.category())) return false;
+        // 여객시설(터미널·대합실·선착장)은 카테고리가 관광지로 오적재돼 있어도 방문지가 아니다
+        // — 실측: "성산포항 종합여객터미널"이 관광 스텝 90분으로 배치됐다.
+        if (PlaceCategoryConstants.isPassengerFacility(c.name())) return false;
         return "DINING".equals(major) || "CAFE".equals(major) || "ATTRACTION".equals(major);
     }
 
@@ -847,7 +1759,84 @@ public class RouteOptimizer {
                 }
             }
         }
+
+        // 이동만으로는 "목적 day가 꽉 찬" 경우를 못 고친다(quota가 이미 상한이면 아무도 못 감).
+        // 양쪽 모두 centroid에 가까워지는 1:1 교환을 추가로 시도한다(C5).
+        changed |= swapAcrossDays(days, candidates, centroids, pairedIndices);
         return changed;
+    }
+
+    /**
+     * 서로 다른 day의 방문지 하나씩을 맞바꾼다 — 각자 상대 day의 centroid에 더 가까워지고 합산
+     * 이득이 {@link #SWAP_MIN_GAIN_KM} 이상일 때만. 개수 중립이라 quota를 깨지 않으므로 꽉 찬
+     * day에도 적용된다. pair 멤버·사용자 필수 장소는 제외하고, 한 패스에서 각 장소는 최대 1회 교환.
+     */
+    private boolean swapAcrossDays(List<DayState> days, List<PlaceCandidate> candidates,
+                                   List<double[]> centroids, Set<Integer> pairedIndices) {
+        boolean changed = false;
+        Set<Integer> swapped = new HashSet<>();
+
+        for (int i = 0; i < days.size(); i++) {
+            double[] ci = centroids.get(i);
+            if (ci == null) continue;
+            for (int j = i + 1; j < days.size(); j++) {
+                double[] cj = centroids.get(j);
+                if (cj == null) continue;
+
+                Integer bestA = null, bestB = null;
+                double bestGain = SWAP_MIN_GAIN_KM;
+
+                for (Integer a : new ArrayList<>(days.get(i).placeIndices)) {
+                    if (!isSwappable(a, candidates, pairedIndices, swapped)) continue;
+                    double[] ca = coordsOf(byIndex(candidates, a));
+                    if (ca == null) continue;
+                    for (Integer b : new ArrayList<>(days.get(j).placeIndices)) {
+                        if (!isSwappable(b, candidates, pairedIndices, swapped)) continue;
+                        double[] cb = coordsOf(byIndex(candidates, b));
+                        if (cb == null) continue;
+
+                        double before = haversine(ca, ci) + haversine(cb, cj);
+                        double after = haversine(ca, cj) + haversine(cb, ci);
+                        double gain = before - after;
+                        // 양쪽 모두 개선되는 교환만 (한쪽 희생으로 합만 맞추는 교환 금지)
+                        boolean bothImprove = haversine(ca, cj) < haversine(ca, ci)
+                                && haversine(cb, ci) < haversine(cb, cj);
+                        if (bothImprove && gain > bestGain) {
+                            bestGain = gain;
+                            bestA = a;
+                            bestB = b;
+                        }
+                    }
+                }
+
+                if (bestA != null) {
+                    days.get(i).placeIndices.remove(bestA);
+                    days.get(j).placeIndices.remove(bestB);
+                    days.get(i).placeIndices.add(bestB);
+                    days.get(j).placeIndices.add(bestA);
+                    swapped.add(bestA);
+                    swapped.add(bestB);
+                    changed = true;
+                    log.info("day 간 스왑: day={} ↔ day={} ({} ↔ {}, {}km 단축)",
+                            days.get(i).dayNumber, days.get(j).dayNumber,
+                            nameOf(candidates, bestA), nameOf(candidates, bestB),
+                            String.format("%.1f", bestGain));
+                }
+            }
+        }
+        return changed;
+    }
+
+    private boolean isSwappable(Integer idx, List<PlaceCandidate> candidates,
+                                Set<Integer> pairedIndices, Set<Integer> swapped) {
+        if (pairedIndices.contains(idx) || swapped.contains(idx)) return false;
+        PlaceCandidate c = byIndex(candidates, idx);
+        return c != null && !c.userSelected();
+    }
+
+    private String nameOf(List<PlaceCandidate> candidates, Integer idx) {
+        PlaceCandidate c = byIndex(candidates, idx);
+        return c != null && c.name() != null ? c.name() : String.valueOf(idx);
     }
 
     /** idxList 중 좌표상 가장 먼 두 점의 (리스트 내) 위치를 반환. 유효좌표 없으면 null. */
@@ -1025,9 +2014,25 @@ public class RouteOptimizer {
 
             String prevRegion = dominantRegion(prev.placeIndices, candidates);
             String currRegion = dominantRegion(curr.placeIndices, candidates);
-            if (prevRegion != null && prevRegion.equals(currRegion)) {
-                curr.accommodationIndex = prev.accommodationIndex;
+            if (prevRegion == null || !prevRegion.equals(currRegion)) continue;
+
+            // region은 "Jeju"처럼 섬·광역 단위라 너무 거칠다. 같은 region이어도 day1은 서부,
+            // day2는 동부면 숙소를 통일하는 순간 매 구간이 30km대가 된다(실측 itinerary 68 day2
+            // 표시 161km). 짐 이동을 아끼자고 하루 동선을 무너뜨리면 손해이므로, 통일했을 때
+            // 그날 숙소가 방문지 중심에서 지나치게 멀어지면 그대로 둔다.
+            double[] currCentroid = centroidOf(curr.placeIndices, candidates);
+            double[] prevHotel = coordsOf(byIndex(candidates, prev.accommodationIndex));
+            double[] currHotel = coordsOf(byIndex(candidates, curr.accommodationIndex));
+            if (currCentroid != null && prevHotel != null && currHotel != null) {
+                double unified = haversine(currCentroid, prevHotel);
+                double own = haversine(currCentroid, currHotel);
+                if (unified - own > CONTINUITY_MAX_EXTRA_KM) {
+                    log.info("숙소 연박 통일 보류: day={} 통일 시 중심에서 {}km(현재 {}km) — 동선 우선",
+                            curr.dayNumber, String.format("%.0f", unified), String.format("%.0f", own));
+                    continue;
+                }
             }
+            curr.accommodationIndex = prev.accommodationIndex;
         }
     }
 
@@ -1268,13 +2273,6 @@ public class RouteOptimizer {
                 .orElse(null);
     }
 
-    // 서사 흐름 가중치: 거리 단위(km)와 같은 스케일의 "패널티"로 표현해 2-opt 비용함수에 더함.
-    // 도심 스팟간 거리(보통 1~5km)보다 작게 잡아, 거리가 명확히 우세하면 거리가 이기고
-    // 거리차가 0.5km 내외로 비슷한(타이) 경우에만 흐름이 결정하도록 함.
-    private static final double HIGHLIGHT_FIRST_PENALTY_KM = 0.5;
-    private static final double REST_AFTER_HIGHLIGHT_BONUS_KM = 0.3;
-
-    private enum Intensity { HIGHLIGHT, REST, NEUTRAL }
 
     /**
      * day 내 순서를 NN+2-opt로 결정한다. pair는 union-find로 한 노드로 묶어 최적화 후 펼친다
@@ -1509,26 +2507,18 @@ public class RouteOptimizer {
         List<Integer> diningAll = orderedMain.stream()
                 .filter(idx -> {
                     PlaceCandidate c = byIndex(candidates, idx);
-                    return isDiningCand(c) && !PlaceCategoryConstants.isBar(c.category());
+                    // 한 끼 식사가 아닌 것(바·디저트·베이커리·간식)과 집합 POI(음식거리)는 식사
+                    // 슬롯에서 뺀다 — 검색 슬롯과 같은 목록을 쓴다(PlaceCategoryConstants.isMealPlace).
+                    return c != null && c.mealEligible();
                 })
                 .collect(Collectors.toList());
         List<Integer> meals = selectMeals(diningAll, candidates, spareIndices);
-
-        // 저녁은 경로순이 아니라 "숙소에 가장 가까운 식당"으로 — 저녁 식사 후 숙소 반대편으로
-        // 장거리 이동하는 패턴(실측: 저녁 왕복 65km)을 구조적으로 줄인다.
-        meals = preferDinnerNearAccommodation(meals, day, candidates);
-
-        Integer breakfastIdx = null, lunchIdx = null, dinnerIdx = null;
-        if (meals.size() == 1) {
-            lunchIdx = meals.get(0);
-        } else if (meals.size() == 2) {
-            lunchIdx = meals.get(0);
-            dinnerIdx = meals.get(1);
-        } else if (meals.size() >= 3) {
-            breakfastIdx = meals.get(0);
-            lunchIdx = meals.get(1);
-            dinnerIdx = meals.get(2);
-        }
+        // 아침 슬롯은 "숙소에서 출발하는 날"에만 성립한다. 도착일(허브로 시작)이나 전날 숙소가
+        // 없는 날에 아침을 두면 공항 옆 식당이 10시 아침이 된다(실측 64 day1 10:03).
+        boolean allowBreakfast = day.arrivalHubIndex == null && startFrom != null;
+        meals = dropBreakfastIfNotAllowed(meals, day, candidates, spareIndices, allowBreakfast);
+        // 숙소에서 먼 아침은 그 다음에 버린다(아침부터 원정 방지) — 남은 개수가 버킷 용량을 결정한다.
+        meals = dropDistantBreakfast(meals, day, candidates, spareIndices);
         Set<Integer> mealSet = new HashSet<>(diningAll);
 
         // 비식사 활동을 시간대 적합성(야외=주간만, Bar=저녁만)을 지키며 오전/오후/저녁 버킷에 배분.
@@ -1536,16 +2526,28 @@ public class RouteOptimizer {
         List<Integer> activities = orderedMain.stream()
                 .filter(idx -> !mealSet.contains(idx))
                 .collect(Collectors.toList());
-        int[] caps = bucketCaps(cfg, lunchIdx != null, dinnerIdx != null, breakfastIdx != null);
+        int[] budgets = bucketBudgets(cfg, meals.size() >= 1, meals.size() >= 2, meals.size() >= 3);
+        // 도착 허브(공항 도착·수속)는 활동 목록에 없지만 오전 시간을 실제로 먹는다. 빼주지 않으면
+        // 오전 예산이 부풀어 활동이 하나 더 들어가고 점심이 창 밖으로 밀린다
+        // (실측 71/72 day1: 허브 08:30~10:00 뒤 120분 오름 → 점심 14:03).
+        if (day.arrivalHubIndex != null) {
+            PlaceCandidate hub = byIndex(candidates, day.arrivalHubIndex);
+            if (hub != null) {
+                budgets[0] = Math.max(0, budgets[0] - resolveVisitMinutes(hub) - INTRA_BUCKET_TRAVEL_MINUTES);
+            }
+        }
+        // 버킷별 사용 분 누적 — 실제 체류시간으로 채워야 시계와 용량이 어긋나지 않는다
+        int[] usedM = {0}, usedA = {0}, usedE = {0};
         List<Integer> morning = new ArrayList<>(), afternoon = new ArrayList<>(), evening = new ArrayList<>();
         for (Integer idx : activities) {
             PlaceCandidate actCand = byIndex(candidates, idx);
             boolean placed = switch (timePreference(actCand)) {
-                case DAYTIME -> addIfBelowCap(morning, caps[0], idx) || addIfBelowCap(afternoon, caps[1], idx);
-                case EVENING -> addIfBelowCap(evening, caps[2], idx);
-                case FLEXIBLE -> addIfBelowCap(morning, caps[0], idx)
-                        || addIfBelowCap(afternoon, caps[1], idx)
-                        || addIfBelowCap(evening, caps[2], idx);
+                case DAYTIME -> addIfFitsBudget(morning, budgets[0], usedM, idx, actCand, false)
+                        || addIfFitsBudget(afternoon, budgets[1], usedA, idx, actCand, true);
+                case EVENING -> addIfFitsBudget(evening, budgets[2], usedE, idx, actCand, false);
+                case FLEXIBLE -> addIfFitsBudget(morning, budgets[0], usedM, idx, actCand, false)
+                        || addIfFitsBudget(afternoon, budgets[1], usedA, idx, actCand, true)
+                        || addIfFitsBudget(evening, budgets[2], usedE, idx, actCand, false);
             };
             if (!placed) {
                 // 사용자 필수 장소는 버킷 용량에 밀려도 spare로 빼지 않는다 — 오후에 강제 편입
@@ -1557,6 +2559,14 @@ public class RouteOptimizer {
                 }
             }
         }
+
+        // 버킷이 확정된 뒤에 식사 슬롯을 배정한다(C3). 버킷 경계를 알아야 "점심이 오전 마지막
+        // 활동과 오후 첫 활동 사이에서 우회를 최소화하는 식당"인지 판정할 수 있다 — 경계를 모른 채
+        // 그날 중심 최근접으로 고르면 오전(동쪽) → 점심(서쪽) → 오후(동쪽) 왕복이 생긴다.
+        MealSlots slots = assignMealSlots(meals, day, candidates, morning, afternoon, startFrom, dayCentroid);
+        Integer breakfastIdx = slots.breakfast();
+        Integer lunchIdx = slots.lunch();
+        Integer dinnerIdx = slots.dinner();
 
         // 동선 보완: 저녁 버킷이 비면 저녁 식당이 숙소 직전이 되는데, 숙소에 더 가까운 오후 활동이
         // 있으면 그 하나를 저녁(마지막)으로 옮겨 "그날을 숙소 근처에서 마무리"(orderDay orientToAnchors
@@ -1591,7 +2601,15 @@ public class RouteOptimizer {
             PlaceCandidate c = byIndex(candidates, idx);
             if (c != null && c.userSelected()) protectedIdx.add(idx);
         }
-        trimSequenceOverBudget(day, seq, candidates, spareIndices, transportPref, protectedIdx);
+        // 전날 숙소(또는 도착 허브)에서 첫 스텝까지의 이동도 그날 주행에 포함해야 한다(C4).
+        // 이 leg를 빼고 재던 기존 계산은 "숙소에서 60km 떨어진 곳에서 하루를 시작"하는 day를
+        // 상한 이내로 오판했다(실측: 하루 196km).
+        PlaceCandidate budgetOrigin = (startFrom != null && !seq.isEmpty() && seq.get(0) != startFrom.index())
+                ? startFrom : null;
+        trimSequenceOverBudget(day, seq, candidates, spareIndices, transportPref, protectedIdx, budgetOrigin);
+        // 귀가 시각 상한 — 거리 예산과 별개다. 상한 내여도 체류·이동이 쌓이면 23시 귀가가 된다.
+        trimSequenceForDepartureTime(day, seq, candidates, spareIndices, cfg, budgetOrigin,
+                transportPref, protectedIdx, breakfastIdx, lunchIdx, dinnerIdx);
 
         List<StepData> steps = new ArrayList<>();
         int currentMinutes = cfg.morningStart;
@@ -1629,7 +2647,10 @@ public class RouteOptimizer {
             boolean isMorningDeparture = prev == null && day.arrivalHubIndex == null
                     && PlaceCategoryConstants.isAccommodation(cand.category());
             int visitMinutes;
-            if (isMorningDeparture) {
+            if (isSameIndex(day.departureHubIndex, idx)) {
+                // 귀가 허브는 탑승 수속 시간이지 관광이 아니다 — 기본 90분이면 종료가 그만큼 밀린다
+                visitMinutes = DEPARTURE_HUB_MINUTES;
+            } else if (isMorningDeparture) {
                 visitMinutes = MORNING_DEPARTURE_MINUTES;
             } else if (PlaceCategoryConstants.isAccommodation(cand.category())) {
                 visitMinutes = ACCOMMODATION_ARRIVAL_MINUTES; // 하루 마무리 체크인 — 90분 잡으면 "23:45 종료"가 됨
@@ -1646,6 +2667,30 @@ public class RouteOptimizer {
                 int lastEnd = toMinutesOrZero(steps.get(steps.size() - 1).endTime());
                 startMin = Math.max(startMin, Math.min(lastEnd, END_OF_DAY_MINUTES - 1));
             }
+
+            // 시각 가드 — 버킷은 "개수"만 세기 때문에, 정상 배치된 장소도 시계가 밀리면 한밤중에
+            // 시작할 수 있다(실측: 해변 20:37, 야외 지질공원 18:13~21:13). 확정된 시각을 보고
+            // 한 번 더 거른다. 식사·허브·숙소·사용자 필수 장소는 구조상 빼면 안 되므로 제외.
+            boolean fixedSlot = isSameIndex(day.arrivalHubIndex, idx)
+                    || isSameIndex(day.departureHubIndex, idx)
+                    || isSameIndex(day.accommodationIndex, idx)
+                    || isSameIndex(breakfastIdx, idx)
+                    || isSameIndex(lunchIdx, idx)
+                    || isSameIndex(dinnerIdx, idx);
+            if (!fixedSlot && !cand.userSelected()) {
+                int latestStart = Math.min(cfg.eveningCap, ABSOLUTE_LATEST_START_MINUTES);
+                if (timePreference(cand) == TimePreference.DAYTIME) {
+                    latestStart = Math.min(latestStart, daytimeLatestStart(cfg));
+                }
+                if (startMin > latestStart) {
+                    day.placeIndices.remove(Integer.valueOf(idx));
+                    spareIndices.addLast(idx);
+                    log.info("시각 가드 트림: day={} {} ({} 시작, 상한 {})", day.dayNumber, cand.name(),
+                            formatMinutes(startMin), formatMinutes(latestStart));
+                    continue;
+                }
+            }
+
             int endMin = Math.min(startMin + visitMinutes, END_OF_DAY_MINUTES);
             if (endMin <= startMin) endMin = startMin + 1;
 
@@ -1656,16 +2701,6 @@ public class RouteOptimizer {
             prev = cand;
         }
         return steps;
-    }
-
-    private int toMinutesOrZero(String hhmm) {
-        if (hhmm == null || !hhmm.contains(":")) return 0;
-        String[] p = hhmm.split(":");
-        try {
-            return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
     }
 
     private StepData buildStep(DayState day, PlaceCandidate cand, int startMin, int endMin,
@@ -1686,7 +2721,6 @@ public class RouteOptimizer {
         );
     }
 
-    private record TransportLeg(String mode, int durationMin, BigDecimal distanceKm, BigDecimal cost) {}
 
     /**
      * 두 장소 사이 이동 추정. 계산은 {@link GeoUtils#estimateLeg}에 위임하고(대안 선택 재계산
@@ -1707,9 +2741,22 @@ public class RouteOptimizer {
         return new TransportLeg(leg.mode(), leg.durationMin(), leg.distanceKm(), leg.cost());
     }
 
-    private boolean addIfBelowCap(List<Integer> bucket, int cap, Integer idx) {
-        if (bucket.size() >= cap) return false;
+    /**
+     * 버킷에 활동을 넣되 <b>분 예산</b>으로 판단한다. 체류시간 + 구간 이동 여유를 누적해,
+     * 180분짜리 장소가 110분 한 칸만 차지하던 불일치를 없앤다.
+     * 빈 버킷에는 예산을 넘겨도 1개는 넣는다(기존 {@code Math.max(1, ...)} 정신 보존).
+     */
+    private boolean addIfFitsBudget(List<Integer> bucket, int budgetMinutes, int[] usedMinutes,
+                                    Integer idx, PlaceCandidate cand, boolean guaranteeOne) {
+        if (budgetMinutes <= 0) return false;
+        int need = resolveVisitMinutes(cand) + INTRA_BUCKET_TRAVEL_MINUTES;
+        boolean fits = usedMinutes[0] + need <= budgetMinutes;
+        // 빈 버킷 1개 보장은 오후에만 준다. 오전·저녁은 뒤에 식사·마감이라는 하드 데드라인이 있어
+        // 예산을 넘겨 넣으면 그게 그대로 밀린다(실측 71 day1: 오전에 120분 오름이 들어가 점심이
+        // 14:03로 밀려 "점심 없음"). 오후는 가장 넓고 다른 버킷의 폴백 목적지라 하루가 비지 않게 지킨다.
+        if (!fits && !(guaranteeOne && bucket.isEmpty())) return false;
         bucket.add(idx);
+        usedMinutes[0] += need;
         return true;
     }
 
@@ -1727,7 +2774,6 @@ public class RouteOptimizer {
         return PlaceCategoryConstants.heuristicVisitMinutes(cand.category());
     }
 
-    private enum TimePreference { DAYTIME, EVENING, FLEXIBLE }
 
     /**
      * 장소의 적합 시간대. enrich 배치가 채운 recommended_time_slots가 있으면 그것을 우선하고,
@@ -1742,12 +2788,19 @@ public class RouteOptimizer {
                     containsAny(s, "저녁", "밤", "야간", "심야", "evening", "night"));
             boolean daytime = slots.stream().anyMatch(s ->
                     containsAny(s, "아침", "오전", "오후", "낮", "주간", "morning", "afternoon", "daytime"));
+            // 데이터가 "저녁 전용"/"주간 전용"이라고 명시할 때만 그대로 따른다. 그래야 야간 조명
+            // 명소(제주불빛정원 {evening,night})가 지형 판정에 눌려 낮으로 가지 않는다.
             if (evening && !daytime) return TimePreference.EVENING;
             if (daytime && !evening) return TimePreference.DAYTIME;
-            return TimePreference.FLEXIBLE;
+            // 섞여 있으면("{morning,afternoon,evening}") 판단을 유보하고 아래 지형 판정으로 넘긴다.
+            // enrich가 시간대를 느슨하게 나열하는 경우가 많아 그대로 FLEXIBLE로 두면 해변이
+            // 저녁 버킷에 들어간다(실측: 세기알해변 20:37).
         }
         if (PlaceCategoryConstants.isBar(c.category())) return TimePreference.EVENING;
         if (PlaceCategoryConstants.isDaytimeOutdoor(c.category())) return TimePreference.DAYTIME;
+        // 총칭 리프라 카테고리로는 못 걸러지는 야외 장소(해변·오름·공원)를 세부 유형으로 판정한다
+        // — 실측: "하고수동해변"이 Tourist Attraction이라 19:56 저녁 스텝에 배치됐다.
+        if (PlaceCategoryConstants.isDaytimeSubType(subTypeOf(c))) return TimePreference.DAYTIME;
         return TimePreference.FLEXIBLE;
     }
 
@@ -1795,7 +2848,6 @@ public class RouteOptimizer {
         }
     }
 
-    private record GapFill(List<StepData> steps, PlaceCandidate prev, int minutes) {}
 
     /**
      * 식사 슬롯 시작까지의 빈 시간이 활동 1개 분량({@link #ACTIVITY_SLOT_MINUTES}) 이상이면
@@ -1815,8 +2867,24 @@ public class RouteOptimizer {
             int arrivalAtMeal = currentMinutes + (toMeal != null ? toMeal.durationMin() : 0);
             if (mealStart - arrivalAtMeal < GAP_FILL_THRESHOLD_MINUTES) break;
 
+            int gap = mealStart - arrivalAtMeal;
             Integer fillIdx = pickGapFiller(prev, mealCand, candidates, spareIndices, usedIndices, transportPref);
-            if (fillIdx == null) break;
+            if (fillIdx == null && gap >= LARGE_GAP_MINUTES) {
+                // 3시간 이상 비면 spare가 말라도 그냥 두지 않는다 — 아직 어디에도 안 쓰인 후보까지
+                // 넓혀 한 번 더 찾는다(반경·시간대 조건은 동일하게 적용).
+                fillIdx = pickGapFiller(prev, mealCand, candidates,
+                        new ArrayDeque<>(unusedIndices(candidates, usedIndices)), usedIndices, transportPref);
+                if (fillIdx != null) {
+                    log.info("긴 공백({}분) — 미사용 후보까지 확장해 보충: day={}", gap, day.dayNumber);
+                }
+            }
+            if (fillIdx == null) {
+                if (gap >= LARGE_GAP_MINUTES) {
+                    log.info("긴 공백({}분) 미충전: day={} (반경·시간대 조건을 만족하는 후보 없음)",
+                            gap, day.dayNumber);
+                }
+                break;
+            }
             spareIndices.remove(fillIdx);
             usedIndices.add(fillIdx);
 
@@ -1835,6 +2903,14 @@ public class RouteOptimizer {
         return new GapFill(inserted, prev, currentMinutes);
     }
 
+    /** 아직 어느 day에도 쓰이지 않은 후보 인덱스. 긴 공백을 채울 때 spare 다음 순번으로 쓴다. */
+    private List<Integer> unusedIndices(List<PlaceCandidate> candidates, Set<Integer> usedIndices) {
+        return candidates.stream()
+                .map(PlaceCandidate::index)
+                .filter(i -> !usedIndices.contains(i))
+                .collect(Collectors.toList());
+    }
+
     /** 갭 보충 후보: 관광지/카페, 주간 적합, 경로 우회(현위치→후보→식당)가 최소인 spare. */
     private Integer pickGapFiller(PlaceCandidate prev, PlaceCandidate mealCand,
                                   List<PlaceCandidate> candidates, Deque<Integer> spareIndices,
@@ -1850,6 +2926,7 @@ public class RouteOptimizer {
                     String major = PlaceCategoryConstants.majorCategory(c.category());
                     return "ATTRACTION".equals(major) || "CAFE".equals(major);
                 })
+                .filter(c -> !PlaceCategoryConstants.isViaRoute(c.name(), c.category(), c.tags()))
                 .filter(c -> timePreference(c) != TimePreference.EVENING)
                 .filter(c -> coordsOf(c) != null)
                 .filter(c -> from == null || haversine(from, coordsOf(c)) <= radius)
@@ -1930,15 +3007,22 @@ public class RouteOptimizer {
      */
     private void trimSequenceOverBudget(DayState day, List<Integer> seq, List<PlaceCandidate> candidates,
                                         Deque<Integer> spareIndices, String transportPref,
-                                        Set<Integer> protectedIdx) {
+                                        Set<Integer> protectedIdx, PlaceCandidate origin) {
         double[] limits = TRANSPORT_ABS_LIMITS.getOrDefault(transportPref, TRANSPORT_ABS_LIMITS.get("any"));
         double legCap = limits[0];
         double dayCap = limits[1];
+        double[] originCoord = coordsOf(origin);
 
         for (int guard = 0; guard < 2 && seq.size() > 1; guard++) {
-            List<double[]> coords = seq.stream()
-                    .map(i -> coordsOf(byIndex(candidates, i)))
-                    .collect(Collectors.toList());
+            // 하루 실주행 = (출발지 → 첫 스텝) + 스텝 간 이동. 출발지가 있으면 맨 앞에 붙여 함께 잰다.
+            List<double[]> coords = new ArrayList<>(seq.size() + 1);
+            int offset = 0;
+            if (originCoord != null) {
+                coords.add(originCoord);
+                offset = 1;
+            }
+            for (Integer i : seq) coords.add(coordsOf(byIndex(candidates, i)));
+
             double total = 0;
             double worstLeg = 0;
             for (int i = 1; i < coords.size(); i++) {
@@ -1955,13 +3039,22 @@ public class RouteOptimizer {
             double bestGain = 0;
             for (int i = 0; i < seq.size(); i++) {
                 if (protectedIdx.contains(seq.get(i))) continue;
-                double gain = removalGain(coords, i);
+                double gain = removalGain(coords, i + offset);
                 if (gain > bestGain) {
                     bestGain = gain;
                     pos = i;
                 }
             }
-            if (pos < 0) break; // 트림 가능한 활동 없음(전부 보호 대상) — 구조 유지 우선
+            if (pos < 0) {
+                // 전부 보호 대상(식사·허브·숙소)이라 뺄 게 없다 — 제거 대신 "가장 먼 것을 가까운
+                // 같은 종류로 교체"를 시도한다. 필수 슬롯을 지키면서 거리만 줄이는 유일한 수단.
+                if (replaceFarthestWithNearbySpare(day, seq, candidates, spareIndices, coords, offset)) {
+                    continue;
+                }
+                log.info("거리 예산 초과({}km/{}km)인데 트림·교체 모두 불가(전부 보호 대상): day={}",
+                        String.format("%.0f", total), String.format("%.0f", dayCap), day.dayNumber);
+                break;
+            }
 
             Integer idx = seq.remove(pos);
             day.placeIndices.remove(idx);
@@ -1971,6 +3064,71 @@ public class RouteOptimizer {
                     String.format("%.0f", total), String.format("%.0f", dayCap),
                     day.dayNumber, c != null ? c.name() : idx);
         }
+    }
+
+    /**
+     * 거리 예산 초과인데 트림 가능한 활동이 없을 때, 우회 기여가 가장 큰 스텝(허브·숙소 제외)을
+     * 같은 대분류의 가까운 spare로 교체한다. 필수 슬롯(식사)을 없애지 않고 거리만 줄인다.
+     *
+     * @return 교체가 일어났으면 true
+     */
+    private boolean replaceFarthestWithNearbySpare(DayState day, List<Integer> seq,
+                                                   List<PlaceCandidate> candidates, Deque<Integer> spareIndices,
+                                                   List<double[]> coords, int offset) {
+        int bestPos = -1;
+        double bestGain = 0;
+        for (int i = 0; i < seq.size(); i++) {
+            Integer idx = seq.get(i);
+            // 허브·숙소는 구조적으로 고정 — 교체 대상이 아니다
+            String major = PlaceCategoryConstants.majorCategory(byIndex(candidates, idx) != null
+                    ? byIndex(candidates, idx).category() : null);
+            if ("TRANSIT_HUB".equals(major) || "LODGING".equals(major)) continue;
+            PlaceCandidate c = byIndex(candidates, idx);
+            if (c != null && c.userSelected()) continue; // 사용자 필수는 교체하지 않는다
+            double gain = removalGain(coords, i + offset);
+            if (gain > bestGain) {
+                bestGain = gain;
+                bestPos = i;
+            }
+        }
+        if (bestPos < 0) return false;
+
+        Integer target = seq.get(bestPos);
+        PlaceCandidate targetCand = byIndex(candidates, target);
+        if (targetCand == null) return false;
+
+        // 교체 후보: 같은 대분류 + 앞뒤 이웃 경유 거리가 현재의 절반 미만
+        double[] prev = bestPos + offset - 1 >= 0 ? coords.get(bestPos + offset - 1) : null;
+        double[] next = bestPos + offset + 1 < coords.size() ? coords.get(bestPos + offset + 1) : null;
+        Integer replacement = pickCloserSameMajorSpare(seq, candidates, spareIndices, targetCand, prev, next);
+        if (replacement == null) return false;
+
+        seq.set(bestPos, replacement);
+        replaceInDay(day, target, replacement);
+        spareIndices.remove(replacement);
+        spareIndices.addLast(target);
+        log.info("거리 예산 초과 — 보호 대상 교체: day={} {} → {}", day.dayNumber,
+                targetCand.name(), nameOf(candidates, replacement));
+        return true;
+    }
+
+    /** 같은 대분류 spare 중 prev→후보→next 경유 거리가 현재의 절반 미만인 가장 가까운 후보. */
+    private Integer pickCloserSameMajorSpare(List<Integer> seq, List<PlaceCandidate> candidates,
+                                             Deque<Integer> spareIndices, PlaceCandidate target,
+                                             double[] prev, double[] next) {
+        String major = PlaceCategoryConstants.majorCategory(target.category());
+        double currentDetour = detourVia(prev, coordsOf(target), next);
+        Set<Integer> inSeq = new HashSet<>(seq);
+        return spareIndices.stream()
+                .map(i -> byIndex(candidates, i))
+                .filter(Objects::nonNull)
+                .filter(c -> !inSeq.contains(c.index()))
+                .filter(c -> major.equals(PlaceCategoryConstants.majorCategory(c.category())))
+                .filter(c -> coordsOf(c) != null)
+                .filter(c -> detourVia(prev, coordsOf(c), next) < currentDetour * 0.5)
+                .min(Comparator.comparingDouble(c -> detourVia(prev, coordsOf(c), next)))
+                .map(PlaceCandidate::index)
+                .orElse(null);
     }
 
     /**
@@ -2091,35 +3249,147 @@ public class RouteOptimizer {
         return meals;
     }
 
+
     /**
-     * 식사가 2개 이상이고 그날 숙소 좌표가 유효하면, 숙소에 가장 가까운 식당을 마지막(=저녁)으로
-     * 재배치한다. 좌표 불명이거나 이미 마지막이면 무변경.
+     * 아침 슬롯이 허용되지 않는 날(도착일 등)에 3식이 잡혀 있으면 경로상 첫 식사를 spare로 돌린다.
+     * 도착일의 첫 스텝은 관광 또는 점심부터 시작하는 것이 자연스럽다.
      */
-    private List<Integer> preferDinnerNearAccommodation(List<Integer> meals, DayState day,
-                                                        List<PlaceCandidate> candidates) {
-        // 2식일 때만 재배치한다. 3식([아침,점심,저녁])에서 아침 성격 식당이 숙소 최근접이라고
-        // 저녁으로 밀면 시간대가 어긋나므로 손대지 않는다.
-        if (meals.size() != 2 || day.accommodationIndex == null) return meals;
-        double[] hotel = coordsOf(byIndex(candidates, day.accommodationIndex));
+    private List<Integer> dropBreakfastIfNotAllowed(List<Integer> meals, DayState day,
+                                                    List<PlaceCandidate> candidates,
+                                                    Deque<Integer> spareIndices, boolean allowBreakfast) {
+        if (allowBreakfast || meals.size() < 3) return meals;
+
+        Integer candidate = meals.get(0);
+        PlaceCandidate bc = byIndex(candidates, candidate);
+        if (bc != null && bc.userSelected()) return meals; // 사용자 필수 식당은 버리지 않는다
+
+        List<Integer> remaining = new ArrayList<>(meals);
+        remaining.remove(candidate);
+        day.placeIndices.remove(candidate);
+        spareIndices.addLast(candidate);
+        log.info("아침 슬롯 미허용(도착일/숙소 출발 아님) — 식사 1건 제외: day={} {}",
+                day.dayNumber, bc != null ? bc.name() : candidate);
+        return remaining;
+    }
+
+    /**
+     * 3식일 때 숙소에서 {@link #BREAKFAST_MAX_KM_FROM_ACCOMMODATION}km를 넘는 아침은 슬롯에서
+     * 빼고 spare로 돌린다(아침부터 원정 가는 일정 방지). 사용자 필수 식당은 버리지 않는다.
+     * 경로 순서상 첫 번째를 아침 후보로 본다 — 슬롯 확정은 버킷 확정 후 assignMealSlots가 한다.
+     */
+    private List<Integer> dropDistantBreakfast(List<Integer> meals, DayState day,
+                                               List<PlaceCandidate> candidates, Deque<Integer> spareIndices) {
+        if (meals.size() < 3) return meals;
+        double[] hotel = accommodationCoords(day, candidates);
         if (hotel == null) return meals;
 
+        Integer candidate = meals.get(0);
+        PlaceCandidate bc = byIndex(candidates, candidate);
+        double[] coord = coordsOf(bc);
+        if (coord == null || (bc != null && bc.userSelected())) return meals;
+        if (haversine(hotel, coord) <= BREAKFAST_MAX_KM_FROM_ACCOMMODATION) return meals;
+
+        List<Integer> remaining = new ArrayList<>(meals);
+        remaining.remove(candidate);
+        day.placeIndices.remove(candidate);
+        spareIndices.addLast(candidate);
+        log.info("아침 식사 생략(숙소에서 {}km 초과): day={} {}",
+                String.format("%.0f", BREAKFAST_MAX_KM_FROM_ACCOMMODATION), day.dayNumber,
+                bc != null ? bc.name() : candidate);
+        return remaining;
+    }
+
+    /**
+     * 확정된 활동 버킷을 기준으로 식사를 아침/점심/저녁 슬롯에 배정한다(C3).
+     * <ul>
+     *   <li><b>저녁</b>: 그날 숙소에 가장 가까운 식당 — 식후 장거리 귀가를 구조적으로 차단</li>
+     *   <li><b>점심</b>: 오전 마지막 활동 → 식당 → 오후 첫 활동 우회가 가장 작은 식당.
+     *       버킷이 비어 있으면 하루 시작점/그날 중심을 앵커로 쓴다</li>
+     *   <li><b>아침</b>: 남은 하나</li>
+     * </ul>
+     * 사용자 필수 식당(userSelected)은 재배치 대상에서 제외한다(경로 순서 유지).
+     */
+    MealSlots assignMealSlots(List<Integer> meals, DayState day, List<PlaceCandidate> candidates,
+                              List<Integer> morning, List<Integer> afternoon,
+                              PlaceCandidate startFrom, double[] dayCentroid) {
+        if (meals.isEmpty()) return new MealSlots(null, null, null);
+        if (meals.size() == 1) return new MealSlots(null, meals.get(0), null);
+
+        List<Integer> remaining = new ArrayList<>(meals);
+
+        double[] hotel = accommodationCoords(day, candidates);
+        Integer dinner = hotel != null
+                ? nearestMeal(remaining, candidates, hotel)
+                : remaining.get(remaining.size() - 1);
+        remaining.remove(dinner);
+
+        // 점심 앵커: 오전 마지막 활동 → (점심) → 오후 첫 활동
+        double[] from = lastCoord(morning, candidates);
+        if (from == null) from = coordsOf(startFrom);
+        if (from == null) from = dayCentroid;
+        double[] to = firstCoord(afternoon, candidates);
+        if (to == null) to = coordsOf(byIndex(candidates, dinner));
+        if (to == null) to = dayCentroid;
+
+        Integer lunch = minDetourMeal(remaining, candidates, from, to);
+        remaining.remove(lunch);
+
+        Integer breakfast = remaining.isEmpty() ? null : remaining.get(0);
+        return new MealSlots(breakfast, lunch, dinner);
+    }
+
+    /** from→식당→to 우회가 가장 작은 식사. 사용자 필수 식당은 재배치 대상에서 제외한다. */
+    private Integer minDetourMeal(List<Integer> meals, List<PlaceCandidate> candidates,
+                                  double[] from, double[] to) {
+        Integer best = null;
+        double bestDetour = Double.MAX_VALUE;
+        for (Integer m : meals) {
+            PlaceCandidate c = byIndex(candidates, m);
+            if (c != null && c.userSelected()) continue;
+            double[] coord = coordsOf(c);
+            if (coord == null) continue;
+            double detour = detourVia(from, coord, to);
+            if (detour < bestDetour) {
+                bestDetour = detour;
+                best = m;
+            }
+        }
+        return best != null ? best : meals.get(0);
+    }
+
+    /** anchor에 가장 가까운 식사 후보. 사용자 필수 식당은 재배치 대상에서 제외한다. */
+    private Integer nearestMeal(List<Integer> meals, List<PlaceCandidate> candidates, double[] anchor) {
         Integer nearest = null;
         double best = Double.MAX_VALUE;
         for (Integer m : meals) {
-            double[] c = coordsOf(byIndex(candidates, m));
-            if (c == null) continue;
-            double d = haversine(c, hotel);
+            PlaceCandidate c = byIndex(candidates, m);
+            if (c != null && c.userSelected()) continue; // 사용자 선택은 원 위치 유지
+            double[] coord = coordsOf(c);
+            if (coord == null) continue;
+            double d = haversine(coord, anchor);
             if (d < best) {
                 best = d;
                 nearest = m;
             }
         }
-        if (nearest == null || nearest.equals(meals.get(meals.size() - 1))) return meals;
+        // 전부 userSelected거나 좌표 불명이면 경로 순서를 그대로 따른다.
+        return nearest != null ? nearest : meals.get(meals.size() - 1);
+    }
 
-        List<Integer> reordered = new ArrayList<>(meals);
-        reordered.remove(nearest);
-        reordered.add(nearest);
-        return reordered;
+    private double[] lastCoord(List<Integer> bucket, List<PlaceCandidate> candidates) {
+        for (int i = bucket.size() - 1; i >= 0; i--) {
+            double[] c = coordsOf(byIndex(candidates, bucket.get(i)));
+            if (c != null) return c;
+        }
+        return null;
+    }
+
+    private double[] firstCoord(List<Integer> bucket, List<PlaceCandidate> candidates) {
+        for (Integer idx : bucket) {
+            double[] c = coordsOf(byIndex(candidates, idx));
+            if (c != null) return c;
+        }
+        return null;
     }
 
     /**
@@ -2155,21 +3425,211 @@ public class RouteOptimizer {
      * {@link #ACTIVITY_SLOT_MINUTES}분으로 잡는다. 테마 상한(cfg.eveningCap)이 넓으면 저녁이 늘어난다.
      */
     private int[] bucketCaps(ScheduleConfig cfg, boolean hasLunch, boolean hasDinner, boolean hasBreakfast) {
-        int slot = ACTIVITY_SLOT_MINUTES;
+        int[] budgets = bucketBudgets(cfg, hasLunch, hasDinner, hasBreakfast);
+        return new int[]{
+                Math.max(0, budgets[0] / ACTIVITY_SLOT_MINUTES),
+                Math.max(budgets[1] > 0 ? 1 : 0, budgets[1] / ACTIVITY_SLOT_MINUTES),
+                Math.max(0, budgets[2] / ACTIVITY_SLOT_MINUTES)};
+    }
+
+    /**
+     * 오전/오후/저녁 시간창의 <b>분 단위 예산</b>.
+     *
+     * <p>예전엔 여기서 바로 "개수"를 냈는데, 활동 1개를 {@value ScheduleTuning#ACTIVITY_SLOT_MINUTES}분으로 고정
+     * 가정하는 바람에 체류 180분짜리 장소도 1칸만 차지했다. 그 결과 버킷은 안 넘쳤는데 시계는
+     * 3시간 밀려 야외 장소가 한밤중에 시작됐다(실측 67 day3: 국가지질공원 18:13~21:13).
+     * 실제 체류시간으로 채우도록 분을 그대로 돌려준다.
+     */
+    private int[] bucketBudgets(ScheduleConfig cfg, boolean hasLunch, boolean hasDinner, boolean hasBreakfast) {
+        int densityMinutes = cfg.densityDelta * ACTIVITY_SLOT_MINUTES;
         int morningStart = cfg.morningStart + (hasBreakfast ? DINING_VISIT_MINUTES : 0);
         if (hasLunch && hasDinner) {
-            int capM = Math.max(0, (LUNCH_START - morningStart) / slot);
-            int capA = Math.max(1, (DINNER_START - (LUNCH_START + DINING_VISIT_MINUTES)) / slot);
-            int capE = Math.max(0, (cfg.eveningCap - (DINNER_START + DINING_VISIT_MINUTES)) / slot);
-            return new int[]{capM, capA, capE};
+            int budgetM = Math.max(0, LUNCH_START - morningStart);
+            int budgetA = Math.max(ACTIVITY_SLOT_MINUTES,
+                    DINNER_START - (LUNCH_START + DINING_VISIT_MINUTES) + densityMinutes);
+            int budgetE = Math.max(0, cfg.eveningCap - (DINNER_START + DINING_VISIT_MINUTES));
+            return new int[]{budgetM, budgetA, budgetE};
         } else if (hasLunch) { // 저녁 없음 → 오후가 상한까지 확장
-            int capM = Math.max(0, (LUNCH_START - morningStart) / slot);
-            int capA = Math.max(1, (cfg.eveningCap - (LUNCH_START + DINING_VISIT_MINUTES)) / slot);
-            return new int[]{capM, capA, 0};
+            int budgetM = Math.max(0, LUNCH_START - morningStart);
+            int budgetA = Math.max(ACTIVITY_SLOT_MINUTES,
+                    cfg.eveningCap - (LUNCH_START + DINING_VISIT_MINUTES) + densityMinutes);
+            return new int[]{budgetM, budgetA, 0};
         } else { // 식사 없음 → 하루 전체를 한 버킷으로
-            int capAll = Math.max(1, (cfg.eveningCap - morningStart) / slot);
-            return new int[]{capAll, 0, 0};
+            int budgetAll = Math.max(ACTIVITY_SLOT_MINUTES, cfg.eveningCap - morningStart + densityMinutes);
+            return new int[]{budgetAll, 0, 0};
         }
+    }
+
+    /**
+     * 세부 유형 반복 상한(C1). 같은 세부 유형(카테고리 경로의 마지막 토큰)이 전체 일정에서
+     * {@code ceil(days/2) + 1}회를 넘으면 초과분을 spare로 보내고, 그 자리를 아직 쓰이지 않은
+     * 다른 유형의 spare로 보충한다.
+     *
+     * <p>추가로 경유형([경유] — 해안도로·드라이브코스·둘레길)은 전체 일정 1개로 제한한다.
+     * 이들은 leafCategory가 "Tourist Attraction"으로 같아 유형 상한에 걸리지 않지만, "90분 머무는
+     * 방문지"가 아니라 지나가는 구간이라 반복되면 일정이 무의미해진다(실측: 한 일정에 해안도로 7곳).
+     *
+     * <p>사용자 필수 장소(userSelected)는 상한 계산에는 포함하되 제거 대상에서는 제외한다.
+     */
+    void enforceTypeDiversity(List<DayState> days, List<PlaceCandidate> candidates, Deque<Integer> spare,
+                              List<List<Integer>> pairs) {
+        int typeCap = (int) Math.ceil(days.size() / 2.0) + TYPE_CAP_BASE;
+        Set<Integer> pairedIndices = pairs == null ? Set.of() : pairs.stream()
+                .filter(p -> p != null && p.size() == 2)
+                .flatMap(List::stream)
+                .collect(Collectors.toSet());
+        Map<String, Integer> typeCount = new HashMap<>();
+        int viaCount = 0;
+
+        for (DayState day : days) {
+            for (Integer idx : new ArrayList<>(day.placeIndices)) {
+                PlaceCandidate c = byIndex(candidates, idx);
+                if (c == null) continue;
+
+                boolean via = PlaceCategoryConstants.isViaRoute(c.name(), c.category(), c.tags());
+                // 총칭 리프("Tourist Attraction")는 이름·태그로 세부 유형을 추론해 상한 키로 쓴다
+                // — 추론이 없으면 오름 3연속이 "같은 유형"으로 인식되지 않아 상한이 무력해진다.
+                String type = subTypeOf(c);
+                int count = typeCount.getOrDefault(type, 0);
+
+                boolean overType = isSpecificType(type) && count >= typeCap;
+                boolean overVia = via && viaCount >= VIA_ROUTE_CAP;
+                if (!overType && !overVia) {
+                    typeCount.put(type, count + 1);
+                    if (via) viaCount++;
+                    continue;
+                }
+                // 사용자 필수·pair 멤버는 상한을 넘겨도 유지(포함·pair 무결성이 우선)
+                if (c.userSelected() || pairedIndices.contains(idx)) {
+                    typeCount.put(type, count + 1);
+                    if (via) viaCount++;
+                    continue;
+                }
+
+                day.placeIndices.remove(idx);
+                spare.addLast(idx);
+                log.info("유형 다양성 상한 초과 — 트림: day={} {} ({})", day.dayNumber, c.name(),
+                        overVia ? "경유형 상한 " + VIA_ROUTE_CAP : type + " " + typeCap + "회 초과");
+
+                Integer replacement = pickDiverseSpare(day, candidates, spare, typeCount, typeCap);
+                if (replacement != null) {
+                    day.placeIndices.add(replacement);
+                    spare.remove(replacement);
+                    PlaceCandidate rc = byIndex(candidates, replacement);
+                    typeCount.merge(subTypeOf(rc), 1, Integer::sum);
+                    log.info("유형 다양성 보충: day={} {}", day.dayNumber, rc.name());
+                }
+            }
+        }
+    }
+
+    /**
+     * 유형 상한을 적용할 만큼 구체적인 리프인지. "Tourist Attraction"/"Landmark"처럼 대분류와
+     * 다름없는 총칭 리프는 제외한다(그 범주 안에 서로 다른 종류의 명소가 전부 들어오기 때문).
+     */
+    private boolean isSpecificType(String type) {
+        return !PlaceCategoryConstants.isGenericLeaf(type);
+    }
+
+    /**
+     * 유형 상한·시간대 버킷·대안 매칭이 공유하는 세부 유형 키(2번 항목). 총칭 리프는
+     * 이름·태그·설명으로 추론된 유형이 돌아온다.
+     */
+    private String subTypeOf(PlaceCandidate c) {
+        if (c == null) return "";
+        return PlaceCategoryConstants.subType(c.name(), c.category(), c.tags(), c.description());
+    }
+
+    /** 상한에 걸리지 않은 다른 유형의 spare 중, 그날 중심에서 가장 가까운 방문 가능 후보. */
+    private Integer pickDiverseSpare(DayState day, List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                     Map<String, Integer> typeCount, int typeCap) {
+        double[] centroid = centroidOf(day.placeIndices, candidates);
+        Set<Integer> used = collectUsedIndicesIncludingSpareUse(day);
+        return spare.stream()
+                .map(i -> byIndex(candidates, i))
+                .filter(Objects::nonNull)
+                .filter(this::isVisitableFill)
+                .filter(c -> !used.contains(c.index()))
+                .filter(c -> !PlaceCategoryConstants.isViaRoute(c.name(), c.category(), c.tags()))
+                .filter(c -> typeCount.getOrDefault(subTypeOf(c), 0) < typeCap)
+                .filter(c -> centroid == null || coordsOf(c) != null)
+                .min(Comparator.comparingDouble(c -> centroid == null ? 0
+                        : haversine(centroid, coordsOf(c))))
+                .map(PlaceCandidate::index)
+                .orElse(null);
+    }
+
+    private Set<Integer> collectUsedIndicesIncludingSpareUse(DayState day) {
+        return new HashSet<>(day.placeIndices);
+    }
+
+    /**
+     * 사용자 카테고리 커버리지 보충(C2). 사용자가 고른 카테고리 중 일정에 한 번도 등장하지 않은
+     * 것이 있으면, spare에서 그 카테고리에 해당하는 후보를 찾아 quota 여유가 있는 day에 넣는다.
+     * 후보가 없으면 로그만 남긴다 — 없는 유형을 억지로 만들어내지 않는다.
+     */
+    void ensureCategoryCoverage(List<DayState> days, List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                List<String> userCategories, int maxPerDay) {
+        if (userCategories == null || userCategories.isEmpty()) return;
+
+        for (String categoryId : userCategories) {
+            if (categoryId == null || categoryId.isBlank()) continue;
+
+            boolean covered = days.stream()
+                    .flatMap(d -> d.placeIndices.stream())
+                    .map(i -> byIndex(candidates, i))
+                    .filter(Objects::nonNull)
+                    .anyMatch(c -> PlaceCategoryConstants.matchesUserCategory(
+                            categoryId, c.name(), c.category(), c.tags()));
+            // 숙소는 accommodationIndex로 별도 배정되므로 placeIndices에 없어도 커버된 것으로 본다
+            if (!covered && "accommodation".equalsIgnoreCase(categoryId.trim())) {
+                covered = days.stream().anyMatch(d -> d.accommodationIndex != null);
+            }
+            if (covered) continue;
+
+            Integer pick = spare.stream()
+                    .map(i -> byIndex(candidates, i))
+                    .filter(Objects::nonNull)
+                    .filter(this::isVisitableFill)
+                    .filter(c -> PlaceCategoryConstants.matchesUserCategory(
+                            categoryId, c.name(), c.category(), c.tags()))
+                    .max(Comparator.comparing(c -> c.rating() != null ? c.rating() : BigDecimal.ZERO))
+                    .map(PlaceCandidate::index)
+                    .orElse(null);
+
+            if (pick == null) {
+                log.info("카테고리 커버리지 미충족(후보 없음): {}", categoryId);
+                continue;
+            }
+
+            DayState target = pickDayForCoverage(days, candidates, byIndex(candidates, pick), maxPerDay);
+            if (target == null) {
+                log.info("카테고리 커버리지 미충족(모든 day가 quota 상한): {}", categoryId);
+                continue;
+            }
+            target.placeIndices.add(pick);
+            spare.remove(pick);
+            log.info("카테고리 커버리지 보충: {} → day={} {}", categoryId, target.dayNumber,
+                    nameOf(candidates, pick));
+        }
+    }
+
+    /** quota 여유가 있는 day 중 centroid가 가장 가까운 곳. 전부 꽉 찼으면 null. */
+    private DayState pickDayForCoverage(List<DayState> days, List<PlaceCandidate> candidates,
+                                        PlaceCandidate cand, int maxPerDay) {
+        double[] target = coordsOf(cand);
+        DayState best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (DayState d : days) {
+            if (d.placeIndices.size() >= maxPerDay) continue;
+            double[] centroid = centroidOf(d.placeIndices, candidates);
+            double dist = (target == null || centroid == null) ? d.placeIndices.size() : haversine(target, centroid);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = d;
+            }
+        }
+        return best;
     }
 
     /**
@@ -2202,30 +3662,63 @@ public class RouteOptimizer {
         }
     }
 
+    /**
+     * 그날 시간창에 들어갈 수 있는 활동 <b>개수</b> 추정. 분 예산을 그날 활동들의 실제 평균
+     * 체류시간으로 나눠, 장시간 체류 장소가 많은 day를 과대평가하지 않는다.
+     */
     private int totalActivityCapacity(DayState day, List<PlaceCandidate> candidates, ScheduleConfig cfg) {
         long dining = day.placeIndices.stream().filter(idx -> isDiningCand(byIndex(candidates, idx))).count();
-        int[] caps = bucketCaps(cfg, dining >= 1, dining >= 2, dining >= 3);
-        return caps[0] + caps[1] + caps[2];
+        int[] budgets = bucketBudgets(cfg, dining >= 1, dining >= 2, dining >= 3);
+        int totalBudget = budgets[0] + budgets[1] + budgets[2];
+
+        double avgNeed = day.placeIndices.stream()
+                .map(idx -> byIndex(candidates, idx))
+                .filter(Objects::nonNull)
+                .filter(c -> !isDiningCand(c))
+                .mapToInt(c -> resolveVisitMinutes(c) + INTRA_BUCKET_TRAVEL_MINUTES)
+                .average()
+                .orElse(ACTIVITY_SLOT_MINUTES);
+        return Math.max(1, (int) (totalBudget / Math.max(1, avgNeed)));
     }
 
-    /** 테마 기반 하루 시작/저녁 상한 설정. */
-    private ScheduleConfig scheduleConfig(List<String> themes) {
-        String joined = themes == null ? "" : String.join(" ", themes).toLowerCase();
-        int morningStart = EARLY_THEME_KEYWORDS.stream().anyMatch(joined::contains)
-                ? EARLY_MORNING_START_MINUTES : DAY_START_MINUTES;
-        int eveningCap = NIGHT_THEME_KEYWORDS.stream().anyMatch(joined::contains)
-                ? LATE_EVENING_CAP_MINUTES : DEFAULT_EVENING_CAP_MINUTES;
-        return new ScheduleConfig(morningStart, eveningCap);
-    }
-
-    private static final class ScheduleConfig {
-        final int morningStart;
-        final int eveningCap;
-        ScheduleConfig(int morningStart, int eveningCap) {
-            this.morningStart = morningStart;
-            this.eveningCap = eveningCap;
+    /**
+     * 테마 기반 하루 시간창 설정(C6). 사용자가 고른 테마 전부를 {@link #THEME_SCHEDULES}에서 찾아
+     * "가장 이른 시작 · 가장 늦은 상한 · 밀도 보정 합"으로 병합한다. 표에 없는 값(미지의 테마)은
+     * 무시하고, 아무 테마도 매칭되지 않으면 기본값(09:00~22:00)을 쓴다.
+     */
+    ScheduleConfig scheduleConfig(List<String> themes) {
+        if (themes == null || themes.isEmpty()) {
+            return new ScheduleConfig(DAY_START_MINUTES, DEFAULT_EVENING_CAP_MINUTES, 0, false);
         }
+
+        int morningStart = Integer.MAX_VALUE;
+        int eveningCap = Integer.MIN_VALUE;
+        int densityDelta = 0;
+        boolean indoorPreferred = false;
+        boolean matched = false;
+
+        for (String theme : themes) {
+            if (theme == null || theme.isBlank()) continue;
+            ThemeSchedule ts = THEME_SCHEDULES.get(theme.trim().toLowerCase());
+            if (ts == null) continue;
+            matched = true;
+            morningStart = Math.min(morningStart, ts.morningStart());
+            eveningCap = Math.max(eveningCap, ts.eveningCap());
+            densityDelta += ts.densityDelta();
+            indoorPreferred |= ts.indoorPreferred();
+        }
+
+        if (!matched) {
+            return new ScheduleConfig(DAY_START_MINUTES, DEFAULT_EVENING_CAP_MINUTES, 0, false);
+        }
+        // 여러 테마를 고르면 밀도 보정이 합산돼 극단으로 갈 수 있어 ±1로 묶는다.
+        densityDelta = Math.max(-1, Math.min(1, densityDelta));
+        return new ScheduleConfig(
+                Math.max(MIN_MORNING_START_MINUTES, morningStart),
+                Math.min(MAX_EVENING_CAP_MINUTES, eveningCap),
+                densityDelta, indoorPreferred);
     }
+
 
     /**
      * 메인 스텝의 대안 3개를 만든다(C 재설계). "같은 종류·주변·중복 없이" 원칙:
@@ -2309,9 +3802,10 @@ public class RouteOptimizer {
 
     private double subCategorySimilarity(PlaceCandidate a, PlaceCandidate b) {
         double s = 0;
-        String la = leafCategory(a.category());
-        String lb = leafCategory(b.category());
-        if (la != null && la.equalsIgnoreCase(lb)) s += 1.0;
+        // 총칭 리프끼리는 전부 "같은 종류"로 보여 해변의 대안으로 오름이 나오므로 세부 유형으로 본다
+        String la = subTypeOf(a);
+        String lb = subTypeOf(b);
+        if (la != null && !la.isBlank() && la.equalsIgnoreCase(lb)) s += 1.0;
         if (a.tags() != null && b.tags() != null) {
             Set<String> shared = new HashSet<>(a.tags());
             shared.retainAll(new HashSet<>(b.tags()));
@@ -2333,22 +3827,6 @@ public class RouteOptimizer {
         if (cc != null) return "geo:" + Math.round(cc[0] * 10000) + "|" + Math.round(cc[1] * 10000);
         return "name:" + (c.name() == null ? "" : c.name().toLowerCase().replaceAll("\\s+", ""));
     }
-
-    // priceLevel(1~4) 단가는 카테고리별로 다르다. 기존 "priceLevel × 15,000원 일괄"은 카페
-    // 30,000원, 우물 입장료 30,000원 같은 왜곡을 만들었다(실측). priceLevel이 없을 때(흔함 —
-    // 특히 소규모 식당/카페)는 카테고리 기본값을 쓴다. "0원"은 식당·카페·숙소에선 사실상 항상
-    // 틀린 값이라(공짜 숙박·식당은 없음) 추정치를 넣는 게 예산 감에 더 정직하다.
-    private static final long DINING_WON_PER_PRICE_LEVEL = 12000L;
-    private static final long CAFE_WON_PER_PRICE_LEVEL = 5000L;
-    private static final long PAID_ATTRACTION_DEFAULT_WON = 10000L;
-    private static final long DINING_DEFAULT_WON = 13000L;
-    private static final long CAFE_DEFAULT_WON = 6000L;
-    // 숙소 1박(1실) 추정가. priceLevel(1~4)이 있으면 등급×단가, 없으면 숙소 유형별 기본값.
-    // 숙소는 여행 예산의 최대 항목이라 0원으로 두면 예산 표시가 무의미해진다(실측: 3박 0원).
-    private static final long LODGING_WON_PER_PRICE_LEVEL = 60000L; // pl1=6만 ~ pl4=24만
-    private static final long LODGING_HOSTEL_DEFAULT_WON = 50000L;
-    private static final long LODGING_RESORT_DEFAULT_WON = 200000L;
-    private static final long LODGING_HOTEL_DEFAULT_WON = 120000L;  // 그 외 숙소 기본
 
     private BigDecimal estimateCost(PlaceCandidate c) {
         String category = PlaceCategoryConstants.majorCategory(c.category());
@@ -2377,12 +3855,9 @@ public class RouteOptimizer {
     }
 
     private PlaceData toPlaceData(PlaceCandidate c) {
-        return new PlaceData(c.name(), c.address(), c.category(), c.region(), c.country());
-    }
-
-    private PlaceCandidate byIndex(List<PlaceCandidate> candidates, int index) {
-        if (index < 1 || index > candidates.size()) return null;
-        return candidates.get(index - 1);
+        // subRegion/description은 저장에 쓰이지 않고 story 생성(Haiku) 컨텍스트로만 전달된다.
+        return new PlaceData(c.name(), c.address(), c.category(), c.region(), c.country(),
+                c.subRegion(), c.description());
     }
 
     private double[] coordsOf(PlaceCandidate c) {
@@ -2407,32 +3882,4 @@ public class RouteOptimizer {
         return new double[]{lat, lng};
     }
 
-    private String formatMinutes(int minutes) {
-        // 누적 시각이 자정을 넘으면 %24 wrap으로 26:16→02:16처럼 시간이 역행해 보인다.
-        // 일과 종료(23:59)로 클램프해 같은 날 안에서 시각이 단조증가하도록 보장한다.
-        int clamped = minutes;
-        if (clamped > END_OF_DAY_MINUTES) {
-            log.warn("RouteOptimizer: 일과 시간 초과({}분) — {}로 클램프", minutes, "23:59");
-            clamped = END_OF_DAY_MINUTES;
-        }
-        int h = clamped / 60;
-        int m = clamped % 60;
-        return String.format("%02d:%02d", h, m);
-    }
-
-    private static class DayState {
-        final int dayNumber;
-        Integer arrivalHubIndex;
-        final List<Integer> placeIndices;
-        Integer accommodationIndex;
-        Integer departureHubIndex;
-
-        DayState(SelectionOutput.DayPlan plan) {
-            this.dayNumber = plan.dayNumber();
-            this.arrivalHubIndex = plan.arrivalHubIndex();
-            this.placeIndices = new ArrayList<>(plan.placeIndices() != null ? plan.placeIndices() : List.of());
-            this.accommodationIndex = plan.accommodationIndex();
-            this.departureHubIndex = plan.departureHubIndex();
-        }
-    }
 }

@@ -5,6 +5,7 @@ import com.anthropic.models.messages.*;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
+import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
@@ -164,20 +165,38 @@ public class SelectionCallGenerator {
         }
 
         sb.append("\n## 후보 장소 목록 (").append(candidates.size()).append("개)\n");
-        sb.append("형식: ID | 이름 | 카테고리 | 평점 | #태그 | 지역\n");
+        sb.append("형식: ID | 이름 | 카테고리 | 평점 | #태그 | 세부지역 | 체류시간 | 시간대 | 휴무 ")
+                .append("(값이 없는 항목은 생략됨)\n");
         boolean hasUserSelected = false;
+        boolean hasVia = false;
         for (PlaceCandidate candidate : candidates) {
             if (candidate.userSelected()) {
                 sb.append("★");
                 hasUserSelected = true;
+            }
+            // 경유형(해안도로·드라이브코스·둘레길 등)은 "머무는 방문지"가 아니라 지나가는 구간이다.
+            // 코드가 마킹해두고, 프롬프트가 전체 일정 최대 1개로 제한한다(B2).
+            boolean via = PlaceCategoryConstants.isViaRoute(
+                    candidate.name(), candidate.category(), candidate.tags());
+            if (via) {
+                sb.append("[경유]");
+                hasVia = true;
             }
             sb.append(candidate.index()).append(" | ")
                     .append(candidate.name()).append(" | ")
                     .append(summarizeCategory(candidate.category())).append(" | ")
                     .append(formatRating(candidate.rating())).append(" | ")
                     .append(formatTags(candidate.tags())).append(" | ")
-                    .append(candidate.region() != null ? candidate.region() : "")
-                    .append("\n");
+                    .append(candidate.displayRegion() != null ? candidate.displayRegion() : "");
+            appendIfPresent(sb, formatDuration(candidate.recommendedDurationMinutes()));
+            appendIfPresent(sb, formatTimeSlots(candidate.recommendedTimeSlots()));
+            appendIfPresent(sb, formatClosedDay(candidate.openingHours()));
+            sb.append("\n");
+        }
+
+        if (hasVia) {
+            sb.append("\n[경유] 표시 후보는 도로·산책길 같은 **경유 구간**입니다. 머무는 방문지가 아니므로 ")
+                    .append("pairs나 동선 힌트로만 쓰고, placeIndices에 넣더라도 **전체 일정에서 최대 1개**까지만 넣으세요.\n");
         }
 
         if (hasUserSelected) {
@@ -186,9 +205,67 @@ public class SelectionCallGenerator {
                     .append("spareIndices에 넣지 마세요. 동선이 다소 불리해도 포함이 우선입니다.\n");
         }
 
+        if (input.categories() != null && !input.categories().isEmpty()) {
+            sb.append("\n사용자가 고른 카테고리(").append(String.join(", ", input.categories()))
+                    .append(") 각각이 전체 일정에 **최소 1회**는 등장하도록 선택하세요. ")
+                    .append("후보에 해당 유형이 아예 없으면 억지로 넣지 말고 넘어가세요.\n");
+        }
+
         sb.append("\nconcept을 먼저 정의한 뒤, select_places 도구를 호출하여 날짜별 장소를 선택하세요.\n");
 
         return sb.toString();
+    }
+
+    /** 값이 있을 때만 " | 값"으로 덧붙인다(없는 항목은 생략 — 토큰 절감). */
+    private void appendIfPresent(StringBuilder sb, String value) {
+        if (value != null && !value.isBlank()) sb.append(" | ").append(value);
+    }
+
+    /** 권장 체류시간(분). 없으면 null. */
+    private String formatDuration(Integer minutes) {
+        return minutes != null && minutes > 0 ? minutes + "분" : null;
+    }
+
+    /** 추천 시간대 — 영어 어휘를 한국어 한 단어로. 없으면 null. */
+    private String formatTimeSlots(List<String> slots) {
+        if (slots == null || slots.isEmpty()) return null;
+        return slots.stream()
+                .filter(s -> s != null && !s.isBlank())
+                .map(s -> switch (s.trim().toLowerCase()) {
+                    case "morning" -> "오전";
+                    case "afternoon" -> "오후";
+                    case "evening" -> "저녁";
+                    case "night" -> "야간";
+                    case "all_day" -> "종일";
+                    default -> s.trim();
+                })
+                .distinct()
+                .limit(2)
+                .collect(java.util.stream.Collectors.joining("/"));
+    }
+
+    /**
+     * 영업시간 문자열에서 정기휴무 요일을 뽑아 "목휴무" 형태로. 고신뢰 신호(휴무/closed)가 있는
+     * 줄에서 요일을 찾고, 없으면 null(RouteOptimizer.repairClosedDayPlaces와 같은 보수적 기준).
+     */
+    private String formatClosedDay(String openingHours) {
+        if (openingHours == null || openingHours.isBlank()) return null;
+        String lower = openingHours.toLowerCase();
+        if (!lower.contains("휴무") && !lower.contains("closed") && !lower.contains("정기휴")) return null;
+
+        String[] korean = {"월", "화", "수", "목", "금", "토", "일"};
+        String[] english = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"};
+        for (String line : openingHours.split("[\\r\\n,]")) {
+            String l = line.toLowerCase();
+            if (!l.contains("휴무") && !l.contains("closed")) continue;
+            for (int i = 0; i < korean.length; i++) {
+                if (line.contains(korean[i] + "요일") || line.contains(korean[i] + "휴")
+                        || l.contains(english[i])) {
+                    return korean[i] + "휴무";
+                }
+            }
+        }
+        return null;
     }
 
     /**

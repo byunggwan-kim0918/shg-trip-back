@@ -37,6 +37,9 @@ public class BatchEnrichScheduler {
     private static final String BATCH_API_URL = "https://api.anthropic.com/v1/messages/batches";
     private static final int MAX_RETRIES = 3;
     private static final long POLL_INTERVAL_MS = 10_000; // 10초
+
+    /** 결과 JSONL 다운로드 타임아웃(분). 청크 1000건 기준 여유 있게 잡는다. */
+    private static final int RESULTS_DOWNLOAD_TIMEOUT_MINUTES = 10;
     private static final long MAX_POLL_DURATION_MS = 3_600_000; // 1시간
 
     private final PlaceRepository placeRepository;
@@ -64,11 +67,21 @@ public class BatchEnrichScheduler {
     @Value("${batch.enrich.regions:}")
     private String enrichRegions;
 
+    /**
+     * 이미 제출·완료된 배치의 결과를 다시 적용할 때 쓰는 batchId.
+     * Anthropic이 결과를 29일간 보관하므로, 결과 처리 단계에서만 실패한 경우 재제출(재과금) 없이
+     * 복구할 수 있다(실측: 515건 배치가 다운로드 타임아웃으로 통째로 버려졌다).
+     */
+    @Value("${batch.enrich.resume-batch-id:}")
+    private String resumeBatchId;
+
     public BatchEnrichScheduler(PlaceRepository placeRepository, ObjectMapper objectMapper) {
         this.placeRepository = placeRepository;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(30))
+                // 결과 파일 URL은 서명된 스토리지로 302 리다이렉트된다 — 따라가지 않으면 본문이 비어온다
+                .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
     }
 
@@ -146,14 +159,21 @@ public class BatchEnrichScheduler {
      */
     ChunkResult processChunk(List<Place> places) {
         try {
-            // 1. 배치 요청 구성
-            List<Map<String, Object>> requests = buildBatchRequests(places);
+            String batchId;
+            if (resumeBatchId != null && !resumeBatchId.isBlank()) {
+                // 재제출하지 않고 기존 배치 결과만 다시 가져온다(중복 과금 방지)
+                batchId = resumeBatchId.trim();
+                log.info("기존 배치 결과 재사용 - batchId={} (재제출 없음)", batchId);
+            } else {
+                // 1. 배치 요청 구성
+                List<Map<String, Object>> requests = buildBatchRequests(places);
 
-            // 2. 배치 제출
-            String batchId = submitBatch(requests);
-            if (batchId == null) {
-                log.error("배치 제출 실패 - {}건 모두 실패 처리", places.size());
-                return new ChunkResult(0, places.size(), allIds(places));
+                // 2. 배치 제출
+                batchId = submitBatch(requests);
+                if (batchId == null) {
+                    log.error("배치 제출 실패 - {}건 모두 실패 처리", places.size());
+                    return new ChunkResult(0, places.size(), allIds(places));
+                }
             }
 
             // 3. 폴링으로 완료 대기
@@ -374,11 +394,13 @@ public class BatchEnrichScheduler {
      */
     ChunkResult processResults(String resultsUrl, List<Place> places) {
         try {
+            // 결과는 요청 수만큼의 JSONL이라 청크가 커질수록 길어진다. 60초로는 515건에서
+            // 이미 타임아웃이 났다(실측) — 배치 비용은 이미 지불된 뒤라 여기서 실패하면 그냥 날린다.
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(resultsUrl))
                     .header("x-api-key", anthropicApiKey)
                     .header("anthropic-version", "2023-06-01")
-                    .timeout(Duration.ofSeconds(60))
+                    .timeout(Duration.ofMinutes(RESULTS_DOWNLOAD_TIMEOUT_MINUTES))
                     .GET()
                     .build();
 

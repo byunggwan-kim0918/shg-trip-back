@@ -27,7 +27,18 @@ public class ItinerarySaveHelper {
 
     @Transactional
     public Itinerary save(ItineraryData data, EnrichedInput input, Long userId, boolean alreadyOptimized) {
-        Itinerary itinerary = itineraryDataMapper.toEntity(data, input, userId, alreadyOptimized);
+        return save(data, input, userId, alreadyOptimized, null);
+    }
+
+    /**
+     * @param referenceCoord 후보 좌표 median 중심점 — 여행지 기준 좌표(Redis 캐시/Google)가
+     *                       이 중심점과 어긋나면 매퍼가 기준 좌표를 폐기하고 median을 쓴다.
+     *                       fallback 경로처럼 후보 풀이 없으면 null(기존 동작).
+     */
+    @Transactional
+    public Itinerary save(ItineraryData data, EnrichedInput input, Long userId,
+                          boolean alreadyOptimized, double[] referenceCoord) {
+        Itinerary itinerary = itineraryDataMapper.toEntity(data, input, userId, alreadyOptimized, referenceCoord);
         itinerary.assignCoverFromSteps();
         return itineraryRepository.save(itinerary);
     }

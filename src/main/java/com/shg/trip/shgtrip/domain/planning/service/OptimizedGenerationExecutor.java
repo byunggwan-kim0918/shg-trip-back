@@ -113,10 +113,14 @@ public class OptimizedGenerationExecutor {
                     () -> resolveCustomPlaces(request, enrichedInput, candidatesRaw, emitter)));
             placeRegionValidator.validate(selectedPlaces, enrichedInput); // 불일치 시 BusinessException → SSE error
             List<PlaceCandidate> candidates = mergeSelectedPlaces(candidatesRaw, selectedPlaces);
+            // 여행지 기준 좌표 — 후보 수십 건의 median이 단일 Google 검색 결과보다 신뢰도가 높다.
+            // Google/Redis 캐시 좌표가 이 중심점에서 벗어나면 저장 단계가 캐시를 폐기하고 이 값을 쓴다(A7).
+            final double[] destinationReference = candidateMedianCenter(candidates);
             stageMark = logStage("search", stageMark);
 
             // [25%] Fallback/컴팩트 분기 판단
             if (cancellationRegistry.isCancelled(jobId)) return;
+            logCandidatePool(candidates, days);
             FallbackDecider.PoolQuality poolQuality = fallbackDecider.assess(candidates, days);
 
             if (poolQuality == FallbackDecider.PoolQuality.FALLBACK) {
@@ -155,7 +159,7 @@ public class OptimizedGenerationExecutor {
 
             if (!toSync.isEmpty()) {
                 log.info("Google Places 동기화: {}건", toSync.size());
-                syncAllPlaces(toSync);
+                syncAllPlaces(toSync, destinationReference);
             }
 
             // DB 최신 데이터 반영 + 숙소 보완 + 물리적 중복 제거(선택 이전 1회)
@@ -171,10 +175,21 @@ public class OptimizedGenerationExecutor {
             SelectionOutput rawSelectionOutput = executeWithHeartbeat(emitter,
                     () -> selectionCallGenerator.selectPlaces(enrichedInput, enrichedCandidates));
 
-            // 중간 날 숙소 누락 보정 + 사용자 필수 장소 누락 주입 (추가 LLM 호출 없는 결정론적 보정)
+            // 숙소·허브(코드 소유 필드) 제거 → 집합 POI 제외 (day 구성 확정)
+            SelectionOutput dayComposition = indexResultMapper.stripMealIneligibleAggregates(
+                    indexResultMapper.stripCodeOwnedFields(rawSelectionOutput), enrichedCandidates);
+
+            // day 구성이 확정됐으니, 방문지 중심에서 너무 먼 숙소밖에 없는 day가 있으면 그 day의
+            // centroid 기준으로 숙소를 한 번 더 검색해 후보에 덧붙인다(3차 4번). 기존 인덱스는
+            // 건드리지 않고 뒤에 이어 붙인다 — selectionOutput이 인덱스를 참조하고 있다.
+            // **숙소 배정보다 먼저** 돌려야 새로 찾은 숙소가 배정 대상에 들어간다(예전엔 배정 뒤라 무용지물).
+            final List<PlaceCandidate> candidatesWithLocalStays = appendNearbyAccommodations(
+                    enrichedCandidates, dayComposition, enrichedInput);
+
+            // 숙소 결정론적 배정 → 사용자 필수 장소 주입 (추가 LLM 호출 없는 결정론적 보정)
             final SelectionOutput selectionOutput = indexResultMapper.injectRequiredPlaces(
-                    indexResultMapper.fillMissingAccommodation(rawSelectionOutput, enrichedCandidates),
-                    enrichedCandidates);
+                    indexResultMapper.fillMissingAccommodation(dayComposition, candidatesWithLocalStays),
+                    candidatesWithLocalStays);
             stageMark = logStage("select", stageMark);
 
             // [65%] Backend Repair·Optimizer: day/순서/시간/교통/대안 전부 결정론적으로 확정
@@ -183,15 +198,22 @@ public class OptimizedGenerationExecutor {
             sendSseEvent(emitter, "OPTIMIZING", 65, "동선과 시간을 확정하고 있습니다...");
 
             final boolean compact = compactMode;
-            List<StepData> fixedSteps = executeWithHeartbeat(emitter,
-                    () -> routeOptimizer.repairAndSchedule(
-                            selectionOutput, enrichedCandidates, enrichedInput.pace(),
+            RouteOptimizer.ScheduleResult scheduleResult = executeWithHeartbeat(emitter,
+                    () -> routeOptimizer.schedule(
+                            selectionOutput, candidatesWithLocalStays, enrichedInput.pace(),
                             enrichedInput.transportPref(), enrichedInput.startDate(),
-                            enrichedInput.themes(), enrichedInput.transportationHub(), compact));
+                            enrichedInput.themes(), enrichedInput.transportationHub(), compact,
+                            enrichedInput.categories()));
+            List<StepData> fixedSteps = scheduleResult.steps();
+            List<String> qualityNotices = scheduleResult.notices();
 
             // [F4] 확정된 뼈대(장소·시간·Day구성)를 day별로 스트리밍 → 프론트 스켈레톤→실카드 교체.
             // 65%에 이미 실데이터가 완성돼 있으므로 연출(가짜 delay) 아님. 인위적 sleep 금지(SSE 스레드 blocking).
             sendStepStream(emitter, fixedSteps);
+            // 해소하지 못한 품질 문제를 사용자에게도 알린다 — 로그만 남기면 숙소 없는 일정이
+            // 아무 표시 없이 나간다. 상세 화면 표시는 itineraries.quality_notices가 담당하고,
+            // 이 이벤트는 생성 중 즉시 안내용이다.
+            sendQualityNotices(emitter, qualityNotices);
             stageMark = logStage("optimize", stageMark);
 
             // [80%] 구조 검증(안전망 — 결정론적 코드이므로 실패 시 재시도가 아니라 버그로 취급)
@@ -205,19 +227,19 @@ public class OptimizedGenerationExecutor {
             List<String> tagSeed = enrichedInput.searchTags() != null && !enrichedInput.searchTags().isEmpty()
                     ? enrichedInput.searchTags() : enrichedInput.themes();
             ItineraryData draftData = indexResultMapper.toDraftItineraryData(
-                    fixedSteps, destination, selectionOutput.concept(), tagSeed);
+                    fixedSteps, destination, selectionOutput.concept(), tagSeed, qualityNotices);
             HardValidationResult validationResult = hardValidator.validate(draftData);
             if (!validationResult.valid()) {
                 log.error("Optimized 경로 구조 검증 실패 (결정론적 로직 버그 가능성): {}", validationResult.failureReason());
             }
-            verifyUserSelectedIncluded(enrichedCandidates, fixedSteps);
+            verifyUserSelectedIncluded(candidatesWithLocalStays, fixedSteps);
 
             // [90%] 구조 일정 저장 (story는 비어있음) — 즉시 complete, story는 비동기로 채움
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "SAVING", 90, "일정을 저장하고 있습니다...");
 
             EnrichedInput legacyInput = toLegacyEnrichedInput(enrichedInput);
-            Itinerary saved = saveHelper.save(draftData, legacyInput, userId, true);
+            Itinerary saved = saveHelper.save(draftData, legacyInput, userId, true, destinationReference);
             stageMark = logStage("save", stageMark);
 
             // [100%] 구조 완료 — emitter는 닫지 않고 story-ready까지 유지
@@ -248,6 +270,103 @@ public class OptimizedGenerationExecutor {
 
     // ── Private helpers ──
 
+    /** day 방문지 centroid에서 이 거리(km)를 넘는 숙소밖에 없으면 그 day 기준으로 추가 검색한다. */
+    private static final double LOCAL_STAY_TRIGGER_KM = 30.0;
+    /** 추가 검색 반경(km) — 트리거 거리보다 좁게 잡아 "그 지역 숙소"만 들어오게 한다. */
+    private static final double LOCAL_STAY_RADIUS_KM = 20.0;
+    /** day당 추가로 가져올 숙소 수. */
+    private static final int LOCAL_STAY_LIMIT = 3;
+
+    /**
+     * 각 day의 방문지 centroid에서 가장 가까운 숙소 후보가 {@link #LOCAL_STAY_TRIGGER_KM}를 넘으면,
+     * 그 centroid 기준으로 숙소를 1회 추가 검색해 후보 목록 뒤에 이어 붙인다.
+     * 기존 후보의 인덱스는 그대로 두므로 selectionOutput의 인덱스 참조가 깨지지 않는다.
+     */
+    private List<PlaceCandidate> appendNearbyAccommodations(List<PlaceCandidate> candidates,
+                                                            SelectionOutput selection,
+                                                            VectorEnrichedInput input) {
+        if (selection == null || selection.days() == null || selection.days().isEmpty()) return candidates;
+
+        List<PlaceCandidate> lodgings = candidates.stream()
+                .filter(c -> "LODGING".equals(PlaceCategoryConstants.majorCategory(c.category())))
+                .filter(this::hasValidCoords)
+                .toList();
+
+        List<PlaceCandidate> result = new ArrayList<>(candidates);
+        Set<Long> knownPlaceIds = candidates.stream()
+                .map(PlaceCandidate::placeId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(HashSet::new));
+
+        for (SelectionOutput.DayPlan day : selection.days()) {
+            double[] centroid = dayCentroid(day, candidates);
+            if (centroid == null) continue;
+
+            double nearest = lodgings.stream()
+                    .mapToDouble(c -> GeoUtils.haversine(centroid,
+                            new double[]{c.latitude().doubleValue(), c.longitude().doubleValue()}))
+                    .min().orElse(Double.MAX_VALUE);
+            // 숙소 후보가 아예 없으면 거리와 무관하게 발동한다 — 거리 게이트만 두면 "숙소 0개"인
+            // 최악의 경우에 보완이 돌지 않는다(nearest가 MAX_VALUE라 통과하긴 하지만 의도를 명시).
+            boolean noLodgingAtAll = lodgings.isEmpty();
+            if (!noLodgingAtAll && nearest <= LOCAL_STAY_TRIGGER_KM) continue;
+
+            log.info("day={} 숙소 보완 검색: {} — centroid 기준 추가 검색", day.dayNumber(),
+                    noLodgingAtAll ? "후보 풀에 숙소 0개"
+                            : "가장 가까운 숙소가 " + String.format("%.0f", nearest) + "km");
+            List<PlaceCandidate> extra = vectorSearchQueryService.searchAccommodationsNear(
+                    input, centroid, LOCAL_STAY_RADIUS_KM, LOCAL_STAY_LIMIT, result.size() + 1);
+            for (PlaceCandidate c : extra) {
+                if (c.placeId() != null && !knownPlaceIds.add(c.placeId())) continue; // 이미 있는 숙소
+                result.add(reindexCandidate(c, result.size() + 1));
+            }
+        }
+        if (result.size() > candidates.size()) {
+            log.info("숙소 후보 보완: {}개 → {}개", candidates.size(), result.size());
+        }
+        return result;
+    }
+
+    /** DayPlan의 방문지 좌표 centroid. 유효 좌표가 없으면 null. */
+    private double[] dayCentroid(SelectionOutput.DayPlan day, List<PlaceCandidate> candidates) {
+        List<Double> lats = new ArrayList<>();
+        List<Double> lngs = new ArrayList<>();
+        for (Integer idx : day.placeIndices() != null ? day.placeIndices() : List.<Integer>of()) {
+            if (idx == null || idx < 1 || idx > candidates.size()) continue;
+            PlaceCandidate c = candidates.get(idx - 1);
+            if (!hasValidCoords(c)) continue;
+            lats.add(c.latitude().doubleValue());
+            lngs.add(c.longitude().doubleValue());
+        }
+        if (lats.isEmpty()) return null;
+        return new double[]{
+                lats.stream().mapToDouble(Double::doubleValue).average().orElse(0),
+                lngs.stream().mapToDouble(Double::doubleValue).average().orElse(0)};
+    }
+
+    /**
+     * 후보 풀 구성을 로깅한다 — FallbackDecider가 왜 그 판정을 냈는지 사후에 추적할 수 있어야 한다
+     * (판정 실패 시 "후보가 부족했다"만 남으면 검색 층 어디가 비었는지 알 수 없다).
+     */
+    private void logCandidatePool(List<PlaceCandidate> candidates, long days) {
+        Map<String, Long> byMajor = candidates.stream().collect(Collectors.groupingBy(
+                c -> PlaceCategoryConstants.majorCategory(c.category()), Collectors.counting()));
+        // FallbackDecider가 쓰는 키워드 기준 카운트(대분류 매핑과 다를 수 있어 함께 남긴다)
+        long lodging = candidates.stream().filter(c -> containsIgnoreCase(c.category(), "lodging")).count();
+        long restaurant = candidates.stream().filter(c -> containsIgnoreCase(c.category(), "restaurant")).count();
+        long attraction = candidates.stream().filter(c ->
+                containsIgnoreCase(c.category(), "landmarks")
+                        || containsIgnoreCase(c.category(), "arts and entertainment")
+                        || containsIgnoreCase(c.category(), "sports and recreation")
+                        || containsIgnoreCase(c.category(), "outdoors")).count();
+        log.info("후보 풀: total={}, 대분류={}, 판정기준(lodging={}/1, restaurant={}/{}, attraction={}/{})",
+                candidates.size(), byMajor, lodging, restaurant, days * 2, attraction, days);
+    }
+
+    private boolean containsIgnoreCase(String value, String needle) {
+        return value != null && value.toLowerCase().contains(needle);
+    }
+
     /** 파이프라인 단계 소요시간(ms)을 로깅하고, 다음 구간 측정을 위한 기준 시각(nanoTime)을 반환한다. */
     private long logStage(String stage, long sinceNanos) {
         long now = System.nanoTime();
@@ -255,14 +374,16 @@ public class OptimizedGenerationExecutor {
         return now;
     }
 
-    private void syncAllPlaces(List<Place> places) {
+    private void syncAllPlaces(List<Place> places, double[] destinationReference) {
         log.info("Google Places 동기화 시작: {}건", places.size());
 
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (Place place : places) {
             if (place.getId() == null) continue;
             futures.add(CompletableFuture.runAsync(() ->
-                    placeRefreshService.refreshSync(place.getId(), place.getName()),
+                    // 여행지 기준 좌표를 넘겨, 이름만으로 재검색할 때 타지역 동명 가게가 매칭돼
+                    // 좌표가 오염되는 것을 막는다(A8).
+                    placeRefreshService.refreshSync(place.getId(), place.getName(), destinationReference),
                     googleSyncExecutor   // blocking I/O 전용 풀 (commonPool 점유 방지)
             ));
         }
@@ -312,7 +433,9 @@ public class OptimizedGenerationExecutor {
                     place.getRecommendedTimeSlots(),
                     place.getRecommendedDurationMinutes(),
                     c.userSelected(),
-                    place.getAdmissionFee()
+                    place.getAdmissionFee(),
+                    // 주소가 Google 동기화로 갱신됐을 수 있으므로 세부지역을 다시 뽑고, 실패하면 기존 값 유지
+                    subRegionOrKeep(place.getAddress(), c.subRegion())
             );
         }).collect(Collectors.toList());
     }
@@ -418,7 +541,14 @@ public class OptimizedGenerationExecutor {
         return new PlaceCandidate(index, c.placeId(), c.name(), c.address(), c.category(),
                 c.tags(), c.region(), c.country(), c.latitude(), c.longitude(),
                 c.description(), c.rating(), c.similarityScore(), c.priceLevel(), c.openingHours(),
-                c.recommendedTimeSlots(), c.recommendedDurationMinutes(), c.userSelected(), c.admissionFee());
+                c.recommendedTimeSlots(), c.recommendedDurationMinutes(), c.userSelected(), c.admissionFee(),
+                c.subRegion());
+    }
+
+    /** 주소에서 세부지역을 재추출하되, 추출 실패 시 기존 값을 유지한다. */
+    private String subRegionOrKeep(String address, String current) {
+        String extracted = PlaceCategoryConstants.extractSubRegion(address);
+        return extracted != null ? extracted : current;
     }
 
     /**
@@ -630,7 +760,8 @@ public class OptimizedGenerationExecutor {
                     index++, p.getId(), p.getName(), p.getAddress(), p.getCategory(),
                     p.getTags(), p.getRegion(), p.getCountry(), p.getLatitude(), p.getLongitude(),
                     p.getDescription(), p.getRating(), 1.0, p.getPriceLevel(), p.getOpeningHours(),
-                    p.getRecommendedTimeSlots(), p.getRecommendedDurationMinutes(), true, p.getAdmissionFee()));
+                    p.getRecommendedTimeSlots(), p.getRecommendedDurationMinutes(), true, p.getAdmissionFee(),
+                    PlaceCategoryConstants.extractSubRegion(p.getAddress())));
         }
         for (PlaceCandidate c : candidates) {
             PlaceCandidate reindexed = reindexCandidate(c, index++);
@@ -678,7 +809,10 @@ public class OptimizedGenerationExecutor {
                     nextIndex++, hotel.getId(), hotel.getName(), hotel.getAddress(),
                     hotel.getCategory(), hotel.getTags(), hotel.getRegion(), hotel.getCountry(),
                     hotel.getLatitude(), hotel.getLongitude(), hotel.getDescription(),
-                    hotel.getRating(), 0.0, null, hotel.getOpeningHours()
+                    hotel.getRating(), 0.0, null, hotel.getOpeningHours(),
+                    hotel.getRecommendedTimeSlots(), hotel.getRecommendedDurationMinutes(),
+                    false, hotel.getAdmissionFee(),
+                    PlaceCategoryConstants.extractSubRegion(hotel.getAddress())
             ));
         }
         return result;
@@ -754,6 +888,17 @@ public class OptimizedGenerationExecutor {
      * payload: {@code { dayNumber, steps: [{name, startTime, category}] }} — 프론트가 Day 스켈레톤을 실카드로 교체.
      * 장소명이 없는 스텝은 건너뛴다. 전송 실패는 조용히 무시(critical path 아님).
      */
+    /** 남은 품질 문제를 SSE로 전달한다. 전송 실패는 무시(critical path 아님). */
+    private void sendQualityNotices(SseEmitter emitter, List<String> notices) {
+        if (notices == null || notices.isEmpty()) return;
+        try {
+            emitter.send(SseEmitter.event().name("quality-notice").data(Map.of("notices", notices)));
+            log.info("품질 안내 {}건 전송: {}", notices.size(), notices);
+        } catch (IOException | IllegalStateException e) {
+            log.debug("SSE quality-notice 전송 실패: {}", e.getMessage());
+        }
+    }
+
     private void sendStepStream(SseEmitter emitter, List<StepData> steps) {
         if (steps == null || steps.isEmpty()) return;
 

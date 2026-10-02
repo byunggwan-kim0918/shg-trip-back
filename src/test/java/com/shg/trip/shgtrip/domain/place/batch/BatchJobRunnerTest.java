@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.place.batch;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -7,6 +8,7 @@ import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
@@ -25,6 +27,13 @@ class BatchJobRunnerTest {
 
     @InjectMocks
     private BatchJobRunner batchJobRunner;
+
+    @BeforeEach
+    void enableFoursquareStage() {
+        // @Value("${batch.foursquare.enabled:true}")는 단위 테스트에서 주입되지 않아 boolean 기본값
+        // false가 된다. 운영 기본값(true)과 같은 조건에서 검증하도록 명시적으로 켠다.
+        ReflectionTestUtils.setField(batchJobRunner, "foursquareEnabled", true);
+    }
 
     @Test
     @DisplayName("배치 파이프라인은 시딩 → 임베딩 순서로 실행된다 (enrich 비활성화 시)")

@@ -33,16 +33,27 @@ public class BatchJobRunner implements CommandLineRunner {
     @Value("${batch.tourapi.enabled:false}")
     private boolean tourApiEnabled;
 
+    /**
+     * Foursquare CSV 시딩 실행 여부. 기본 true(운영 전체 파이프라인 유지)지만, 이미 적재된 행의
+     * 임베딩만 채우는 재실행에서는 꺼야 한다 — 52,000행 upsert에 20분 이상 걸리고 얻는 게 없다.
+     */
+    @Value("${batch.foursquare.enabled:true}")
+    private boolean foursquareEnabled;
+
     @Override
     public void run(String... args) {
         log.info("=== 배치 파이프라인 시작 (enrich.enabled={}) ===", enrichEnabled);
 
-        log.info("[1/4] Foursquare 장소 시딩 시작");
-        try {
-            foursquareSeeder.seed();
-            log.info("[1/4] Foursquare 장소 시딩 완료");
-        } catch (Exception e) {
-            log.error("[1/4] Foursquare 장소 시딩 실패, 이후 단계 계속 진행: {}", e.getMessage(), e);
+        if (foursquareEnabled) {
+            log.info("[1/4] Foursquare 장소 시딩 시작");
+            try {
+                foursquareSeeder.seed();
+                log.info("[1/4] Foursquare 장소 시딩 완료");
+            } catch (Exception e) {
+                log.error("[1/4] Foursquare 장소 시딩 실패, 이후 단계 계속 진행: {}", e.getMessage(), e);
+            }
+        } else {
+            log.info("[1/4] Foursquare 장소 시딩 건너뜀 (batch.foursquare.enabled=false)");
         }
 
         // 관광지(Landmarks) 커버리지 보완 — Foursquare가 빈약한 지역의 관광지를 TourAPI로 채운다.

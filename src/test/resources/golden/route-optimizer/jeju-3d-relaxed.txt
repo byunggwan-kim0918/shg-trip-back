@@ -1,0 +1,68 @@
+== day 1 ==
+  #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
+      이동: - -분 -km -원
+      비용: 0원 / 메모: -
+  #2  11:30-12:40  명품진전복해물탕 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
+      이동: CAR 10분 6.21km 1864원
+      비용: 13000원 / 메모: -
+      대안: 공천포식당 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
+      대안: 양가형제 | Dining and Drinking > Restaurant | 13000원
+  #3  12:45-14:15  사라봉공원 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
+      이동: CAR 5분 2.99km 896원
+      비용: 0원 / 메모: -
+      대안: 서프라이즈 테마파크 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 세기알해변 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 개오름 | Landmarks and Outdoors > Tourist Attraction | 0원
+  #4  14:31-16:01  제주별빛누리공원 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
+      이동: CAR 16분 10.32km 3095원
+      비용: 0원 / 메모: -
+      대안: 서프라이즈 테마파크 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 개오름 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 세기알해변 | Landmarks and Outdoors > Tourist Attraction | 0원
+  #5  17:30-18:40  아레 한국 식당 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
+      이동: CAR 15분 9.76km 2927원
+      비용: 13000원 / 메모: -
+      대안: 공천포식당 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
+      대안: 양가형제 | Dining and Drinking > Restaurant | 13000원
+  #6  18:43-19:13  제주R호텔 | Travel and Transportation > Lodging > Hotel | 제주시 | Jeju
+      이동: CAR 3분 1.85km 555원
+      비용: 120000원 / 메모: -
+      대안: Ocean Grand Hotel Jeju | Travel and Transportation > Lodging > Resort | 200000원
+== day 2 ==
+  #7  09:55-10:55  쉼표 | Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop | 제주시 | Jeju
+      이동: CAR 55분 36.54km 10961원
+      비용: 6000원 / 메모: -
+      대안: 카페콜라 | Dining and Drinking > Cafe, Coffee, and Tea House > Café | 6000원
+  #8  11:37-12:47  연돈 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
+      이동: CAR 42분 27.97km 8391원
+      비용: 13000원 / 메모: -
+      대안: 양가형제 | Dining and Drinking > Restaurant | 13000원
+      대안: 공천포식당 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
+  #9  17:30-18:40  대금식당 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
+      이동: CAR 42분 27.97km 8392원
+      비용: 13000원 / 메모: -
+      대안: 양가형제 | Dining and Drinking > Restaurant | 13000원
+      대안: 공천포식당 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
+  #10 19:33-20:03  제주R호텔 | Travel and Transportation > Lodging > Hotel | 제주시 | Jeju
+      이동: CAR 53분 35.11km 10534원
+      비용: 120000원 / 메모: -
+      대안: Ocean Grand Hotel Jeju | Travel and Transportation > Lodging > Resort | 200000원
+== day 3 ==
+  #11 11:30-12:40  어멍 | Dining and Drinking > Restaurant > BBQ Joint | 제주시 | Jeju
+      이동: CAR 30분 19.57km 5872원
+      비용: 13000원 / 메모: -
+      대안: 공천포식당 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
+      대안: 양가형제 | Dining and Drinking > Restaurant | 13000원
+  #12 13:00-16:00  제주도 국가지질공원 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
+      이동: CAR 20분 13.21km 3962원
+      비용: 0원 / 메모: -
+      대안: 서프라이즈 테마파크 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 개오름 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 세기알해변 | Landmarks and Outdoors > Tourist Attraction | 0원
+  #13 16:20-18:50  손지오름 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
+      이동: CAR 20분 12.68km 3804원
+      비용: 0원 / 메모: -
+      대안: 개오름 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 제주 성산항 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 세기알해변 | Landmarks and Outdoors > Tourist Attraction | 0원
+-- notices (0) --
