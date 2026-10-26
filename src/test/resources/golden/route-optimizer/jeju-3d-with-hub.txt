@@ -1,3 +1,6 @@
+-- metrics --
+  스텝 16 / 숙소 1곳 / 총이동 300km
+  연속중복 0 / 최대공백 290분 / 늦은시작 0일 / 안내 2건
 == day 1 ==
   #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: - -분 -km -원
@@ -51,5 +54,6 @@
   #16 19:39-20:39  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: CAR 59분 39.18km 11753원
       비용: 0원 / 메모: -
--- notices (1) --
+-- notices (2) --
   2일차에 넣을 만한 관광지를 찾지 못했어요.
+  2일차 중간에 4시간 50분 비는 시간이 있어요. 주변에 넣을 만한 곳을 찾지 못했습니다.

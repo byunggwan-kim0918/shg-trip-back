@@ -37,6 +37,132 @@ class RouteOptimizerTest {
     }
 
     @Test
+    @DisplayName("개장이 1시간 이내로 늦으면 버리지 않고 시작 시각을 개장 시각으로 늦춘다")
+    void repairAndSchedule_waitsForOpeningWhenShortDelay() {
+        java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
+
+        List<PlaceCandidate> candidates = List.of(
+                placeWithHours(1, "열시개장관", "Arts and Entertainment > Museum",
+                        37.500, 127.000, "강남", "월요일: 오전 10:00 ~ 오후 6:00"),
+                placeWithHours(2, "점심집", "Dining and Drinking > Restaurant > Korean",
+                        37.501, 127.001, "강남", "월요일: 오전 11:00 ~ 오후 9:00"),
+                placeWithHours(3, "호텔", "Travel and Transportation > Lodging > Hotel",
+                        37.502, 127.002, "강남", null)
+        );
+
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2), 3, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+
+        StepData museum = steps.stream().filter(s -> "열시개장관".equals(s.place().name()))
+                .findFirst().orElseThrow();
+        // 하루 시작은 09:00이지만 10:00 개장이므로 10:00으로 밀려야 한다 (버리지 않는다)
+        assertThat(museum.startTime()).isEqualTo("10:00");
+    }
+
+    @Test
+    @DisplayName("개장까지 1시간을 넘게 기다려야 하는 장소는 그 자리에 두지 않는다")
+    void repairAndSchedule_trimsPlaceOpeningMuchLater() {
+        java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
+
+        List<PlaceCandidate> candidates = List.of(
+                placeWithHours(1, "저녁에만열리는야시장", "Landmarks and Outdoors > Market",
+                        37.500, 127.000, "강남", "월요일: 오후 8:00 ~ 오후 11:00"),
+                placeWithHours(2, "아침부터여는공원", "Landmarks and Outdoors > Park",
+                        37.5005, 127.0005, "강남", "월요일: 24시간 영업"),
+                placeWithHours(3, "점심집", "Dining and Drinking > Restaurant > Korean",
+                        37.501, 127.001, "강남", "월요일: 오전 11:00 ~ 오후 9:00"),
+                placeWithHours(4, "호텔", "Travel and Transportation > Lodging > Hotel",
+                        37.502, 127.002, "강남", null)
+        );
+
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3), 4, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+
+        // 09시대에 배정될 자리에 20시 개장 야시장을 두고 11시간을 기다리게 할 수는 없다.
+        // 남아 있다면 20:00 이후여야 한다.
+        steps.stream()
+                .filter(s -> "저녁에만열리는야시장".equals(s.place().name()))
+                .forEach(s -> assertThat(ScheduleTimes.toMinutesOrZero(s.startTime()))
+                        .as("20시 개장 장소가 개장 전에 배치됨: " + s.startTime())
+                        .isGreaterThanOrEqualTo(20 * 60));
+    }
+
+    @Test
+    @DisplayName("오후 4시 오픈 식당은 점심 자리에 오지 않고 저녁 자리로 간다 (실측 76 제주돗)")
+    void repairAndSchedule_assignsLateOpeningRestaurantToDinnerNotLunch() {
+        java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
+
+        List<PlaceCandidate> candidates = List.of(
+                placeWithHours(1, "점심만여는집", "Dining and Drinking > Restaurant > Korean",
+                        37.500, 127.000, "강남", "월요일: 오전 11:00 ~ 오후 3:00"),
+                placeWithHours(2, "저녁만여는집", "Dining and Drinking > Restaurant > Korean",
+                        37.501, 127.001, "강남", "월요일: 오후 4:00~10:00"),
+                placeWithHours(3, "공원", "Landmarks and Outdoors > Park",
+                        37.502, 127.002, "강남", "월요일: 24시간 영업"),
+                placeWithHours(4, "호텔", "Travel and Transportation > Lodging > Hotel",
+                        37.503, 127.003, "강남", null)
+        );
+
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3), 4, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+
+        StepData lunch = steps.stream().filter(s -> "점심만여는집".equals(s.place().name())).findFirst().orElseThrow();
+        StepData dinner = steps.stream().filter(s -> "저녁만여는집".equals(s.place().name())).findFirst().orElseThrow();
+        // 좌표상으로는 둘 다 호텔에서 거의 같은 거리다 — 영업시간이 슬롯을 결정해야 한다
+        assertThat(lunch.startTime()).isEqualTo("11:30");
+        assertThat(dinner.startTime()).isEqualTo("17:30");
+    }
+
+    @Test
+    @DisplayName("점심에 닫혀 있는 식당 하나뿐이면 점심 자리에 넣지 않는다 (닫힌 가게보다 빈 슬롯)")
+    void repairAndSchedule_neverSeatsClosedRestaurantAtLunch() {
+        java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
+
+        List<PlaceCandidate> candidates = List.of(
+                placeWithHours(1, "저녁만여는집", "Dining and Drinking > Restaurant > Korean",
+                        37.500, 127.000, "강남", "월요일: 오후 4:00~10:00"),
+                placeWithHours(2, "공원", "Landmarks and Outdoors > Park",
+                        37.501, 127.001, "강남", "월요일: 24시간 영업"),
+                placeWithHours(3, "호텔", "Travel and Transportation > Lodging > Hotel",
+                        37.502, 127.002, "강남", null)
+        );
+
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2), 3, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+
+        // 그 식당이 일정에 남는다면 저녁 시간대여야 한다. 11:30 점심 자리에는 절대 오지 않는다.
+        steps.stream()
+                .filter(s -> "저녁만여는집".equals(s.place().name()))
+                .forEach(s -> assertThat(ScheduleTimes.toMinutesOrZero(s.startTime()))
+                        .as("저녁만 여는 식당이 점심 시간대에 배치됨: " + s.startTime())
+                        .isGreaterThanOrEqualTo(16 * 60));
+    }
+
+    @Test
     @DisplayName("pace quota 초과 시 day별 장소 수가 normal 상한(5) 이하로 트림된다")
     void repairAndSchedule_trimsExceedingPaceQuota() {
         List<PlaceCandidate> candidates = List.of(
@@ -314,8 +440,8 @@ class RouteOptimizerTest {
     }
 
     @Test
-    @DisplayName("정기휴무 장소가 pair 멤버면 교체하지 않고 그대로 유지한다 (pair 무결성 우선)")
-    void repairAndSchedule_doesNotSwapClosedDayPlaceWhenItIsAPairMember() {
+    @DisplayName("정기휴무 장소는 pair 멤버여도 교체한다 (휴무 회피가 인접 배치보다 우선)")
+    void repairAndSchedule_swapsClosedDayPlaceEvenWhenItIsAPairMember() {
         // 2024-01-01 은 월요일 → day1 = 월요일
         java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
 
@@ -331,8 +457,10 @@ class RouteOptimizerTest {
                 placeWithHours(5, "짝지", "Cafe", 37.5008, 127.0008, "강남", null)
         );
 
-        // index 1(월요일휴무명소)과 index 5(짝지)가 must_pair_with — 1이 휴무라도 교체되면
-        // 5와 같은 날 함께 있어야 하는 보장이 깨진다.
+        // index 1(월요일휴무명소)과 index 5(짝지)가 must_pair_with. 예전에는 pair가 깨지는 것을
+        // 막으려고 휴무인 1을 그대로 뒀는데, 그 결과 여행자가 문 닫은 곳에 갔다(실측 78 영화의전당
+        // 라이브러리, 76 국가지질공원, 73 서울풍물시장이 모두 이 예외로 살아남았다).
+        // 이제는 교체한다 — 짝의 인접 배치를 잃는 것이 휴무인 곳에 보내는 것보다 낫다.
         SelectionOutput selection = new SelectionOutput(
                 "concept",
                 List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 5), 3, null)),
@@ -343,8 +471,10 @@ class RouteOptimizerTest {
         List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed", monday);
 
         List<String> names = steps.stream().map(s -> s.place().name()).collect(Collectors.toList());
-        assertThat(names).contains("월요일휴무명소", "짝지");
-        assertThat(names).doesNotContain("항상열린대체명소");
+        assertThat(names).doesNotContain("월요일휴무명소");
+        assertThat(names).contains("항상열린대체명소");
+        // 교체는 자리 치환이므로 짝의 다른 쪽은 그날에 그대로 남는다 (통째로 사라지지 않는다)
+        assertThat(names).contains("짝지");
     }
 
     @Test

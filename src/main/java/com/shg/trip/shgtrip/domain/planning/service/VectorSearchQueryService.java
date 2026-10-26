@@ -60,10 +60,26 @@ public class VectorSearchQueryService {
     private static final int OVERFETCH_FACTOR = 3;
     private static final int MAX_OVERFETCH = 60;
 
-    /** 하이브리드 랭킹 가중치 — 유사도 기반에 평점/대분류/라벨 매칭을 소폭 얹는다. */
-    private static final double RATING_WEIGHT = 0.10;
-    /** 평점이 없는 장소의 중립 사전값(무평점이라고 과도하게 밀려나지 않도록). */
+    /**
+     * 하이브리드 랭킹의 인기도 가중치.
+     *
+     * <p>실측으로 정한 값이다(제주 관광지 364곳, 인기도 시딩 적용 후): 0.15면 리뷰 없는
+     * 열안지오름이 채택권(슬롯당 상위 4) 밖으로 밀리고 채택되는 4곳이 모두 실제 리뷰를 가진
+     * 장소가 된다. 0.35까지 올리면 유사도 0.52짜리가 0.59짜리를 이겨 주제 적합성이 깨진다
+     * (자연 테마 일정에 수족관이 해안 경관지보다 위로 올라왔다).
+     */
+    private static final double RATING_WEIGHT = 0.15;
+    /** 리뷰 데이터 커버리지가 0일 때, 즉 인기도를 전혀 판단할 수 없을 때의 중립값. */
     private static final double NEUTRAL_RATING_RATIO = 0.7;
+    /** 커버리지가 100%일 때 "리뷰 수 미상"에 매기는 값 — 사실상 "리뷰가 없는 곳"으로 본다. */
+    private static final double UNKNOWN_FLOOR_RATIO = 0.15;
+    /**
+     * 리뷰 수 포화 기준. 이 수를 넘으면 인기도 가점이 더 늘지 않는다.
+     *
+     * <p>로그를 쓰는 이유: 리뷰 20,000개가 2,000개보다 10배 좋은 장소는 아니다. 선형으로 쓰면
+     * 초대형 명소 하나가 다른 모든 후보를 눌러 일정이 단조로워진다.
+     */
+    private static final int REVIEW_SATURATION_COUNT = 10_000;
     private static final double MAJOR_CATEGORY_BONUS = 0.05;
     private static final double LABEL_MATCH_BONUS = 0.03;
 
@@ -220,7 +236,8 @@ public class VectorSearchQueryService {
                     index++, r.placeId(), r.name(), r.address(), r.category(), r.tags(),
                     r.region(), r.country(), r.latitude(), r.longitude(), r.description(),
                     r.rating(), r.similarityScore(), null, null, null, null, false, null,
-                    PlaceCategoryConstants.extractSubRegion(r.address())));
+                    PlaceCategoryConstants.extractSubRegion(r.address()), r.userRatingCount(),
+                    r.wikidataSitelinks()));
         }
         log.info("day centroid 기준 숙소 보완 검색: 반경 {}km, 조회={}, 채택={}",
                 String.format("%.0f", radiusKm), raw.size(), result.size());
@@ -235,34 +252,58 @@ public class VectorSearchQueryService {
         double minSimilarity = PlaceCategoryConstants.minSimilarity(slot.role());
         String slotMajor = PlaceCategoryConstants.slotMajorCategory(slot.role());
 
-        List<ScoredResult> kept = new ArrayList<>();
+        List<VectorSearchResult> passed = new ArrayList<>();
         int dropped = 0;
         for (VectorSearchResult r : raw) {
             if (r.similarityScore() < minSimilarity) {
                 dropped++;
                 continue;
             }
-            kept.add(new ScoredResult(r, hybridScore(r, slotMajor, slot.labelTokens())));
+            passed.add(r);
+        }
+
+        double neutral = neutralProminence(passed);
+        List<ScoredResult> kept = new ArrayList<>(passed.size());
+        for (VectorSearchResult r : passed) {
+            kept.add(new ScoredResult(r, hybridScore(r, slotMajor, slot.labelTokens(), neutral)));
         }
         kept.sort(Comparator.comparingDouble(ScoredResult::score).reversed());
         List<ScoredResult> accepted = kept.size() > limit ? new ArrayList<>(kept.subList(0, limit)) : kept;
 
-        log.info("슬롯 검색: key={}, role={}, 조회={}, 임계탈락={}, 채택={} (임계값={})",
+        log.info("슬롯 검색: key={}, role={}, 조회={}, 임계탈락={}, 채택={} (임계값={}, 인기도미상 중립={})",
                 slot.key(), slot.role(), raw.size(), dropped, accepted.size(),
-                String.format("%.2f", minSimilarity));
+                String.format("%.2f", minSimilarity), String.format("%.2f", neutral));
         return accepted;
     }
 
     /**
-     * 하이브리드 점수 = 유사도 + 평점 정규화 가중 + 대분류 일치 가점 + 라벨(테마·카테고리) 매칭 가점.
+     * "인기도 미상"에 매길 값 — 이 슬롯 후보 중 <b>Wikidata 매칭이 끝난 비율</b>로 정한다.
+     *
+     * <p>고정값은 어느 쪽으로 두어도 틀린다. 0.7(관대)로 두면 백필을 끝낸 지역에서 무명 장소가
+     * 주상절리대(0.88)와 사실상 동점이 되어, 확보한 인기도 신호가 묻힌다. 낮게 두면 아직
+     * 동기화되지 않은 지역(서울 관광지 리뷰 보유율 1%)의 명소가 전부 바닥으로 깔린다.
+     *
+     * <p>그래서 데이터에서 추론한다 — 후보 다수가 매칭을 끝냈다면 비어 있는 값은 "아직 못 본
+     * 소수"라는 뜻이라 낮게 깔아도 되고, 대부분이 미매칭이면 그냥 판단 근거가 없다는 뜻이다.
+     * 커버리지 0% → {@value #NEUTRAL_RATING_RATIO}, 100% → 0.15로 선형 보간한다.
+     * 미동기화 지역은 커버리지가 낮아 모두 같은 값을 받으므로 순위가 바뀌지 않는다(무해).
+     */
+    private double neutralProminence(List<VectorSearchResult> candidates) {
+        if (candidates.isEmpty()) return NEUTRAL_RATING_RATIO;
+        long known = candidates.stream().filter(r -> r.wikidataSitelinks() != null).count();
+        double coverage = (double) known / candidates.size();
+        return NEUTRAL_RATING_RATIO - (NEUTRAL_RATING_RATIO - UNKNOWN_FLOOR_RATIO) * coverage;
+    }
+
+    /**
+     * 하이브리드 점수 = 유사도 + <b>인기도</b> 가중 + 대분류 일치 가점 + 라벨(테마·카테고리) 매칭 가점.
      * 임베딩만으로는 대표 명소가 위로 올라오지 못하는 문제를 완화한다.
      */
-    private double hybridScore(VectorSearchResult r, String slotMajorCategory, List<String> labelTokens) {
+    private double hybridScore(VectorSearchResult r, String slotMajorCategory,
+                               List<String> labelTokens, double neutralProminence) {
         double score = r.similarityScore();
 
-        double ratingRatio = r.rating() != null
-                ? Math.min(1.0, r.rating().doubleValue() / 5.0) : NEUTRAL_RATING_RATIO;
-        score += RATING_WEIGHT * ratingRatio;
+        score += RATING_WEIGHT * prominence(r, neutralProminence);
 
         if (slotMajorCategory != null
                 && slotMajorCategory.equals(PlaceCategoryConstants.majorCategory(r.category()))) {
@@ -273,6 +314,24 @@ public class VectorSearchQueryService {
             score += LABEL_MATCH_BONUS;
         }
         return score;
+    }
+
+    /**
+     * 장소의 인기도(0.0~1.0). <b>평점 × 리뷰 수</b>로 본다.
+     *
+     * <p>평점 단독으로는 인기도를 가릴 수 없다. 실측(제주 관광지를 평점순 정렬): 용두암 5.0,
+     * 쉼한모금 5.0, 사라봉공원 5.0, 논짓물 4.8 ... 협재해수욕장(4.7)이 11위다. 리뷰 두세 개짜리
+     * 5.0이 수만 리뷰의 명소를 이기기 때문이다.
+     *
+     * <p>신호 우선순위는 <b>Wikidata sitelinks → 리뷰 수 → 평점</b>이다. 계산 자체는
+     * {@link PlaceProminence}에 있고 여기서는 "미매칭"만 슬롯 커버리지 기반 중립값으로 바꾼다.
+     * 충전 경로와 검색 랭킹이 같은 기준을 쓰게 하려면 계산이 한 곳에 있어야 한다.
+     */
+    private double prominence(VectorSearchResult r, double neutralProminence) {
+        if (r.wikidataSitelinks() == null && r.userRatingCount() == null) {
+            return neutralProminence;
+        }
+        return PlaceProminence.of(r.rating(), r.userRatingCount(), r.wikidataSitelinks());
     }
 
     /** 이름·태그에 슬롯 라벨 토큰이 들어 있는지(테마/카테고리 의미 직접 매칭). */
@@ -546,7 +605,9 @@ public class VectorSearchQueryService {
                     null,  // recommendedDurationMinutes
                     false, // userSelected
                     null,  // admissionFee
-                    subRegion
+                    subRegion,
+                    r.userRatingCount(),
+                    r.wikidataSitelinks()
             ));
         }
         if (!results.isEmpty()) {

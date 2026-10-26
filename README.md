@@ -29,7 +29,7 @@
 - **실시간 스트리밍** — 생성이 진행되는 동안 진행률과 완성되는 Day 카드가 SSE로 실시간 전송됩니다.
 - **일정 편집** — 제목·태그 수정, 스텝(방문지) 드래그 재정렬, 스텝 삭제, 각 스텝의 대안 선택, 일정 확정(finalize)이 가능합니다.
 - **공유** — 공유 링크를 만들어 비로그인 사용자도 볼 수 있는 공개 페이지로 일정을 공유합니다.
-- **장소 검색** — 키워드·카테고리·반경으로 장소를 검색합니다(Google Places 연동).
+- **장소 검색** — 키워드·카테고리·반경으로 DB 장소를 검색합니다.
 - **남용 방지** — 30일간 생성 5회 쿼터, 입력 검증 반복 실패 시 일시적 생성 제한을 둡니다.
 
 ## 아키텍처 요약
@@ -49,7 +49,7 @@
 
 ### 장소 데이터
 
-장소는 OpenAI 임베딩으로 벡터화되어 유사도 검색에 사용됩니다. Foursquare / TourAPI 시딩과 Google Places 동기화는 `batch` 프로파일의 배치 파이프라인이 담당합니다 — [docs/place-batch-pipeline.md](docs/place-batch-pipeline.md).
+장소는 OpenAI 임베딩으로 벡터화되어 유사도 검색에 사용됩니다. Foursquare / TourAPI 시딩, Wikidata 인기도 매칭은 `batch` 프로파일의 배치 파이프라인이 담당합니다 — [docs/place-batch-pipeline.md](docs/place-batch-pipeline.md).
 
 ## 프로젝트 구조
 
@@ -101,7 +101,6 @@ cp .env.example .env
 | `DB_PASSWORD` | Postgres 비밀번호. **docker-compose의 `POSTGRES_PASSWORD`와 동일하게** 설정 |
 | `ANTHROPIC_API_KEY` | Claude API 키 (일정 생성) |
 | `OPENAI_API_KEY` | OpenAI 임베딩 키 (장소 벡터 검색) |
-| `GOOGLE_PLACES_API_KEY` | Google Places API 키 (장소 검색·동기화) |
 | `KAKAO_CLIENT_ID` / `KAKAO_CLIENT_SECRET` | 카카오 OAuth (로그인하려면 최소 한 제공자 필요) |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | 구글 OAuth |
 | `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` | 네이버 OAuth |
@@ -121,7 +120,6 @@ cp .env.example .env
 |------|------|
 | `BATCH_ENRICH_ENABLED` / `BATCH_ENRICH_REGIONS` | 장소 보강 배치 on/off·대상 지역 |
 | `TOUR_API_SERVICE_KEY` / `BATCH_TOURAPI_ENABLED` / `BATCH_TOURAPI_AREA_CODES` / `BATCH_TOURAPI_MAX_ROWS` | 한국관광공사 TourAPI 관광지 시딩 |
-| `BATCH_GOOGLE_SYNC_ENABLED` / `BATCH_GOOGLE_SYNC_RECENT_DAYS` / `BATCH_GOOGLE_SYNC_DAILY_LIMIT` | Google Places 동기화 배치 |
 | `FOURSQUARE_DATA_PATH` / `BATCH_FOURSQUARE_SOURCE` / `BATCH_FOURSQUARE_S3_BUCKET` | Foursquare CSV 시딩 소스 |
 
 ### 3. 서버 실행

@@ -7,7 +7,6 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
-import com.shg.trip.shgtrip.domain.place.s3.PlaceImageAsyncRecovery;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
@@ -44,7 +43,6 @@ public class ItineraryService {
 
     private final ItineraryRepository itineraryRepository;
     private final PlaceRepository placeRepository;
-    private final PlaceImageAsyncRecovery asyncRecovery;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -52,15 +50,7 @@ public class ItineraryService {
     @Transactional(readOnly = true)
     public ItineraryResponse getItinerary(Long itineraryId, Long userId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
-        triggerAsyncImageRecovery(itinerary);
         return ItineraryResponse.from(itinerary);
-    }
-
-    private void triggerAsyncImageRecovery(Itinerary itinerary) {
-        itinerary.getSteps().stream()
-                .map(ItineraryStep::getPlace)
-                .filter(place -> place != null && place.getImageUrl() == null && place.getPhotoReference() != null)
-                .forEach(place -> asyncRecovery.tryUploadAsync(place.getId(), place.getPhotoReference()));
     }
 
     @Transactional(readOnly = true)
@@ -68,7 +58,9 @@ public class ItineraryService {
         Page<Itinerary> page = itineraryRepository
                 .findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable);
 
-        // 커버 place들의 현재 imageUrl을 한 번에 해소한다(만료되는 presigned URL을 저장하지 않고 read-time 조회).
+        // 커버 place들의 imageUrl을 한 번에 해소한다. 이미지 출처는 TourAPI(firstimage) 하나뿐이고
+        // 적재 시점에 확정되므로, 조회 시점에 채워 넣을 경로는 없다 — Google 사진 비동기 업로드는
+        // 제거됐다(Maps 약관 3.2.3(a): 사진·세부정보 캐싱 금지).
         List<Long> coverPlaceIds = page.getContent().stream()
                 .map(Itinerary::getCoverPlaceId)
                 .filter(Objects::nonNull)
@@ -82,11 +74,6 @@ public class ItineraryService {
         Map<Long, String> coverUrlById = coverPlaces.stream()
                 .filter(p -> p.getImageUrl() != null)
                 .collect(Collectors.toMap(Place::getId, Place::getImageUrl));
-
-        // 아직 이미지가 없는 커버 place는 비동기 업로드를 트리거 — 다음 조회 때 채워진다.
-        coverPlaces.stream()
-                .filter(p -> p.getImageUrl() == null && p.getPhotoReference() != null)
-                .forEach(p -> asyncRecovery.tryUploadAsync(p.getId(), p.getPhotoReference()));
 
         return page.map(i -> ItinerarySummaryResponse.from(
                 i, i.getCoverPlaceId() != null ? coverUrlById.get(i.getCoverPlaceId()) : null));

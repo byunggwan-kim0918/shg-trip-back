@@ -49,7 +49,7 @@ class StoryGenerationServiceTest {
     void generateAndAttach_cancelledJob_skipsLlmCallAndSave() {
         when(cancellationRegistry.isCancelled("job-1")).thenReturn(true);
 
-        service.generateAndAttach("job-1", emitter, 42L, fixedSteps, "concept", enrichedInput);
+        service.generateAndAttach("job-1", emitter, 42L, fixedSteps, "제주 3박 4일", enrichedInput, "concept");
 
         verifyNoInteractions(assemblyCallGenerator);
         verifyNoInteractions(storySaveHelper);
@@ -65,9 +65,11 @@ class StoryGenerationServiceTest {
         when(assemblyCallGenerator.assembleItinerary(fixedSteps, "concept", enrichedInput))
                 .thenReturn(storyOutput);
 
-        service.generateAndAttach("job-1", emitter, 42L, fixedSteps, "concept", enrichedInput);
+        service.generateAndAttach("job-1", emitter, 42L, fixedSteps, "제주 3박 4일", enrichedInput, "concept");
 
-        verify(storySaveHelper).saveStory(42L, fixedSteps, storyOutput);
+        // concept은 구조 저장 시점의 임시 제목이므로 그대로 넘어가야 한다 (조건부 제목 교체의 기준값)
+        // 교체 비교 기준은 실제 저장된 임시 제목이어야 한다(concept이 아니다)
+        verify(storySaveHelper).saveStory(42L, fixedSteps, storyOutput, "제주 3박 4일");
         verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
         verify(emitter).complete();
     }
@@ -79,7 +81,7 @@ class StoryGenerationServiceTest {
         when(assemblyCallGenerator.assembleItinerary(any(), any(), any()))
                 .thenThrow(new RuntimeException("Haiku 호출 실패"));
 
-        service.generateAndAttach("job-1", emitter, 42L, fixedSteps, "concept", enrichedInput);
+        service.generateAndAttach("job-1", emitter, 42L, fixedSteps, "제주 3박 4일", enrichedInput, "concept");
 
         verifyNoInteractions(storySaveHelper);
         verify(emitter).complete();

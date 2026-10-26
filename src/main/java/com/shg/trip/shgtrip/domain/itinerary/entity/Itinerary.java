@@ -106,10 +106,13 @@ public class Itinerary extends BaseTimeEntity {
     }
 
     /**
-     * 커버로 쓸 place 참조(coverPlaceId)를 지정한다. 사진 확보가 가능한(photoReference 있는) 스텝 중
-     * 커버에 가장 어울리는 하나를 고른다. 실제 imageUrl(만료되는 presigned URL)은 저장하지 않고
-     * 조회 시점에 이 id로 해소한다.
+     * 커버로 쓸 place 참조(coverPlaceId)를 지정한다. 이미지가 **실제로 있는** 스텝 중 커버에
+     * 가장 어울리는 하나를 고른다. URL 자체는 저장하지 않고 조회 시점에 이 id로 해소한다.
      * (과거엔 미구현된 /api/places/{id}/photo 프록시 URL을 coverImage에 넣어 커버가 항상 깨졌음.)
+     *
+     * 판정 기준이 photoReference → imageUrl로 바뀌었다. Google 사진 경로를 제거하면서
+     * photoReference가 전 행 null이 됐고, 그 조건으로는 커버가 하나도 안 잡혔다. 지금 남은
+     * 이미지는 TourAPI firstimage 1,870건이고 그건 imageUrl에 직접 들어 있다.
      *
      * 과거엔 findFirst()로 "첫 스텝"을 썼는데, 여행의 첫 스텝은 구조적으로 거의 항상 공항/역이다.
      * 그 결과 제주 일정 5건의 커버가 전부 "제주국제공항" 사진으로 동일했다(대시보드가 같은 사진의 벽).
@@ -118,7 +121,7 @@ public class Itinerary extends BaseTimeEntity {
     public void assignCoverFromSteps() {
         if (this.coverPlaceId != null) return;
         this.steps.stream()
-                .filter(s -> s.getPlace() != null && s.getPlace().getPhotoReference() != null)
+                .filter(s -> s.getPlace() != null && s.getPlace().getImageUrl() != null)
                 .max(java.util.Comparator
                         .comparingInt((ItineraryStep s) -> coverScore(s.getPlace().getCategory()))
                         // 같은 등급이면 평점이 높은 쪽 — 대체로 사진 품질도 낫다

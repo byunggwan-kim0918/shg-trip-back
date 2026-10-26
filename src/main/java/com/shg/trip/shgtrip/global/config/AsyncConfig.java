@@ -26,23 +26,6 @@ public class AsyncConfig {
     }
 
     /**
-     * Google Places API 병렬 동기화 전용 스레드풀.
-     * Blocking I/O 호출이므로 ForkJoinPool.commonPool()과 분리한다.
-     * 동시 동기화 요청 최대 8개 (planningExecutor coreSize 4 × 2 배수).
-     */
-    @Bean(name = "googleSyncExecutor")
-    public Executor googleSyncExecutor() {
-        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(4);
-        executor.setMaxPoolSize(8);
-        executor.setQueueCapacity(200);
-        executor.setThreadNamePrefix("google-sync-");
-        executor.setWaitForTasksToCompleteOnShutdown(false);
-        executor.initialize();
-        return executor;
-    }
-
-    /**
      * SSE heartbeat 전용 스케줄러.
      * 요청마다 새로운 스케줄러를 생성하지 않고 공유해서 스레드 낭비를 막는다.
      */

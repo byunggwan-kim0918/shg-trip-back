@@ -2,11 +2,8 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
-import com.shg.trip.shgtrip.domain.place.client.GooglePlaceDetail;
-import com.shg.trip.shgtrip.domain.place.client.GooglePlacesClient;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
-import com.shg.trip.shgtrip.domain.place.service.PlaceRefreshService;
 import com.shg.trip.shgtrip.domain.planning.dto.*;
 import com.shg.trip.shgtrip.domain.planning.service.ai.SelectionCallGenerator;
 import com.shg.trip.shgtrip.domain.planning.service.ai.OptimizedClaudeAIService;
@@ -55,20 +52,15 @@ public class OptimizedGenerationExecutor {
     private final GenerationResultStore resultStore;
     private final CancellationRegistry cancellationRegistry;
     private final GenerationPolicyService generationPolicyService;
-    private final PlaceRefreshService placeRefreshService;
     private final PlaceRepository placeRepository;
     private final PlaceRegionValidator placeRegionValidator;
-    private final GooglePlacesClient googlePlacesClient;
-    private final PlacePersistenceHelper placePersistenceHelper;
-
-    /** blocking I/O(Google API) 전용 풀 — commonPool 점유 방지 (AsyncConfig.googleSyncExecutor). */
-    @org.springframework.beans.factory.annotation.Qualifier("googleSyncExecutor")
-    private final java.util.concurrent.Executor googleSyncExecutor;
 
     /** 보완 숙소가 기존 후보 median 중심점에서 이 거리(km)를 초과하면 지역 오태깅으로 보고 제외. */
     private static final double MAX_ACCOMMODATION_RADIUS_KM = 100.0;
     /** 보완 숙소 좌표 검증용 region별 최소 후보 표본 수(미만이면 중심점 신뢰도 낮아 필터 skip). */
     private static final int ACCOMMODATION_GEO_MIN_SAMPLE = 4;
+    /** 자유입력 장소명 DB 검색 시 거리 비교 대상으로 가져올 동명 후보 수. */
+    private static final int CUSTOM_PLACE_SEARCH_LIMIT = 10;
 
     @Async("planningExecutor")
     public void execute(String jobId, ItineraryGenerateRequest request, Long userId, SseEmitter emitter) {
@@ -104,11 +96,11 @@ public class OptimizedGenerationExecutor {
             List<PlaceCandidate> candidatesRaw = executeWithHeartbeat(emitter,
                     () -> vectorSearchQueryService.search(enrichedInput));
 
-            // Manual 모드: 사용자가 선택한 장소(ID) + 자유입력 장소명(Google 실장소화)을 resolve
+            // Manual 모드: 사용자가 선택한 장소(ID) + 자유입력 장소명(DB 해소)을 resolve
             // → 지역 검증 → 후보에 userSelected(필수 방문)로 병합.
             List<Place> selectedPlaces = new ArrayList<>(resolveSelectedPlaces(request));
-            // 자유입력 실장소화는 Google 호출(최대 5건 × read 10s)이 순차라 최악 지연이 heartbeat
-            // 주기(30초)를 넘길 수 있어 반드시 heartbeat로 감싼다(프록시 idle 타임아웃 방지).
+            // DB 조회만 하므로 예전 Google 호출(최대 5건 × read 10s)처럼 느리지 않지만,
+            // heartbeat 래핑은 유지한다 — 비용이 없고 느려질 때 프록시가 끊는 것을 막아준다.
             selectedPlaces.addAll(executeWithHeartbeat(emitter,
                     () -> resolveCustomPlaces(request, enrichedInput, candidatesRaw, emitter)));
             placeRegionValidator.validate(selectedPlaces, enrichedInput); // 불일치 시 BusinessException → SSE error
@@ -137,9 +129,13 @@ public class OptimizedGenerationExecutor {
                 log.info("OptimizedGeneration 컴팩트 모드 (jobId={}, reason=sparse_attractions)", jobId);
             }
 
-            // [35%] Google Places 동기화
+            // [35%] 후보 정리
+            //
+            // 예전엔 여기서 stale 후보를 Google Places로 동기화했다(SKU 과금 지점이자 2026-10-08
+            // 과금 사고의 호출 경로). 제거했다 — Maps 약관 3.2.3(a)상 받아온 세부정보를 DB에
+            // 보관할 수 없어, 캐싱 전제의 "동기화"가 성립하지 않는다.
             if (cancellationRegistry.isCancelled(jobId)) return;
-            sendSseEvent(emitter, "SYNCING", 35, "장소 정보를 동기화하고 있습니다...");
+            sendSseEvent(emitter, "SYNCING", 35, "장소 정보를 정리하고 있습니다...");
 
             List<Long> placeIds = candidates.stream()
                     .map(PlaceCandidate::placeId)
@@ -147,19 +143,9 @@ public class OptimizedGenerationExecutor {
                     .distinct()
                     .collect(Collectors.toList());
 
-            // 후보 등장 시각 기록 (월배치 사전채움 인기도 기준) — 벌크 UPDATE 1회, 비용 미미
+            // 후보 등장 시각 기록 — 배치가 보강 우선순위를 정하는 데 쓴다. 벌크 UPDATE 1회.
             if (!placeIds.isEmpty()) {
                 placeRepository.markCandidateAppearance(placeIds, OffsetDateTime.now());
-            }
-
-            List<Place> toSync = placeRepository.findByIdAndNeedsSync(
-                    placeIds,
-                    OffsetDateTime.now().minusDays(Place.STALENESS_DAYS)
-            );
-
-            if (!toSync.isEmpty()) {
-                log.info("Google Places 동기화: {}건", toSync.size());
-                syncAllPlaces(toSync, destinationReference);
             }
 
             // DB 최신 데이터 반영 + 숙소 보완 + 물리적 중복 제거(선택 이전 1회)
@@ -226,8 +212,13 @@ public class OptimizedGenerationExecutor {
             // StorySaveHelper가 title/tags를 더 이상 덮지 않으므로 여기서 확정하지 않으면 tags가 빈값으로 남는다.
             List<String> tagSeed = enrichedInput.searchTags() != null && !enrichedInput.searchTags().isEmpty()
                     ? enrichedInput.searchTags() : enrichedInput.themes();
+            // 임시 제목은 Sonnet의 concept 문장이 아니라 짧은 결정론적 문구를 쓴다.
+            // concept은 "~를 오가며 즐기는 ~ 여행 – ~과 ~을 함께 즐긴다" 같은 한 줄 설명이라,
+            // Haiku 스토리가 비동기로 끝나기 전까지 사용자가 60자짜리 설명문을 제목으로 본다
+            // (실측 91번 화면: 2줄로 줄바꿈된 제목). 교체 전 상태도 그대로 보여줄 수 있어야 한다.
+            String draftTitle = buildDraftTitle(destination, enrichedInput);
             ItineraryData draftData = indexResultMapper.toDraftItineraryData(
-                    fixedSteps, destination, selectionOutput.concept(), tagSeed, qualityNotices);
+                    fixedSteps, destination, draftTitle, tagSeed, qualityNotices);
             HardValidationResult validationResult = hardValidator.validate(draftData);
             if (!validationResult.valid()) {
                 log.error("Optimized 경로 구조 검증 실패 (결정론적 로직 버그 가능성): {}", validationResult.failureReason());
@@ -254,8 +245,11 @@ public class OptimizedGenerationExecutor {
             log.info("stage=total elapsedMs={}", (System.nanoTime() - pipelineStart) / 1_000_000);
 
             // 비동기 스토리텔링 — critical path 밖에서 진행, 완료 시 story-ready emit 후 emitter 종료
+            // 교체 비교 기준(expectedTitle)은 실제로 저장한 임시 제목이어야 한다 — concept을
+            // 넘기면 0행 업데이트가 되어 제목이 영원히 임시값으로 남는다.
             storyGenerationService.generateAndAttach(
-                    jobId, emitter, saved.getId(), fixedSteps, selectionOutput.concept(), enrichedInput);
+                    jobId, emitter, saved.getId(), fixedSteps, draftTitle, enrichedInput,
+                    selectionOutput.concept());
 
         } catch (BusinessException e) {
             log.error("OptimizedGeneration 비즈니스 오류 (jobId={}): {}", jobId, e.getMessage());
@@ -348,6 +342,27 @@ public class OptimizedGenerationExecutor {
      * 후보 풀 구성을 로깅한다 — FallbackDecider가 왜 그 판정을 냈는지 사후에 추적할 수 있어야 한다
      * (판정 실패 시 "후보가 부족했다"만 남으면 검색 층 어디가 비었는지 알 수 없다).
      */
+    /**
+     * 구조 저장 시점의 <b>임시 제목</b> — "제주 3박 4일" 같은 짧은 결정론적 문구.
+     *
+     * <p>예전에는 Sonnet의 {@code concept}을 그대로 썼는데, concept은 "제주 동서 해안과 숲을
+     * 오가며 즐기는 로맨틱 힐링 커플 여행 – 일출·오름·숲길의 자연경관과 다채로운 제주 미식을
+     * 함께 즐긴다" 같은 한 줄 설명이다. Haiku 스토리가 비동기로 끝나기 전까지 사용자는 그
+     * 60자짜리 문장을 제목으로 본다(실측 91번 화면: 제목이 두 줄로 줄바꿈됐다).
+     *
+     * <p>스토리가 끝나면 Haiku의 제목으로 교체되지만, <b>교체 전 상태도 보여줄 수 있어야 한다.</b>
+     * 스토리 생성이 실패하거나 사용자가 그 사이에 목록을 보면 이 값이 최종 제목이 된다.
+     */
+    String buildDraftTitle(String destination, VectorEnrichedInput input) {
+        String place = (destination != null && !destination.isBlank()) ? destination.trim() : "여행";
+        if (input == null || input.startDate() == null || input.endDate() == null) {
+            return place + " 여행";
+        }
+        long days = ChronoUnit.DAYS.between(input.startDate(), input.endDate()) + 1;
+        if (days <= 1) return place + " 당일치기";
+        return place + " " + (days - 1) + "박 " + days + "일";
+    }
+
     private void logCandidatePool(List<PlaceCandidate> candidates, long days) {
         Map<String, Long> byMajor = candidates.stream().collect(Collectors.groupingBy(
                 c -> PlaceCategoryConstants.majorCategory(c.category()), Collectors.counting()));
@@ -372,33 +387,6 @@ public class OptimizedGenerationExecutor {
         long now = System.nanoTime();
         log.info("stage={} elapsedMs={}", stage, (now - sinceNanos) / 1_000_000);
         return now;
-    }
-
-    private void syncAllPlaces(List<Place> places, double[] destinationReference) {
-        log.info("Google Places 동기화 시작: {}건", places.size());
-
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-        for (Place place : places) {
-            if (place.getId() == null) continue;
-            futures.add(CompletableFuture.runAsync(() ->
-                    // 여행지 기준 좌표를 넘겨, 이름만으로 재검색할 때 타지역 동명 가게가 매칭돼
-                    // 좌표가 오염되는 것을 막는다(A8).
-                    placeRefreshService.refreshSync(place.getId(), place.getName(), destinationReference),
-                    googleSyncExecutor   // blocking I/O 전용 풀 (commonPool 점유 방지)
-            ));
-        }
-
-        try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                    .get(20, TimeUnit.SECONDS);
-        } catch (TimeoutException e) {
-            log.warn("Google Places 동기화 타임아웃 (20초), 동기화된 장소만 사용");
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.warn("Google Places 동기화 인터럽트");
-        } catch (ExecutionException e) {
-            log.warn("Google Places 동기화 중 오류: {}", e.getMessage());
-        }
     }
 
     private List<PlaceCandidate> enrichCandidatesFromDb(List<PlaceCandidate> candidates) {
@@ -435,7 +423,10 @@ public class OptimizedGenerationExecutor {
                     c.userSelected(),
                     place.getAdmissionFee(),
                     // 주소가 Google 동기화로 갱신됐을 수 있으므로 세부지역을 다시 뽑고, 실패하면 기존 값 유지
-                    subRegionOrKeep(place.getAddress(), c.subRegion())
+                    subRegionOrKeep(place.getAddress(), c.subRegion()),
+                    place.getUserRatingCount() != null ? place.getUserRatingCount() : c.userRatingCount(),
+                    place.getWikidataSitelinks() != null
+                            ? place.getWikidataSitelinks() : c.wikidataSitelinks()
             );
         }).collect(Collectors.toList());
     }
@@ -542,7 +533,7 @@ public class OptimizedGenerationExecutor {
                 c.tags(), c.region(), c.country(), c.latitude(), c.longitude(),
                 c.description(), c.rating(), c.similarityScore(), c.priceLevel(), c.openingHours(),
                 c.recommendedTimeSlots(), c.recommendedDurationMinutes(), c.userSelected(), c.admissionFee(),
-                c.subRegion());
+                c.subRegion(), c.userRatingCount(), c.wikidataSitelinks());
     }
 
     /** 주소에서 세부지역을 재추출하되, 추출 실패 시 기존 값을 유지한다. */
@@ -572,14 +563,16 @@ public class OptimizedGenerationExecutor {
     }
 
     /**
-     * Manual 모드 자유입력 장소명을 Google Places(languageCode=ko)로 실장소화한다.
-     * 기존엔 프론트가 자유입력을 조용히 버렸다 — 사용자는 넣었다고 생각하지만 서버 미도달.
-     * <ul>
-     *   <li>이름+여행지로 텍스트 검색 → 후보 median 중심점 100km 초과면 오매칭(동명 타지역) 제외</li>
-     *   <li>name+address로 기존 Place 재사용, 없으면 신규 저장(source='google')</li>
-     *   <li>실패분은 SSE로 정직하게 안내 후 계속. MANUAL인데 ID도 없고 전부 실패면 예외</li>
-     * </ul>
-     * 최대 5건(@Size) 순차 호출 — executeWithHeartbeat 바깥이지만 건당 ~0.5s라 SSE 유지에 문제없다.
+     * Manual 모드 자유입력 장소명을 **DB에서** 실장소로 해소한다.
+     *
+     * <p>예전에는 Google Places 텍스트 검색으로 찾고, 없으면 새 Place를 저장했다. 그 경로는
+     * 제거했다 — 받아온 좌표·주소·평점을 보관할 수 없고(Maps 약관 3.2.3(a)), 자유입력 5건이
+     * 생성 1건당 Text Search 5회로 그대로 과금됐다.
+     *
+     * <p>지금은 이름 부분일치로 DB를 뒤지고, 여행지 중심에서 {@value #MAX_ACCOMMODATION_RADIUS_KM}km
+     * 안에 있는 후보 중 **중심에 가장 가까운 하나**를 고른다. 동명 타지역 가게가 섞여 들어오는
+     * 것을 막는 기준은 Google 시절과 같다. DB에 없는 장소는 만들어내지 않고 실패로 안내한다 —
+     * 좌표 없는 Place를 지어내 봐야 지도에도 동선에도 못 쓴다.
      */
     private List<Place> resolveCustomPlaces(ItineraryGenerateRequest request, VectorEnrichedInput enrichedInput,
                                             List<PlaceCandidate> candidatesRaw, SseEmitter emitter) {
@@ -587,8 +580,6 @@ public class OptimizedGenerationExecutor {
         if (names == null || names.isEmpty()) return List.of();
 
         double[] center = candidateMedianCenter(candidatesRaw);
-        String destination = enrichedInput.normalizedDestination() != null
-                ? enrichedInput.normalizedDestination() : enrichedInput.destination();
 
         List<Place> resolved = new ArrayList<>();
         List<String> failed = new ArrayList<>();
@@ -597,23 +588,14 @@ public class OptimizedGenerationExecutor {
             if (raw == null || raw.isBlank()) continue;
             String name = raw.trim();
             try {
-                Optional<GooglePlaceDetail> detailOpt = googlePlacesClient.searchAndGetDetail(name + " " + destination);
-                if (detailOpt.isEmpty() || detailOpt.get().name() == null
-                        || (detailOpt.get().lat() == 0.0 && detailOpt.get().lng() == 0.0)) {
+                Optional<Place> match = findCustomPlaceInDb(name, center);
+                if (match.isEmpty()) {
                     failed.add(name);
                     continue;
                 }
-                GooglePlaceDetail detail = detailOpt.get();
-                if (center != null && GeoUtils.haversine(center,
-                        new double[]{detail.lat(), detail.lng()}) > MAX_ACCOMMODATION_RADIUS_KM) {
-                    log.info("자유입력 '{}' Google 매칭({})이 여행지 중심에서 100km 초과 — 오매칭으로 제외",
-                            name, detail.name());
-                    failed.add(name);
-                    continue;
-                }
-                resolved.add(findOrCreateCustomPlace(detail, enrichedInput, candidatesRaw));
+                resolved.add(match.get());
             } catch (Exception e) {
-                log.warn("자유입력 '{}' 실장소화 실패: {}", name, e.getMessage());
+                log.warn("자유입력 '{}' 해소 실패: {}", name, e.getMessage());
                 failed.add(name);
             }
         }
@@ -631,78 +613,36 @@ public class OptimizedGenerationExecutor {
         return resolved;
     }
 
-    /**
-     * name+address 기존 레코드 재사용, 없으면 신규 저장. @Async 생성 파이프라인은 논트랜잭션이라
-     * (ItinerarySaveHelper 관례대로) 저장을 REQUIRES_NEW 독립 트랜잭션 헬퍼로 분리하고, 경합
-     * 시 유니크 위반은 재조회로 멱등 복구한다. Place는 일정과 무관한 재사용 캐시라 독립 커밋이 정상.
-     */
-    private Place findOrCreateCustomPlace(GooglePlaceDetail detail, VectorEnrichedInput enrichedInput,
-                                          List<PlaceCandidate> candidatesRaw) {
-        String address = detail.address() != null ? detail.address() : "주소 미확인";
-        return placePersistenceHelper.findOrCreate(detail.name(), address, () -> Place.builder()
-                .googlePlaceId(detail.placeId())
-                .name(detail.name())
-                .address(address)
-                .latitude(BigDecimal.valueOf(detail.lat()))
-                .longitude(BigDecimal.valueOf(detail.lng()))
-                .category(mapGoogleTypesToCategory(detail.types()))
-                // region은 여행지 첫 region 강제 대신 좌표상 가장 가까운 후보의 region을 상속
-                // (검증·dedupe가 실제 지역 기준으로 동작하도록). 상속 불가면 null(하류 null-safe).
-                .region(inheritRegion(detail, candidatesRaw))
-                .country(enrichedInput.country())
-                .rating(detail.rating() != null ? BigDecimal.valueOf(detail.rating()) : null)
-                .priceLevel(detail.priceLevel())
-                .openingHours(detail.openingHours())
-                .photoReference(detail.photoReference())
-                .sourceUrl(detail.sourceUrl())
-                .description(detail.editorialSummary())
-                .source("google")
-                .active(true)
-                .savedAt(OffsetDateTime.now())
-                .build());
-    }
+    /** 이름 부분일치 중 여행지 중심에 가장 가까운 하나(상한 {@value #CUSTOM_PLACE_SEARCH_LIMIT}건). */
+    private Optional<Place> findCustomPlaceInDb(String name, double[] center) {
+        // 중심점을 모르면 거리 판정이 불가능하다. 이름이 가장 짧은(= 가장 타이트한) 결과를 쓴다.
+        if (center == null) {
+            List<Place> byName = placeRepository.findActiveByNameLike(
+                    name, PageRequest.of(0, CUSTOM_PLACE_SEARCH_LIMIT));
+            return byName.isEmpty() ? Optional.empty() : Optional.of(byName.get(0));
+        }
 
-    /** 좌표상 가장 가까운 기존 후보의 region 상속(30km 이내). 없으면 null. */
-    private String inheritRegion(GooglePlaceDetail detail, List<PlaceCandidate> candidatesRaw) {
-        double[] target = {detail.lat(), detail.lng()};
-        String best = null;
-        double bestDist = 30.0; // 30km 초과면 지역 상속 부적절
-        for (PlaceCandidate c : candidatesRaw) {
-            if (!hasValidCoords(c) || c.region() == null) continue;
-            double d = GeoUtils.haversine(target,
-                    new double[]{c.latitude().doubleValue(), c.longitude().doubleValue()});
+        // 거리순으로 잘라야 한다. 이름 길이순으로 자르면 "스타벅스"처럼 전국에 수백 건인 이름에서
+        // 정작 여행지 안의 지점이 상한 밖으로 밀려 나간다.
+        List<Place> matches = placeRepository.findActiveByNameLikeNearest(
+                name, center[0], center[1], PageRequest.of(0, CUSTOM_PLACE_SEARCH_LIMIT));
+        if (matches.isEmpty()) return Optional.empty();
+
+        Place best = null;
+        double bestDist = MAX_ACCOMMODATION_RADIUS_KM;
+        for (Place p : matches) {
+            double d = GeoUtils.haversine(center,
+                    new double[]{p.getLatitude().doubleValue(), p.getLongitude().doubleValue()});
             if (d < bestDist) {
                 bestDist = d;
-                best = c.region();
+                best = p;
             }
         }
-        return best;
-    }
-
-    /**
-     * Google types → 내부 카테고리(Foursquare 계층 형식) 매핑. majorCategory 판정과 호환되는
-     * 형식이어야 식사 슬롯/대안 매칭이 정상 동작한다. 불명이면 관광지로 취급(사용자가 "가고
-     * 싶은 곳"으로 넣은 의도에 가장 가까움).
-     */
-    private String mapGoogleTypesToCategory(List<String> types) {
-        if (types != null) {
-            for (String t : types) {
-                String lower = t.toLowerCase();
-                if (lower.contains("lodging") || lower.contains("hotel")) {
-                    return "Travel and Transportation > Lodging";
-                }
-                if (lower.contains("cafe") || lower.contains("coffee") || lower.contains("bakery")) {
-                    return "Dining and Drinking > Cafe, Coffee, and Tea House";
-                }
-                if (lower.contains("bar") || lower.contains("night_club")) {
-                    return "Dining and Drinking > Bar";
-                }
-                if (lower.contains("restaurant") || lower.contains("food")) {
-                    return "Dining and Drinking > Restaurant";
-                }
-            }
+        if (best == null) {
+            log.info("자유입력 '{}' DB 매칭 {}건이 모두 여행지 중심에서 {}km 초과 — 동명 타지역으로 보고 제외",
+                    name, matches.size(), (long) MAX_ACCOMMODATION_RADIUS_KM);
         }
-        return "Landmarks and Outdoors > Tourist Attraction";
+        return Optional.ofNullable(best);
     }
 
     /** 후보들의 region 무관 전체 median 중심점 (자유입력 오매칭 검증용). 표본 부족 시 null. */
@@ -761,7 +701,8 @@ public class OptimizedGenerationExecutor {
                     p.getTags(), p.getRegion(), p.getCountry(), p.getLatitude(), p.getLongitude(),
                     p.getDescription(), p.getRating(), 1.0, p.getPriceLevel(), p.getOpeningHours(),
                     p.getRecommendedTimeSlots(), p.getRecommendedDurationMinutes(), true, p.getAdmissionFee(),
-                    PlaceCategoryConstants.extractSubRegion(p.getAddress())));
+                    PlaceCategoryConstants.extractSubRegion(p.getAddress()), p.getUserRatingCount(),
+                    p.getWikidataSitelinks()));
         }
         for (PlaceCandidate c : candidates) {
             PlaceCandidate reindexed = reindexCandidate(c, index++);

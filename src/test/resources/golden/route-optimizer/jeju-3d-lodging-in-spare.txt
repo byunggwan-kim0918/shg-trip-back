@@ -1,3 +1,6 @@
+-- metrics --
+  스텝 16 / 숙소 1곳 / 총이동 257km
+  연속중복 0 / 최대공백 290분 / 늦은시작 0일 / 안내 2건
 == day 1 ==
   #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: - -분 -km -원
@@ -13,11 +16,9 @@
   #4  14:31-16:01  제주별빛누리공원 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
       이동: CAR 16분 10.32km 3095원
       비용: 0원 / 메모: -
-      대안: 세기알해변 | Landmarks and Outdoors > Tourist Attraction | 0원
   #5  17:30-18:40  아레 한국 식당 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
       이동: CAR 15분 9.76km 2927원
       비용: 13000원 / 메모: -
-      대안: 공천포식당 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
   #6  18:43-19:13  제주R호텔 | Travel and Transportation > Lodging > Hotel | 제주시 | Jeju
       이동: CAR 3분 1.85km 555원
       비용: 120000원 / 메모: -
@@ -33,7 +34,6 @@
   #9  17:30-18:40  연돈 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
       이동: CAR 30분 19.67km 5901원
       비용: 13000원 / 메모: -
-      대안: 공천포식당 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
   #10 19:22-20:22  쉼표 | Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop | 제주시 | Jeju
       이동: CAR 42분 27.97km 8391원
       비용: 6000원 / 메모: -
@@ -53,14 +53,12 @@
   #14 13:51-16:51  제주도 국가지질공원 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
       이동: CAR 20분 13.21km 3962원
       비용: 0원 / 메모: -
-      대안: 세기알해변 | Landmarks and Outdoors > Tourist Attraction | 0원
   #15 17:11-19:41  손지오름 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
       이동: CAR 20분 12.68km 3804원
       비용: 0원 / 메모: -
-      대안: 세기알해변 | Landmarks and Outdoors > Tourist Attraction | 0원
   #16 20:02-21:32  제주 성산항 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
       이동: CAR 21분 13.96km 4189원
       비용: 0원 / 메모: -
-      대안: 세기알해변 | Landmarks and Outdoors > Tourist Attraction | 0원
--- notices (1) --
+-- notices (2) --
   2일차에 넣을 만한 관광지를 찾지 못했어요.
+  2일차 중간에 4시간 50분 비는 시간이 있어요. 주변에 넣을 만한 곳을 찾지 못했습니다.

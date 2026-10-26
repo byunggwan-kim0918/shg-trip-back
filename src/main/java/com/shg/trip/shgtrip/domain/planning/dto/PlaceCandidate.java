@@ -11,7 +11,7 @@ public record PlaceCandidate(
         int index,              // 1-based 인덱스 번호
         Long placeId,           // DB id
         String name,
-        String address,         // 주소 (Google Places 매핑 시 활용)
+        String address,         // 주소 — 저장 시 name과 함께 DB Place 조회 키로 쓴다
         String category,
         List<String> tags,
         String region,
@@ -21,15 +21,46 @@ public record PlaceCandidate(
         String description,
         BigDecimal rating,
         double similarityScore, // cosine 유사도
-        Integer priceLevel,     // Google Places 가격 수준 (1~4)
-        String openingHours,    // Google Places 영업시간
+        Integer priceLevel,     // 가격 수준 (1~4) — Google 유래라 약관상 삭제됨, 현재 전부 null
+        String openingHours,    // 영업시간 — Google 유래라 약관상 삭제됨, 현재 전부 null
         List<String> recommendedTimeSlots, // enrich 배치 산출 추천 시간대 (예: "morning") — 없으면 null
         Integer recommendedDurationMinutes, // enrich 배치 산출 권장 체류시간(분) — 없으면 null
         boolean userSelected,   // Manual 모드에서 사용자가 직접 고른 필수 방문 장소 (트림/교체 면제)
         Integer admissionFee,   // enrich 배치 산출 입장료(원, 0=무료) — 없으면 null(관광지 비용 산정용)
-        String subRegion        // 주소에서 추출한 시/군/구 단위 세부지역 — 없으면 null(호출부가 region 사용)
+        String subRegion,       // 주소에서 추출한 시/군/구 단위 세부지역 — 없으면 null(호출부가 region 사용)
+        Integer userRatingCount,// Google 리뷰 수 — 없으면 null. 약관상 삭제돼 현재는 전부 null
+        Integer wikidataSitelinks // Wikidata 언어판 수 — null=미매칭, 0=항목없음, 1+=인기도
 ) {
-    /** 세부지역 없이 생성하는 기존 호환 생성자(전체 필드). */
+    /** 인기도 신호 없이 생성하는 호환 생성자. 미매칭으로 취급한다. */
+    public PlaceCandidate(int index, Long placeId, String name, String address,
+                          String category, List<String> tags, String region, String country,
+                          BigDecimal latitude, BigDecimal longitude, String description,
+                          BigDecimal rating, double similarityScore,
+                          Integer priceLevel, String openingHours,
+                          List<String> recommendedTimeSlots, Integer recommendedDurationMinutes,
+                          boolean userSelected, Integer admissionFee, String subRegion,
+                          Integer userRatingCount) {
+        this(index, placeId, name, address, category, tags, region, country,
+                latitude, longitude, description, rating, similarityScore,
+                priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
+                userSelected, admissionFee, subRegion, userRatingCount, null);
+    }
+
+    /** 리뷰 수 없이 생성하는 기존 호환 생성자(전체 필드). 리뷰 수 미상으로 취급한다. */
+    public PlaceCandidate(int index, Long placeId, String name, String address,
+                          String category, List<String> tags, String region, String country,
+                          BigDecimal latitude, BigDecimal longitude, String description,
+                          BigDecimal rating, double similarityScore,
+                          Integer priceLevel, String openingHours,
+                          List<String> recommendedTimeSlots, Integer recommendedDurationMinutes,
+                          boolean userSelected, Integer admissionFee, String subRegion) {
+        this(index, placeId, name, address, category, tags, region, country,
+                latitude, longitude, description, rating, similarityScore,
+                priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
+                userSelected, admissionFee, subRegion, null, null);
+    }
+
+    /** 세부지역 없이 생성하는 기존 호환 생성자. */
     public PlaceCandidate(int index, Long placeId, String name, String address,
                           String category, List<String> tags, String region, String country,
                           BigDecimal latitude, BigDecimal longitude, String description,
@@ -40,7 +71,7 @@ public record PlaceCandidate(
         this(index, placeId, name, address, category, tags, region, country,
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
-                userSelected, admissionFee, null);
+                userSelected, admissionFee, null, null, null);
     }
 
     /**
@@ -78,7 +109,7 @@ public record PlaceCandidate(
                           List<String> recommendedTimeSlots) {
         this(index, placeId, name, address, category, tags, region, country,
                 latitude, longitude, description, rating, similarityScore,
-                priceLevel, openingHours, recommendedTimeSlots, null, false, null, null);
+                priceLevel, openingHours, recommendedTimeSlots, null, false, null, null, null, null);
     }
 
     /** userSelected 플래그만 켠 사본 (dedupe 대표 선정 시 필수성 전파용). */
@@ -87,7 +118,7 @@ public record PlaceCandidate(
         return new PlaceCandidate(index, placeId, name, address, category, tags, region, country,
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes, true,
-                admissionFee, subRegion);
+                admissionFee, subRegion, userRatingCount, wikidataSitelinks);
     }
 
     /** 세부지역만 채운 사본. 추출 실패(null)면 원본을 그대로 둔다(호출부가 region으로 폴백). */
@@ -96,7 +127,7 @@ public record PlaceCandidate(
         return new PlaceCandidate(index, placeId, name, address, category, tags, region, country,
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
-                userSelected, admissionFee, newSubRegion);
+                userSelected, admissionFee, newSubRegion, userRatingCount, wikidataSitelinks);
     }
 
     /**

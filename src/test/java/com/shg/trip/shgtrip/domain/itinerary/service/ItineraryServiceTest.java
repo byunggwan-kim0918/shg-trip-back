@@ -7,7 +7,6 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
-import com.shg.trip.shgtrip.domain.place.s3.PlaceImageAsyncRecovery;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import jakarta.persistence.EntityManager;
@@ -41,7 +40,6 @@ class ItineraryServiceTest {
 
     @Mock private ItineraryRepository itineraryRepository;
     @Mock private PlaceRepository placeRepository;
-    @Mock private PlaceImageAsyncRecovery asyncRecovery;
     @Mock private EntityManager entityManager;
 
     @InjectMocks private ItineraryService itineraryService;

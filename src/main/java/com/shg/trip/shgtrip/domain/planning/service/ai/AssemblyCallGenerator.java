@@ -5,6 +5,7 @@ import com.anthropic.models.messages.*;
 import com.shg.trip.shgtrip.domain.planning.dto.AssemblyItineraryOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
+import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
@@ -80,13 +81,27 @@ public class AssemblyCallGenerator {
                 .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
                         "AI 응답에서 스토리 데이터를 추출할 수 없습니다."));
 
-        log.info("AssemblyCallGenerator 완료: title='{}', steps={}, inputTokens={}, outputTokens={}",
+        log.info("AssemblyCallGenerator 완료: title='{}', steps={}, inputTokens={}, outputTokens={}, 캐시읽음/쓰기={}",
                 result.title(),
                 result.steps() != null ? result.steps().size() : 0,
                 message.usage().inputTokens(),
-                message.usage().outputTokens());
+                message.usage().outputTokens(),
+                cacheInfo(message));
 
         return result;
+    }
+
+    /**
+     * 프롬프트 캐시 적중 현황을 "읽음/쓰기" 형태로 포맷한다.
+     *
+     * <p>적중 없는 캐시는 쓰기 프리미엄(1.25배)만 내고 이득이 없다. 생성이 희박해서 기본 TTL
+     * 안에 재사용되지 않으면 캐시가 순손실인데, 지금은 적중률 로그가 없어 이득인지 손실인지
+     * 판단할 수 없었다. 읽음이 계속 0이면 캐시를 떼는 게 맞다.
+     */
+    private String cacheInfo(Message message) {
+        long read = message.usage().cacheReadInputTokens().orElse(0L);
+        long write = message.usage().cacheCreationInputTokens().orElse(0L);
+        return read + "/" + write;
     }
 
     /** 구조 필드가 없어 매우 가벼움: step당 대략 80토큰 가정. */
@@ -138,13 +153,19 @@ public class AssemblyCallGenerator {
         sb.append("\n");
 
         sb.append("## 확정된 일정 (순서·시간 변경 절대 불가, story만 작성)\n");
-        sb.append("형식: [stepOrder N] D일차 시작-종료 장소명 (세부지역) · 카테고리 · 설명\n");
+        sb.append("형식: [stepOrder N] D일차(날짜, 요일) 시작-종료 장소명 (세부지역) · 역할 · 카테고리 · 설명\n");
         for (StepData step : fixedSteps) {
             sb.append("[stepOrder ").append(step.stepOrder()).append("] ")
-                    .append(step.dayNumber()).append("일차 ")
-                    .append(step.startTime()).append("-").append(step.endTime()).append(" ")
+                    .append(step.dayNumber()).append("일차");
+            // 날짜·요일을 준다. 없으면 모델이 11:30 점심을 "아침을 깨우고"로 쓰고,
+            // 18:43 호텔 체크인을 "야경"으로 쓴다(실측 79번).
+            appendDayDate(sb, input, step.dayNumber());
+            sb.append(" ").append(step.startTime()).append("-").append(step.endTime()).append(" ")
                     .append(step.place().name())
                     .append(" (").append(displayRegion(step)).append(")");
+            // 슬롯 역할을 명시한다 — 같은 시각이라도 "점심 식사"와 "숙소 체크인"은 문장이 달라야 한다.
+            String role = slotRole(step);
+            if (role != null) sb.append(" · ").append(role);
             String category = leafCategory(step.place().category());
             if (category != null) sb.append(" · ").append(category);
             String description = shortDescription(step.place().description());
@@ -152,6 +173,7 @@ public class AssemblyCallGenerator {
             sb.append("\n");
         }
 
+        appendSunsetHint(sb, input);
         sb.append("\n주어진 concept을 관통하는 하나의 여행 이야기로서, 각 stepOrder에 대해 ")
                 .append("장소 사이를 잇는 짧은 가이드북 문장(story)을 작성해 assemble_itinerary 도구를 호출하세요.\n")
                 .append("일반적인 감성 문구가 아니라, 위 concept에 종속된 narrative여야 합니다.\n");
@@ -160,6 +182,63 @@ public class AssemblyCallGenerator {
     }
 
     /** 표시 지역: 세부지역(시/군/구) 우선, 없으면 상위 region. */
+    /** D일차의 실제 날짜와 요일. {@code startDate}가 없으면 아무것도 붙이지 않는다. */
+    private void appendDayDate(StringBuilder sb, VectorEnrichedInput input, int dayNumber) {
+        if (input == null || input.startDate() == null) return;
+        java.time.LocalDate date = input.startDate().plusDays(dayNumber - 1L);
+        String dow = date.getDayOfWeek().getDisplayName(
+                java.time.format.TextStyle.SHORT, java.util.Locale.KOREAN);
+        sb.append("(").append(date.getMonthValue()).append("월 ")
+                .append(date.getDayOfMonth()).append("일 ").append(dow).append(")");
+    }
+
+    /**
+     * 스텝의 역할(점심/저녁/숙소/도착·출발). 시각만 주면 모델이 역할을 추측하다 틀린다 —
+     * 실측 79번: 11:30 점심을 "아침을 깨우고", 18:43 호텔 체크인을 "해변의 야경"으로 썼다.
+     */
+    private String slotRole(StepData step) {
+        if (step.place() == null) return null;
+        String category = step.place().category();
+        if (PlaceCategoryConstants.isAccommodation(category)) return "숙소 체크인";
+        if ("TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(category))) return "교통 거점";
+        int start = startMinutes(step.startTime());
+        if (!"DINING".equals(PlaceCategoryConstants.majorCategory(category))) return null;
+        if (start < 10 * 60 + 30) return "아침 식사";
+        if (start < 15 * 60) return "점심 식사";
+        return "저녁 식사";
+    }
+
+    /** "HH:mm" → 분. 파싱 실패 시 0. (ScheduleTimes는 패키지 전용이라 여기서 따로 둔다) */
+    private int startMinutes(String hhmm) {
+        if (hhmm == null || !hhmm.contains(":")) return 0;
+        String[] parts = hhmm.split(":");
+        try {
+            return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /**
+     * 일몰 시각 안내. 없으면 모델이 "해질녘", "야경"을 시각과 무관하게 쓴다
+     * (실측 79번: 5월 제주 일몰은 19:30경인데 18:16을 "저녁이 물드는"으로 썼다).
+     * 위도별 정밀 계산 대신 월별 대략값을 준다 — 틀린 단정을 막는 것이 목적이다.
+     */
+    private void appendSunsetHint(StringBuilder sb, VectorEnrichedInput input) {
+        if (input == null || input.startDate() == null) return;
+        int month = input.startDate().getMonthValue();
+        String sunset = switch (month) {
+            case 12, 1 -> "17시 20분경";
+            case 11, 2 -> "17시 50분경";
+            case 10, 3 -> "18시 20분경";
+            case 4, 9 -> "18시 50분경";
+            case 5, 8 -> "19시 20분경";
+            default -> "19시 40분경";
+        };
+        sb.append("\n## 일몰\n- 이 시기 일몰은 ").append(sunset)
+                .append("입니다. 그 이전 시각을 '해질녘·노을·야경'으로 쓰지 마세요.\n");
+    }
+
     private String displayRegion(StepData step) {
         String sub = step.place().subRegion();
         if (sub != null && !sub.isBlank()) return sub;
