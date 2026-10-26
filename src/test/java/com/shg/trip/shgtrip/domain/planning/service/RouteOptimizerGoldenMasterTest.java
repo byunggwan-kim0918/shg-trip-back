@@ -180,6 +180,7 @@ class RouteOptimizerGoldenMasterTest {
      */
     private static String render(RouteOptimizer.ScheduleResult result) {
         StringBuilder sb = new StringBuilder();
+        sb.append(renderMetrics(result));
         int currentDay = -1;
 
         for (StepData step : result.steps()) {
@@ -205,6 +206,78 @@ class RouteOptimizerGoldenMasterTest {
             sb.append("  ").append(notice).append('\n');
         }
         return sb.toString();
+    }
+
+    /**
+     * 스냅샷 맨 앞의 <b>지표 줄</b>. 스냅샷 동등성만으로는 "달라졌다"만 알 수 있고
+     * "나아졌는지"는 알 수 없다 — diff 맨 위에 숫자를 두어 그 판단을 가능하게 한다.
+     *
+     * <p>지표를 고른 기준은 <b>여행자가 실제로 겪는 실패</b>다. 각 항목은 실측 사례에서 왔다.
+     * <ul>
+     *   <li>연속중복: 같은 장소가 두 스텝으로 (실측 jeju-3d-walk 제주R호텔 19:33/20:04)</li>
+     *   <li>모드불일치: 도보 선호인데 CAR (실측 같은 스냅샷 42km CAR 구간)</li>
+     *   <li>숙소수: 짐을 몇 번 싸는가 (실측 79번 3박에 3곳)</li>
+     *   <li>최대공백: 하루 중간이 얼마나 비는가 (실측 79번 2일차 152분)</li>
+     *   <li>늦은시작: 오전이 통째로 비는 날 (실측 78번 4일 내내 11:30 시작)</li>
+     * </ul>
+     */
+    private static String renderMetrics(RouteOptimizer.ScheduleResult result) {
+        List<StepData> steps = result.steps();
+
+        int duplicateAdjacent = 0;
+        int maxGapMinutes = 0;
+        String prevKey = null;
+        int prevDay = -1;
+        int prevEnd = -1;
+        for (StepData s : steps) {
+            String key = s.place() != null ? nz(s.place().name()) : "-";
+            if (s.dayNumber() == prevDay) {
+                if (key.equals(prevKey)) duplicateAdjacent++;
+                int gap = toMinutes(s.startTime()) - prevEnd;
+                if (gap > maxGapMinutes) maxGapMinutes = gap;
+            }
+            prevKey = key;
+            prevDay = s.dayNumber();
+            prevEnd = toMinutes(s.endTime());
+        }
+
+        double totalKm = steps.stream()
+                .map(StepData::transportationDistance)
+                .filter(d -> d != null)
+                .mapToDouble(BigDecimal::doubleValue).sum();
+
+        long lodgingCount = steps.stream()
+                .filter(s -> s.place() != null)
+                .filter(s -> PlaceCategoryConstants.isAccommodation(s.place().category()))
+                .map(s -> s.place().name())
+                .distinct().count();
+
+        // 하루의 첫 스텝이 점심(11:30) 이후면 오전이 통째로 빈 날이다.
+        long lateStartDays = steps.stream()
+                .collect(java.util.stream.Collectors.groupingBy(StepData::dayNumber,
+                        java.util.stream.Collectors.minBy(
+                                java.util.Comparator.comparingInt(s -> toMinutes(s.startTime())))))
+                .values().stream()
+                .filter(java.util.Optional::isPresent).map(java.util.Optional::get)
+                .filter(s -> toMinutes(s.startTime()) > 11 * 60 + 30)
+                .count();
+
+        return String.format(
+                "-- metrics --%n"
+                + "  스텝 %d / 숙소 %d곳 / 총이동 %.0fkm%n"
+                + "  연속중복 %d / 최대공백 %d분 / 늦은시작 %d일 / 안내 %d건%n",
+                steps.size(), lodgingCount, totalKm,
+                duplicateAdjacent, maxGapMinutes, lateStartDays, result.notices().size());
+    }
+
+    private static int toMinutes(String hhmm) {
+        if (hhmm == null || !hhmm.contains(":")) return 0;
+        String[] p = hhmm.split(":");
+        try {
+            return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private static String placeOf(StepData step) {

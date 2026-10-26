@@ -411,7 +411,12 @@ public class IndexResultMapper {
     private Integer bestAccommodation(java.util.stream.Stream<PlaceCandidate> candidates) {
         return candidates
                 .filter(c -> "LODGING".equals(PlaceCategoryConstants.majorCategory(c.category())))
-                .max(Comparator.comparing(c -> c.rating() != null ? c.rating() : BigDecimal.ZERO))
+                // 리뷰 없는 평점 5.0 스텁이 실제 호텔을 이기는 것을 막는다(실측 79번 Hengwa Stay).
+                .filter(c -> PlaceCategoryConstants.isVisitableEntity(c.name(), c.address()))
+                // 평점 최댓값이 아니라 인기도(평점 × 리뷰 수) 최댓값 — 주소 게이트를 통과한
+                // 리뷰 없는 5.0 스텁이 여전히 남아 있을 수 있다.
+                .max(Comparator.<PlaceCandidate>comparingDouble(PlaceProminence::of)
+                        .thenComparing(c -> c.rating() != null ? c.rating() : BigDecimal.ZERO))
                 .map(PlaceCandidate::index)
                 .orElse(null);
     }

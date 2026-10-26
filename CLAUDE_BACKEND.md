@@ -37,8 +37,7 @@ src/main/java/com/shg/trip/shgtrip/
 │   │                 # entity: OAuthProvider, RefreshToken, UserAuthProvider
 │   ├── user/        # UserController(me/profile), UserService
 │   ├── place/       # PlaceController, WishlistController
-│   │   ├── batch/    # Foursquare 시딩 + 임베딩 배치 (place-batch-pipeline.md 참고)
-│   │   ├── client/   # GooglePlacesClient
+│   │   ├── batch/    # Foursquare·TourAPI 시딩 + 임베딩 + Wikidata 인기도 (place-batch-pipeline.md)
 │   │   ├── embedding/ # OpenAI 임베딩 호출
 │   │   ├── s3/        # CSV/이미지 S3 연동
 │   │   └── vector/    # pgvector 유사도 검색
@@ -102,7 +101,8 @@ pace 미준수·동선 점프 문제로 재설계됨.
 [10%] enrichInput (Haiku, OptimizedClaudeAIService) — 입력 보강
 [30%] VectorSearchQueryService — pgvector 유사도 검색으로 카테고리별 PlaceCandidate 조회
       → FallbackDecider 판단 (accommodation≥1, restaurant≥days×2, attraction≥days, 총≥15 미달 시 fallback)
-[40%] Google Places 동기화 (best-effort, 20초 타임아웃, stale/foursquare 소스만 갱신)
+[35%] 후보 정리 — 외부 호출 없음(후보 등장 기록 + DB 반영 + 물리적 중복 제거, 실측 89ms)
+      ※ 2026-10-26 Google Places 동기화 제거 — Maps 약관 3.2.3(a)가 캐싱을 금지한다
 [50%] SelectionCallGenerator.selectPlaces() (Sonnet, select-places.txt)
       → 출력: concept + day별 장소 인덱스(힌트) + pairs(인접 강제) + highlight/restIndices
       → 시간/교통/비용은 출력하지 않음 (토큰 절감 + 책임 분리)
@@ -155,7 +155,7 @@ hardValidator.validate() — 안전망(결정론적이라 실패해도 재시도
 - `FallbackDecider` — 후보 충분성 판단
 - `HardValidator` / `ItineraryValidationService` — Hard/Soft 검증
 - `ItineraryAutoFixer` — fallback 경로 전용 구조 교정 (정상 경로에선 스킵)
-- `ItineraryDataMapper` — AI 응답 → 엔티티 변환 + Google Places 배치 조회
+- `ItineraryDataMapper` — AI 응답 → 엔티티 변환 (DB에서만 해소, 못 찾은 스텝은 제외)
 - `VectorSearchQueryService` — pgvector 기반 후보 검색
 - `GenerationResultStore` / `TravelPlannerService` — jobId/결과/SSE emitter 관리
 
@@ -314,8 +314,8 @@ throw new BusinessException(ErrorCode.USER_NOT_FOUND);
    `TransactionRequiredException`. Spring Data가 자동으로 걸어주지 않음.
 2. **`findFirst()`로 허브/대표 후보 선택 시 오선택** — Foursquare 데이터에 본체 외 하위 POI가
    섞여있어, 평점(rating) 기준 정렬 필요.
-3. **`priceLevel` null → 무조건 0원 처리 금지** — Google Places가 가격 정보를 안 주는 경우가
-   흔함(특히 소규모 식당). 카테고리 기본값 필요.
+3. **`priceLevel` null → 무조건 0원 처리 금지** — 현재 전 행이 null이다(Google 유래라 약관에
+   따라 삭제). 카테고리 기본값이 유일한 근거다.
 4. **거리 검증이 일부 경로에만 있던 버그** — DB 캐시 경로/신규 조회 경로마다 따로 구현돼 있던
    "여행지에서 너무 먼 장소" 검증을 `isFarFromDestination()` 공유 헬퍼로 통합, 기준 150km로 강화.
    여러 코드 경로 중 일부에만 안전장치가 있는 패턴은 항상 의심할 것.

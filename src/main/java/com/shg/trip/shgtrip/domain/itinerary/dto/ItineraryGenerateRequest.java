@@ -47,8 +47,8 @@ public record ItineraryGenerateRequest(
 
         List<Long> selectedPlaceIds,  // Manual Mode 전용, nullable
 
-        // Manual Mode 자유입력 장소명 — 생성 시 Google Places(ko)로 실장소화된다.
-        // Google 호출 비용 상한을 위해 최대 5개.
+        // Manual Mode 자유입력 장소명 — 생성 시 DB에서 이름으로 실장소화한다(외부 호출 없음).
+        // DB에 없는 이름은 만들어내지 않고 "찾지 못함"으로 안내한다.
         @Size(max = 5, message = "직접 입력 장소는 최대 5개까지 가능합니다.")
         List<@Size(max = 100, message = "장소명은 100자 이내여야 합니다.") String> customPlaceNames
 ) {

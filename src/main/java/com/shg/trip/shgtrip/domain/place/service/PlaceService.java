@@ -19,29 +19,18 @@ import org.springframework.transaction.annotation.Transactional;
 public class PlaceService {
 
     private final PlaceRepository placeRepository;
-    private final PlaceRefreshService placeRefreshService;
 
     /**
-     * 장소 단건 조회. 7일 이상 경과 시 비동기 갱신 트리거.
+     * 장소 단건 조회.
+     *
+     * <p>예전에는 7일이 지난 장소를 Google Places로 비동기 갱신했다. 그 경로는 제거됐다 —
+     * Maps 약관 3.2.3(a)가 세부정보·좌표·평점의 로컬 캐싱을 금지하므로 갱신해 둘 수가 없다.
+     * 장소 데이터는 적재 배치(TourAPI·Foursquare·Wikidata)가 책임진다.
      */
     public PlaceResponse getPlace(Long placeId) {
         Place place = placeRepository.findById(placeId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.PLACE_NOT_FOUND));
-
-        if (place.isStale()) {
-            log.info("Place {} is stale, triggering async refresh", placeId);
-            placeRefreshService.refreshAsync(placeId, place.getName());
-        }
-
         return PlaceResponse.from(place);
-    }
-
-    /**
-     * Google Places API로 장소 데이터 갱신.
-     */
-    @Transactional
-    public void refreshPlaceData(Place place) {
-        placeRefreshService.refreshAsync(place.getId(), place.getName());
     }
 
     /**
@@ -62,30 +51,4 @@ public class PlaceService {
                 .map(PlaceResponse::from);
     }
 
-    /**
-     * 장소 데이터 신선도 확인 (7일 기준)
-     */
-    public boolean isPlaceStale(Long placeId) {
-        return placeRepository.findById(placeId)
-                .map(Place::isStale)
-                .orElse(true);
-    }
-
-    /**
-     * photo proxy용 photo_reference 조회
-     */
-    public String getPhotoReference(Long placeId) {
-        return placeRepository.findById(placeId)
-                .map(Place::getPhotoReference)
-                .orElse(null);
-    }
-
-    /**
-     * photo proxy용 S3 image_url 조회
-     */
-    public String getImageUrl(Long placeId) {
-        return placeRepository.findById(placeId)
-                .map(Place::getImageUrl)
-                .orElse(null);
-    }
 }

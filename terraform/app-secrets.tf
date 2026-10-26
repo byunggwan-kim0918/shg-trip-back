@@ -22,7 +22,6 @@ variable "app_secrets" {
   #   NAVER_CLIENT_SECRET  = "..."
   #   ANTHROPIC_API_KEY    = "..."
   #   OPENAI_API_KEY       = "..."
-  #   GOOGLE_PLACES_API_KEY= "..."
   # }
 }
 

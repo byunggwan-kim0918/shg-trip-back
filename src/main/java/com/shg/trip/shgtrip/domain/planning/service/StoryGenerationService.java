@@ -40,7 +40,7 @@ public class StoryGenerationService {
      */
     @Async("planningExecutor")
     public void generateAndAttach(String jobId, SseEmitter emitter, Long itineraryId, List<StepData> fixedSteps,
-                                   String concept, VectorEnrichedInput enrichedInput) {
+                                   String draftTitle, VectorEnrichedInput enrichedInput, String concept) {
         if (cancellationRegistry.isCancelled(jobId)) {
             log.info("Story 생성 스킵 - 취소된 job (jobId={}, itineraryId={})", jobId, itineraryId);
             emitter.complete();
@@ -50,7 +50,10 @@ public class StoryGenerationService {
             AssemblyItineraryOutput storyOutput = assemblyCallGenerator.assembleItinerary(
                     fixedSteps, concept, enrichedInput);
 
-            storySaveHelper.saveStory(itineraryId, fixedSteps, storyOutput);
+            // 교체 비교 기준은 <b>실제로 저장된 임시 제목</b>이어야 한다. concept을 넘기면
+            // 조건이 영원히 불일치해 0행 업데이트가 되고 제목이 임시값으로 굳는다.
+            // concept은 스토리 생성 입력으로만 쓴다(일정의 의도를 Haiku에 전달).
+            storySaveHelper.saveStory(itineraryId, fixedSteps, storyOutput, draftTitle);
 
             sendStoryReady(emitter, itineraryId);
         } catch (Exception e) {

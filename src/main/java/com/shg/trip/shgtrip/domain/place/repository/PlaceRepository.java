@@ -17,20 +17,68 @@ import java.time.OffsetDateTime;
 public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /**
-     * 장소명 + 주소로 기존 장소 조회 (AI 응답 → DB 매핑용, 활성 상태만)
-     * 중복 데이터 대비: source 우선순위 (google > foursquare > 기타), 최신순
-     * List로 반환받아 첫 번째만 선택 (중복 시 예외 대신 우선순위 데이터 사용)
+     * 장소명 + 주소로 기존 장소 조회 (AI 응답 → DB 매핑용, 활성 상태만).
+     * 중복 행이 있으면 <b>데이터가 많은 쪽</b>을 고르고, 동률이면 최신순.
+     *
+     * <p>예전 정렬 기준은 {@code source = 'google'} 우선이었다. 당시엔 Google 동기화된 행이
+     * 평점·리뷰·사진을 다 갖고 있어 맞는 기준이었다. 지금은 **정반대로 뒤집혔다** — 약관에 따라
+     * Google 유래 필드를 전부 지웠으므로 {@code source='google'}로 표시된 763행이 오히려
+     * 가장 빈약하다. 그 기준을 그대로 뒀다면 중복이 있을 때마다 빈 행을 골랐을 것이다.
+     * 그래서 출처 이름 대신 실제 보유 데이터(이미지 → Wikidata 매칭)로 판단한다.
      */
     @Query("""
             SELECT p FROM Place p
             WHERE p.name = :name AND p.address = :address AND p.active = true
-            ORDER BY CASE WHEN p.source = 'google' THEN 0 ELSE 1 END, p.createdAt DESC
+            ORDER BY CASE WHEN p.imageUrl IS NOT NULL THEN 0 ELSE 1 END,
+                     CASE WHEN p.wikidataSitelinks IS NOT NULL THEN 0 ELSE 1 END,
+                     p.createdAt DESC
             """)
     List<Place> findByNameAndAddressList(@Param("name") String name, @Param("address") String address);
 
     default Optional<Place> findByNameAndAddress(String name, String address) {
         return findByNameAndAddressList(name, address).stream().findFirst();
     }
+
+    /**
+     * 자유입력 장소명을 DB에서 해소할 때 쓰는 이름 부분일치 검색 — <b>여행지에서 가까운 순</b>.
+     *
+     * <p>좌표가 없거나 (0,0)인 행은 제외한다 — 동선·지도에 쓸 수 없는 장소를 사용자가 지정한
+     * 필수 방문지로 넣으면 그 스텝이 통째로 깨진다.
+     *
+     * <p>정렬을 거리로 하는 이유: 처음엔 이름 길이순으로 잘랐는데, 그러면 "스타벅스"처럼 전국에
+     * 수백 건인 이름에서 <b>짧은 이름 상위 N건</b>만 남아 정작 여행지 안의 지점이 잘려 나간다.
+     * 거리로 자르면 호출자가 받은 N건이 이미 "가까운 후보"다. 거리 동률이면 이름이 짧은 쪽을
+     * 먼저 준다 — "성산일출봉 주차장"보다 "성산일출봉"이 사용자 의도에 가깝다.
+     *
+     * <p>{@code searchByRadius}와 같은 Haversine 근사식을 쓴다(JPQL에서 검증된 형태).
+     */
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.active = true
+              AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+              AND NOT (p.latitude = 0 AND p.longitude = 0)
+              AND LOWER(p.name) LIKE LOWER(CONCAT('%', :name, '%'))
+            ORDER BY (6371 * acos(
+                cos(radians(:lat)) * cos(radians(p.latitude)) *
+                cos(radians(p.longitude) - radians(:lng)) +
+                sin(radians(:lat)) * sin(radians(p.latitude))
+            )), LENGTH(p.name), p.id
+            """)
+    List<Place> findActiveByNameLikeNearest(@Param("name") String name,
+                                            @Param("lat") double lat,
+                                            @Param("lng") double lng,
+                                            Pageable pageable);
+
+    /** 여행지 기준 좌표를 모를 때 — 이름이 짧은(= 가장 타이트한) 순. */
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.active = true
+              AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+              AND NOT (p.latitude = 0 AND p.longitude = 0)
+              AND LOWER(p.name) LIKE LOWER(CONCAT('%', :name, '%'))
+            ORDER BY LENGTH(p.name), p.id
+            """)
+    List<Place> findActiveByNameLike(@Param("name") String name, Pageable pageable);
 
     /**
      * 키워드로 장소 검색 (이름, 주소, 설명 포함)
@@ -77,24 +125,6 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     );
 
     /**
-     * 비동기 S3 이미지 URL 복구에 사용되는 메서드.
-     * Place 엔티티의 imageUrl 필드를 직접 업데이트한다.
-     */
-    @Modifying
-    @Query("UPDATE Place p SET p.imageUrl = :url WHERE p.id = :id")
-    @Transactional
-    void updateImageUrl(@Param("id") Long id, @Param("url") String url);
-
-    /**
-     * 국가, 지역, source='foursquare'로 장소 목록 조회.
-     */
-    @Query("SELECT p FROM Place p WHERE p.country = :country AND p.region = :region AND p.source = 'foursquare'")
-    List<Place> findAllByCountryAndRegionAndSourceFoursquare(
-            @Param("country") String country,
-            @Param("region") String region
-    );
-
-    /**
      * region 목록 내 Lodging 카테고리 장소를 평점 순 조회 — 숙소 후보 보완용.
      */
     @Query("""
@@ -112,24 +142,6 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     @Query("SELECT p FROM Place p WHERE p.embedding IS NULL AND p.active = true")
     Page<Place> findByEmbeddingIsNullAndActiveTrue(Pageable pageable);
 
-    /**
-     * 벡터 검색 후보 중 Google API 동기화가 필요한 place 조회.
-     * 조건: googleSyncedAt IS NULL(동기화 시도 이력 없음) OR 마지막 시도가 staleThreshold 이전.
-     * source='foursquare' 조건을 쓰지 않는 이유: Google 무매칭 장소는 source가 영구히
-     * 'foursquare'로 남아 매 생성마다 무한 재호출됐음 — 실패 시에도 googleSyncedAt을
-     * 기록(markSyncAttempted)하고 이 컬럼만으로 재시도 주기를 판단한다.
-     * @param placeIds 벡터 검색 결과 place ID 목록
-     * @param staleThreshold stale 판정 기준 시각 (now - STALENESS_DAYS)
-     * @return 동기화 대상 place 목록
-     */
-    @Query("""
-            SELECT p FROM Place p
-            WHERE p.id IN :placeIds
-            AND (p.googleSyncedAt IS NULL OR p.googleSyncedAt < :staleThreshold)
-            AND p.active = true
-            """)
-    List<Place> findByIdAndNeedsSync(@Param("placeIds") List<Long> placeIds,
-                                      @Param("staleThreshold") OffsetDateTime staleThreshold);
 
     /**
      * 벡터 검색 후보로 등장한 장소들의 last_candidate_at을 일괄 갱신 (인기도 추적).
@@ -141,21 +153,46 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     void markCandidateAppearance(@Param("placeIds") List<Long> placeIds, @Param("now") OffsetDateTime now);
 
     /**
-     * 월배치 사전채움 대상 조회: 최근 후보로 등장(last_candidate_at >= recentThreshold)했고
-     * 동기화가 필요한(googleSyncedAt IS NULL OR < staleThreshold) 활성 장소를,
-     * 최근 등장순으로 상위 N개(Pageable limit). "인기 장소 우선" 사전채움에 사용.
+     * 지역별 좌표 경계 상자(bbox)를 <b>백분위수</b>로 계산한다 — Wikidata SPARQL 질의 범위용.
+     *
+     * <p>min/max를 그대로 쓰면 안 된다. 좌표가 오염된 행이 섞여 있어 서울의 위도 하한이
+     * 19.694(동남아)까지 내려가고 부산도 마찬가지다. 2~98% 구간으로 자르면 서울이
+     * 37.475~37.640 / 126.850~127.127로 실제 도시 범위가 나온다.
+     *
+     * @return {@code [region, minLat, minLon, maxLat, maxLon, placeCount]} 행 목록
+     */
+    @Query(value = """
+            SELECT region,
+                   percentile_cont(0.02) WITHIN GROUP (ORDER BY latitude)  AS min_lat,
+                   percentile_cont(0.02) WITHIN GROUP (ORDER BY longitude) AS min_lon,
+                   percentile_cont(0.98) WITHIN GROUP (ORDER BY latitude)  AS max_lat,
+                   percentile_cont(0.98) WITHIN GROUP (ORDER BY longitude) AS max_lon,
+                   count(*) AS place_count
+            FROM places
+            WHERE active = true
+              AND latitude IS NOT NULL AND longitude IS NOT NULL
+              AND NOT (latitude = 0 AND longitude = 0)
+            GROUP BY region
+            HAVING count(*) >= :minPlaces
+            ORDER BY count(*) DESC
+            """, nativeQuery = true)
+    List<Object[]> findRegionBoundingBoxes(@Param("minPlaces") int minPlaces);
+
+    /**
+     * Wikidata 매칭을 아직 시도하지 않은 활성 장소 — 좌표가 있는 것만.
+     *
+     * <p>{@code wikidata_matched_at IS NULL}만 본다. 매칭 실패도 시각을 찍으므로 여기서 빠지고,
+     * 그래서 "Wikidata에 없는 장소"를 배치가 돌 때마다 다시 조회하지 않는다.
      */
     @Query("""
             SELECT p FROM Place p
             WHERE p.active = true
-            AND p.lastCandidateAt IS NOT NULL
-            AND p.lastCandidateAt >= :recentThreshold
-            AND (p.googleSyncedAt IS NULL OR p.googleSyncedAt < :staleThreshold)
-            ORDER BY p.lastCandidateAt DESC
+              AND p.region = :region
+              AND p.wikidataMatchedAt IS NULL
+              AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
+            ORDER BY p.id
             """)
-    List<Place> findPrefetchTargets(@Param("recentThreshold") OffsetDateTime recentThreshold,
-                                    @Param("staleThreshold") OffsetDateTime staleThreshold,
-                                    Pageable pageable);
+    List<Place> findWikidataUnmatched(@Param("region") String region, Pageable pageable);
 
     /**
      * 미보강(enriched_at IS NULL)이고 활성 상태인 장소 페이징 조회 — BatchEnrichScheduler 사용.
@@ -164,6 +201,40 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /** TourAPI 시딩 중복 방지 — 같은 지역에 같은 이름의 장소가 이미 있으면 삽입하지 않는다. */
     boolean existsByNameAndRegion(String name, String region);
+
+    /**
+     * TourAPI 이미지 백필 대상 조회 — 같은 지역·같은 이름이면서 <b>이미지가 비어 있는</b> 활성 행.
+     *
+     * <p>시더는 중복을 스킵만 해서 기존 행을 영영 손대지 않는다. 그 사이 Google 동기화가
+     * 이 행들의 {@code image_url}을 덮어썼고, 약관에 따라 Google 유래 데이터를 지우면서 같이
+     * 비었다. 실측: TourAPI 제주 관광지 175건이 DB에 전부 있는데 이미지는 0건(154건은
+     * {@code source}까지 'google'로 재라벨됨). 원본은 TourAPI가 아직 그대로 주고 있다(172/175).
+     */
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.name = :name AND p.region = :region
+              AND p.active = true AND p.imageUrl IS NULL
+            """)
+    List<Place> findImagelessByNameAndRegion(@Param("name") String name, @Param("region") String region);
+
+    /**
+     * 이미지가 없는 관광지 — TourAPI 키워드 백필 대상.
+     *
+     * <p>지역 기반 조회(areaBasedList2)만으로는 닿지 않는 행이 있다. 실측: TourAPI가 성산일출봉의
+     * {@code areacode}를 <b>빈 값</b>으로 내려주기 때문에 {@code areaCode=39} 목록에 영영 안 들어온다
+     * (제주 관광지 totalCount가 arrange와 무관하게 175로 고정). 같은 레코드가 searchKeyword2로는
+     * 이미지까지 정상 조회된다. 그래서 DB 쪽에서 빠진 행을 꺼내 이름으로 역조회한다.
+     *
+     * <p>인기도가 있는 행을 먼저 준다 — 일정에 실제로 뽑히는 건 그쪽이고, 상한에 걸려 잘리더라도
+     * 체감 품질에 기여하는 순서로 채워진다.
+     */
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.active = true AND p.region = :region AND p.imageUrl IS NULL
+              AND (p.category LIKE 'Landmarks%' OR p.category LIKE 'Arts and Entertainment%')
+            ORDER BY p.wikidataSitelinks DESC NULLS LAST, p.id
+            """)
+    List<Place> findImagelessAttractions(@Param("region") String region, Pageable pageable);
 
     /**
      * 지역 스코프 미보강 장소 페이징 조회 — 전량(수만 건) LLM 보강 비용을 통제하기 위해

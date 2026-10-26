@@ -3,9 +3,6 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import com.shg.trip.shgtrip.domain.itinerary.entity.AlternativeOption;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
-import com.shg.trip.shgtrip.domain.place.client.GooglePlaceDetail;
-import com.shg.trip.shgtrip.domain.place.client.GooglePlacesClient;
-import com.shg.trip.shgtrip.domain.place.client.PlaceIdNotFoundException;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
@@ -25,7 +22,12 @@ import java.util.stream.Stream;
 
 /**
  * AI 응답(ItineraryData) → Itinerary 엔티티 변환.
- * PlaceData → Place 엔티티 조회/생성 (Google Places API 연동).
+ *
+ * <p>PlaceData → Place는 **DB에서만** 해소한다. 예전에는 DB에 없으면 Google Places로 검색해
+ * 새 Place를 만들고, 그마저 실패하면 좌표 (0,0)짜리 fallback 레코드를 저장했다. 두 경로 모두
+ * 제거했다 — 전자는 Maps 약관 3.2.3(a)(세부정보·좌표 캐싱 금지) 위반이고, 후자는 지도에 찍히지도
+ * 검색에 걸리지도 않는 쓰레기 행을 남긴다(벡터 검색이 {@code NOT(lat=0 AND lng=0)}으로 걸러낸다).
+ * 해소하지 못한 장소는 **만들지 않고 스텝째 버린다**.
  */
 @Slf4j
 @Component
@@ -33,11 +35,8 @@ import java.util.stream.Stream;
 public class ItineraryDataMapper {
 
     private final PlaceRepository placeRepository;
-    private final GooglePlacesClient googlePlacesClient;
-    private final PlacePersistenceHelper placePersistenceHelper;
     private final RouteOptimizer routeOptimizer;
     private final ItineraryAutoFixer autoFixer;
-    private final DestinationCoordCache destinationCoordCache;
 
     /**
      * 여행지 기준 "엉뚱한 장소" 판정 거리(km). 기존 500km는 한국 내 도시 단위 오매칭
@@ -47,21 +46,18 @@ public class ItineraryDataMapper {
      */
     private static final double DESTINATION_DISTANCE_THRESHOLD_KM = 150;
 
-    /**
-     * 여행지 기준 좌표와 후보 median 중심점의 허용 이탈(km). 이를 넘으면 기준 좌표 쪽이 틀린
-     * 것으로 보고(후보 수십 건의 median이 단일 검색 결과보다 신뢰도가 높다) 캐시를 폐기한다.
-     */
-    private static final double REFERENCE_CROSS_CHECK_KM = 100;
+    /** 자체 median을 기준 좌표로 채택하기 위한 최소 표본 수. 이하면 이상치 하나에 끌려간다. */
+    private static final int MEDIAN_MIN_SAMPLE = 4;
 
     /**
      * ItineraryData → Itinerary 엔티티 변환.
      * 1) 모든 PlaceData를 수집 → 중복 제거
-     * 2) DB 배치 조회 → 미존재분만 Google API 호출 (트랜잭션 밖)
-     * 3) 캐시된 Place로 엔티티 조립 (트랜잭션은 호출자 ItinerarySaveHelper가 관리)
+     * 2) DB 배치 조회 — 못 찾은 장소는 그 스텝째 버린다
+     * 3) 해소된 Place로 엔티티 조립 (트랜잭션은 호출자 ItinerarySaveHelper가 관리)
      *
-     * @Transactional 제거: Google Places API 외부 HTTP 호출이 포함되어 있어
-     * 트랜잭션 내 DB 커넥션을 수십 초간 점유하는 문제 방지.
-     * 저장 트랜잭션은 ItinerarySaveHelper.save()가 담당.
+     * <p>이 클래스에 {@code @Transactional}이 없는 이유는 원래 Google HTTP 호출이 섞여 있어
+     * 커넥션을 수십 초 점유했기 때문이다. 호출은 사라졌지만 저장 트랜잭션 경계는 그대로
+     * {@code ItinerarySaveHelper.save()}가 쥔다 — 조립과 저장을 분리해 두는 편이 낫다.
      */
     public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId) {
         return toEntity(data, input, userId, false, null);
@@ -78,10 +74,9 @@ public class ItineraryDataMapper {
     }
 
     /**
-     * @param referenceCoord 후보 장소 좌표의 median 중심점(있으면). 캐시·Google이 준 여행지 기준
-     *                       좌표가 이 중심점에서 {@link #REFERENCE_CROSS_CHECK_KM} 이상 벗어나면
-     *                       기준 좌표를 신뢰하지 않고 median을 기준으로 쓴다 — "안전장치가 검증되지
-     *                       않은 기준값을 신뢰"해 후보 전체가 fallback 처리되던 사고의 재발 방지.
+     * @param referenceCoord 후보 장소 좌표의 median 중심점(있으면). 여행지에서 멀리 떨어진
+     *                       오매칭 장소를 걸러내는 유일한 기준점이다. null이면 거리 검증을
+     *                       건너뛴다 — 기준이 없는데 거르면 멀쩡한 장소까지 버린다.
      */
     public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId,
                               boolean alreadyOptimized, double[] referenceCoord) {
@@ -89,7 +84,7 @@ public class ItineraryDataMapper {
         Map<String, PlaceData> uniquePlaces = collectUniquePlaces(data);
 
         // 2. 배치로 Place 엔티티 resolve (여행지 기준 좌표로 엉뚱한 장소 필터링)
-        Map<String, Place> placeCache = batchResolvePlaces(uniquePlaces, input.destination(), referenceCoord);
+        Map<String, Place> placeCache = batchResolvePlaces(uniquePlaces, referenceCoord);
 
         List<StepData> optimizedSteps;
         if (alreadyOptimized) {
@@ -115,9 +110,21 @@ public class ItineraryDataMapper {
                 .build();
 
         if (optimizedSteps != null) {
+            int dropped = 0;
+            boolean precededByDrop = false;
             for (StepData stepData : optimizedSteps) {
-                ItineraryStep step = toStepEntity(stepData, placeCache);
-                itinerary.addStep(step);
+                // 장소를 DB에서 못 찾은 스텝은 버린다. 예전엔 좌표 (0,0) fallback Place를 만들어
+                // 붙였는데, 그건 지도에 안 찍히고 검색에도 안 걸리는 빈 카드로 남을 뿐이었다.
+                if (lookupPlace(stepData.place(), placeCache) == null) {
+                    dropped++;
+                    precededByDrop = true;
+                    continue;
+                }
+                itinerary.addStep(toStepEntity(stepData, placeCache, precededByDrop));
+                precededByDrop = false;
+            }
+            if (dropped > 0) {
+                log.warn("장소 미해소로 제외한 스텝 {}건", dropped);
             }
         }
 
@@ -161,191 +168,98 @@ public class ItineraryDataMapper {
     }
 
     /**
-     * 배치 Place resolve:
-     * 1) DB에서 name+address로 일괄 조회
-     *    - 유효(7일 미만): 캐시에 직접 등록
-     *    - 만료(7일 이상): stale 목록으로 분류 → Google API로 갱신
-     * 2) 미존재분 + 만료분: Google API 호출 (신규 저장 or 기존 업데이트)
-     * 3) Google 실패 시 fallback 처리
+     * 배치 Place resolve — DB에서만 해소한다.
+     *
+     * <p>name+address로 일괄 조회하고, 여행지에서 {@link #DESTINATION_DISTANCE_THRESHOLD_KM}
+     * 넘게 떨어진 행은 오매칭으로 보고 버린다. 못 찾은 장소는 캐시에 넣지 않는다 —
+     * 호출자({@link #toEntity})가 그 스텝을 버린다.
+     *
+     * <p>stale(7일 경과) 분기가 사라졌다. 갱신할 외부 소스가 없으므로 "오래됨"이 더 이상
+     * 행동을 가르지 않는다. 신선도는 적재 배치의 책임이다.
      */
-    private Map<String, Place> batchResolvePlaces(Map<String, PlaceData> uniquePlaces, String destination,
+    private Map<String, Place> batchResolvePlaces(Map<String, PlaceData> uniquePlaces,
                                                   double[] referenceCoord) {
-        Map<String, Place> cache = new HashMap<>();
-        Map<String, Place> stalePlaces = new HashMap<>();
-        int fallbackCount = 0;
-
-        // 여행지 기준 좌표 조회 (Google API로 1회 검색) — 엉뚱한 장소 필터링에 사용
-        double[] destinationCoord = resolveDestinationCoord(destination, referenceCoord);
-
-        // 1. DB 배치 조회 — 유효/만료 분류. 여행지에서 너무 먼 기존 DB row(오매칭/오래된 잘못된
-        // 데이터)는 캐시에 그대로 쓰지 않고 "못 찾음"으로 취급해 2단계에서 재해결하게 한다.
+        // 1차: DB 조회만 한다. 거리 판정은 기준 좌표가 정해진 뒤에 해야 하므로 여기서 미룬다.
+        Map<String, Place> found = new LinkedHashMap<>();
+        List<String> unresolved = new ArrayList<>();
         for (Map.Entry<String, PlaceData> entry : uniquePlaces.entrySet()) {
             PlaceData pd = entry.getValue();
-            placeRepository.findByNameAndAddress(pd.name(), pd.address())
-                    .ifPresent(place -> {
-                        if (isFarFromDestination(place.getLatitude(), place.getLongitude(), destinationCoord)) {
-                            log.warn("DB에 캐시된 장소가 여행지에서 너무 멀어 재해결 대상으로 처리: name={}", place.getName());
-                            return;
-                        }
-                        if (place.isStale()) {
-                            stalePlaces.put(entry.getKey(), place);
-                        } else {
-                            cache.put(entry.getKey(), place);
-                        }
-                    });
-        }
-
-        // 2. 신규 장소: Google API 조회 + fallback
-        for (Map.Entry<String, PlaceData> entry : uniquePlaces.entrySet()) {
-            String key = entry.getKey();
-            if (cache.containsKey(key)) continue;
-
-            PlaceData pd = entry.getValue();
-            if (stalePlaces.containsKey(key)) {
-                // 만료된 장소: Google API로 정보 갱신
-                Place refreshed = refreshFromGoogle(stalePlaces.get(key), pd, destinationCoord);
-                cache.put(key, refreshed);
-                if (isFallbackPlace(refreshed)) {
-                    fallbackCount++;
-                }
+            Optional<Place> hit = placeRepository.findByNameAndAddress(pd.name(), pd.address());
+            if (hit.isEmpty()) {
+                unresolved.add(pd.name());
             } else {
-                // 신규 장소: Google API 조회 후 저장
-                Place resolved = resolveFromGoogleOrFallback(pd, destinationCoord);
-                cache.put(key, resolved);
-                if (isFallbackPlace(resolved)) {
-                    fallbackCount++;
-                }
+                found.put(entry.getKey(), hit.get());
             }
         }
 
-        if (fallbackCount > 0) {
-            log.warn("Google Places 미확인 장소 {}건 (좌표·사진 없음, 지도 표시 불가)", fallbackCount);
+        // 기준 좌표의 출처를 구분해 둔다. 호출자가 준 값은 후보 수십 건의 median이라 신뢰할 수
+        // 있고, 우리가 직접 뽑은 median은 일정에 들어온 장소 몇 개짜리라 약하다.
+        boolean selfDerivedReference = referenceCoord == null;
+        double[] destinationCoord = selfDerivedReference ? medianOf(found.values()) : referenceCoord;
+
+        // 2차: 여행지 기준에서 너무 먼 행을 추린다. 아직 버리지는 않는다 — 과반이 걸리면
+        // 기준 좌표 쪽을 의심해야 하기 때문이다(아래).
+        List<String> farKeys = new ArrayList<>();
+        for (Map.Entry<String, Place> entry : found.entrySet()) {
+            Place place = entry.getValue();
+            if (isFarFromDestination(place.getLatitude(), place.getLongitude(), destinationCoord)) {
+                farKeys.add(entry.getKey());
+            }
+        }
+
+        /* 자체 median을 썼는데 과반이 "너무 멀다"면 기준 좌표 쪽이 틀린 것이다 — 필터를 포기한다.
+         *
+         * 이 필터는 **소수의 오매칭**을 걷어내라고 있는 것이지 일정을 비우라고 있는 게 아니다.
+         * 실제로 비는 경로가 있다: medianOf는 위도·경도 median을 독립적으로 계산하므로 장소가
+         * 두 지역에 반반 섞이면 중심점이 그 사이 허공에 찍힌다(제주 2곳 + 서울 2곳 → (35.5,
+         * 126.75), 양쪽 모두 224km → 임계 150km 초과로 **전부 삭제**). 스텝 0개짜리 일정을
+         * 저장하느니 오매칭 몇 건을 남기는 편이 낫다.
+         *
+         * 호출자가 기준 좌표를 준 경우에는 적용하지 않는다. 그건 후보 수십 건의 median이라
+         * "과반이 멀다"가 기준이 틀렸다는 뜻이 아니라 **일정이 실제로 엉뚱하다**는 뜻이다. */
+        if (selfDerivedReference && !farKeys.isEmpty() && farKeys.size() * 2 > found.size()) {
+            log.warn("여행지 기준 좌표에서 먼 장소가 과반({}/{}) — 기준 좌표를 신뢰할 수 없어 거리 필터를 건너뛴다",
+                    farKeys.size(), found.size());
+            farKeys.clear();
+        }
+
+        Map<String, Place> cache = new HashMap<>(found);
+        for (String key : farKeys) {
+            Place removed = cache.remove(key);
+            log.warn("DB 장소가 여행지에서 너무 멀어 제외: name={}", removed.getName());
+            unresolved.add(removed.getName());
+        }
+
+        if (!unresolved.isEmpty()) {
+            log.warn("DB에서 해소하지 못한 장소 {}건 — 해당 스텝은 제외한다: {}",
+                    unresolved.size(), unresolved);
         }
 
         return cache;
     }
 
     /**
-     * fallback으로 생성된 장소인지 판별 (좌표가 0,0이면 fallback).
+     * 해소된 장소들의 median 좌표. 호출자가 기준 좌표를 안 넘겼을 때 쓰는 **자체 기준**이다.
+     *
+     * <p>없으면 안 되는 이유: 기준 좌표가 null이면 {@link #isFarFromDestination}가 항상 false를
+     * 반환해 "제주 일정에 서울 좌표가 찍히는" 오매칭 가드가 통째로 꺼진다. 예전에는 Redis 캐시나
+     * Google 행정구역 검색이 기준을 만들어 줬는데 둘 다 사라졌고, Fallback 경로
+     * ({@code ItineraryGenerationExecutor})는 median을 넘기지 않는다.
+     *
+     * <p>표본이 {@value #MEDIAN_MIN_SAMPLE} 미만이면 null을 준다 — 장소 두세 곳의 median은
+     * 이상치 하나에 그대로 끌려가서, 기준으로 삼으면 멀쩡한 장소를 버린다.
      */
-    private boolean isFallbackPlace(Place place) {
-        return place.getLatitude() != null && place.getLongitude() != null
-                && BigDecimal.ZERO.compareTo(place.getLatitude()) == 0
-                && BigDecimal.ZERO.compareTo(place.getLongitude()) == 0;
-    }
-
-    /**
-     * 여행지 이름으로 기준 좌표를 조회.
-     * Redis 캐시(TTL 30일) 우선 조회 — 도시 좌표는 불변이므로 같은 목적지 반복 생성 시 API 호출 생략.
-     * 미스 시에만 Basic 필드마스크(가장 저렴한 SKU)로 Google 조회 후 캐시에 적재.
-     * 실패 시 null 반환 — 거리 검증 skip (서비스 중단 방지).
-     */
-    private double[] resolveDestinationCoord(String destination, double[] referenceCoord) {
-        if (destination == null || destination.isBlank()) return referenceCoord;
-
-        Optional<double[]> cached = destinationCoordCache.get(destination);
-        if (cached.isPresent()) {
-            double[] coord = cached.get();
-            if (isConsistentWithReference(coord, referenceCoord)) return coord;
-            log.warn("여행지 기준 좌표 캐시가 후보 중심점에서 {}km 이탈 — 캐시 폐기 후 후보 median 사용: destination={}",
-                    String.format("%.0f", GeoUtils.haversine(coord, referenceCoord)), destination);
-            destinationCoordCache.evict(destination);
-            return referenceCoord;
+    private double[] medianOf(java.util.Collection<Place> places) {
+        List<Double> lats = new ArrayList<>();
+        List<Double> lngs = new ArrayList<>();
+        for (Place p : places) {
+            if (p.getLatitude() == null || p.getLongitude() == null) continue;
+            if (p.getLatitude().signum() == 0 && p.getLongitude().signum() == 0) continue;
+            lats.add(p.getLatitude().doubleValue());
+            lngs.add(p.getLongitude().doubleValue());
         }
-
-        try {
-            // 행정구역(도시/지역) 타입 결과만 채택 — 상호명 오매칭 좌표를 기준값으로 쓰지 않는다.
-            Optional<GooglePlaceDetail> detail = googlePlacesClient.searchAdministrativeArea(destination);
-            // (0,0)은 파싱 실패 마커 — 다른 경로(isFallbackPlace 등)와 동일하게 AND 조건으로 판정
-            if (detail.isPresent() && (detail.get().lat() != 0.0 || detail.get().lng() != 0.0)) {
-                double lat = detail.get().lat();
-                double lng = detail.get().lng();
-                double[] coord = new double[]{lat, lng};
-                if (!isConsistentWithReference(coord, referenceCoord)) {
-                    log.warn("Google 여행지 좌표가 후보 중심점에서 {}km 이탈 — 캐시하지 않고 후보 median 사용: destination={}",
-                            String.format("%.0f", GeoUtils.haversine(coord, referenceCoord)), destination);
-                    return referenceCoord;
-                }
-                destinationCoordCache.put(destination, lat, lng);
-                return coord;
-            }
-        } catch (Exception e) {
-            log.warn("여행지 기준 좌표 조회 실패: destination={}, error={}", destination, e.getMessage());
-        }
-        return referenceCoord;
-    }
-
-    /** 기준 좌표가 후보 median 중심점과 같은 지역인지. 중심점이 없으면 판단 보류(true). */
-    private boolean isConsistentWithReference(double[] coord, double[] referenceCoord) {
-        if (coord == null || referenceCoord == null) return true;
-        return GeoUtils.haversine(coord, referenceCoord) <= REFERENCE_CROSS_CHECK_KM;
-    }
-
-    /**
-     * 만료된 Place를 Google Places API로 갱신.
-     * 갱신 실패 시 오래진 데이터를 그대로 반환 (서비스 중단 방지).
-     * Google이 여행지에서 너무 먼 좌표를 반환하면(오매칭) 갱신을 적용하지 않고 기존 데이터를 유지한다
-     * — 잘못된 좌표로 덮어써서 지도에 엉뚱한 위치가 찍히는 것을 방지.
-     * photoReference는 DB에 저장되며, 이미지는 화면 조회 시 PlaceImageAsyncRecovery에서 비동기로 다운로드.
-     */
-    private Place refreshFromGoogle(Place stalePlace, PlaceData placeData, double[] destinationCoord) {
-        try {
-            // place_id가 있으면 Details 직조회(저렴+오매칭 없음), 404면 리셋 후 Text Search 재매칭
-            Optional<GooglePlaceDetail> detail = fetchDetailForStale(stalePlace, placeData);
-            if (detail.isPresent()) {
-                GooglePlaceDetail d = detail.get();
-                // 좌표 (0,0)은 Details 응답에 location이 없는 파손 결과 — 정상 좌표를 파괴하지 않도록 갱신 스킵
-                if (d.lat() == 0.0 && d.lng() == 0.0) {
-                    log.warn("Google 갱신 결과 좌표가 (0,0)이라 적용하지 않고 기존 데이터 유지: name={}", stalePlace.getName());
-                    return markAttemptAndKeep(stalePlace);
-                }
-                if (isFarFromDestination(BigDecimal.valueOf(d.lat()), BigDecimal.valueOf(d.lng()), destinationCoord)) {
-                    log.warn("Google 갱신 결과가 여행지에서 너무 멀어 적용하지 않고 기존 데이터 유지: name={}", stalePlace.getName());
-                    return markAttemptAndKeep(stalePlace);
-                }
-                stalePlace.update(d.placeId(), d.address(), d.lat(), d.lng(), d.rating(),
-                        d.priceLevel(), d.openingHours(), d.photoReference(), d.sourceUrl(),
-                        null);   // description: refresh 시엔 갱신 안 함 (임베딩 이미 생성됨)
-                stalePlace.setSource("google");
-                return placePersistenceHelper.updateAndSave(stalePlace);
-            }
-            // 무매칭(결정적 실패): 시도 이력을 남기지 않으면 매 생성마다 무한 재호출됨
-            log.warn("Google 무매칭으로 만료된 장소 데이터 그대로 사용 ({}일 후 재시도): name={}", Place.STALENESS_DAYS, stalePlace.getName());
-            return markAttemptAndKeep(stalePlace);
-        } catch (com.shg.trip.shgtrip.global.exception.BusinessException e) {
-            // API 장애(일시적 실패)는 시도 이력을 남기지 않고 다음 기회에 재시도
-            log.warn("Google Places API 장애로 stale 데이터 유지: name={}, error={}", stalePlace.getName(), e.getMessage());
-        } catch (Exception e) {
-            log.warn("Google Places 갱신 실패: name={}, error={}", stalePlace.getName(), e.getMessage());
-        }
-        return stalePlace;
-    }
-
-    /** stale 장소 refresh 시 place_id 우선 Details 조회, 404면 리셋 후 Text Search(refresh 마스크) 재매칭. */
-    private Optional<GooglePlaceDetail> fetchDetailForStale(Place stalePlace, PlaceData placeData) {
-        if (stalePlace.getGooglePlaceId() != null) {
-            try {
-                return googlePlacesClient.getPlaceDetails(stalePlace.getGooglePlaceId());
-            } catch (PlaceIdNotFoundException e) {
-                log.info("Place {} google_place_id 폐기 감지, Text Search 재매칭", stalePlace.getName());
-                stalePlace.clearGooglePlaceId();
-            }
-        }
-        return googlePlacesClient.searchForRefresh(placeData.name() + " " + placeData.address());
-    }
-
-    /**
-     * 무매칭·오매칭 등 결정적 실패 시 데이터는 유지하되 시도 이력만 기록.
-     * 이 메서드는 트랜잭션 밖에서 실행되므로 더티체킹이 없어 REQUIRES_NEW 헬퍼로 명시 저장한다.
-     */
-    private Place markAttemptAndKeep(Place stalePlace) {
-        try {
-            stalePlace.markSyncAttempted();
-            placePersistenceHelper.updateAndSave(stalePlace);
-        } catch (Exception e) {
-            log.warn("동기화 시도 이력 저장 실패: name={}, error={}", stalePlace.getName(), e.getMessage());
-        }
-        return stalePlace;
+        if (lats.size() < MEDIAN_MIN_SAMPLE) return null;
+        return new double[]{GeoUtils.median(lats), GeoUtils.median(lngs)};
     }
 
     /** 여행지 기준 좌표에서 너무 먼지 판정. destinationCoord/좌표가 없거나 (0,0) fallback 마커면 false. */
@@ -357,94 +271,13 @@ public class ItineraryDataMapper {
     }
 
     /**
-     * Google Places API 조회 → 실패 시 fallback 저장.
-     * - BusinessException(외부 API 장애)은 fallback으로 처리 (일정 생성 전체 중단 방지)
-     * - 일반 예외(파싱 오류 등)도 fallback 처리
-     * - photoReference는 DB에 저장되며, 이미지는 화면 조회 시 PlaceImageAsyncRecovery에서 비동기로 다운로드
-     * - destinationCoord가 있으면 여행지 기준 {@link #DESTINATION_DISTANCE_THRESHOLD_KM} 초과 장소는
-     *   fallback 처리 (엉뚱한 장소 방지)
+     * @param precededByDrop 바로 앞 스텝이 장소 미해소로 버려졌으면 true. 이 스텝의 교통 정보는
+     *                       <b>사라진 출발지</b>에서 온 구간이라 그대로 두면 거짓말이 된다
+     *                       ("차로 32분·20.7km"인데 그 출발지가 일정에 없음). 비워서 UI가
+     *                       구간을 그리지 않게 한다.
      */
-    private Place resolveFromGoogleOrFallback(PlaceData placeData, double[] destinationCoord) {
-        // Google API 시도
-        try {
-            Optional<GooglePlaceDetail> detail =
-                    googlePlacesClient.searchAndGetDetail(placeData.name() + " " + placeData.address());
-
-            if (detail.isPresent()) {
-                GooglePlaceDetail d = detail.get();
-
-                // 여행지 기준 거리 검증: 초과 시 엉뚱한 장소로 판단 → fallback
-                if (d.lat() != 0.0 && d.lng() != 0.0
-                        && isFarFromDestination(BigDecimal.valueOf(d.lat()), BigDecimal.valueOf(d.lng()), destinationCoord)) {
-                    log.warn("Google Places 결과가 여행지에서 너무 멀어 fallback 처리: name={}", placeData.name());
-                    return buildFallbackPlace(placeData);
-                }
-
-                // Google이 반환한 name+address로 DB에 이미 있는지 확인
-                Optional<Place> existing = placeRepository.findByNameAndAddress(d.name(), d.address());
-                if (existing.isPresent()) {
-                    Place ex = existing.get();
-                    if (ex.isStale()) {
-                        // 신규 첫 매칭 경로이므로 editorialSummary(description) 포함해 임베딩 품질 유지
-                        ex.update(d.placeId(), d.address(), d.lat(), d.lng(), d.rating(),
-                                d.priceLevel(), d.openingHours(), d.photoReference(), d.sourceUrl(),
-                                d.editorialSummary());
-                        return placePersistenceHelper.updateAndSave(ex);
-                    }
-                    return ex;
-                }
-
-                Place place = Place.builder()
-                        .googlePlaceId(d.placeId())   // 이후 refresh가 Details ID 직조회로 가도록 저장
-                        .name(d.name())
-                        .address(d.address())
-                        .latitude(BigDecimal.valueOf(d.lat()))
-                        .longitude(BigDecimal.valueOf(d.lng()))
-                        .category(placeData.category() != null ? placeData.category() : "기타")
-                        .region(placeData.region())
-                        .country(placeData.country())
-                        .rating(d.rating() != null ? BigDecimal.valueOf(d.rating()) : null)
-                        .priceLevel(d.priceLevel())
-                        .openingHours(d.openingHours())
-                        .photoReference(d.photoReference())
-                        .sourceUrl(d.sourceUrl())
-                        .description(d.editorialSummary())   // 신규 장소 임베딩 텍스트 품질용
-                        .source("google")
-                        .savedAt(OffsetDateTime.now())
-                        .googleSyncedAt(OffsetDateTime.now())
-                        .build();
-                return placeRepository.save(place);
-            }
-        } catch (com.shg.trip.shgtrip.global.exception.BusinessException e) {
-            log.warn("Google Places API 장애로 fallback 처리: name={}, error={}", placeData.name(), e.getMessage());
-        } catch (Exception e) {
-            log.warn("Google Places API 조회 실패: name={}, error={}", placeData.name(), e.getMessage());
-        }
-
-        // Fallback: AI가 생성한 name+address로 DB 조회 (동시성 대비)
-        Optional<Place> existing = placeRepository.findByNameAndAddress(
-                placeData.name(), placeData.address());
-        if (existing.isPresent()) return existing.get();
-
-        return buildFallbackPlace(placeData);
-    }
-
-    private Place buildFallbackPlace(PlaceData placeData) {
-        Place fallback = Place.builder()
-                .name(placeData.name())
-                .address(placeData.address() != null ? placeData.address() : "주소 미확인")
-                .latitude(BigDecimal.ZERO)
-                .longitude(BigDecimal.ZERO)
-                .category(placeData.category() != null ? placeData.category() : "기타")
-                .region(placeData.region())
-                .country(placeData.country())
-                .source("google")
-                .savedAt(OffsetDateTime.now())
-                .build();
-        return placeRepository.save(fallback);
-    }
-
-    private ItineraryStep toStepEntity(StepData stepData, Map<String, Place> placeCache) {
+    private ItineraryStep toStepEntity(StepData stepData, Map<String, Place> placeCache,
+                                       boolean precededByDrop) {
         Place place = lookupPlace(stepData.place(), placeCache);
 
         ItineraryStep step = ItineraryStep.builder()
@@ -453,24 +286,28 @@ public class ItineraryDataMapper {
                 .startTime(stepData.startTime())
                 .endTime(stepData.endTime())
                 .place(place)
-                .transportationMode(stepData.transportationMode())
-                .transportationDuration(stepData.transportationDuration())
-                .transportationDistance(stepData.transportationDistance())
-                .transportationCost(stepData.transportationCost())
+                .transportationMode(precededByDrop ? null : stepData.transportationMode())
+                .transportationDuration(precededByDrop ? null : stepData.transportationDuration())
+                .transportationDistance(precededByDrop ? null : stepData.transportationDistance())
+                .transportationCost(precededByDrop ? null : stepData.transportationCost())
                 .notes(stepData.notes())
                 .estimatedCost(stepData.estimatedCost())
                 .build();
 
         if (stepData.alternatives() != null) {
-            for (int i = 0; i < stepData.alternatives().size(); i++) {
-                AlternativeData altData = stepData.alternatives().get(i);
+            int order = 1;
+            for (AlternativeData altData : stepData.alternatives()) {
                 Place altPlace = placeCache.get(altKey(altData));
+                // 해소 못 한 대안은 **버린다**. place가 null인 AlternativeOption을 저장하면
+                // 조회 시 PlaceResponse.from(null)에서 NPE가 난다(null 체크가 없다).
+                // 예전엔 좌표 (0,0) fallback Place라도 항상 붙어서 null이 될 수 없었다.
+                if (altPlace == null) continue;
 
                 AlternativeOption alt = AlternativeOption.builder()
                         .place(altPlace)
                         .notes(altData.notes())
                         .estimatedCost(altData.estimatedCost())
-                        .optionOrder(i + 1)
+                        .optionOrder(order++)
                         .generatedAt(OffsetDateTime.now())
                         .build();
                 step.addAlternative(alt);

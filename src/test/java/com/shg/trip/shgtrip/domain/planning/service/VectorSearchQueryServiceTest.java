@@ -211,25 +211,82 @@ class VectorSearchQueryServiceTest {
             assertThat(result).extracting(PlaceCandidate::placeId).doesNotHaveDuplicates();
         }
 
+        /** 평점·리뷰 수만 다른 후보를 만든다. 유사도와 카테고리는 동일. */
+        private VectorSearchResult candidate(long id, String name, Double rating,
+                                             Integer reviewCount, double similarity) {
+            return new VectorSearchResult(
+                    id, name, "주소" + id, "Dining and Drinking > Restaurant", List.of(),
+                    "시부야", "일본", BigDecimal.valueOf(35.6), BigDecimal.valueOf(139.7),
+                    "설명", rating != null ? BigDecimal.valueOf(rating) : null,
+                    reviewCount, similarity);
+        }
+
         @Test
-        @DisplayName("하이브리드 랭킹: 유사도가 조금 낮아도 평점이 높으면 위로 올라온다")
-        void search_hybridRankingBoostsHighRating() {
+        @DisplayName("리뷰 수 없는 고평점은 유사도를 뒤집지 못한다 — 평점 단독은 신뢰 신호가 아니다")
+        void search_ratingAloneDoesNotOutrankSimilarity() {
+            // 리뷰 수를 모르면 평점 4.9도 인기도 근거가 못 된다. 실측: 리뷰 두세 개짜리 5.0이
+            // 수만 리뷰의 명소를 이기는 현상(사라봉공원 5.0 vs 협재해수욕장 4.7)이 여기서 나왔다.
             VectorEnrichedInput input = createBasicInput(3);
             givenBatchEmbeddings();
-            VectorSearchResult lowRated = new VectorSearchResult(
-                    1L, "무평점 유사", "주소1", "Dining and Drinking > Restaurant", List.of(),
-                    "시부야", "일본", BigDecimal.valueOf(35.6), BigDecimal.valueOf(139.7),
-                    "설명", null, 0.62);
-            VectorSearchResult highRated = new VectorSearchResult(
-                    2L, "고평점", "주소2", "Dining and Drinking > Restaurant", List.of(),
-                    "시부야", "일본", BigDecimal.valueOf(35.6), BigDecimal.valueOf(139.7),
-                    "설명", BigDecimal.valueOf(4.9), 0.60);
             given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
-                    .willReturn(List.of(lowRated, highRated));
+                    .willReturn(List.of(
+                            candidate(1L, "무평점 유사", null, null, 0.62),
+                            candidate(2L, "고평점 리뷰미상", 4.9, null, 0.60)));
 
             List<PlaceCandidate> result = service.search(input);
 
-            assertThat(result.get(0).name()).isEqualTo("고평점");
+            assertThat(result.get(0).name()).isEqualTo("무평점 유사");
+        }
+
+        @Test
+        @DisplayName("리뷰 많은 명소가 리뷰 적은 만점 장소를 이긴다 (실측 협재해수욕장 vs 사라봉공원)")
+        void search_manyReviewsOutrankFewReviewPerfectScore() {
+            VectorEnrichedInput input = createBasicInput(3);
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(List.of(
+                            // 리뷰 3개 만점 — 유사도는 오히려 더 높다
+                            candidate(1L, "사라봉공원형", 5.0, 3, 0.65),
+                            // 리뷰 2만개 4.7 — 유사도는 낮지만 인기도가 압도
+                            candidate(2L, "협재해수욕장형", 4.7, 20_000, 0.60)));
+
+            List<PlaceCandidate> result = service.search(input);
+
+            assertThat(result.get(0).name()).isEqualTo("협재해수욕장형");
+        }
+
+        @Test
+        @DisplayName("리뷰 수 미상은 '무명임을 아는' 장소보다 위에 온다 — 자기강화 루프 방지")
+        void search_unknownPopularityRanksAboveKnownObscure() {
+            // TourAPI로 적재된 명소(성산일출봉·천지연폭포 등)는 Google 미동기화라 리뷰 수가 없다.
+            // 이들을 '리뷰 적은 무명 장소'보다 밀어내면 후보가 되지 못해 영원히 동기화되지 않는다.
+            VectorEnrichedInput input = createBasicInput(3);
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(List.of(
+                            candidate(1L, "무명 확인됨", 4.5, 5, 0.60),
+                            candidate(2L, "미동기화 명소", null, null, 0.60)));
+
+            List<PlaceCandidate> result = service.search(input);
+
+            assertThat(result.get(0).name()).isEqualTo("미동기화 명소");
+        }
+
+        @Test
+        @DisplayName("리뷰 수 가점은 포화한다 — 초대형 명소 하나가 전부를 누르지 않는다")
+        void search_popularitySaturates() {
+            VectorEnrichedInput input = createBasicInput(3);
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(List.of(
+                            // 리뷰 50만개지만 포화 상한(1만)을 넘어 추가 가점이 없다.
+                            // 유사도 0.08 차이를 인기도로 뒤집지 못한다(최대 가점 0.10, 이미 양쪽 모두 포화).
+                            candidate(1L, "초대형 명소", 4.6, 500_000, 0.55),
+                            candidate(2L, "유사도 우위 명소", 4.6, 12_000, 0.63)));
+
+            List<PlaceCandidate> result = service.search(input);
+
+            assertThat(result.get(0).name()).isEqualTo("유사도 우위 명소");
         }
 
         @Test
@@ -688,6 +745,109 @@ class VectorSearchQueryServiceTest {
                     jeju("한라산", 33.3617, 126.5292)
             );
             assertThat(service.filterGeographicOutliers(valid)).hasSize(4);
+        }
+    }
+
+    @Nested
+    @DisplayName("인기도 랭킹 — 리뷰 수 미상의 중립값은 슬롯 커버리지에 따른다")
+    class ProminenceRankingTests {
+
+        private final SearchQueryBuilder.SearchSlot attractionSlot = new SearchQueryBuilder.SearchSlot(
+                "attraction-nature", PlaceCategoryConstants.SearchRole.ATTRACTION, "제주 자연 경관", List.of(), List.of());
+
+        /**
+         * 관광지 결과 생성. sitelinks의 세 상태를 그대로 넘긴다 —
+         * null=미매칭, 0=Wikidata에 항목 없음, 1+=언어판 수.
+         */
+        private VectorSearchResult attraction(String name, double similarity,
+                                              double rating, Integer sitelinks) {
+            return new VectorSearchResult(
+                    (long) name.hashCode(), name, name + " 주소",
+                    "Landmarks and Outdoors > Tourist Attraction", List.of(),
+                    "Jeju", "KR", BigDecimal.valueOf(33.4), BigDecimal.valueOf(126.5),
+                    name + " 설명", BigDecimal.valueOf(rating), null, sitelinks, similarity);
+        }
+
+        @Test
+        @DisplayName("유사도가 비슷하면 명소가 '항목 없음'을 이긴다")
+        void popularBeatsNotNotableAtSimilarSimilarity() {
+            // 랭킹에서 계속 이기던 열안지오름은 Wikidata에 항목 자체가 없다(sitelinks 0).
+            // 유사도가 같거나 더 높아도 명소가 위로 와야 한다.
+            List<VectorSearchResult> raw = List.of(
+                    attraction("열안지오름", 0.588, 4.0, 0),
+                    attraction("만장굴", 0.588, 4.4, 11),
+                    attraction("성산일출봉", 0.514, 4.3, 16),
+                    attraction("한라산", 0.430, 4.4, 46)
+            );
+
+            List<String> accepted = service.applyThresholdAndRank(attractionSlot, raw, 4).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted.indexOf("만장굴")).isLessThan(accepted.indexOf("열안지오름"));
+            assertThat(accepted.indexOf("성산일출봉")).isLessThan(accepted.indexOf("열안지오름"));
+        }
+
+        @Test
+        @DisplayName("미매칭(null)과 항목없음(0)을 다르게 다룬다")
+        void unmatchedIsNotTreatedAsNotNotable() {
+            // null은 "아직 안 봤음"이라 판단 보류, 0은 "봤는데 없음"이라 무명 확정이다.
+            // 둘을 같게 다루면 매칭 전 지역의 명소가 전부 바닥으로 깔린다.
+            List<VectorSearchResult> raw = List.of(
+                    attraction("아직안본곳", 0.50, 4.5, null),
+                    attraction("확인된무명", 0.50, 4.5, 0)
+            );
+
+            List<String> accepted = service.applyThresholdAndRank(attractionSlot, raw, 2).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted.indexOf("아직안본곳")).isLessThan(accepted.indexOf("확인된무명"));
+        }
+
+        @Test
+        @DisplayName("유사도는 여전히 주된 신호다 — 인기도가 주제 적합성을 뒤집지는 않는다")
+        void similarityRemainsPrimarySignal() {
+            // 인기도 가중치 0.15는 유사도 폭(제주 관광지 실측 0.25)의 일부일 뿐이다.
+            // 압도적으로 더 적합한 장소가 인기도만으로 밀려나면 자연 테마에 수족관이 들어온다.
+            List<VectorSearchResult> raw = List.of(
+                    attraction("주제에 꼭 맞는 오름", 0.60, 4.0, null),
+                    attraction("초인기 수족관", 0.41, 4.3, 14173)
+            );
+
+            List<String> accepted = service.applyThresholdAndRank(attractionSlot, raw, 1).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted).containsExactly("주제에 꼭 맞는 오름");
+        }
+
+        @Test
+        @DisplayName("커버리지가 0이면 리뷰 수 미상을 밀어내지 않는다 — 미동기화 지역 보호")
+        void zeroCoverage_keepsUnknownReviewCount() {
+            // 서울 관광지 리뷰 보유율은 1%다. 여기서 "미상"을 무명으로 깔면 그 지역 전체가
+            // 유사도 순서를 잃는다. 전원이 미상이면 같은 값을 받아 순위가 유사도 그대로여야 한다.
+            List<VectorSearchResult> raw = List.of(
+                    attraction("경복궁", 0.52, 4.5, null),
+                    attraction("북촌한옥마을", 0.50, 4.3, null),
+                    attraction("무명공원", 0.48, 4.0, null)
+            );
+
+            List<String> accepted = service.applyThresholdAndRank(attractionSlot, raw, 3).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted).containsExactly("경복궁", "북촌한옥마을", "무명공원");
+        }
+
+        @Test
+        @DisplayName("리뷰 수가 압도적이어도 슬롯 최소 유사도 미만이면 채택되지 않는다")
+        void popularButOffTopic_isStillDropped() {
+            List<VectorSearchResult> raw = List.of(
+                    attraction("주제에 맞는 해안", 0.45, 4.0, 100),
+                    attraction("초인기 무관한 장소", 0.20, 4.9, 50000)
+            );
+
+            List<String> accepted = service.applyThresholdAndRank(attractionSlot, raw, 5).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted).containsExactly("주제에 맞는 해안");
         }
     }
 }

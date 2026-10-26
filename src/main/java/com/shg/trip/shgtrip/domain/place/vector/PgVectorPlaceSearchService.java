@@ -31,6 +31,13 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
      */
     private static final int HNSW_EF_SEARCH = 200;
 
+    /**
+     * 인기도 시딩 갈래의 상·하한. 유사도 갈래와 비슷한 규모로 두어 한쪽이 윈도를 독식하지 않게 한다.
+     * 제주 관광지 기준 12건이면 sitelinks 상위(한라산 46 ~ 만장굴 11)를 모두 담는다.
+     */
+    private static final int POPULARITY_SEED_MIN = 5;
+    private static final int POPULARITY_SEED_MAX = 20;
+
     private final JdbcTemplate jdbcTemplate;
 
     @Override
@@ -138,41 +145,72 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
      */
     private List<VectorSearchResult> searchSingle(VectorSearchRequest request, List<String> regions) {
         String vectorString = toVectorString(request.queryVector());
-        String destination = request.destination();
-        int limit = request.limit();
 
-        StringBuilder sql = new StringBuilder();
-        List<Object> params = new ArrayList<>();
-
-        sql.append("""
-                SELECT p.id, p.name, p.address, p.category, p.tags, p.region, p.country,
-                       p.latitude, p.longitude, p.description, p.rating,
-                       1 - (p.embedding <=> ?::vector) AS similarity_score
-                FROM places p
+        StringBuilder where = new StringBuilder("""
                 WHERE p.embedding IS NOT NULL
                   AND p.active = true
                   AND p.country = ?
                   AND NOT (p.latitude = 0 AND p.longitude = 0)
                 """);
-        params.add(vectorString);
-        params.add(destination);
+        List<Object> whereParams = new ArrayList<>();
+        whereParams.add(request.destination());
 
         // 단일 지역 필터
         if (regions != null && regions.size() == 1) {
-            sql.append("  AND p.region = ?\n");
-            params.add(regions.get(0));
+            where.append("  AND p.region = ?\n");
+            whereParams.add(regions.get(0));
         }
 
-        appendCategoryExclusions(sql, params, request.excludedCategoryPatterns());
-        appendRadiusFilter(sql, params, request.center(), request.radiusKm());
+        appendCategoryExclusions(where, whereParams, request.excludedCategoryPatterns());
+        appendRadiusFilter(where, whereParams, request.center(), request.radiusKm());
 
-        sql.append("ORDER BY p.embedding <=> ?::vector\n");
-        params.add(vectorString);
+        return queryTwoLeg(vectorString, where.toString(), whereParams, request.limit());
+    }
 
-        sql.append("LIMIT ?");
+    /**
+     * 후보 윈도를 <b>유사도 최근접</b>과 <b>인기도 상위</b> 두 갈래로 가져온다.
+     *
+     * <p>유사도만으로 윈도를 자르면 대표 명소가 후보에 들어오지 못한다. 실측(제주 관광지 364곳,
+     * 쿼리 "제주 자연 경관 오름 해안 절경 관광지"): 코사인 순위가 낮아질수록 평균 인기도가
+     * 오히려 올라간다. 성산일출봉이 339위, 주상절리대가 242위이고 상위 12위는 열안지오름·
+     * 유수암마을처럼 Wikidata에 항목조차 없는 곳으로 찬다.
+     *
+     * <p>원인은 데이터나 가중치가 아니라 <b>질의가 일반 명사</b>라는 점이다. "오름·해안" 같은
+     * 일반어로 질의하면 이름·태그가 그 일반어 자체인 장소(열안지<b>오름</b>, 남원 큰엉<b>해안</b>)가
+     * 이기고, 고유한 정체성을 가진 명소(일출봉·주상절리)는 어휘가 겹치지 않아 밀린다.
+     * 유사도 재랭킹을 어떻게 바꿔도 윈도 밖에 있으면 이길 수 없으므로 윈도 자체를 넓힌다.
+     *
+     * <p>두 갈래를 UNION할 뿐 채택은 하지 않는다 — 호출부가 슬롯 최소 유사도로 거르고
+     * 하이브리드 점수로 재랭킹한다. 명소가 슬롯 의미에 안 맞으면 거기서 탈락한다.
+     */
+    private List<VectorSearchResult> queryTwoLeg(
+            String vectorString, String whereClause, List<Object> whereParams, int limit) {
+
+        int seedLimit = Math.min(POPULARITY_SEED_MAX, Math.max(POPULARITY_SEED_MIN, limit));
+
+        String columns = """
+                SELECT p.id, p.name, p.address, p.category, p.tags, p.region, p.country,
+                       p.latitude, p.longitude, p.description, p.rating, p.user_rating_count,
+                       p.wikidata_sitelinks,
+                       1 - (p.embedding <=> ?::vector) AS similarity_score
+                FROM places p
+                """;
+
+        String sql = "(" + columns + whereClause + "ORDER BY p.embedding <=> ?::vector\nLIMIT ?)\n"
+                + "UNION\n"
+                + "(" + columns + whereClause + "  AND p.wikidata_sitelinks > 0\n"
+                + "ORDER BY p.wikidata_sitelinks DESC\nLIMIT ?)";
+
+        List<Object> params = new ArrayList<>();
+        params.add(vectorString);          // 1번 갈래 SELECT의 similarity_score
+        params.addAll(whereParams);
+        params.add(vectorString);          // 1번 갈래 ORDER BY
         params.add(limit);
+        params.add(vectorString);          // 2번 갈래 SELECT의 similarity_score
+        params.addAll(whereParams);
+        params.add(seedLimit);
 
-        return jdbcTemplate.query(sql.toString(), params.toArray(), (rs, rowNum) -> mapRow(rs));
+        return jdbcTemplate.query(sql, params.toArray(), (rs, rowNum) -> mapRow(rs));
     }
 
     /**
@@ -182,33 +220,20 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
             String vectorString, String country, String targetRegion, int limitPerRegion,
             List<String> excludedCategoryPatterns) {
 
-        StringBuilder sql = new StringBuilder();
-        List<Object> params = new ArrayList<>();
-
-        sql.append("""
-                SELECT p.id, p.name, p.address, p.category, p.tags, p.region, p.country,
-                       p.latitude, p.longitude, p.description, p.rating,
-                       1 - (p.embedding <=> ?::vector) AS similarity_score
-                FROM places p
+        StringBuilder where = new StringBuilder("""
                 WHERE p.embedding IS NOT NULL
                   AND p.active = true
                   AND p.country = ?
                   AND p.region = ?
                   AND NOT (p.latitude = 0 AND p.longitude = 0)
                 """);
-        params.add(vectorString);
-        params.add(country);
-        params.add(targetRegion);
+        List<Object> whereParams = new ArrayList<>();
+        whereParams.add(country);
+        whereParams.add(targetRegion);
 
-        appendCategoryExclusions(sql, params, excludedCategoryPatterns);
+        appendCategoryExclusions(where, whereParams, excludedCategoryPatterns);
 
-        sql.append("ORDER BY p.embedding <=> ?::vector\n");
-        params.add(vectorString);
-
-        sql.append("LIMIT ?");
-        params.add(limitPerRegion);
-
-        return jdbcTemplate.query(sql.toString(), params.toArray(), (rs, rowNum) -> mapRow(rs));
+        return queryTwoLeg(vectorString, where.toString(), whereParams, limitPerRegion);
     }
 
     /**
@@ -257,6 +282,16 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
 
         BigDecimal rating = rs.getBigDecimal("rating");
 
+        // 리뷰 수는 백필 전에는 NULL이다. getInt는 NULL을 0으로 돌려주므로 wasNull로 구분해야
+        // "리뷰 0개"와 "미상"이 섞이지 않는다 — 랭킹이 둘을 다르게 다룬다.
+        int reviewCountRaw = rs.getInt("user_rating_count");
+        Integer userRatingCount = rs.wasNull() ? null : reviewCountRaw;
+
+        // sitelinks도 세 상태를 구분해야 한다 — NULL(미매칭) / 0(항목없음) / 1+(인기도).
+        // getInt가 NULL을 0으로 돌려주므로 wasNull 없이는 "아직 안 봤음"과 "봐도 없음"이 섞인다.
+        int sitelinksRaw = rs.getInt("wikidata_sitelinks");
+        Integer wikidataSitelinks = rs.wasNull() ? null : sitelinksRaw;
+
         return new VectorSearchResult(
                 rs.getLong("id"),
                 rs.getString("name"),
@@ -269,6 +304,8 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                 rs.getBigDecimal("longitude"),
                 rs.getString("description"),
                 rating,
+                userRatingCount,
+                wikidataSitelinks,
                 rs.getDouble("similarity_score")
         );
     }

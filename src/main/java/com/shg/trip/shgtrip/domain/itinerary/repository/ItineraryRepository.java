@@ -42,4 +42,21 @@ public interface ItineraryRepository extends JpaRepository<Itinerary, Long> {
             WHERE i.shareToken = :shareToken AND i.deletedAt IS NULL
             """)
     Optional<Itinerary> findByShareToken(@Param("shareToken") String shareToken);
+
+    /**
+     * 제목이 아직 {@code expectedTitle}일 때만 교체한다(0행이면 그사이 누군가 바꾼 것).
+     *
+     * <p>비동기 story 단계가 더 나은 제목을 들고 오지만, 그 몇 초 사이에 사용자가 제목을 고쳤을
+     * 수도 있다. 무조건 UPDATE하면 그 편집이 조용히 사라진다(JPQL UPDATE라 @Version도 안 걸린다).
+     * WHERE에 현재 제목을 넣어 "안 건드려졌을 때만" 바꾸는 단일 원자적 쿼리로 처리한다.
+     */
+    @Transactional
+    @Modifying
+    @Query("""
+            UPDATE Itinerary i SET i.title = :newTitle
+            WHERE i.id = :id AND i.title = :expectedTitle AND i.deletedAt IS NULL
+            """)
+    int updateTitleIfUnchanged(@Param("id") Long id,
+                               @Param("newTitle") String newTitle,
+                               @Param("expectedTitle") String expectedTitle);
 }

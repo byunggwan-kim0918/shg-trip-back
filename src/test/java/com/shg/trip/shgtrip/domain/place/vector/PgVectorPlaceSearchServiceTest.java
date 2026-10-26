@@ -88,11 +88,45 @@ class PgVectorPlaceSearchServiceTest {
             assertThat(sql).contains("p.active = true");
             assertThat(sql).contains("p.embedding IS NOT NULL");
 
-            // params: vectorString, country, region, vectorString(ORDER BY), limit
-            assertThat(params).hasSize(5);
+            // 유사도 갈래 + 인기도 시딩 갈래를 UNION한다. 필터는 양쪽에 동일하게 걸린다.
+            assertThat(sql).contains("UNION");
+            assertThat(sql).contains("ORDER BY p.embedding <=> ?::vector");
+            assertThat(sql).contains("ORDER BY p.wikidata_sitelinks DESC");
+
+            // params: [vec, country, region, vec(ORDER BY), limit] + [vec, country, region, seedLimit]
+            assertThat(params).hasSize(9);
             assertThat(params[1]).isEqualTo("일본");
             assertThat(params[2]).isEqualTo("시부야");
             assertThat(params[4]).isEqualTo(20);
+            assertThat(params[6]).isEqualTo("일본");
+            assertThat(params[7]).isEqualTo("시부야");
+            assertThat(params[8]).isEqualTo(20);
+        }
+
+        @Test
+        @DisplayName("인기도 시딩 갈래는 Wikidata 항목이 있는 장소만 대상으로 하고 상한을 지킨다")
+        void search_seedsPopularPlacesWithinCap() {
+            // 유사도만으로 윈도를 자르면 대표 명소가 후보에 못 들어온다(실측: 성산일출봉이
+            // 제주 관광지 364곳 중 339위). 두 번째 갈래가 그 자리를 만든다.
+            // 신호는 Google 리뷰 수에서 Wikidata sitelinks로 바뀌었다(약관상 리뷰 보관 불가).
+            float[] vector = {0.1f, 0.2f, 0.3f};
+            VectorSearchRequest request = new VectorSearchRequest(
+                    vector, "한국", List.of("Jeju"), List.of(), null, null, 100
+            );
+
+            given(jdbcTemplate.query(anyString(), any(Object[].class), any(RowMapper.class)))
+                    .willReturn(List.of());
+
+            service.search(request);
+
+            ArgumentCaptor<Object[]> paramsCaptor = ArgumentCaptor.forClass(Object[].class);
+            ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+            verify(jdbcTemplate).query(sqlCaptor.capture(), paramsCaptor.capture(), any(RowMapper.class));
+
+            assertThat(sqlCaptor.getValue()).contains("p.wikidata_sitelinks > 0");
+            Object[] params = paramsCaptor.getValue();
+            // 유사도 갈래는 요청 limit, 시딩 갈래는 상한 20으로 잘린다
+            assertThat(params[params.length - 1]).isEqualTo(20);
         }
 
         @Test

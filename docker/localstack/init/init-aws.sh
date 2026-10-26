@@ -14,8 +14,7 @@ awslocal secretsmanager create-secret \
   --secret-string '{
     "DB_PASSWORD": "shg99**",
     "JWT_SECRET": "bG9jYWxfZGV2X3NlY3JldF9rZXlfZm9yX2p3dA==",
-    "ANTHROPIC_API_KEY": "sk-ant-local-test",
-    "GOOGLE_PLACES_API_KEY": "test-key"
+    "ANTHROPIC_API_KEY": "sk-ant-local-test"
   }' 2>/dev/null || echo "시크릿이 이미 존재합니다."
 
 echo "LocalStack 초기화 완료!"

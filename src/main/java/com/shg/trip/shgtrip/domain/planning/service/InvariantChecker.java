@@ -19,6 +19,7 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.DEFAUL
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.DINNER_END;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.DINNER_START;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.EARLY_FINISH_MINUTES;
+import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LARGE_GAP_MINUTES;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LUNCH_END;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LUNCH_START;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.TRANSPORT_ABS_LIMITS;
@@ -150,6 +151,16 @@ final class InvariantChecker {
                 violations.add("늦은 종료(" + formatMinutes(st.endMinutes()) + ")");
                 notices.add(dayNumber + "일차 일정이 " + formatMinutes(st.endMinutes()) + "까지 이어집니다.");
             }
+            // 메우지 못한 긴 공백은 숨기지 말고 알린다. 식사 슬롯이 11:30/17:30에 고정돼 있어
+            // 그 사이에 넣을 장소가 없으면 4시간 이상 비는데(실측: 골든 스냅샷 다수가 290분),
+            // 경로에서 멀리 떨어진 곳을 억지로 끼우면 "앉아서 3시간" 대신 "2.5시간 운전"이 된다.
+            // 채우지 못하는 것 자체는 후보 데이터의 한계이므로, 자유시간으로 정직하게 보여준다.
+            int gap = maxIntraDayGap(steps, dayNumber);
+            if (gap >= LARGE_GAP_MINUTES) {
+                violations.add("긴 공백(" + gap + "분)");
+                notices.add(dayNumber + "일차 중간에 " + (gap / 60) + "시간 " + (gap % 60)
+                        + "분 비는 시간이 있어요. 주변에 넣을 만한 곳을 찾지 못했습니다.");
+            }
             if (!violations.isEmpty()) violationDays++;
 
             log.info("불변식 요약 day={}: 점심={} 저녁={}{} 숙소={}{} 관광={} 거리={}km(표시 {}km, 상한 {}km) 최대구간={}km 종료={} | {}",
@@ -192,6 +203,24 @@ final class InvariantChecker {
      * 마지막날 저녁 식사가 필요한지 — 출발 허브 스텝 시각이 저녁 시간대를 넘기면 필요하다.
      * candidates가 없으면 대분류로 허브 스텝을 찾는다(로그 경로에서 후보 목록 없이 호출됨).
      */
+    /**
+     * 그 day에서 연속한 두 스텝 사이의 최대 공백(분). 스텝이 1개 이하면 0.
+     * 식사 슬롯 고정(11:30/17:30) 때문에 생기는 오후 공백을 사용자 안내로 노출하는 데 쓴다.
+     */
+    static int maxIntraDayGap(List<StepData> steps, int dayNumber) {
+        List<StepData> daySteps = steps.stream()
+                .filter(s -> s.dayNumber() == dayNumber)
+                .sorted(java.util.Comparator.comparingInt(s -> toMinutesOrZero(s.startTime())))
+                .toList();
+        int max = 0;
+        for (int i = 1; i < daySteps.size(); i++) {
+            int gap = toMinutesOrZero(daySteps.get(i).startTime())
+                    - toMinutesOrZero(daySteps.get(i - 1).endTime());
+            if (gap > max) max = gap;
+        }
+        return max;
+    }
+
     static boolean departsAfterDinner(List<StepData> daySteps, List<PlaceCandidate> candidates, DayState day) {
         if (day.departureHubIndex == null) return false;
         String hubName = candidates != null && byIndex(candidates, day.departureHubIndex) != null

@@ -13,10 +13,22 @@ public final class PlaceCategoryConstants {
 
     private PlaceCategoryConstants() {}
 
+    /**
+     * 숙소 판정 키워드.
+     *
+     * <p>{@code "lodging"}이 빠져 있어서 카테고리가 {@code "Travel and Transportation > Lodging"}으로
+     * 끝나는 숙소(리프에 Hotel 같은 세부 유형이 없는 경우)가 숙소로 인식되지 않았다
+     * — {@code "lodging"}은 {@code "lodge"}를 부분 문자열로 포함하지 않는다.
+     *
+     * <p>그 결과 체크인 스텝이 30분({@code ACCOMMODATION_ARRIVAL_MINUTES}) 대신 관광 체류
+     * 90~180분으로 계산돼 하루 종료가 그만큼 밀렸다(실측 79번: 보물섬펜션 90분,
+     * 제주신라호텔 120분, 제주엠리조트 180분 → 3일차 21:50 종료).
+     * {@link #majorCategory}는 같은 문자열을 LODGING으로 올바르게 분류하고 있어 두 함수가 어긋난 상태였다.
+     */
     public static final Set<String> ACCOMMODATION_KEYWORDS = Set.of(
             "숙소", "호텔", "리조트", "펜션", "게스트하우스", "모텔", "에어비앤비",
             "캠핑장", "캠프",
-            "hotel", "resort", "hostel", "motel", "lodge", "accommodation", "camp"
+            "hotel", "resort", "hostel", "motel", "lodge", "lodging", "accommodation", "camp"
     );
 
     /**
@@ -484,6 +496,10 @@ public final class PlaceCategoryConstants {
     public static final Set<String> GENERIC_LEAF_TYPES = Set.of(
             "tourist attraction", "attraction", "landmark", "landmarks", "landmarks and outdoors",
             "point of interest", "outdoors", "arts and entertainment", "structure", "plaza",
+            // restaurant를 총칭으로 넣는 이유: DB 카테고리가 "Dining and Drinking > Restaurant"로
+            // 끝나는 식당이 매우 많고(실측 79번 식당 8곳 전부 동일), 그러면 subType이 추론 없이
+            // "restaurant" 하나로 고정돼 유형 상한이 "돼지고기 6끼"를 한 종류로 센다.
+            "restaurant", "dining and drinking",
             "기타", "other", "general"
     );
 
@@ -493,6 +509,24 @@ public final class PlaceCategoryConstants {
      */
     private static final Map<String, List<String>> SUB_TYPE_KEYWORDS = new LinkedHashMap<>();
     static {
+        // ── 음식 유형(식당 세부 분류) ──
+        // 유형 상한·대안 매칭이 이 값을 공유하므로, 식당이 전부 한 종류로 묶이면
+        // "돼지고기만 6끼"를 아무도 막지 못한다(실측 79번). 지형 키워드보다 먼저 판정한다.
+        SUB_TYPE_KEYWORDS.put("pork", List.of("흑돼지", "돼지", "삼겹", "오겹", "돈가", "뒷고기",
+                "족발", "보쌈", "pork"));
+        SUB_TYPE_KEYWORDS.put("beef", List.of("한우", "소고기", "갈비", "불고기", "스테이크",
+                "야키니쿠", "beef", "steak"));
+        SUB_TYPE_KEYWORDS.put("chicken", List.of("치킨", "닭", "chicken"));
+        SUB_TYPE_KEYWORDS.put("seafood", List.of("해물", "해산물", "회", "물회", "전복", "갈치",
+                "고등어", "조개", "장어", "seafood", "sushi", "초밥"));
+        SUB_TYPE_KEYWORDS.put("noodle", List.of("국수", "면", "라멘", "우동", "소바", "짜장",
+                "칼국수", "noodle", "ramen", "udon"));
+        SUB_TYPE_KEYWORDS.put("soup", List.of("탕", "국밥", "찌개", "전골", "곰탕", "감자탕"));
+        SUB_TYPE_KEYWORDS.put("bakery", List.of("베이커리", "제과", "빵", "케이크", "디저트",
+                "bakery", "patisserie", "dessert"));
+        SUB_TYPE_KEYWORDS.put("cafe_drink", List.of("카페", "커피", "로스터", "티하우스",
+                "cafe", "coffee", "roaster"));
+        // ── 지형·시설 유형 ──
         SUB_TYPE_KEYWORDS.put("waterfall", List.of("폭포", "waterfall", "falls", "滝"));
         SUB_TYPE_KEYWORDS.put("beach", List.of("해수욕장", "해변", "바닷가", "beach", "浜", "ビーチ"));
         SUB_TYPE_KEYWORDS.put("cave", List.of("동굴", "굴사", "cave", "grotto", "洞窟"));
@@ -528,6 +562,56 @@ public final class PlaceCategoryConstants {
             // "제주 성산항"처럼 이름 끝 한 글자로만 항구임이 드러나는 경우 (항공·관광은 접미사가 아니라 안 걸림)
             "harbor", List.of("항")
     );
+
+    /**
+     * 실제로 <b>찾아가서 머물 수 있는 장소</b>인지 판정한다. 충전·보충·숙소 선택 경로가 공유한다.
+     *
+     * <p>두 부류를 막는다.
+     * <ul>
+     *   <li><b>행정 지정 구역</b> — "제주도 관광특구", "해운대 관광특구", "용두산 자갈치 관광특구",
+     *       "강남 마이스 관광특구" 같은 레코드. 방문지가 아니라 구역 이름인데 enrich가
+     *       "여행 필수 코스"로 꾸며놓아 명소처럼 읽힌다(실측 79번: 3시간 스텝으로 들어갔다).</li>
+     *   <li><b>주소가 쓸 수 없는 레코드</b> — 주소가 비어 있거나 "제주특별자치도"처럼 광역만 있는 경우.
+     *       여행자가 찾아갈 수 없다(실측 73·78번 7건: Night Market, 나눔곰장어, 영동감자탕 등).</li>
+     * </ul>
+     *
+     * <p><b>적용 지점에 주의</b>: Google 동기화 <i>이후</i>인 충전 단계에서 쓴다. 검색 단계에 걸면
+     * 서울·오사카 후보의 절반이 날아간다(주소 12자 미만이 Seoul 49%, Osaka 61%) — 그 장소들은
+     * 후보로 뽑힌 뒤 동기화로 주소가 채워진다.
+     *
+     * <p>평점 하한은 넣지 않는다. 평점 보유율이 지역별 0.6~24%뿐이라 하한을 걸면
+     * 평점 없는 명소(TourAPI 적재 성산일출봉·천지연폭포)가 전부 탈락한다.
+     */
+    public static boolean isVisitableEntity(String name, String address) {
+        if (name != null && ADMINISTRATIVE_ZONE_PATTERNS.stream().anyMatch(name::contains)) return false;
+        String addr = address == null ? "" : address.trim();
+        // 광역 단위만 있는 주소는 좌표는 맞아도 "어디로 가라"는 정보가 없다.
+        if (addr.length() < MIN_USABLE_ADDRESS_LENGTH) return false;
+        return !BROAD_ONLY_ADDRESSES.contains(addr);
+    }
+
+    /** 방문지가 아니라 구역 이름임이 드러나는 접미 패턴. */
+    private static final Set<String> ADMINISTRATIVE_ZONE_PATTERNS = Set.of(
+            "관광특구", "관광지구", "관광권역", "특구");
+
+    /**
+     * 사실상 비어 있는 주소로 보는 길이. 길이 휴리스틱을 넓게 잡으면 짧지만 유효한 주소까지
+     * 막는다 — 실측 불량 7건의 실제 내용은 "완전 공백 3건 + 광역만 2건"이었고, 나머지
+     * 2건("의사당대로 38", "제주시 비양도")은 찾아갈 수 있는 주소였다. 그래서 길이는
+     * "비어 있음"만 걸러내는 최소선으로 두고, 판별은 아래 광역-전용 목록이 담당한다.
+     */
+    private static final int MIN_USABLE_ADDRESS_LENGTH = 4;
+
+    /**
+     * 광역 단위만 담긴 주소 — 좌표는 맞아도 "어디로 가라"는 정보가 없다.
+     * 실측: 부산광안대교 "대한민국 부산광역시", 제주도 관광특구 "제주특별자치도".
+     */
+    private static final Set<String> BROAD_ONLY_ADDRESSES = Set.of(
+            "대한민국 서울특별시", "대한민국 부산광역시", "대한민국 제주특별자치도",
+            "대한민국 인천광역시", "대한민국 대구광역시", "대한민국 대전광역시",
+            "대한민국 광주광역시", "대한민국 울산광역시", "대한민국 세종특별자치시",
+            "서울특별시", "부산광역시", "제주특별자치도", "인천광역시", "대구광역시",
+            "대전광역시", "광주광역시", "울산광역시", "세종특별자치시", "대한민국");
 
     /** 야외·주간 성격이 명확한 세부 유형 — 야간 버킷에 배치하지 않는다. */
     private static final Set<String> DAYTIME_SUB_TYPES = Set.of(

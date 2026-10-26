@@ -29,7 +29,10 @@ public final class AssemblyToolSchema {
 
         Tool.InputSchema.Properties properties = Tool.InputSchema.Properties.builder()
                 .putAdditionalProperty("title", JsonValue.from(Map.of(
-                        "type", "string", "description", "concept을 반영한 일정 제목")))
+                        "type", "string",
+                        "description", "일정 목록에서 이 여행을 알아볼 이름. 12~30자, 명사로 끝남. "
+                                + "여행지 + 이 여행만의 특징. '~하는 여행' 같은 설명문과 부제 금지. "
+                                + "예: '제주 오름과 흑돼지 4일'")))
                 .putAdditionalProperty("tags", JsonValue.from(Map.of(
                         "type", "array",
                         "items", Map.of("type", "string"),

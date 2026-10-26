@@ -22,13 +22,14 @@ public class BatchJobRunner implements CommandLineRunner {
     private final TourApiSeeder tourApiSeeder;
     private final EmbeddingBatchJob embeddingBatchJob;
     private final BatchEnrichScheduler batchEnrichScheduler;
-    private final GooglePlaceSyncScheduler googlePlaceSyncScheduler;
+    private final WikidataSitelinksJob wikidataSitelinksJob;
 
     @Value("${batch.enrich.enabled:false}")
     private boolean enrichEnabled;
 
-    @Value("${batch.google-sync.enabled:false}")
-    private boolean googleSyncEnabled;
+    /** Wikidata 인기도 매칭. 기본 false — 켜야만 외부 호출이 나간다. */
+    @Value("${batch.wikidata.enabled:false}")
+    private boolean wikidataEnabled;
 
     @Value("${batch.tourapi.enabled:false}")
     private boolean tourApiEnabled;
@@ -91,16 +92,19 @@ public class BatchJobRunner implements CommandLineRunner {
             log.error("[3/4] 임베딩 배치 생성 실패, 이후 단계 계속 진행: {}", e.getMessage(), e);
         }
 
-        if (googleSyncEnabled) {
-            log.info("[4/4] Google Places 사전채움 시작");
+        // 예전 [4/4]는 Google Places 사전채움이었다. 제거됐다 — Maps 약관 3.2.3(a)가 세부정보·
+        // 좌표·평점 캐싱을 금지해 "미리 채워 둔다"는 전제 자체가 성립하지 않는다. 인기도는
+        // 아래 Wikidata가 대신한다.
+        if (wikidataEnabled) {
+            log.info("[4/4] Wikidata 인기도 매칭 시작");
             try {
-                googlePlaceSyncScheduler.sync();
-                log.info("[4/4] Google Places 사전채움 완료");
+                wikidataSitelinksJob.run();
+                log.info("[4/4] Wikidata 인기도 매칭 완료");
             } catch (Exception e) {
-                log.error("[4/4] Google Places 사전채움 실패: {}", e.getMessage(), e);
+                log.error("[4/4] Wikidata 인기도 매칭 실패: {}", e.getMessage(), e);
             }
         } else {
-            log.info("[4/4] Google Places 사전채움 건너뜀 (batch.google-sync.enabled=false)");
+            log.info("[4/4] Wikidata 인기도 매칭 건너뜀 (batch.wikidata.enabled=false)");
         }
 
         log.info("=== 배치 파이프라인 완료 ===");

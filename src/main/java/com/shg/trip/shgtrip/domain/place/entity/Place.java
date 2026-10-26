@@ -53,6 +53,16 @@ public class Place extends BaseTimeEntity {
     @Column(precision = 2, scale = 1)
     private BigDecimal rating;
 
+    /**
+     * Google 리뷰 수. 인기도 신호이며 검색 랭킹이 평점과 함께 본다.
+     *
+     * <p>평점 단독으로는 인기도를 가릴 수 없다 — 실측(제주 관광지 평점순): 리뷰 소수의
+     * 사라봉공원 5.0이 협재해수욕장 4.7(11위)보다 위에 온다. null은 "미상"이며,
+     * 랭킹은 null을 평점 없음과 같은 중립으로 다룬다.
+     */
+    @Column(name = "user_rating_count")
+    private Integer userRatingCount;
+
     private Integer priceLevel;
 
     private String openingHours;
@@ -66,6 +76,29 @@ public class Place extends BaseTimeEntity {
     /** Google place_id (Place Details ID 직조회용). 첫 매칭 시 저장되고 이후 불변. */
     @Column(name = "google_place_id", length = 255)
     private String googlePlaceId;
+
+    /** Wikidata 항목 ID(Q12345). 좌표 매칭으로 찾는다. null이면 매칭되는 항목이 없다는 뜻. */
+    @Column(name = "wikidata_id", length = 16)
+    private String wikidataId;
+
+    /**
+     * 그 항목을 다루는 위키 언어판 수 — 인기도 신호.
+     *
+     * <p>Google 리뷰 수를 약관상 보관할 수 없게 되면서 들여온 대체 신호다. 명소일수록 크고
+     * 무명은 Wikidata에 항목 자체가 없다(실측 제주: 한라산 46, 우도 17, 성산일출봉 16,
+     * 만장굴 11 / 열안지오름·사라봉은 없음). CC0라 저장 제약이 없다.
+     */
+    @Column(name = "wikidata_sitelinks")
+    private Integer wikidataSitelinks;
+
+    /**
+     * 매칭을 시도한 시각.
+     *
+     * <p>{@link #wikidataSitelinks}가 null인 것이 "아직 안 봤음"인지 "봤는데 없음"인지
+     * 구분한다. 후자를 매번 다시 조회하면 그게 바로 이번 Google 과금 사고의 구조다.
+     */
+    @Column(name = "wikidata_matched_at")
+    private OffsetDateTime wikidataMatchedAt;
 
     /** 벡터 검색 후보로 마지막 등장한 시각 — 월배치 사전채움의 인기도 기준. */
     @Column(name = "last_candidate_at")
@@ -120,24 +153,9 @@ public class Place extends BaseTimeEntity {
     @Column(nullable = false)
     private OffsetDateTime savedAt;
 
-    /**
-     * Google 데이터 재동기화 주기(일). rating은 수개월 단위, priceLevel은 거의 불변,
-     * openingHours(정기휴무)가 가장 민감하나 폐업 아닌 이상 분기 단위로 변동 → 30일이 균형점.
-     * refresh 판정(isStale)과 배치 동기화 필터(findByIdAndNeedsSync)가 공유한다.
-     */
-    public static final int STALENESS_DAYS = 30;
-
     @PrePersist
     protected void onSave() {
         if (savedAt == null) savedAt = OffsetDateTime.now();
-    }
-
-    public boolean isStale() {
-        return savedAt.isBefore(OffsetDateTime.now().minusDays(STALENESS_DAYS));
-    }
-
-    public void updateImageUrl(String imageUrl) {
-        this.imageUrl = imageUrl;
     }
 
     /** 벡터 검색 후보로 등장했음을 기록 (배치 사전채움 인기도 기준). */
@@ -145,42 +163,46 @@ public class Place extends BaseTimeEntity {
         this.lastCandidateAt = OffsetDateTime.now();
     }
 
-    public void update(String googlePlaceId, String address, double lat, double lng, Double rating,
-                       Integer priceLevel, String openingHours, String photoReference,
-                       String sourceUrl, String description) {
-        if (googlePlaceId != null) this.googlePlaceId = googlePlaceId;
-        this.address = address;
-        this.latitude = BigDecimal.valueOf(lat);
-        this.longitude = BigDecimal.valueOf(lng);
-        if (rating != null) this.rating = BigDecimal.valueOf(rating);
-        if (priceLevel != null) this.priceLevel = priceLevel;
-        if (openingHours != null) this.openingHours = openingHours;
-        if (photoReference != null) this.photoReference = photoReference;
-        if (sourceUrl != null) this.sourceUrl = sourceUrl;
-        if (description != null && !description.isBlank()) this.description = description;
-        this.savedAt = OffsetDateTime.now();
-        this.googleSyncedAt = OffsetDateTime.now();
-    }
+    /*
+     * 여기 있던 Google 쓰기 메서드 4개를 지웠다 — update(placeId, address, lat, lng, rating,
+     * userRatingCount, priceLevel, openingHours, photoReference, sourceUrl, description),
+     * clearGooglePlaceId(), setSource(), markSyncAttempted().
+     *
+     * 전부 호출처가 0이 됐고(GooglePlacesClient·PlaceRefreshService·GooglePlaceSyncScheduler가
+     * 사라지면서), 하나같이 Maps 약관 3.2.3(a)가 금지하는 필드(평점·리뷰 수·영업시간·사진
+     * 참조·주소·좌표)를 DB에 쓰는 통로였다. 남겨 두면 "호출 한 줄만 추가하면 되는" 상태라
+     * 위반 경로가 조용히 되살아난다. 되살리려면 약관부터 다시 읽어야 하도록 지운다.
+     *
+     * google_place_id 컬럼 자체는 남는다 — Place ID는 약관상 유일하게 무기한 보관이 허용된다.
+     */
 
-    /** Google place_id를 무효화 (Details 조회가 404 → 폐기된 ID). 다음 refresh 때 Text Search로 재매칭. */
-    public void clearGooglePlaceId() {
-        this.googlePlaceId = null;
-    }
-
-    /** 데이터 소스 변경 (Foursquare → Google) */
-    public void setSource(String source) {
-        this.source = source;
+    /**
+     * 대표 이미지 URL을 채운다. 호출처는 {@code TourApiSeeder}의 이미지 백필 하나뿐이다.
+     *
+     * <p>Google 사진 경로를 지우면서 한 번 같이 지웠다가 되살렸다. 지울 당시엔 호출처가 0이었고
+     * S3 업로더(= Google 사진 전용)가 유일한 사용처였기 때문인데, TourAPI {@code firstimage}는
+     * 약관 제약이 없는 자체 출처라 쓰기 통로가 필요하다. Google 쪽 필드(평점·리뷰·영업시간·
+     * 사진 참조)와 달리 이건 되살려도 되는 값이다.
+     */
+    public void updateImageUrl(String imageUrl) {
+        this.imageUrl = imageUrl;
     }
 
     /**
-     * Google 매칭 실패 시 동기화 시도 사실만 기록한다.
-     * savedAt을 갱신하지 않으면 source='foursquare' OR savedAt<7일 조건에 영구히 걸려
-     * 후보로 뽑힐 때마다 무한 재호출되므로, 실패해도 savedAt을 갱신해 7일 주기로만 재시도되게 한다.
-     * source는 실제 Google 데이터로 확정된 것이 아니므로 그대로 유지한다.
+     * Wikidata 매칭 결과를 기록한다. <b>실패도 기록한다</b>.
+     *
+     * <p>매칭되는 항목이 없으면 {@code wikidataId}·{@code sitelinks}가 null로 남지만
+     * {@code matchedAt}은 찍힌다. 이 구분이 없으면 "Wikidata에 없는 장소"를 배치가 돌 때마다
+     * 다시 조회한다 — 2026-10-08 Google 과금 사고가 정확히 그 구조였다(리뷰 데이터가 없는
+     * 57곳이 조건에서 영원히 안 빠져 41회 반복 조회됨).
+     *
+     * @param wikidataId 매칭된 항목 ID, 없으면 null
+     * @param sitelinks  그 항목의 위키 언어판 수, 없으면 null
      */
-    public void markSyncAttempted() {
-        this.savedAt = OffsetDateTime.now();
-        this.googleSyncedAt = OffsetDateTime.now();
+    public void markWikidataMatch(String wikidataId, Integer sitelinks) {
+        this.wikidataId = wikidataId;
+        this.wikidataSitelinks = sitelinks;
+        this.wikidataMatchedAt = OffsetDateTime.now();
     }
 
     /** soft delete 처리 */
@@ -232,15 +254,11 @@ public class Place extends BaseTimeEntity {
         this.enrichedAt = OffsetDateTime.now();
     }
 
-    /**
-     * 장소명을 갱신한다 — Google Places(languageCode=ko)가 준 한글 공식 명칭 채택 전용.
-     * 호출부(PlaceRefreshService)가 "기존 이름 비한글 && 새 이름 한글" 방향만 허용한다.
+    /*
+     * updateName(String)도 지웠다. Google이 languageCode=ko로 준 한글 공식 명칭을 채택하는
+     * 전용 메서드였고, 유일한 호출부 PlaceRefreshService가 사라지면서 고아가 됐다.
+     * 이름은 적재 배치(TourAPI·Foursquare)가 정하는 값이다.
      */
-    public void updateName(String newName) {
-        if (newName != null && !newName.isBlank()) {
-            this.name = newName;
-        }
-    }
 
     /**
      * Foursquare 시딩 시 메타데이터만 갱신한다.

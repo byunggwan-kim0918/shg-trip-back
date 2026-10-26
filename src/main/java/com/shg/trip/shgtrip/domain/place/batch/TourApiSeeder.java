@@ -39,6 +39,8 @@ import java.util.Set;
 public class TourApiSeeder {
 
     private static final String BASE_URL = "https://apis.data.go.kr/B551011/KorService2/areaBasedList2";
+    /** 지역 목록에 안 잡히는 레코드(areacode 공란)를 이름으로 역조회할 때 쓴다. */
+    private static final String KEYWORD_URL = "https://apis.data.go.kr/B551011/KorService2/searchKeyword2";
     private static final int NUM_OF_ROWS = 100;
 
     /**
@@ -87,6 +89,17 @@ public class TourApiSeeder {
     @Value("${batch.tourapi.max-rows-per-type:500}")
     private int maxRowsPerType;
 
+    /**
+     * 이미지 없는 관광지를 이름으로 역조회해 채울지 여부. 기본 false — 켜면 대상 1건당
+     * 호출 1회가 나가므로 의도적으로 돌릴 때만 켠다.
+     */
+    @Value("${batch.tourapi.image-backfill.enabled:false}")
+    private boolean imageBackfillEnabled;
+
+    /** 1회 실행당 이름 역조회 상한. */
+    @Value("${batch.tourapi.image-backfill.limit:300}")
+    private int imageBackfillLimit;
+
     public TourApiSeeder(PlaceRepository placeRepository, ObjectMapper objectMapper) {
         this.placeRepository = placeRepository;
         this.objectMapper = objectMapper;
@@ -103,6 +116,7 @@ public class TourApiSeeder {
 
         int totalInserted = 0;
         int totalSkipped = 0;
+        int totalBackfilled = 0;
         for (String areaRaw : areaCodesRaw.split(",")) {
             String trimmed = areaRaw.trim();
             if (trimmed.isEmpty()) continue;
@@ -117,15 +131,23 @@ public class TourApiSeeder {
                 int[] result = seedAreaType(areaCode, region, type.getKey(), type.getValue());
                 totalInserted += result[0];
                 totalSkipped += result[1];
+                totalBackfilled += result[2];
+            }
+
+            // 지역 목록에 안 잡히는 행(areacode 공란)은 여기서 이름으로 따로 채운다.
+            if (imageBackfillEnabled) {
+                totalBackfilled += backfillImagesByKeyword(region, imageBackfillLimit);
             }
         }
-        log.info("TourAPI 시딩 완료 - 신규 {}건, 중복 스킵 {}건", totalInserted, totalSkipped);
+        log.info("TourAPI 시딩 완료 - 신규 {}건, 중복 스킵 {}건, 이미지 복구 {}건",
+                totalInserted, totalSkipped, totalBackfilled);
     }
 
-    /** @return [inserted, skipped] */
+    /** @return [inserted, skipped, backfilled] */
     private int[] seedAreaType(int areaCode, String region, int contentTypeId, String category) {
         int inserted = 0;
         int skipped = 0;
+        int backfilled = 0;
         int fetched = 0;
 
         for (int pageNo = 1; fetched < maxRowsPerType; pageNo++) {
@@ -140,6 +162,7 @@ public class TourApiSeeder {
                 if (place == null) continue;
                 if (placeRepository.existsByNameAndRegion(place.getName(), region)) {
                     skipped++;
+                    backfilled += backfillImage(place.getName(), region, place.getImageUrl());
                     continue;
                 }
                 placeRepository.save(place);
@@ -148,9 +171,116 @@ public class TourApiSeeder {
             if (items.size() < NUM_OF_ROWS) break; // 마지막 페이지
         }
 
-        log.info("TourAPI 시딩 - areaCode={}({}), contentTypeId={}: 신규 {}건, 스킵 {}건",
-                areaCode, region, contentTypeId, inserted, skipped);
-        return new int[]{inserted, skipped};
+        log.info("TourAPI 시딩 - areaCode={}({}), contentTypeId={}: 신규 {}건, 스킵 {}건, 이미지복구 {}건",
+                areaCode, region, contentTypeId, inserted, skipped, backfilled);
+        return new int[]{inserted, skipped, backfilled};
+    }
+
+    /**
+     * 이미 있는 행의 비어 있는 {@code image_url}만 TourAPI 대표 이미지로 채운다.
+     *
+     * <p>시더는 원래 중복을 스킵만 하고 기존 행을 건드리지 않았다. 그 사이 Google 동기화가
+     * 이 행들의 이미지를 덮어썼고, 약관에 따라 Google 데이터를 삭제하면서 함께 비었다
+     * (실측: TourAPI 제주 관광지 175건 전부 DB에 있는데 이미지 0건). 커버 이미지가 전멸한
+     * 직접 원인이라, 시딩 경로에서 같이 복구한다.
+     *
+     * <p><b>이미지만 건드린다.</b> 이름·좌표·카테고리는 덮어쓰지 않는다 — 기존 행이 Google
+     * 동기화로 한글 정식명을 얻은 경우가 있어, TourAPI 표제로 되돌리면 품질이 내려간다.
+     *
+     * @return 실제로 채운 행 수
+     */
+    int backfillImage(String name, String region, String imageUrl) {
+        if (imageUrl == null || imageUrl.isBlank()) return 0;
+        List<Place> targets = placeRepository.findImagelessByNameAndRegion(name, region);
+        if (targets.isEmpty()) return 0;
+        for (Place target : targets) {
+            target.updateImageUrl(imageUrl);
+        }
+        placeRepository.saveAll(targets);
+        log.debug("TourAPI 이미지 복구: name={}, region={}, {}행", name, region, targets.size());
+        return targets.size();
+    }
+
+    /**
+     * 지역 목록 조회로는 닿지 않는 행의 이미지를 <b>이름 역조회</b>로 채운다.
+     *
+     * <p>왜 따로 필요한가: TourAPI가 성산일출봉의 {@code areacode}를 빈 값으로 내려준다.
+     * 그래서 {@code areaBasedList2&areaCode=39}에는 영영 안 들어온다 — 제주 관광지 totalCount가
+     * arrange를 뭘 주든 175로 고정이고, 그 175에 성산일출봉·천지연폭포·산방산이 없다.
+     * 같은 레코드를 {@code searchKeyword2}로 치면 이미지까지 정상으로 나온다.
+     *
+     * <p><b>제목이 정확히 같을 때만</b> 채운다. "성산일출봉"으로 검색하면
+     * "성산흑돼지두루치기 성산일출봉점"도 같이 나오는데, 느슨하게 받으면 명소 자리에 식당 사진이
+     * 박힌다. DB 이름이 이미 TourAPI 표제(`성산일출봉 [유네스코 세계자연유산]`)와 같은 형식이라
+     * 정확일치로 충분하다.
+     *
+     * <p>Google 백필과 달리 실패 이력을 남기지 않는다. 이 API는 <b>무료 공공데이터</b>이고
+     * 이 단계는 플래그로 꺼져 있으며 {@code limit}으로 1회 호출 수가 묶인다 — 재조회가 반복돼도
+     * 과금으로 이어지지 않는다(2026-10-08 사고는 호출마다 과금되는 Google에서 났다).
+     *
+     * @return 채운 행 수
+     */
+    int backfillImagesByKeyword(String region, int limit) {
+        List<Place> targets = placeRepository.findImagelessAttractions(
+                region, org.springframework.data.domain.PageRequest.of(0, limit));
+        if (targets.isEmpty()) {
+            log.info("TourAPI 키워드 백필 - region={}: 대상 없음", region);
+            return 0;
+        }
+
+        int filled = 0;
+        int notFound = 0;
+        for (Place place : targets) {
+            String imageUrl = fetchImageByExactTitle(place.getName());
+            if (imageUrl == null) {
+                notFound++;
+                continue;
+            }
+            place.updateImageUrl(imageUrl);
+            placeRepository.save(place);
+            filled++;
+        }
+        log.info("TourAPI 키워드 백필 - region={}: 대상 {}건, 복구 {}건, 미발견 {}건",
+                region, targets.size(), filled, notFound);
+        return filled;
+    }
+
+    /** 키워드 검색 결과 중 <b>제목이 정확히 일치하고</b> 대표이미지가 있는 첫 건의 이미지 URL. */
+    private String fetchImageByExactTitle(String name) {
+        String url = KEYWORD_URL
+                + "?serviceKey=" + serviceKey
+                + "&MobileOS=ETC&MobileApp=shgtrip&_type=json"
+                + "&numOfRows=20&pageNo=1"
+                + "&keyword=" + java.net.URLEncoder.encode(name, java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .timeout(Duration.ofSeconds(30))
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) return null;
+
+            JsonNode itemsNode = objectMapper.readTree(response.body())
+                    .path("response").path("body").path("items").path("item");
+            if (itemsNode.isMissingNode() || itemsNode.isNull()) return null;
+            List<JsonNode> items = itemsNode.isArray()
+                    ? java.util.stream.StreamSupport.stream(itemsNode.spliterator(), false).toList()
+                    : List.of(itemsNode);
+
+            for (JsonNode item : items) {
+                if (!name.equals(item.path("title").asText(null))) continue;
+                String image = item.path("firstimage").asText(null);
+                if (image != null && !image.isBlank()) return image;
+            }
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        } catch (Exception e) {
+            log.warn("TourAPI 키워드 조회 실패: name={}, error={}", name, e.getMessage());
+            return null;
+        }
     }
 
     /** @return 아이템 목록. 호출/파싱 실패 시 null (빈 페이지와 구분). */

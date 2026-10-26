@@ -21,7 +21,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 
@@ -51,10 +50,8 @@ class OptimizedGenerationExecutorTest {
     @Mock private GenerationResultStore resultStore;
     @Mock private CancellationRegistry cancellationRegistry;
     @Mock private GenerationPolicyService generationPolicyService;
-    @Mock private com.shg.trip.shgtrip.domain.place.service.PlaceRefreshService placeRefreshService;
     @Mock private com.shg.trip.shgtrip.domain.place.repository.PlaceRepository placeRepository;
     @Mock private com.shg.trip.shgtrip.domain.planning.service.validation.PlaceRegionValidator placeRegionValidator;
-    @Mock private Executor googleSyncExecutor;
     @Mock private ScheduledExecutorService sseHeartbeatScheduler;
 
     @InjectMocks
@@ -153,13 +150,12 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
-        when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
         when(routeOptimizer.schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any()))
                 .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
-        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList(), anyList()))
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
 
@@ -175,8 +171,10 @@ class OptimizedGenerationExecutorTest {
         verify(routeOptimizer).schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any());
         verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any());
         verify(resultStore).save("job-1", 42L);
+        // 임시 제목(짧은 결정론 문구)을 넘겨야 한다 — concept을 넘기면 제목 교체가 0행이 된다.
         verify(storyGenerationService).generateAndAttach(
-                eq("job-1"), eq(emitter), eq(42L), eq(fixedSteps), eq(selectionOutput.concept()), eq(vectorEnrichedInput));
+                eq("job-1"), eq(emitter), eq(42L), eq(fixedSteps), anyString(), eq(vectorEnrichedInput),
+                eq(selectionOutput.concept()));
         verify(fallbackExecutor, never()).execute(anyString(), any(), anyLong(), any());
     }
 
@@ -217,13 +215,12 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
-        when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
         when(routeOptimizer.schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any()))
                 .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
-        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList(), anyList()))
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.fail("일부 검증 경고"));
 
@@ -235,7 +232,7 @@ class OptimizedGenerationExecutorTest {
 
         verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any());
         verify(resultStore).save("job-4", 99L);
-        verify(storyGenerationService).generateAndAttach(eq("job-4"), any(), eq(99L), any(), any(), any());
+        verify(storyGenerationService).generateAndAttach(eq("job-4"), any(), eq(99L), any(), any(), any(), any());
     }
 
     @Test
@@ -269,13 +266,12 @@ class OptimizedGenerationExecutorTest {
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
-        when(placeRepository.findByIdAndNeedsSync(anyList(), any())).thenReturn(List.of());
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
         when(routeOptimizer.schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any()))
                 .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
-        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), eq(selectionOutput.concept()), anyList(), anyList()))
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
                 .thenReturn(draftData);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
 

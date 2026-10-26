@@ -47,19 +47,13 @@ oauth:
 anthropic:
   models:
     haiku: claude-haiku-4-5-20251001
-    sonnet: claude-sonnet-4-6
+    sonnet: claude-sonnet-5
     max-output-tokens: 64000
 
 openai:
   api-key: test-openai-key
   embedding-model: text-embedding-3-small
   embedding-dimensions: 1536
-
-google:
-  places:
-    api-key: test
-    text-search-uri: https://places.googleapis.com/v1/places:searchText
-    details-base-uri: https://places.googleapis.com/v1/places
 
 planning:
   validation:

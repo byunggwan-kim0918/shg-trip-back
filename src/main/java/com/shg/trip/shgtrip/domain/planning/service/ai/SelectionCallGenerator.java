@@ -88,12 +88,13 @@ public class SelectionCallGenerator {
                 .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
                         "AI 응답에서 장소 선택 데이터를 추출할 수 없습니다."));
 
-        log.info("SelectionCallGenerator 완료: days={}, dayCount={}, spareCount={}, inputTokens={}, outputTokens={}",
+        log.info("SelectionCallGenerator 완료: days={}, dayCount={}, spareCount={}, inputTokens={}, outputTokens={}, 캐시읽음/쓰기={}",
                 days,
                 result.days() != null ? result.days().size() : 0,
                 result.spareIndices() != null ? result.spareIndices().size() : 0,
                 message.usage().inputTokens(),
-                message.usage().outputTokens());
+                message.usage().outputTokens(),
+                cacheInfo(message));
 
         return result;
     }
@@ -165,7 +166,7 @@ public class SelectionCallGenerator {
         }
 
         sb.append("\n## 후보 장소 목록 (").append(candidates.size()).append("개)\n");
-        sb.append("형식: ID | 이름 | 카테고리 | 평점 | #태그 | 세부지역 | 체류시간 | 시간대 | 휴무 ")
+        sb.append("형식: ID | 이름 | 카테고리 | 평점 · 인기도 | #태그 | 세부지역 | 체류시간 | 시간대 | 휴무 ")
                 .append("(값이 없는 항목은 생략됨)\n");
         boolean hasUserSelected = false;
         boolean hasVia = false;
@@ -185,7 +186,7 @@ public class SelectionCallGenerator {
             sb.append(candidate.index()).append(" | ")
                     .append(candidate.name()).append(" | ")
                     .append(summarizeCategory(candidate.category())).append(" | ")
-                    .append(formatRating(candidate.rating())).append(" | ")
+                    .append(formatRating(candidate.rating(), candidate.wikidataSitelinks())).append(" | ")
                     .append(formatTags(candidate.tags())).append(" | ")
                     .append(candidate.displayRegion() != null ? candidate.displayRegion() : "");
             appendIfPresent(sb, formatDuration(candidate.recommendedDurationMinutes()));
@@ -272,9 +273,30 @@ public class SelectionCallGenerator {
      * Foursquare 풀 경로에서 리프 노드만 추출하여 토큰을 절감한다.
      * "Dining and Drinking > Restaurant > Korean Restaurant" → "Korean Restaurant"
      */
-    /** 평점을 "⭐4.2" 형태로. 평점 없으면 "평점없음"(모델이 저품질/미검증 장소를 인지하도록). */
-    private String formatRating(java.math.BigDecimal rating) {
-        return rating != null ? "⭐" + rating.toPlainString() : "평점없음";
+    /**
+     * 평점과 인기도를 "⭐4.4 · 인기도 높음" 형태로.
+     *
+     * <p>인기도 신호가 없으면 모델이 평점만 보고 무명 장소를 명소보다 위에 둔다(실측: 바늘오름
+     * ⭐4.6이 용담해안도로 ⭐4.3을 이겨 일정에 들어갔다). 신호는 Wikidata 언어판 수인데,
+     * 숫자를 그대로 주면 모델이 척도를 모른다 — 46과 16 중 뭐가 큰지는 알아도 "16이 명소인가"는
+     * 판단하지 못한다. 그래서 등급 문구로 바꿔 준다.
+     *
+     * <p>실측 분포(제주 750건): 중간값 1, 83%가 1~2, p95가 5, p99가 28. 그래서 경계를
+     * 10/3/1에 둔다 — 한라산 46·성산일출봉 16이 "매우 높음", 만장굴 11이 "높음"이다.
+     */
+    private String formatRating(java.math.BigDecimal rating, Integer sitelinks) {
+        String base = rating != null ? "⭐" + rating.toPlainString() : "평점없음";
+        String fame = formatFame(sitelinks);
+        return fame == null ? base : base + " · " + fame;
+    }
+
+    /** sitelinks를 모델이 읽을 수 있는 등급으로. null(미매칭)이면 아무 말도 하지 않는다. */
+    private String formatFame(Integer sitelinks) {
+        if (sitelinks == null) return null;
+        if (sitelinks >= 10) return "인기도 매우 높음";
+        if (sitelinks >= 3) return "인기도 높음";
+        if (sitelinks >= 1) return "인기도 보통";
+        return "인기도 낮음";
     }
 
     private String formatTags(List<String> tags) {
@@ -321,5 +343,18 @@ public class SelectionCallGenerator {
                 }
             }
         }
+    }
+
+    /**
+     * 프롬프트 캐시 적중 현황을 "읽음/쓰기" 형태로 포맷한다.
+     *
+     * <p>적중 없는 캐시는 쓰기 프리미엄(1.25배)만 내고 이득이 없다. 생성이 희박해서 기본 TTL
+     * 안에 재사용되지 않으면 캐시가 순손실인데, 지금은 적중률 로그가 없어 이득인지 손실인지
+     * 판단할 수 없었다. 읽음이 계속 0이면 캐시를 떼는 게 맞다.
+     */
+    private String cacheInfo(Message message) {
+        long read = message.usage().cacheReadInputTokens().orElse(0L);
+        long write = message.usage().cacheCreationInputTokens().orElse(0L);
+        return read + "/" + write;
     }
 }

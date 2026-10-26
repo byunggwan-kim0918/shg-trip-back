@@ -522,7 +522,7 @@ public class ClaudeAIService implements AIService {
                 Map.entry("type", "object"),
                 Map.entry("additionalProperties", false),
                 Map.entry("properties", Map.ofEntries(
-                        Map.entry("name", Map.of("type", "string", "description", "장소 정식 명칭 (Google Maps에서 검색 가능한 공식 이름)")),
+                        Map.entry("name", Map.of("type", "string", "description", "장소 정식 명칭 — 간판에 적힌 그대로의 공식 상호/명칭")),
                         Map.entry("address", Map.of("type", "string", "description", "장소 전체 주소 (도로명 또는 지번)")),
                         Map.entry("category", Map.of("type", "string", "description", "장소 카테고리 (맛집, 관광, 카페, 숙소, 쇼핑, 액티비티 중 하나)")),
                         Map.entry("region", Map.of("type", "string", "description", "지역명 (예: 강남구, 하라주쿠)")),
@@ -535,7 +535,7 @@ public class ClaudeAIService implements AIService {
                 Map.entry("type", "object"),
                 Map.entry("additionalProperties", false),
                 Map.entry("properties", Map.ofEntries(
-                        Map.entry("name", Map.of("type", "string", "description", "장소 정식 명칭 (Google Maps에서 검색 가능한 공식 이름)")),
+                        Map.entry("name", Map.of("type", "string", "description", "장소 정식 명칭 — 간판에 적힌 그대로의 공식 상호/명칭")),
                         Map.entry("address", Map.of("type", "string", "description", "장소 전체 주소 (도로명 또는 지번)")),
                         Map.entry("category", Map.of("type", "string", "description", "장소 카테고리 (맛집, 관광, 카페, 숙소, 쇼핑, 액티비티 중 하나)")),
                         Map.entry("region", Map.of("type", "string", "description", "지역명 (예: 강남구, 하라주쿠)")),
