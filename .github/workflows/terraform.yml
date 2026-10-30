@@ -54,10 +54,11 @@ jobs:
         working-directory: ${{ env.WORKING_DIR }}
         run: terraform validate
 
+      # 미리보기라 잠그지 않는다 — plan 역할은 ReadOnlyAccess뿐이라 잠금 파일을 쓸 수 없다
       - name: Terraform Plan
         id: plan
         working-directory: ${{ env.WORKING_DIR }}
-        run: terraform plan -no-color -input=false -out=tfplan
+        run: terraform plan -no-color -input=false -lock=false -out=tfplan
 
       - name: Comment Plan on PR
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0

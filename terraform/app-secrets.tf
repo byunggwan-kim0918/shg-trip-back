@@ -11,6 +11,9 @@ resource "aws_secretsmanager_secret" "app_prod" {
     Project = var.project
     Env     = var.env
   }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 removed {

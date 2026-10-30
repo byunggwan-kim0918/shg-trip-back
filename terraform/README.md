@@ -4,6 +4,8 @@
 
 ### 1. tfstate 백엔드 버킷 수동 생성 (1회)
 
+잠금은 S3 잠금 파일(`use_lockfile`)이라 DynamoDB 테이블은 필요 없다.
+
 > ⚠️ S3 버킷명은 전 세계에서 유일해야 한다. `shgtrip-terraform-state` / `shgtrip-data`는
 > 이미 타인이 점유 중이라 사용 불가. 계정 ID를 접미사로 붙여 충돌을 피한다.
 > (`main.tf`의 backend `bucket`, `s3.tf`의 데이터 버킷명이 이 규칙을 따름)
@@ -17,12 +19,6 @@ aws s3api put-public-access-block \
   --bucket shgtrip-terraform-state-<ACCOUNT_ID> \
   --public-access-block-configuration \
       BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-aws dynamodb create-table \
-  --table-name shgtrip-terraform-lock \
-  --attribute-definitions AttributeName=LockID,AttributeType=S \
-  --key-schema AttributeName=LockID,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region ap-northeast-2
 ```
 
 ### 2. tfvars 파일 생성
@@ -121,6 +117,8 @@ Step Functions
   `terraform/scripts/set-secret.sh`로 Secrets Manager에 직접 넣는다. FSQ 토큰 월간 갱신도 `set-secret.sh fsq` 한 줄이다.
 - 2026-10-30 이전 state·tfvars의 S3 이전 버전(버킷 버저닝)에는 시크릿이 평문으로 남아 있다. 버킷은 비공개·암호화지만,
   유출이 의심되면 S3 이전 버전 삭제가 아니라 해당 키 교체로 대응한다.
+- VPC·ALB·RDS·Valkey·데이터 버킷·시크릿은 `prevent_destroy`, ALB는 AWS 삭제 보호도 켜져 있다. 정말 지울 때는
+  코드에서 먼저 풀고 apply한 뒤 지운다.
 - 장애 알림(`monitoring.tf`)과 파이프라인 알림은 `alert_email`로 간다. 주소를 바꾸면 새 주소로 온 SNS 구독 확인 메일을
   눌러야 한다 — 누르기 전엔 알림이 가지 않는다(스팸함에 잘 들어간다). 예산 알림은 `budget_alert_email`.
 - 월간 파이프라인(Step Functions)은 태스크 정의 **패밀리 이름**으로 실행한다 → 최신 ACTIVE 리비전 = CI가 마지막으로

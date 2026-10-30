@@ -11,6 +11,9 @@ resource "aws_vpc" "main" {
     Env       = var.env
     ManagedBy = "manual"
   }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_subnet" "public_2a" {

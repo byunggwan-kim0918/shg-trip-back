@@ -9,6 +9,9 @@ resource "aws_secretsmanager_secret" "fsq_token" {
     Project = var.project
     Env     = var.env
   }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 removed {

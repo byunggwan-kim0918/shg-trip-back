@@ -57,7 +57,6 @@ terraform/*.tfstate.backup
 # 저장된 plan 파일에는 tfvars 시크릿이 평문으로 들어간다
 terraform/tfplan
 terraform/*.tfplan
-terraform/.terraform.lock.hcl
 
 # jqwik property test DB (로컬 실행 산출물)
 .jqwik-database
