@@ -126,7 +126,5 @@ Step Functions
 - VPC·서브넷·보안그룹·ALB·NAT·ECS 서비스도 Terraform이 관리한다(2026-10-30 콘솔 리소스 편입). 콘솔에서 고치면
   다음 apply가 되돌린다 — 코드로 고칠 것. 예외: tfstate 버킷·잠금 테이블(1번, 부트스트랩), ACM 인증서의 DNS 검증
   레코드(Cloudflare).
-- `imports.tf`는 이 계정에서 편입을 한 번 수행하기 위한 파일이다. CI apply로 편입이 끝나면 지운다 — 남겨 두면
-  새 계정에서 처음부터 만들 때 "존재하지 않는 리소스를 import" 오류로 plan이 실패한다.
 - CI apply는 승인 대기 중 main의 `terraform/`이 바뀌면 거부된다(옛 설정으로 최신 상태를 덮지 않도록). 항상 최신
   Terraform run을 승인한다. 코드만 바뀐 머지는 막지 않는다.

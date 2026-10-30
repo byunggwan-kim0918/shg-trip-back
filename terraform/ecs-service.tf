@@ -8,8 +8,14 @@ resource "aws_ecs_service" "app" {
   desired_count   = 1
   launch_type     = "FARGATE"
 
-  health_check_grace_period_seconds = 120
+  # Spring 기동(이미지 pull 포함 약 1분) + 타깃 정상 판정(15초×2)
+  health_check_grace_period_seconds = 180
   availability_zone_rebalancing     = "ENABLED"
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
   load_balancer {
     target_group_arn = aws_lb_target_group.app.arn
@@ -43,6 +49,11 @@ resource "aws_ecs_service" "web" {
 
   health_check_grace_period_seconds = 120
   availability_zone_rebalancing     = "ENABLED"
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
   load_balancer {
     target_group_arn = aws_lb_target_group.web.arn
