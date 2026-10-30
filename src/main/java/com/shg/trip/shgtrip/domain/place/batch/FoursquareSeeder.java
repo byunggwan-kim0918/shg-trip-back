@@ -58,7 +58,21 @@ public class FoursquareSeeder {
             "government building",                 // 관공서, 우체국
             "education",                           // 학교, 대학
             "convenience store",
-            "pharmacy");
+            "pharmacy",
+            // 2026-10 실측(12개 도시 약 20만 행)에서 일정 스텝이 될 수 없는데 남아 있던 분기.
+            // 교회(명동성당 등)·공항·역·마트는 명소이거나 동선 기점이라 남긴다.
+            "transport hub > bus stop",            // 버스정류장 3,317
+            "travel and transportation > road",    // 도로·교차로 1,858
+            "fuel station",                        // 주유소 961
+            "travel and transportation > parking", // 주차장 906
+            "gym and studio",                      // 헬스장·필라테스·요가 약 2,100
+            "golf driving range",                  // 골프연습장 336
+            "park > playground",                   // 단지 놀이터 512
+            "eyecare store",                       // 안경점 479
+            "computers and electronics retail",    // 전자제품점 502
+            "housing development",
+            "polling place",
+            "assisted living");
 
     /** 카테고리가 비여행 분기(BLOCKED_CATEGORY_KEYWORDS)에 해당하면 true. */
     static boolean isNonTravelCategory(String category) {
@@ -247,10 +261,19 @@ public class FoursquareSeeder {
 
         // CSV의 description 필드에는 실제 설명이 아니라 웹사이트 URL이 들어있는 경우가 흔하다
         // (실측 1.7만 건). URL은 임베딩 텍스트에 노이즈이므로 source_url로 분리 저장한다.
+        // "https:/www…"(슬래시 하나)·"www…"(스킴 없음)도 URL이다 — 놓치면 보강 프롬프트와 임베딩에
+        // 설명으로 들어간다. 링크로 쓰일 수 있으므로 https://로 맞춰 저장한다.
         String sourceUrl = null;
-        if (description != null && description.trim().matches("(?i)^https?://\\S+$")) {
-            sourceUrl = description.trim();
-            description = null;
+        if (description != null) {
+            String trimmed = description.trim();
+            if (trimmed.matches("(?i)^https?://\\S+$")) {
+                sourceUrl = trimmed;
+            } else if (trimmed.matches("(?i)^https?:/[^/]\\S*$")) {
+                sourceUrl = trimmed.replaceFirst("(?i)^(https?):/", "$1://");
+            } else if (trimmed.matches("(?i)^www\\.\\S+$")) {
+                sourceUrl = "https://" + trimmed;
+            }
+            if (sourceUrl != null) description = null;
         }
 
         return new FoursquareRecord(fsqPlaceId.trim(), name.trim(), latitude, longitude,

@@ -1,5 +1,5 @@
 -- metrics --
-  스텝 16 / 숙소 1곳 / 총이동 301km
+  스텝 16 / 숙소 1곳 / 총이동 300km
   연속중복 0 / 최대공백 143분 / 늦은시작 0일 / 안내 0건
 == day 1 ==
   #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
@@ -12,9 +12,8 @@
   #3  13:37-15:07  사라봉공원 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
       이동: CAR 57분 37.89km 11367원
       비용: 0원 / 메모: -
-      대안: 용담해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 제주 무지개해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 월정리해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 한림민속오일시장 | Retail > Market | 0원
+      대안: 중문색달해수욕장 | Landmarks and Outdoors > Tourist Attraction | 0원
   #4  17:30-18:40  대금식당 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
       이동: CAR 59분 39.18km 11753원
       비용: 13000원 / 메모: -
@@ -27,8 +26,8 @@
   #6  09:15-11:15  곽지해수욕장 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
       이동: CAR 15분 9.54km 2862원
       비용: 0원 / 메모: -
+      대안: 중문색달해수욕장 | Landmarks and Outdoors > Tourist Attraction | 0원
       대안: 한림민속오일시장 | Retail > Market | 0원
-      대안: 제주 무지개해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
   #7  12:00-13:10  명품진전복해물탕 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
       이동: CAR 45분 29.65km 8896원
       비용: 13000원 / 메모: -
@@ -36,14 +35,9 @@
   #8  13:44-15:44  1100고지습지 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
       이동: CAR 34분 22.16km 6648원
       비용: 0원 / 메모: -
-      대안: 용담해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 고산일과해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 신창풍차해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
   #9  16:22-17:52  사라봉 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
       이동: CAR 38분 25.3km 7589원
       비용: 0원 / 메모: -
-      대안: 월정리해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 성산세화해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
   #10 18:01-19:11  아레 한국 식당 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
       이동: CAR 9분 5.88km 1763원
       비용: 13000원 / 메모: -
@@ -56,24 +50,19 @@
   #12 09:41-11:11  제주항공우주박물관 | Arts and Entertainment > Cultural Center | 서귀포시 | Jeju
       이동: CAR 41분 26.84km 8053원
       비용: 0원 / 메모: -
-      대안: 고산일과해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 신창풍차해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 중문색달해수욕장 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 한림민속오일시장 | Retail > Market | 0원
   #13 11:30-12:40  양가형제 | Dining and Drinking > Restaurant | 제주시 | Jeju
       이동: CAR 9분 5.53km 1658원
       비용: 13000원 / 메모: -
   #14 12:58-14:28  제주 서귀포 산방산 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
       이동: CAR 18분 11.86km 3557원
       비용: 0원 / 메모: -
-      대안: 한림민속오일시장 | Retail > Market | 0원
-      대안: 제주 무지개해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 용담해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
-  #15 14:46-16:46  중문색달해수욕장 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
-      이동: CAR 18분 11.76km 3528원
+  #15 14:42-16:12  논짓물 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
+      이동: CAR 14분 9.08km 2723원
       비용: 0원 / 메모: -
-      대안: 월정리해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 성산세화해안도로 | Landmarks and Outdoors > Tourist Attraction | 0원
   #16 17:30-18:40  연돈 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
-      이동: CAR 4분 2.07km 621원
+      이동: CAR 6분 3.81km 1143원
       비용: 13000원 / 메모: -
       대안: 하하호호 우도점 | Dining and Drinking > Restaurant > Burger Joint | 13000원
 -- notices (0) --

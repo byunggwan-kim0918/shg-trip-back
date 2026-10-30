@@ -128,6 +128,22 @@
 - 한 도시 안에서 구역을 나누는 여행이면 현지 표기 세부 지명을 씁니다.
   - 예: {"1-2": ["시부야","하라주쿠"], "3-4": ["아사쿠사","우에노"], "5": ["오다이바"]}
 
+### 4-B. 동행·인원 (companionType, partySize)
+description(요청 문장)에서 누구와 가는지 추론합니다. 문장에 단서가 없으면 추측하지 말고 UNKNOWN / null로 둡니다.
+- companionType: SOLO(혼자) | COUPLE(커플·연인·신혼·부부 둘이) | FAMILY(가족·아이·부모님) | FRIENDS(친구·동료) | UNKNOWN
+- partySize: 인원 수(정수). "커플"·"부부"는 2, "혼자"는 1, "친구 3명"은 3. 숫자를 알 수 없으면 null
+- 숙소 질의(categorySearchQueries.accommodation)에도 반영합니다. 커플·가족이면 게스트하우스·호스텔을 넣지 말고
+  "펜션 호텔 리조트 오션뷰"처럼 독립 객실 위주로 씁니다.
+
+### 4-C. 배로만 가는 부속섬 (ferryOnlyAreas)
+여행지 안에 **배를 타야만 갈 수 있는 부속섬**이 있으면, 그 섬의 장소 주소에 들어가는 행정구역 이름을 나열합니다.
+이 섬들은 배 왕복과 대기로 반나절이 들어서, 사용자가 직접 언급하지 않으면 일정에서 뺍니다.
+- 예: 제주 → ["우도면", "추자면", "가파리", "마라리"] / 통영 → ["욕지면", "한산면", "사량면"]
+- 다리로 연결된 섬(예: 거제도, 영종도)은 넣지 않습니다. 여행지 자체가 섬이면 그 섬은 넣지 않습니다(제주에서 "제주"는 넣지 않음).
+- 주소에 실제로 쓰이는 행정구역 이름(면·리·동 단위, 3자 이상)만 씁니다. 확실하지 않으면 넣지 않습니다.
+- 사용자가 description에서 그 섬을 언급했어도 그대로 나열합니다(포함 여부는 서버가 판단합니다).
+- 해당 없으면 빈 배열 []
+
 ### 5. enrichedContext 생성
 - 기존 시스템과 호환되는 텍스트 형식의 컨텍스트를 작성합니다.
 - [현지 컨텍스트], [테마 추천], [예산 팁], [시즌 정보]를 각 1~2문장으로 작성합니다.
@@ -137,6 +153,7 @@
 - valid=false인 경우: errorCode, errorMessage만 필수이며 나머지 필드는 null로 설정합니다.
 - valid=true인 경우: normalizedDestination, country, regions, searchTags, budgetRange, seasonContext, enrichedContext를 모두 채웁니다.
 - transportationHub와 categorySearchQueries도 항상 포함합니다 (transportation 키는 허브가 null이면 생략 가능).
+- companionType, partySize, ferryOnlyAreas도 항상 포함합니다(모르면 UNKNOWN / null / []).
 - 설명(description)이 "없음"이면 무시하세요.
 
 ## 응답 형식 (JSON)
@@ -165,6 +182,9 @@
     "cafe": "도쿄 카페 디저트 파스타"
   },
   "regionAllocation": {"1-2": ["시부야","하라주쿠"], "3-4": ["아사쿠사","우에노"]},
+  "companionType": "UNKNOWN",
+  "partySize": null,
+  "ferryOnlyAreas": [],
   "enrichedContext": "[현지 컨텍스트] 4월 도쿄는 벚꽃 만개 시기로 우에노 공원, 메구로 강 등이 인기. [테마 추천] 쇼핑: 시부야109, 하라주쿠 타케시타 거리. 맛집: 츠키지 외시장, 라멘 거리. [예산 팁] 1일 약 15만원으로 비즈니스호텔+현지식당 수준. [시즌 정보] 벚꽃 성수기, 숙소 조기 예약 권장."
 }
 
@@ -187,6 +207,9 @@
     "cafe": "해운대 카페 디저트 조용한 카페"
   },
   "regionAllocation": null,
+  "companionType": "UNKNOWN",
+  "partySize": null,
+  "ferryOnlyAreas": [],
   "enrichedContext": "[현지 컨텍스트] 해운대는 부산 대표 해수욕장으로 마린시티 야경과 동백섬이 인기. [테마 추천] 해수욕장 주변 해산물 맛집 밀집. [예산 팁] 성수기 숙소 조기 예약 필수. [시즌 정보] 7월 성수기, 파라솔 구역 조기 마감."
 }
 

@@ -5,6 +5,7 @@ import com.anthropic.models.messages.*;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
+import com.shg.trip.shgtrip.domain.planning.service.GeoCluster;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
@@ -63,6 +64,7 @@ public class SelectionCallGenerator {
 
         // 첫 시도
         Message message = callSonnet(userMessage, selectionTool, maxTokens);
+        int usedMaxTokens = maxTokens;
 
         // max_tokens 초과 시 50% 증가하여 1회 재시도
         if (isTruncated(message)) {
@@ -72,6 +74,7 @@ public class SelectionCallGenerator {
                     maxTokens, retryMaxTokens);
 
             message = callSonnet(userMessage, selectionTool, retryMaxTokens);
+            usedMaxTokens = retryMaxTokens;
 
             if (isTruncated(message)) {
                 log.error("선택 재시도 후에도 truncated (retryMaxTokens={})", retryMaxTokens);
@@ -80,13 +83,18 @@ public class SelectionCallGenerator {
             }
         }
 
-        // Tool Use 응답에서 SelectionOutput 추출
-        SelectionOutput result = message.content().stream()
-                .filter(ContentBlock::isToolUse)
-                .findFirst()
-                .map(block -> block.asToolUse()._input().convert(SelectionOutput.class))
-                .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                        "AI 응답에서 장소 선택 데이터를 추출할 수 없습니다."));
+        // 모르는 필드는 무시하고 읽으므로(SelectionOutput), 필드명을 틀린 day는 예외 없이 빈 날이 된다.
+        // 읽은 뒤 날짜 수와 placeIndices 유무를 확인하고, 어긋나면 한 번 다시 묻는다.
+        SelectionOutput result = parseValid(message, days);
+        if (result == null) {
+            log.warn("선택 응답 형식 오류 — 1회 재호출 (버린 응답 inputTokens={}, outputTokens={})",
+                    message.usage().inputTokens(), message.usage().outputTokens());
+            message = callSonnet(userMessage, selectionTool, usedMaxTokens);
+            result = isTruncated(message) ? null : parseValid(message, days);
+            if (result == null) {
+                throw new BusinessException(ErrorCode.AI_SERVICE_ERROR, "AI 선택 응답 형식이 올바르지 않습니다.");
+            }
+        }
 
         log.info("SelectionCallGenerator 완료: days={}, dayCount={}, spareCount={}, inputTokens={}, outputTokens={}, 캐시읽음/쓰기={}",
                 days,
@@ -95,8 +103,61 @@ public class SelectionCallGenerator {
                 message.usage().inputTokens(),
                 message.usage().outputTokens(),
                 cacheInfo(message));
+        logSelection(result, candidates);
 
         return result;
+    }
+
+    /** 응답을 읽어 날짜 수와 각 날의 placeIndices가 갖춰졌으면 반환, 아니면 null. */
+    private SelectionOutput parseValid(Message message, long days) {
+        SelectionOutput out;
+        try {
+            out = extractSelection(message);
+        } catch (IllegalArgumentException | BusinessException e) {
+            log.warn("선택 응답 파싱 실패: {}", e.getMessage());
+            return null;
+        }
+        if (out.days() == null || out.days().size() != days
+                || out.days().stream().anyMatch(d -> d == null || d.placeIndices() == null)) {
+            log.warn("선택 응답 구조 불일치: 기대 {}일, 받은 days={}", days, out.days() == null ? null : out.days().size());
+            return null;
+        }
+        return out;
+    }
+
+    private SelectionOutput extractSelection(Message message) {
+        return message.content().stream()
+                .filter(ContentBlock::isToolUse)
+                .findFirst()
+                .map(block -> block.asToolUse()._input().convert(SelectionOutput.class))
+                .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
+                        "AI 응답에서 장소 선택 데이터를 추출할 수 없습니다."));
+    }
+
+    /**
+     * Sonnet이 실제로 고른 결과를 이름으로 남긴다. 이게 없으면 나쁜 일정이 선택 단계에서 왔는지
+     * RouteOptimizer의 보정에서 왔는지 가릴 수 없다(최종 일정과 비교해야 보정량이 보인다).
+     */
+    private void logSelection(SelectionOutput result, List<PlaceCandidate> candidates) {
+        log.info("Sonnet 선택 concept: {}", result.concept());
+        if (result.days() != null) {
+            for (SelectionOutput.DayPlan day : result.days()) {
+                log.info("Sonnet 선택 day={}: {}", day.dayNumber(), namesOf(day.placeIndices(), candidates));
+            }
+        }
+        log.info("Sonnet 선택 spare: {}", namesOf(result.spareIndices(), candidates));
+        log.info("Sonnet 선택 highlight: {} / timing: {}", namesOf(result.highlightIndices(), candidates),
+                result.timing() == null ? "[]" : result.timing().stream()
+                        .map(t -> namesOf(List.of(t.index()), candidates) + "=" + t.when())
+                        .collect(java.util.stream.Collectors.joining(", ", "[", "]")));
+    }
+
+    private static String namesOf(List<Integer> indices, List<PlaceCandidate> candidates) {
+        if (indices == null) return "[]";
+        return indices.stream()
+                .map(i -> i != null && i >= 1 && i <= candidates.size()
+                        ? i + ":" + candidates.get(i - 1).name() : i + ":?")
+                .collect(java.util.stream.Collectors.joining(", ", "[", "]"));
     }
 
     /**
@@ -158,16 +219,52 @@ public class SelectionCallGenerator {
         sb.append("- 기간: ").append(input.startDate()).append(" ~ ").append(input.endDate())
                 .append(" (").append(days - 1).append("박").append(days).append("일)\n");
         sb.append("- 여행 일수: ").append(days).append("일 (마지막날 dayNumber=").append(days).append(")\n");
+        // 요일을 준다 — 장이 서는 날·휴무 같은 판단은 요일을 알아야 한다.
+        if (input.startDate() != null) {
+            StringBuilder dows = new StringBuilder();
+            for (int d = 0; d < days; d++) {
+                java.time.LocalDate date = input.startDate().plusDays(d);
+                if (d > 0) dows.append(", ");
+                dows.append(d + 1).append("일차 ").append(date.getMonthValue()).append("/").append(date.getDayOfMonth())
+                        .append("(").append(date.getDayOfWeek().getDisplayName(java.time.format.TextStyle.SHORT,
+                                java.util.Locale.KOREAN)).append(")");
+            }
+            sb.append("- 날짜별 요일: ").append(dows).append("\n");
+        }
+        // 도착·출발 허브 — 첫날은 도착지 근처에서, 마지막날은 출발지 쪽으로 끝나게 고를 수 있다.
+        if (input.transportationHub() != null && input.transportationHub().arrivalHub() != null) {
+            sb.append("- 도착/출발: ").append(input.transportationHub().arrivalHub());
+            if (input.transportationHub().departureHub() != null
+                    && !input.transportationHub().departureHub().equals(input.transportationHub().arrivalHub())) {
+                sb.append(" → ").append(input.transportationHub().departureHub());
+            }
+            sb.append("\n");
+        }
         sb.append("- 페이스: ").append(input.pace()).append("\n");
         sb.append("- 이동수단 선호: ").append(input.transportPref())
                 .append(" (walk=도보/버스로 갈 만한 가까운 동선, car=차량 이동 전제로 넉넉한 동선, any=상관없음)\n");
         if (input.description() != null && !input.description().isBlank()) {
             sb.append("- 요청사항: ").append(input.description()).append("\n");
         }
+        String companion = companionLabel(input);
+        if (companion != null) {
+            sb.append("- 동행: ").append(companion).append("\n");
+        }
+
+        // 좌표 기반 지리 구역. 주소에서 뽑은 세부지역은 제주에서 "제주시/서귀포시" 둘뿐이라
+        // (각각 섬의 절반) "같은 지역으로 묶어라"가 사실상 아무 제약이 아니었다. GeoCluster 주석 참고.
+        GeoCluster.Result geo = GeoCluster.of(candidates);
+        if (geo.isEmpty()) {
+            log.info("지리 구역 미적용 — 후보가 적거나 여행지가 좁다 (candidates={})", candidates.size());
+        } else {
+            log.info("지리 구역 {}개: {}", geo.zones().size(), geo.zones().stream()
+                    .map(z -> z.label() + "(" + z.count() + ")").collect(java.util.stream.Collectors.joining(", ")));
+        }
 
         sb.append("\n## 후보 장소 목록 (").append(candidates.size()).append("개)\n");
-        sb.append("형식: ID | 이름 | 카테고리 | 평점 · 인기도 | #태그 | 세부지역 | 체류시간 | 시간대 | 휴무 ")
-                .append("(값이 없는 항목은 생략됨)\n");
+        sb.append("형식: ID | 이름 | 역할·카테고리 | 평점 · 인기도 | #태그 | ")
+                .append(geo.isEmpty() ? "세부지역" : "구역 · 세부지역")
+                .append(" | 체류시간 | 시간대 | 휴무 (값이 없는 항목은 생략됨)\n");
         boolean hasUserSelected = false;
         boolean hasVia = false;
         for (PlaceCandidate candidate : candidates) {
@@ -185,14 +282,44 @@ public class SelectionCallGenerator {
             }
             sb.append(candidate.index()).append(" | ")
                     .append(candidate.name()).append(" | ")
-                    .append(summarizeCategory(candidate.category())).append(" | ")
+                    // 역할(식사·카페·관광…)과 음식 종류를 앞에 붙인다 — 이름과 태그 4개만으로는 흑돼지집인지,
+                    // 카페인지 알 수 없어 같은 종류 끼니가 반복됐다(실측 115~118).
+                    .append(roleLabel(candidate)).append(summarizeCategory(candidate.category())).append(" | ")
                     .append(formatRating(candidate.rating(), candidate.wikidataSitelinks())).append(" | ")
-                    .append(formatTags(candidate.tags())).append(" | ")
-                    .append(candidate.displayRegion() != null ? candidate.displayRegion() : "");
+                    .append(formatTags(candidate.tags())).append(" | ");
+            String zone = geo.labelByIndex().get(candidate.index());
+            if (zone != null) sb.append(zone).append(" · ");
+            sb.append(candidate.displayRegion() != null ? candidate.displayRegion() : "");
             appendIfPresent(sb, formatDuration(candidate.recommendedDurationMinutes()));
             appendIfPresent(sb, formatTimeSlots(candidate.recommendedTimeSlots()));
             appendIfPresent(sb, formatClosedDay(candidate.openingHours()));
             sb.append("\n");
+        }
+
+        // 구역 간 실제 거리를 함께 준다. 라벨만 주면 "동부와 서부가 얼마나 먼지"를 모르는 채
+        // 묶게 되고, 실측에서 그게 하루 155km로 나타났다.
+        if (!geo.isEmpty()) {
+            sb.append("\n### 지리 구역 (좌표 기준)\n");
+            for (GeoCluster.Zone z : geo.zones()) {
+                sb.append("- ").append(z.label()).append(": 후보 ").append(z.count()).append("곳\n");
+            }
+            List<GeoCluster.Zone> zs = geo.zones();
+            StringBuilder pairs = new StringBuilder();
+            for (int i = 0; i < zs.size(); i++) {
+                for (int j = i + 1; j < zs.size(); j++) {
+                    double km = geo.distanceKm(zs.get(i).label(), zs.get(j).label());
+                    if (km < 1) continue;
+                    if (pairs.length() > 0) pairs.append(", ");
+                    pairs.append(zs.get(i).label()).append("↔").append(zs.get(j).label())
+                            .append(" 약 ").append(Math.round(km)).append("km");
+                }
+            }
+            if (pairs.length() > 0) {
+                sb.append("구역 간 거리(중심 기준 직선): ").append(pairs).append("\n");
+            }
+            sb.append("**하루는 한 구역 안에서 묶으세요.** 구역을 건너뛰면 위 거리가 그대로 이동시간이 되고, ")
+                    .append("그만큼 그날 관광 시간이 사라집니다. 구역 이동이 꼭 필요하면 하루에 한 번만, ")
+                    .append("이동 중 들를 수 있는 장소를 사이에 두세요.\n");
         }
 
         if (hasVia) {
@@ -202,7 +329,7 @@ public class SelectionCallGenerator {
 
         if (hasUserSelected) {
             sb.append("\n★ 표시된 후보는 사용자가 직접 선택한 **필수 방문 장소**입니다. ")
-                    .append("숙소(LODGING)면 accommodationIndex로, 그 외에는 반드시 어느 날의 placeIndices에 포함하고 ")
+                    .append("숙소(LODGING)면 백엔드가 숙소로 배정하므로 그대로 두고, 그 외에는 반드시 어느 날의 placeIndices에 포함하고 ")
                     .append("spareIndices에 넣지 마세요. 동선이 다소 불리해도 포함이 우선입니다.\n");
         }
 
@@ -215,6 +342,45 @@ public class SelectionCallGenerator {
         sb.append("\nconcept을 먼저 정의한 뒤, select_places 도구를 호출하여 날짜별 장소를 선택하세요.\n");
 
         return sb.toString();
+    }
+
+    /** 후보 줄의 역할 표시. 숙소·교통은 카테고리로 충분해 생략한다. */
+    static String roleLabel(PlaceCandidate c) {
+        com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy.Role role =
+                com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy.roleOf(c);
+        String base = switch (role) {
+            case MEAL -> "식사";
+            case CAFE -> "카페·디저트";
+            case BAR -> "술집";
+            case SIGHT -> "관광";
+            case ACTIVITY -> "체험";
+            case SHOPPING -> "쇼핑";
+            case MARKET -> "시장";
+            default -> null;
+        };
+        if (base == null) return "";
+        if (role == com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy.Role.MEAL
+                && c.cuisine() != null && CUISINE_KO.containsKey(c.cuisine())) {
+            base += "·" + CUISINE_KO.get(c.cuisine());
+        }
+        return "[" + base + "] ";
+    }
+
+    private static final java.util.Map<String, String> CUISINE_KO = java.util.Map.of(
+            "MEAT", "고기", "SEAFOOD", "해산물", "NOODLE", "면", "SOUP", "국물", "KOREAN_SET", "한식",
+            "JAPANESE", "일식", "CHINESE", "중식", "WESTERN", "양식", "SNACK", "분식");
+
+    /** 동행 표시 문구. 모르면 null(줄 자체를 생략). */
+    private static String companionLabel(VectorEnrichedInput input) {
+        String base = switch (input.companion()) {
+            case SOLO -> "혼자";
+            case COUPLE -> "커플";
+            case FAMILY -> "가족";
+            case FRIENDS -> "친구";
+            case UNKNOWN -> null;
+        };
+        if (base == null) return null;
+        return input.partySize() != null ? base + "(" + input.partySize() + "인)" : base;
     }
 
     /** 값이 있을 때만 " | 값"으로 덧붙인다(없는 항목은 생략 — 토큰 절감). */

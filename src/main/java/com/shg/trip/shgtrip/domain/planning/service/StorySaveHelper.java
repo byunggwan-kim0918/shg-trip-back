@@ -33,7 +33,7 @@ public class StorySaveHelper {
     private final ItineraryRepository itineraryRepository;
 
     /**
-     * @param draftTitle 구조 저장 시점에 넣어둔 임시 제목(= Sonnet concept 문장).
+     * @param draftTitle 구조 저장 시점에 넣어둔 임시 제목("서울 1박 2일" 같은 결정론적 문구).
      *                   제목이 아직 이 값과 같을 때만 story 단계의 제목으로 교체한다.
      */
     @Transactional

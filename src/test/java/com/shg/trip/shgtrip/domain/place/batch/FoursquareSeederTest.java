@@ -8,6 +8,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -167,6 +169,35 @@ class FoursquareSeederTest {
             assertThat(record.sourceUrl()).isEqualTo("http://blog.naver.com/jejucomma");
         }
 
+        @ParameterizedTest(name = "{0} → {1}")
+        @CsvSource({
+                "https:/www.emart24.co.kr, https://www.emart24.co.kr",
+                "www.synnara.co.kr,        https://www.synnara.co.kr",
+                "HTTP:/Example.com/a,      HTTP://Example.com/a",
+        })
+        @DisplayName("슬래시가 하나이거나 스킴이 없는 URL도 sourceUrl로 분리하고 https://로 맞춘다")
+        void mapToRecord_malformedUrlsMovedToSourceUrl(String raw, String expected) {
+            String[] fields = {"fsq_url", "상호", "37.5", "127.0", "KR", "Seoul", "Retail",
+                    "서울", "", raw};
+
+            FoursquareSeeder.FoursquareRecord record = seeder.mapToRecord(fields, columnIndex);
+
+            assertThat(record.description()).isNull();
+            assertThat(record.sourceUrl()).isEqualTo(expected);
+        }
+
+        @Test
+        @DisplayName("URL처럼 보이지 않는 설명은 그대로 둔다")
+        void mapToRecord_plainDescriptionKept() {
+            String[] fields = {"fsq_d", "상호", "37.5", "127.0", "KR", "Seoul", "Retail",
+                    "서울", "", "www 없는 설명 문장"};
+
+            FoursquareSeeder.FoursquareRecord record = seeder.mapToRecord(fields, columnIndex);
+
+            assertThat(record.description()).isEqualTo("www 없는 설명 문장");
+            assertThat(record.sourceUrl()).isNull();
+        }
+
         @Test
         @DisplayName("필수 필드 누락 시 null을 반환한다")
         void mapToRecord_missingRequired() {
@@ -247,6 +278,28 @@ class FoursquareSeederTest {
             assertThat(seeder.mapToRecord(temple, columnIndex)).isNotNull();
             assertThat(seeder.mapToRecord(market, columnIndex)).isNotNull();
             assertThat(seeder.mapToRecord(mall, columnIndex)).isNotNull();
+        }
+
+        @Test
+        @DisplayName("일정 스텝이 될 수 없는 교통·생활 시설(정류장/도로/주유소/주차장/헬스장/놀이터)은 제외한다")
+        void isNonTravelCategory_infrastructureAndLocalServices() {
+            assertThat(FoursquareSeeder.isNonTravelCategory("Travel and Transportation > Transport Hub > Bus Stop")).isTrue();
+            assertThat(FoursquareSeeder.isNonTravelCategory("Travel and Transportation > Road > Intersection")).isTrue();
+            assertThat(FoursquareSeeder.isNonTravelCategory("Travel and Transportation > Fuel Station")).isTrue();
+            assertThat(FoursquareSeeder.isNonTravelCategory("Travel and Transportation > Parking")).isTrue();
+            assertThat(FoursquareSeeder.isNonTravelCategory("Sports and Recreation > Gym and Studio > Pilates Studio")).isTrue();
+            assertThat(FoursquareSeeder.isNonTravelCategory("Landmarks and Outdoors > Park > Playground")).isTrue();
+            assertThat(FoursquareSeeder.isNonTravelCategory("Retail > Computers and Electronics Retail > Electronics Store")).isTrue();
+        }
+
+        @Test
+        @DisplayName("명소·동선 기점이 되는 교통/종교 시설(역/공항/숙소/교회/공원)은 보존한다")
+        void isNonTravelCategory_landmarkLikeFacilitiesAreKept() {
+            assertThat(FoursquareSeeder.isNonTravelCategory("Travel and Transportation > Transport Hub > Metro Station")).isFalse();
+            assertThat(FoursquareSeeder.isNonTravelCategory("Travel and Transportation > Transport Hub > Airport")).isFalse();
+            assertThat(FoursquareSeeder.isNonTravelCategory("Travel and Transportation > Lodging > Hotel")).isFalse();
+            assertThat(FoursquareSeeder.isNonTravelCategory("Community and Government > Spiritual Center > Church")).isFalse();
+            assertThat(FoursquareSeeder.isNonTravelCategory("Landmarks and Outdoors > Park")).isFalse();
         }
     }
 

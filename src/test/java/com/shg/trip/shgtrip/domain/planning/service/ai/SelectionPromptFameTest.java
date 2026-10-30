@@ -58,12 +58,12 @@ class SelectionPromptFameTest {
                 candidate(4, "미매칭장소", 4.5, null)
         ), 4);
 
-        assertThat(message).contains("한라산 | Tourist Attraction | ⭐4.3 · 인기도 매우 높음");
-        assertThat(message).contains("만장굴 | Tourist Attraction | ⭐4.4 · 인기도 매우 높음");
+        assertThat(message).contains("한라산 | [관광] Tourist Attraction | ⭐4.3 · 인기도 매우 높음");
+        assertThat(message).contains("만장굴 | [관광] Tourist Attraction | ⭐4.4 · 인기도 매우 높음");
         // 0 = 조회했는데 Wikidata에 항목이 없음 → 무명임이 확인된 것
-        assertThat(message).contains("바늘오름 | Tourist Attraction | ⭐4.6 · 인기도 낮음");
+        assertThat(message).contains("바늘오름 | [관광] Tourist Attraction | ⭐4.6 · 인기도 낮음");
         // null = 아직 매칭 안 함 → 등급을 붙이지 않는다(0으로 오해하게 만들지 않는다)
-        assertThat(message).contains("미매칭장소 | Tourist Attraction | ⭐4.5 |");
+        assertThat(message).contains("미매칭장소 | [관광] Tourist Attraction | ⭐4.5 |");
         assertThat(message).contains("평점 · 인기도");
     }
 }

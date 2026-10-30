@@ -1,5 +1,5 @@
 -- metrics --
-  스텝 16 / 숙소 1곳 / 총이동 257km
+  스텝 15 / 숙소 1곳 / 총이동 243km
   연속중복 0 / 최대공백 290분 / 늦은시작 0일 / 안내 2건
 == day 1 ==
   #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
@@ -55,9 +55,6 @@
       비용: 0원 / 메모: -
   #15 17:11-19:41  손지오름 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
       이동: CAR 20분 12.68km 3804원
-      비용: 0원 / 메모: -
-  #16 20:02-21:32  제주 성산항 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
-      이동: CAR 21분 13.96km 4189원
       비용: 0원 / 메모: -
 -- notices (2) --
   2일차에 넣을 만한 관광지를 찾지 못했어요.

@@ -133,6 +133,17 @@ public class Place extends BaseTimeEntity {
     @Column(name = "admission_fee")
     private Integer admissionFee;
 
+    /**
+     * 일정 속 역할(배치 보강으로 생성): MEAL, CAFE, BAR, SIGHT, ACTIVITY, SHOPPING, MARKET, LODGING,
+     * TRANSIT, NOT_VISITABLE. 없으면 카테고리·이름 추정으로 대신한다(CandidatePolicy.roleOf).
+     */
+    @Column(name = "place_role", length = 20)
+    private String placeRole;
+
+    /** 음식 종류(배치 보강으로 생성, MEAL만): MEAT, SEAFOOD, NOODLE, SOUP, KOREAN_SET, JAPANESE 등. */
+    @Column(length = 20)
+    private String cuisine;
+
     /** 배치 보강 완료 시각 */
     @Column(name = "enriched_at")
     private OffsetDateTime enrichedAt;
@@ -228,6 +239,12 @@ public class Place extends BaseTimeEntity {
     public void enrichWith(List<String> newTags, String newDescription, List<String> newTimeSlots,
                            Integer durationMinutes) {
         enrichWith(newTags, newDescription, newTimeSlots, durationMinutes, null);
+    }
+
+    /** 보강이 정한 일정 속 역할·음식 종류. null이면 기존 값을 유지한다. */
+    public void assignRole(String newRole, String newCuisine) {
+        if (newRole != null && !newRole.isBlank()) this.placeRole = newRole;
+        if (newCuisine != null && !newCuisine.isBlank()) this.cuisine = newCuisine;
     }
 
     /**

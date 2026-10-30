@@ -65,7 +65,7 @@ anthropic:
     max-output-tokens: 64000
   batch:
     # 장소 태그/설명/시간대 보강용 — 단순 구조화 생성이라 Haiku로 충분 (Batch API 50% 할인 병행)
-    model: claude-haiku-4-5-20251001
+    model: claude-haiku-5-5
     max-tokens-per-request: 1024
     poll-interval-ms: 10000
     max-poll-duration-ms: 3600000
@@ -87,6 +87,7 @@ batch:
     # 우선 처리 도시 목록은 FoursquareSeeder.PRIORITY_CITIES 참조
   embedding:
     batch-size: 100
+    regions: ${BATCH_EMBEDDING_REGIONS:}   # 비우면 전 지역. 로컬 확인용으로 지역을 좁힐 때 (예: Jeju,Seoul,Busan)
   enrich:
     chunk-size: 1000
     # LLM 보강 실행 여부 (기본 false — 초기엔 임베딩만 수행)
@@ -95,16 +96,26 @@ batch:
     # 지역 스코프 (쉼표 구분, 예: "Jeju,Gangneung"). 비우면 전체 —
     # 전량 보강은 LLM 비용이 크므로 관광지 데이터가 빈약한 지역부터 점진 실행 권장.
     regions: ${BATCH_ENRICH_REGIONS:}
+    # 지역당 상한(0=무제한). 인기도 → 비식당 순으로 앞에서부터 자른다.
+    max-per-region: ${BATCH_ENRICH_MAX_PER_REGION:0}
+  role-backfill:
+    # 카테고리로 확정되는 비방문 장소에 place_role=NOT_VISITABLE 기록(외부 호출 없음)
+    enabled: ${BATCH_ROLE_BACKFILL_ENABLED:true}
   tourapi:
     # 한국관광공사 TourAPI 관광지 시딩 (Foursquare의 빈약한 관광지 커버리지 보완)
     enabled: ${BATCH_TOURAPI_ENABLED:false}
     # data.go.kr 발급 서비스키 — URL 인코딩된 키를 그대로 입력
     service-key: ${TOUR_API_SERVICE_KEY:}
-    # 시딩 대상 areaCode (쉼표 구분): 1=서울 2=인천 3=대전 4=대구 5=광주 6=부산 39=제주
-    # 기본은 전국(region 매핑이 1:1인 광역시+제주 전체) — Foursquare처럼 매 배치마다 전 지역 반영
-    area-codes: ${BATCH_TOURAPI_AREA_CODES:1,2,3,4,5,6,39}
-    # areaCode×타입당 최대 수집 행 수
-    max-rows-per-type: ${BATCH_TOURAPI_MAX_ROWS:500}
+    # 시딩 대상 (쉼표 구분): "areaCode" 또는 "areaCode-sigunguCode"
+    #   1=서울 2=인천 3=대전 4=대구 5=광주 6=부산 39=제주
+    #   31-13=수원 32-1=강릉 35-2=경주 37-12=전주 38-13=여수 (도 안의 도시는 시군구 코드로 좁힌다)
+    # 토큰은 이 형식 그대로 받되, 조회는 법정동 코드(lDongRegnCd·lDongSignguCd)로 한다(TourApiSeeder.AREAS).
+    # 지역코드로 조회하면 신규 레코드(areacode 공란)가 빠진다 — 제주 관광지 162 vs 557건(2026-10).
+    # 광주만 법정동 데이터 이상으로 지역코드 조회를 유지한다.
+    # 기본은 Foursquare 적재 대상 12개 도시 전부 — region이 같아야 벡터 검색 지역 필터에 함께 잡힌다
+    area-codes: ${BATCH_TOURAPI_AREA_CODES:1,2,3,4,5,6,39,31-13,32-1,35-2,37-12,38-13}
+    # 대상×타입당 최대 수집 행 수. 500이면 서울 음식점(816건)이 잘렸다(2026-10 실측).
+    max-rows-per-type: ${BATCH_TOURAPI_MAX_ROWS:1000}
     image-backfill:
       # 이미지 없는 관광지를 이름으로 역조회해 채운다. 지역 목록(areaBasedList2)에 안 잡히는
       # 레코드가 있어서 필요하다 — TourAPI가 성산일출봉의 areacode를 빈 값으로 주는 탓에
@@ -115,7 +126,11 @@ batch:
   wikidata:
     enabled: ${BATCH_WIKIDATA_ENABLED:false}
     regions: ${BATCH_WIKIDATA_REGIONS:}          # 비우면 장소 수 기준 전 지역
-    limit-per-region: ${BATCH_WIKIDATA_LIMIT:5000}
+    landmarks:
+      # 지역 대표 명소(사찰·궁·박물관·해변·산 등, 언어판 min-sitelinks 이상)를 Wikidata에서 적재.
+      # 기존 장소와 이름이 겹치고 2km 안이면 넣지 않는다(WikidataLandmarkSeeder).
+      enabled: ${BATCH_WIKIDATA_LANDMARKS_ENABLED:false}
+      min-sitelinks: ${BATCH_WIKIDATA_LANDMARKS_MIN_SITELINKS:5}
 
 # --- AWS S3 설정 (배치에서 Foursquare CSV 읽기) ---
 cloud:

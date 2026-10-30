@@ -1,11 +1,14 @@
 package com.shg.trip.shgtrip.domain.planning.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 import java.math.BigDecimal;
 import java.util.List;
 
 /**
  * AI Tool Use 응답 - 일정 단계 스키마.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record StepData(
         int stepOrder,
         int dayNumber,

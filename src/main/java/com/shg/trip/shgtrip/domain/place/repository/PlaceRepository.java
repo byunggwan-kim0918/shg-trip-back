@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.math.BigDecimal;
@@ -142,6 +143,11 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     @Query("SELECT p FROM Place p WHERE p.embedding IS NULL AND p.active = true")
     Page<Place> findByEmbeddingIsNullAndActiveTrue(Pageable pageable);
 
+    /** 지역을 좁힌 임베딩 대상 조회 — EmbeddingBatchJob(batch.embedding.regions). */
+    @Query("SELECT p FROM Place p WHERE p.embedding IS NULL AND p.active = true AND p.region IN :regions")
+    Page<Place> findByEmbeddingIsNullAndActiveTrueAndRegionIn(@Param("regions") List<String> regions,
+                                                             Pageable pageable);
+
 
     /**
      * 벡터 검색 후보로 등장한 장소들의 last_candidate_at을 일괄 갱신 (인기도 추적).
@@ -179,28 +185,137 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     List<Object[]> findRegionBoundingBoxes(@Param("minPlaces") int minPlaces);
 
     /**
-     * Wikidata 매칭을 아직 시도하지 않은 활성 장소 — 좌표가 있는 것만.
+     * Wikidata 매칭 후보 — 지역의 좌표 있는 활성 장소. 행: (id, name, latitude, longitude, category).
      *
-     * <p>{@code wikidata_matched_at IS NULL}만 본다. 매칭 실패도 시각을 찍으므로 여기서 빠지고,
-     * 그래서 "Wikidata에 없는 장소"를 배치가 돌 때마다 다시 조회하지 않는다.
+     * <p>엔티티가 아니라 컬럼 5개만 읽는다. 서울은 약 11만 곳이고 엔티티에는 임베딩(1536차원)이
+     * 실려 있어 통째로 올리면 수백 MB다. 매칭은 지역 전체를 매번 다시 계산한다(WikidataSitelinksJob).
+     */
+    @Query(value = """
+            SELECT id, name, latitude, longitude, category, source
+            FROM places
+            WHERE active = true
+              AND region = :region
+              AND latitude IS NOT NULL AND longitude IS NOT NULL
+            """, nativeQuery = true)
+    List<Object[]> findWikidataCandidates(@Param("region") String region);
+
+    /**
+     * 지역 전체를 "항목 없음"(sitelinks 0)으로 덮는다. 직후에 매칭된 장소만 다시 쓴다 —
+     * 호출부가 같은 트랜잭션으로 묶는다. 매칭 실패도 시각을 찍어야 미조회(NULL)와 구분된다.
+     */
+    @Modifying
+    @Query(value = """
+            UPDATE places
+               SET wikidata_id = NULL, wikidata_sitelinks = 0, wikidata_matched_at = now()
+             WHERE active = true
+               AND region = :region
+               AND latitude IS NOT NULL AND longitude IS NOT NULL
+            """, nativeQuery = true)
+    int resetWikidataForRegion(@Param("region") String region);
+
+    /** 이미 DB에 있는 Wikidata 항목 id(활성·비활성 모두) — 명소 적재의 재실행 중복 방지용. */
+    @Query(value = "SELECT DISTINCT wikidata_id FROM places WHERE wikidata_id IS NOT NULL", nativeQuery = true)
+    List<String> findAllWikidataIds();
+
+    @Modifying
+    @Query(value = """
+            UPDATE places
+               SET wikidata_id = :wikidataId, wikidata_sitelinks = :sitelinks, wikidata_matched_at = now()
+             WHERE id = :id
+            """, nativeQuery = true)
+    int updateWikidataMatch(@Param("id") long id, @Param("wikidataId") String wikidataId,
+                            @Param("sitelinks") int sitelinks);
+
+    /**
+     * 보강 대상 — 미보강(enriched_at IS NULL)·활성. BatchEnrichScheduler가 첫 페이지만 반복 조회한다.
+     * 카테고리만으로 비방문(NOT_VISITABLE)이 확정된 곳은 보강해도 일정에 안 나오므로 뺀다.
+     *
+     * <p><b>순서</b>: 유명한 곳(Wikidata sitelinks) → 식당·카페가 아닌 곳 → id. 보강은 수만 건을
+     * 순차로 처리해 하루 가까이 걸릴 수 있어서, 중간에 끊겨도 일정에 자주 나오는 곳은 끝나 있게 한다.
+     *
+     * <p><b>excludedIds</b>: 이번 실행에서 이미 실패한 장소. 예전엔 정렬 없이 첫 페이지를 다시 읽고
+     * 메모리에서 걸렀는데, 실패분이 첫 페이지 앞에 계속 남아 실패가 한 페이지(1,000건)를 넘으면
+     * 남은 장소를 두고 조용히 끝났다. 빈 컬렉션은 호출부가 -1 하나로 바꿔 넘긴다.
      */
     @Query("""
             SELECT p FROM Place p
-            WHERE p.active = true
-              AND p.region = :region
-              AND p.wikidataMatchedAt IS NULL
-              AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
-            ORDER BY p.id
+            WHERE p.enrichedAt IS NULL AND p.active = true
+              AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
+              AND p.id NOT IN :excludedIds
+            ORDER BY COALESCE(p.wikidataSitelinks, 0) DESC,
+                     CASE WHEN p.category LIKE 'Dining and Drinking%' THEN 1 ELSE 0 END,
+                     p.id
             """)
-    List<Place> findWikidataUnmatched(@Param("region") String region, Pageable pageable);
+    List<Place> findEnrichTargets(@Param("excludedIds") Collection<Long> excludedIds, Pageable pageable);
 
     /**
-     * 미보강(enriched_at IS NULL)이고 활성 상태인 장소 페이징 조회 — BatchEnrichScheduler 사용.
+     * 역할 미확정 활성 장소의 (id, name, category)를 id 순으로 — {@code PlaceRoleBackfillJob}이 keyset 페이지로 읽는다.
+     * 엔티티로 읽으면 임베딩 컬럼까지 실려 매 실행 수 GB를 읽는다.
      */
-    Page<Place> findByEnrichedAtIsNullAndActiveTrue(Pageable pageable);
+    @Query(value = """
+            SELECT id, name, category FROM places
+            WHERE active = true AND place_role IS NULL AND id > :afterId
+            ORDER BY id
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<Object[]> findRoleBackfillTargets(@Param("afterId") long afterId, @Param("limit") int limit);
+
+    /** 카테고리로 비방문이 확정된 장소에 역할을 기록한다. 보강이 이미 역할을 정한 행은 건드리지 않는다. */
+    @Modifying
+    @Transactional
+    @Query(value = "UPDATE places SET place_role = 'NOT_VISITABLE' WHERE id IN (:ids) AND place_role IS NULL",
+            nativeQuery = true)
+    int markNotVisitable(@Param("ids") List<Long> ids);
 
     /** TourAPI 시딩 중복 방지 — 같은 지역에 같은 이름의 장소가 이미 있으면 삽입하지 않는다. */
     boolean existsByNameAndRegion(String name, String region);
+
+    /** 같은 지역·같은 이름·같은 대분류(카테고리 첫 단계)인 장소가 있는지 — TourAPI 중복 판정. */
+    boolean existsByNameAndRegionAndCategoryStartingWith(String name, String region, String categoryPrefix);
+
+    /**
+     * 총칭 "Restaurant"로 적재된 TourAPI 음식점의 업종 카테고리를 갱신한다. category가 임베딩 텍스트에
+     * 들어가므로 임베딩을 비워 다음 배치가 다시 만들게 한다(V32·V39와 같은 이유). 보강 결과(태그·역할·음식
+     * 종류)도 옛 업종 기준이라 함께 비운다 — 안 비우면 베이커리로 바뀐 행에 "식당" 태그가 남아 식사도 카페도
+     * 아닌 상태가 된다. 트랜잭션 필수(배치 호출).
+     *
+     * @return 고친 행 수
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places
+            SET category = :category, embedding = NULL, enriched_at = NULL, place_role = NULL, cuisine = NULL,
+                updated_at = now()
+            WHERE name = :name AND region = :region AND source = 'tourapi'
+              AND category = 'Dining and Drinking > Restaurant'
+            """, nativeQuery = true)
+    int refineGenericTourApiDiningCategory(@Param("name") String name, @Param("region") String region,
+                                           @Param("category") String category);
+
+    /**
+     * 좌표가 깨진 TourAPI 행((0,0) 또는 좌표 변환 오류로 생긴 남중국해 고정점)을 정상 좌표로 고치고 되살린다.
+     *
+     * <p>V40이 이 행들을 비활성화했는데, 시더는 같은 이름이 있으면 새로 넣지 않으므로 여기서 고치지
+     * 않으면 영영 빠진다. 호출부(배치)는 트랜잭션이 없으므로
+     * {@code @Transactional}이 필수다 — 빠뜨리면 TransactionRequiredException.
+     *
+     * 새 좌표의 유효성은 호출부(TourApiSeeder.toPlace)가 보장한다.
+     *
+     * @return 고친 행 수
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places
+            SET latitude = :lat, longitude = :lng, active = true, deactivated_at = NULL, updated_at = now()
+            WHERE name = :name AND region = :region AND source = 'tourapi'
+              AND ((latitude = 0 AND longitude = 0)
+                   OR (abs(latitude - 19.694) < 0.01 AND abs(longitude - 117.993) < 0.01))
+            """, nativeQuery = true)
+    int repairBrokenTourApiCoordinates(@Param("name") String name, @Param("region") String region,
+                                       @Param("lat") java.math.BigDecimal lat,
+                                       @Param("lng") java.math.BigDecimal lng);
 
     /**
      * TourAPI 이미지 백필 대상 조회 — 같은 지역·같은 이름이면서 <b>이미지가 비어 있는</b> 활성 행.
@@ -237,10 +352,22 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     List<Place> findImagelessAttractions(@Param("region") String region, Pageable pageable);
 
     /**
-     * 지역 스코프 미보강 장소 페이징 조회 — 전량(수만 건) LLM 보강 비용을 통제하기 위해
-     * BATCH_ENRICH_REGIONS로 지역 단위(예: Jeju부터) 점진 실행할 때 사용.
+     * {@link #findEnrichTargets}의 지역 스코프판 — BATCH_ENRICH_REGIONS로 지역 단위(예: Jeju부터)
+     * 점진 실행할 때 사용. 순서·제외 규칙은 같다.
      */
-    Page<Place> findByEnrichedAtIsNullAndActiveTrueAndRegionIn(List<String> regions, Pageable pageable);
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.enrichedAt IS NULL AND p.active = true
+              AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
+              AND p.region IN :regions
+              AND p.id NOT IN :excludedIds
+            ORDER BY COALESCE(p.wikidataSitelinks, 0) DESC,
+                     CASE WHEN p.category LIKE 'Dining and Drinking%' THEN 1 ELSE 0 END,
+                     p.id
+            """)
+    List<Place> findEnrichTargetsInRegions(@Param("regions") List<String> regions,
+                                           @Param("excludedIds") Collection<Long> excludedIds,
+                                           Pageable pageable);
 
     /**
      * 보강 성공 장소의 임베딩을 초기화한다 — 임베딩 텍스트가 tags/description을 포함하므로

@@ -1,6 +1,6 @@
 -- metrics --
-  스텝 13 / 숙소 1곳 / 총이동 204km
-  연속중복 0 / 최대공백 283분 / 늦은시작 0일 / 안내 1건
+  스텝 13 / 숙소 1곳 / 총이동 178km
+  연속중복 0 / 최대공백 188분 / 늦은시작 0일 / 안내 2건
 == day 1 ==
   #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: - -분 -km -원
@@ -28,17 +28,16 @@
       비용: 120000원 / 메모: -
       대안: Ocean Grand Hotel Jeju | Travel and Transportation > Lodging > Resort | 200000원
 == day 2 ==
-  #7  09:55-10:55  쉼표 | Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop | 제주시 | Jeju
-      이동: CAR 55분 36.54km 10961원
-      비용: 6000원 / 메모: -
-      대안: 카페콜라 | Dining and Drinking > Cafe, Coffee, and Tea House > Café | 6000원
-  #8  11:37-12:47  연돈 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
-      이동: CAR 42분 27.97km 8391원
+  #7  11:30-12:40  연돈 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
+      이동: CAR 56분 37.3km 11190원
       비용: 13000원 / 메모: -
       대안: 양가형제 | Dining and Drinking > Restaurant | 13000원
       대안: 공천포식당 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
+  #8  13:22-14:22  쉼표 | Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop | 제주시 | Jeju
+      이동: CAR 42분 27.97km 8391원
+      비용: 6000원 / 메모: -
   #9  17:30-18:40  대금식당 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 제주시 | Jeju
-      이동: CAR 42분 27.97km 8392원
+      이동: CAR 3분 1.51km 453원
       비용: 13000원 / 메모: -
   #10 19:33-20:03  제주R호텔 | Travel and Transportation > Lodging > Hotel | 제주시 | Jeju
       이동: CAR 53분 35.11km 10534원
@@ -60,5 +59,6 @@
       이동: CAR 20분 12.68km 3804원
       비용: 0원 / 메모: -
       대안: 제주 성산항 | Landmarks and Outdoors > Tourist Attraction | 0원
--- notices (1) --
-  2일차 중간에 4시간 43분 비는 시간이 있어요. 주변에 넣을 만한 곳을 찾지 못했습니다.
+-- notices (2) --
+  2일차 이동이 102km로 다소 깁니다.
+  2일차 중간에 3시간 8분 비는 시간이 있어요. 주변에 넣을 만한 곳을 찾지 못했습니다.

@@ -44,6 +44,13 @@ public class EmbeddingBatchJob {
     private int batchSize;
 
     /**
+     * 임베딩 대상 지역(쉼표 구분). 비우면 전 지역. 로컬에서 대량 적재 뒤 확인할 지역만 임베딩해
+     * OpenAI 호출을 줄이는 용도다(예: Jeju,Seoul,Busan).
+     */
+    @Value("${batch.embedding.regions:}")
+    private List<String> regions;
+
+    /**
      * processBatch 결과. failedIds는 이번 실행에서 재시도하지 않도록 제외할 place ID 목록
      * (embedding이 여전히 NULL이라 다음 조회에도 다시 잡히기 때문).
      */
@@ -67,8 +74,11 @@ public class EmbeddingBatchJob {
         Set<Long> excludedIds = new HashSet<>();
 
         while (true) {
-            Page<Place> page = placeRepository.findByEmbeddingIsNullAndActiveTrue(
-                    PageRequest.of(0, batchSize));
+            List<String> target = regions == null ? List.of()
+                    : regions.stream().map(String::trim).filter(r -> !r.isEmpty()).toList();
+            Page<Place> page = target.isEmpty()
+                    ? placeRepository.findByEmbeddingIsNullAndActiveTrue(PageRequest.of(0, batchSize))
+                    : placeRepository.findByEmbeddingIsNullAndActiveTrueAndRegionIn(target, PageRequest.of(0, batchSize));
 
             if (page.isEmpty()) {
                 break;

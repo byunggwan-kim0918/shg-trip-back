@@ -25,6 +25,9 @@ class BatchJobRunnerTest {
     @Mock
     private BatchEnrichScheduler batchEnrichScheduler;
 
+    @Mock
+    private WikidataSitelinksJob wikidataSitelinksJob;
+
     @InjectMocks
     private BatchJobRunner batchJobRunner;
 
@@ -67,5 +70,20 @@ class BatchJobRunnerTest {
         batchJobRunner.run();
 
         verify(batchEnrichScheduler, org.mockito.Mockito.never()).enrich();
+    }
+
+    @Test
+    @DisplayName("인기도(Wikidata)는 보강보다 먼저 채운다 — 보강이 유명한 장소부터 처리하려면 인기도가 있어야 한다")
+    void run_wikidataRunsBeforeEnrich() throws Exception {
+        ReflectionTestUtils.setField(batchJobRunner, "wikidataEnabled", true);
+        ReflectionTestUtils.setField(batchJobRunner, "enrichEnabled", true);
+
+        batchJobRunner.run();
+
+        InOrder inOrder = inOrder(foursquareSeeder, wikidataSitelinksJob, batchEnrichScheduler, embeddingBatchJob);
+        inOrder.verify(foursquareSeeder).seed();
+        inOrder.verify(wikidataSitelinksJob).run();
+        inOrder.verify(batchEnrichScheduler).enrich();
+        inOrder.verify(embeddingBatchJob).execute();
     }
 }

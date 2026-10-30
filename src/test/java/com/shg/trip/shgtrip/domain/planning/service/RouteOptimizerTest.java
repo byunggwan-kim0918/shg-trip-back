@@ -862,9 +862,13 @@ class RouteOptimizerTest {
         List<StepData> steps = routeOptimizer.repairAndSchedule(
                 selection, candidates, "relaxed", "car", null, List.of());
 
+        // 일정에 실제로 들어간 장소 기준으로 본다 — 같은 날 점심·저녁 같은 종류 교체로
+        // RestB가 RestC로 바뀔 수 있어, 이름을 고정하면 일정 밖 장소까지 금지하게 된다.
+        List<String> used = steps.stream().map(s -> s.place().name()).toList();
+        assertThat(used).contains("RestA");
         assertThat(steps).allSatisfy(s ->
                 assertThat(s.alternatives().stream().map(AlternativeData::name))
-                        .doesNotContain("RestA", "RestB"));
+                        .doesNotContainAnyElementsOf(used));
     }
 
     @Test
@@ -2060,6 +2064,188 @@ class RouteOptimizerTest {
         assertThat(PlaceCategoryConstants.hasTransitNameSignal("서울역")).isTrue();
         assertThat(PlaceCategoryConstants.hasTransitNameSignal("제주국제공항")).isTrue();
         assertThat(PlaceCategoryConstants.hasTransitNameSignal("성산포항 종합여객터미널")).isTrue();
+    }
+
+    @Test
+    @DisplayName("오후 마지막 자리가 카페면 관광지와 자리를 바꿔 저녁 바로 앞에 두지 않는다")
+    void keepsCafeOffDinnerBoundary() {
+        // 실측(일정 101 day2): 오드랑베이커리 종료 7분 뒤 훈남횟집 시작. 카페가 오후 버킷 끝에
+        // 놓이고 저녁이 DINNER_START(17:30)에 핀되면서 간격이 사라졌다.
+        java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
+
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "점심집", "Dining and Drinking > Restaurant > Korean", 33.500, 126.500, "제주시"),
+                place(2, "오후베이커리", "Dining and Drinking > Cafe, Coffee, and Tea House > Bakery",
+                        33.502, 126.502, "제주시"),
+                place(3, "오후전망대", "Landmarks and Outdoors > Scenic Lookout", 33.504, 126.504, "제주시"),
+                place(4, "저녁집", "Dining and Drinking > Restaurant > BBQ Joint", 33.506, 126.506, "제주시"),
+                place(5, "호텔", "Travel and Transportation > Lodging > Hotel", 33.508, 126.508, "제주시")
+        );
+
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3, 4), 5, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+
+        List<String> names = steps.stream().map(s -> s.place().name()).toList();
+        int bakery = names.indexOf("오후베이커리");
+        int dinner = names.indexOf("저녁집");
+        assertThat(bakery).isGreaterThanOrEqualTo(0);
+        assertThat(dinner).isGreaterThanOrEqualTo(0);
+        // 베이커리가 저녁 바로 앞이면 안 된다 — 사이에 관광 스텝이 있어야 한다
+        assertThat(dinner - bakery).isGreaterThan(1);
+    }
+
+    @Test
+    @DisplayName("오후가 전부 카페면 자리를 바꾸지 않는다 — 스텝을 버리지는 않는다")
+    void doesNotDropStepsWhenAfternoonIsAllCafes() {
+        java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
+
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "점심집", "Dining and Drinking > Restaurant > Korean", 33.500, 126.500, "제주시"),
+                place(2, "카페하나", "Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop",
+                        33.502, 126.502, "제주시"),
+                place(3, "카페둘", "Dining and Drinking > Cafe, Coffee, and Tea House > Bakery",
+                        33.504, 126.504, "제주시"),
+                place(4, "저녁집", "Dining and Drinking > Restaurant > BBQ Joint", 33.506, 126.506, "제주시"),
+                place(5, "호텔", "Travel and Transportation > Lodging > Hotel", 33.508, 126.508, "제주시")
+        );
+
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3, 4), 5, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+
+        // 바꿀 상대가 없어도 스텝이 사라지지 않아야 한다(식사 상한 트림은 별개 규칙)
+        assertThat(steps.stream().map(s -> s.place().name())).contains("저녁집", "호텔");
+    }
+
+    @Test
+    @DisplayName("지정 구역 이름은 방문지가 아니다 — 괄호 주석으로 붙은 경우는 방문지다")
+    void administrativeZoneDetection() {
+        // 실측 일정 93·95·99에서 90분 관광 스텝으로 들어온 것들
+        assertThat(PlaceCategoryConstants.isAdministrativeZone("제주도 관광특구")).isTrue();
+        assertThat(PlaceCategoryConstants.isAdministrativeZone("제주도 국가지질공원")).isTrue();
+        assertThat(PlaceCategoryConstants.isAdministrativeZone("강남 마이스 관광특구")).isTrue();
+
+        // DB 실측 28건 중 대부분이 이 형태다 — 포함 매칭으로 막으면 전부 날아간다
+        assertThat(PlaceCategoryConstants.isAdministrativeZone("서석대 (무등산권 국가지질공원)")).isFalse();
+        assertThat(PlaceCategoryConstants.isAdministrativeZone("장산 (부산 국가지질공원)")).isFalse();
+        assertThat(PlaceCategoryConstants.isAdministrativeZone("낙동강하구 (부산 국가지질공원)")).isFalse();
+
+        // 국립공원은 입구·탐방로가 정해진 실제 방문지다
+        assertThat(PlaceCategoryConstants.isAdministrativeZone("북한산 국립공원")).isFalse();
+        assertThat(PlaceCategoryConstants.isAdministrativeZone("오동도 한려해상 국립공원")).isFalse();
+        assertThat(PlaceCategoryConstants.isAdministrativeZone("성산일출봉")).isFalse();
+    }
+
+    @Test
+    @DisplayName("체류시간 휴리스틱은 뭉뚱그려진 카테고리에서 이름을 본다")
+    void visitMinutesHeuristicUsesName() {
+        // TourAPI 적재분은 카테고리가 전부 이것 하나다 — 카테고리만 보면 전부 90분이 된다
+        String generic = "Landmarks and Outdoors > Tourist Attraction";
+
+        // 제주 실측 중앙값: 오름 120 / 폭포 120 / 그 외 90
+        assertThat(PlaceCategoryConstants.heuristicVisitMinutes("새별오름", generic)).isEqualTo(120);
+        assertThat(PlaceCategoryConstants.heuristicVisitMinutes("천지연폭포", generic)).isEqualTo(120);
+        assertThat(PlaceCategoryConstants.heuristicVisitMinutes("제주민속촌", generic)).isEqualTo(90);
+
+        // 해변 60 → 90 (제주 해변 20건 중앙값 90)
+        assertThat(PlaceCategoryConstants.heuristicVisitMinutes(
+                "협재해수욕장", "Landmarks and Outdoors > Beach")).isEqualTo(90);
+        // 명시적 등산·시장 카테고리는 이름보다 먼저 본다
+        assertThat(PlaceCategoryConstants.heuristicVisitMinutes(
+                "한라산 둘레길", "Landmarks and Outdoors > Hiking Trail")).isEqualTo(150);
+        assertThat(PlaceCategoryConstants.heuristicVisitMinutes(
+                "동문시장", "Retail > Market")).isEqualTo(60);
+    }
+
+    @Test
+    @DisplayName("pace는 일일 총주행만 줄인다 — 구간 상한은 지형이 정한다")
+    void paceScalesDayCapOnly() {
+        double[] carNormal = ScheduleTuning.distanceLimits("car", "normal");
+        double[] carRelaxed = ScheduleTuning.distanceLimits("car", "relaxed");
+        double[] carTight = ScheduleTuning.distanceLimits("car", "tight");
+
+        // 구간 상한은 어떤 pace에서도 같다. 줄이면 "제주에서 한 번에 24km 이상 못 간다"가 되어
+        // 골든 jeju-40-no-startdate의 day1 오후·저녁이 통째로 트림됐다.
+        assertThat(carRelaxed[0]).isEqualTo(carNormal[0]);
+        assertThat(carTight[0]).isEqualTo(carNormal[0]);
+
+        // 일일 총주행만 relaxed에서 줄어든다
+        assertThat(carRelaxed[1]).isLessThan(carNormal[1]);
+        assertThat(carTight[1]).isEqualTo(carNormal[1]);
+    }
+
+    @Test
+    @DisplayName("모르는 pace·null은 상한을 건드리지 않는다")
+    void unknownPaceKeepsBaseLimits() {
+        double[] base = ScheduleTuning.distanceLimits("walk", "normal");
+        assertThat(ScheduleTuning.distanceLimits("walk", null)).isEqualTo(base);
+        assertThat(ScheduleTuning.distanceLimits("walk", "느긋하게")).isEqualTo(base);
+        // 이동수단이 비어도 any 기준으로 떨어진다
+        assertThat(ScheduleTuning.distanceLimits(null, "normal"))
+                .isEqualTo(ScheduleTuning.distanceLimits("any", "normal"));
+    }
+
+    @Test
+    @DisplayName("테마 슬러그가 매칭되지 않아도 기본 시간창으로 동작한다")
+    void unmatchedThemeFallsBackToDefaults() {
+        // 프론트 계약은 영문 슬러그다(wizardOptions.ts). 한글을 넣으면 매칭되지 않고
+        // 기본 시간창으로 떨어진다 — 별칭을 늘리지 않는 대신 log.warn으로 드러낸다.
+        ScheduleConfig korean = routeOptimizer.scheduleConfig(List.of("야경"), "normal");
+        ScheduleConfig none = routeOptimizer.scheduleConfig(List.of(), "normal");
+
+        assertThat(korean.morningStart).isEqualTo(none.morningStart);
+        assertThat(korean.eveningCap).isEqualTo(none.eveningCap);
+        // pace는 매칭 여부와 무관하게 보존된다 — 거리 상한 계수가 여기서 나온다
+        assertThat(korean.pace).isEqualTo("normal");
+
+        // 유효 슬러그는 기본값과 달라야 한다(그래야 위 비교가 의미를 가진다)
+        ScheduleConfig slug = routeOptimizer.scheduleConfig(List.of("nightview"), "normal");
+        assertThat(slug.eveningCap).isGreaterThan(none.eveningCap);
+    }
+
+    @Test
+    @DisplayName("버킷 안에서 먹는 스텝이 연달아 붙지 않게 자리를 바꾼다")
+    void separatesAdjacentFoodStepsInsideBucket() {
+        // 실측 일정 104 day4: 은희네해장국 → 카페 나모나모베이커리 13분 → 메콩스카이 7분.
+        java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
+
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "점심집", "Dining and Drinking > Restaurant > Korean", 33.500, 126.500, "제주시"),
+                place(2, "오후카페", "Dining and Drinking > Cafe, Coffee, and Tea House > Café",
+                        33.502, 126.502, "제주시"),
+                place(3, "오후베이커리", "Dining and Drinking > Cafe, Coffee, and Tea House > Bakery",
+                        33.503, 126.503, "제주시"),
+                place(4, "오후오름", "Landmarks and Outdoors > Tourist Attraction", 33.505, 126.505, "제주시"),
+                place(5, "호텔", "Travel and Transportation > Lodging > Hotel", 33.508, 126.508, "제주시")
+        );
+
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3, 4), 5, null)),
+                List.of(),
+                List.of()
+        );
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+        List<String> names = steps.stream().map(s -> s.place().name()).toList();
+
+        int cafe = names.indexOf("오후카페");
+        int bakery = names.indexOf("오후베이커리");
+        // 둘 다 남아 있다면 붙어 있지 않아야 한다 (하나가 트림됐다면 그것도 분리된 상태)
+        if (cafe >= 0 && bakery >= 0) {
+            assertThat(Math.abs(cafe - bakery)).isGreaterThan(1);
+        }
     }
 
 }

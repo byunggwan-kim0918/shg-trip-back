@@ -28,6 +28,12 @@ class DayState {
      * 대표가 2곳 이상인 카테고리는 넣지 않는다 — 하나는 빼도 커버리지가 유지된다.
      */
     java.util.Set<Integer> coverageCriticalIndices = java.util.Set.of();
+    /**
+     * 그날 점심과 저녁 사이에 들르는 카페·디저트({@code ScheduleConfig.cafeStop}일 때만). 오후 버킷에
+     * 고정되고 거리 트림에서 보호된다 — 짧게 들르는 곳이라 우회 기여만 보면 가장 먼저 잘린다
+     * (실측 115 day4: 수애기베이커리·미쁜제과가 거리 트림으로 빠졌다).
+     */
+    Integer cafeStopIndex;
 
     DayState(SelectionOutput.DayPlan plan) {
         this.dayNumber = plan.dayNumber();

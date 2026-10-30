@@ -31,6 +31,8 @@ import java.util.stream.Collectors;
 public class OptimizedClaudeAIService {
 
     private static final int MAX_RETRIES = 2;
+    /** enrich 응답 상한. 1024에서는 동행·섬·검색쿼리까지 담은 JSON이 잘릴 수 있었다. */
+    private static final int ENRICH_MAX_TOKENS = 2048;
 
     private final AnthropicClient anthropicClient;
     private final AnthropicProperties anthropicProperties;
@@ -60,12 +62,18 @@ public class OptimizedClaudeAIService {
         try {
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(anthropicProperties.haiku())
-                    .maxTokens(1024)
+                    .maxTokens(ENRICH_MAX_TOKENS)
                     .addUserMessage(prompt)
                     .build();
 
             Message message = executeWithRetry(
                     () -> anthropicClient.messages().create(params), MAX_RETRIES);
+            // 잘린 JSON은 파싱 실패 → legacy fallback으로 떨어져 동행·도선 섬·허브가 통째로 사라진다.
+            // 조용히 품질이 떨어지지 않게 잘림을 로그로 드러낸다.
+            if (message.stopReason().isPresent()
+                    && message.stopReason().get().equals(com.anthropic.models.messages.StopReason.MAX_TOKENS)) {
+                log.warn("enrichInput 응답이 max_tokens({})에서 잘림 — 파싱 실패 시 legacy fallback", ENRICH_MAX_TOKENS);
+            }
 
             String responseText = message.content().stream()
                     .filter(block -> block.isText())
@@ -144,6 +152,12 @@ public class OptimizedClaudeAIService {
                 categorySearchQueries = (Map<String, String>) queriesObj;
             }
 
+            VectorEnrichedInput.CompanionType companionType =
+                    VectorEnrichedInput.CompanionType.parse(parsed.get("companionType"));
+            Integer partySize = parsed.get("partySize") instanceof Number n && n.intValue() > 0
+                    ? n.intValue() : null;
+            List<String> ferryOnlyAreas = getListOrDefault(parsed, "ferryOnlyAreas");
+
             VectorEnrichedInput vectorEnrichedInput = new VectorEnrichedInput(
                     input.destination(),
                     input.themes(),
@@ -164,11 +178,16 @@ public class OptimizedClaudeAIService {
                     seasonContext,
                     enrichedContext,
                     transportationHub,
-                    categorySearchQueries
+                    categorySearchQueries,
+                    companionType,
+                    partySize,
+                    ferryOnlyAreas
             );
 
-            log.debug("enrichInput 성공: destination='{}' → normalized='{}', country='{}', regions={}",
-                    input.destination(), normalizedDestination, country, regions);
+            log.info("enrichInput 성공: destination='{}' → normalized='{}', country='{}', regions={}, "
+                            + "companion={}, partySize={}, ferryOnlyAreas={}",
+                    input.destination(), normalizedDestination, country, regions,
+                    companionType, partySize, ferryOnlyAreas);
             return EnrichmentResult.success(vectorEnrichedInput);
 
         } catch (Exception e) {
