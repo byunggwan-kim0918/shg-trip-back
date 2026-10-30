@@ -3,11 +3,20 @@
 ## 최초 세팅 순서
 
 ### 1. tfstate 백엔드 버킷 수동 생성 (1회)
+
+> ⚠️ S3 버킷명은 전 세계에서 유일해야 한다. `shgtrip-terraform-state` / `shgtrip-data`는
+> 이미 타인이 점유 중이라 사용 불가. 계정 ID를 접미사로 붙여 충돌을 피한다.
+> (`main.tf`의 backend `bucket`, `s3.tf`의 데이터 버킷명이 이 규칙을 따름)
+
 ```bash
-aws s3 mb s3://shgtrip-terraform-state --region ap-northeast-2
+aws s3 mb s3://shgtrip-terraform-state-<ACCOUNT_ID> --region ap-northeast-2
 aws s3api put-bucket-versioning \
-  --bucket shgtrip-terraform-state \
+  --bucket shgtrip-terraform-state-<ACCOUNT_ID> \
   --versioning-configuration Status=Enabled
+aws s3api put-public-access-block \
+  --bucket shgtrip-terraform-state-<ACCOUNT_ID> \
+  --public-access-block-configuration \
+      BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 aws dynamodb create-table \
   --table-name shgtrip-terraform-lock \
   --attribute-definitions AttributeName=LockID,AttributeType=S \
@@ -20,6 +29,9 @@ aws dynamodb create-table \
 ```bash
 cp terraform.tfvars.example terraform.tfvars
 # terraform.tfvars 편집 (실제 값 입력)
+
+# CI(.github/workflows/terraform.yml)가 여기서 받아 쓴다. 로컬에서 고칠 때마다 다시 올릴 것
+aws s3 cp terraform.tfvars s3://shgtrip-terraform-state-<ACCOUNT_ID>/config/terraform.tfvars --sse AES256
 ```
 
 ### 3. Terraform 실행
@@ -28,6 +40,18 @@ terraform init
 terraform plan
 terraform apply
 ```
+
+CI 역할(`shgtrip-github-terraform-plan`/`-apply`)은 이 apply가 만든다. 그래서 첫 apply는 반드시 로컬에서 하고,
+그다음에 워크플로 변경을 main에 반영한다(역할이 없으면 CI의 plan/apply가 assume 단계에서 실패한다).
+
+태스크 정의의 환경변수·시크릿을 바꾼 apply는 실행 중인 서비스에 반영되지 않는다(서비스는 Terraform 밖).
+apply 뒤 강제 재배포한다:
+```bash
+aws ecs update-service --cluster shgtrip-cluster --service shgtrip-app --force-new-deployment
+aws ecs update-service --cluster shgtrip-cluster --service shgtrip-web --force-new-deployment
+```
+시크릿에 새 키(예: `TOUR_API_SERVICE_KEY`)를 추가했으면 S3의 `config/terraform.tfvars`도 먼저 갱신한다 —
+CI apply가 옛 사본으로 시크릿을 덮어쓰면 그 키를 참조하는 태스크가 시작하지 못한다.
 
 ### 4. ECR에 이미지 푸시
 

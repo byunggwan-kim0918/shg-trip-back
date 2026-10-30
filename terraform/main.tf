@@ -10,7 +10,7 @@ terraform {
 
   # tfstate를 S3에 저장 (팀 협업 및 상태 보존)
   backend "s3" {
-    bucket         = "shgtrip-terraform-state"
+    bucket         = "shgtrip-terraform-state-815734209917"
     key            = "shgtrip/terraform.tfstate"
     region         = "ap-northeast-2"
     encrypt        = true
