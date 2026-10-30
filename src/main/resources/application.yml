@@ -12,7 +12,8 @@ cloud:
   aws:
     s3:
       region: ${AWS_REGION:ap-northeast-2}
-      bucket: ${S3_BUCKET:shgtrip-data}
+      # 기본값 없음 — shgtrip-data는 타인 소유 버킷이다. 운영은 ECS가 주입, 로컬은 application-local.yml
+      bucket: ${S3_BUCKET:}
       # CloudFront 배포 도메인. 설정 시 이미지 정적 URL을 CloudFront로 서빙(운영).
       # 미설정(로컬) 시 LocalStack path-style 정적 URL 사용.
       cloud-front-domain: ${CLOUDFRONT_DOMAIN:}
