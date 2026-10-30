@@ -137,7 +137,7 @@ cloud:
   aws:
     s3:
       region: ${AWS_REGION:ap-northeast-2}
-      bucket: ${BATCH_FOURSQUARE_S3_BUCKET:shgtrip-data}
+      bucket: ${BATCH_FOURSQUARE_S3_BUCKET:}   # 기본값 없음 — shgtrip-data는 타인 소유 버킷
 
 # --- 로깅 설정 (배치 모드) ---
 logging:

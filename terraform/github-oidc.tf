@@ -130,15 +130,12 @@ data "aws_iam_policy_document" "github_deploy_assume" {
       variable = "token.actions.githubusercontent.com:aud"
       values   = ["sts.amazonaws.com"]
     }
-    # push: main 트리거 + environment: production 사용 시
-    # sub가 "repo:...:environment:production" 형태로 옴
+    # 배포 잡은 environment: production을 쓰므로 sub가 environment 형식으로만 온다.
+    # ref:main을 같이 허용하면 environment 없는 워크플로도 이 역할을 받을 수 있다.
     condition {
-      test     = "StringLike"
+      test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values = [
-        "repo:${var.github_repo}:ref:refs/heads/main",
-        "repo:${var.github_repo}:environment:production",
-      ]
+      values   = ["repo:${var.github_repo}:environment:production"]
     }
   }
 }
@@ -226,12 +223,9 @@ data "aws_iam_policy_document" "github_deploy_front_assume" {
       values   = ["sts.amazonaws.com"]
     }
     condition {
-      test     = "StringLike"
+      test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values = [
-        "repo:${var.github_repo_front}:ref:refs/heads/main",
-        "repo:${var.github_repo_front}:environment:production",
-      ]
+      values   = ["repo:${var.github_repo_front}:environment:production"]
     }
   }
 }

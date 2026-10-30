@@ -412,6 +412,9 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * (enriched_at IS NOT NULL 가드) — CSV의 tags는 카테고리 복사/파편이라 LLM 보강 결과보다
      * 항상 저품질이다. name도 마찬가지 — Google 동기화(languageCode=ko)가 채택한 한글명을
      * CSV의 영문명이 되돌리지 않도록 "기존 한글명 보존" CASE 가드를 둔다.
+     *
+     * <p>카테고리가 바뀌면 임베딩·역할·음식 종류·보강 시각을 비운다 — 전부 옛 카테고리 기준이라,
+     * 남겨 두면 다음 배치가 다시 만들지 않는다.
      */
     @Modifying
     @Transactional
@@ -431,6 +434,14 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 country = EXCLUDED.country,
                 region = EXCLUDED.region,
                 category = EXCLUDED.category,
+                embedding = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                                 THEN NULL ELSE places.embedding END,
+                place_role = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                                  THEN NULL ELSE places.place_role END,
+                cuisine = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                               THEN NULL ELSE places.cuisine END,
+                enriched_at = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                                   THEN NULL ELSE places.enriched_at END,
                 tags = CASE WHEN places.enriched_at IS NOT NULL THEN places.tags
                             ELSE EXCLUDED.tags END,
                 description = CASE WHEN places.enriched_at IS NOT NULL THEN places.description
