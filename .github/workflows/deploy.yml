@@ -7,6 +7,7 @@ on:
       - 'terraform/**'
       - 'docs/**'
       - '*.md'
+  workflow_dispatch:
 
 env:
   AWS_REGION: ap-northeast-2
@@ -51,11 +52,14 @@ jobs:
           docker push $ECR_REGISTRY/$APP_REPO:$IMAGE_TAG
           docker push $ECR_REGISTRY/$APP_REPO:latest
 
-          # 배치 ECR — latest만 (Step Functions가 latest pull)
+          # 배치 ECR — SHA + latest
+          docker tag app-image:$IMAGE_TAG $ECR_REGISTRY/$BATCH_REPO:$IMAGE_TAG
           docker tag app-image:$IMAGE_TAG $ECR_REGISTRY/$BATCH_REPO:latest
+          docker push $ECR_REGISTRY/$BATCH_REPO:$IMAGE_TAG
           docker push $ECR_REGISTRY/$BATCH_REPO:latest
 
           echo "image=$ECR_REGISTRY/$APP_REPO:$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "batch_image=$ECR_REGISTRY/$BATCH_REPO:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
       # ECS 앱 서비스 롤링 배포
       - name: Download current task definition
@@ -80,3 +84,24 @@ jobs:
           service: shgtrip-app
           cluster: ${{ env.ECS_CLUSTER }}
           wait-for-service-stability: false
+
+      # 배치는 service 없이 등록만 한다 — Step Functions가 패밀리의 최신 리비전으로 실행
+      - name: Download current batch task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition shgtrip-batch \
+            --query taskDefinition \
+            > batch-task-def.json
+
+      - name: Render batch task definition with updated image
+        id: batch-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
+        with:
+          task-definition: batch-task-def.json
+          container-name: batch
+          image: ${{ steps.build.outputs.batch_image }}
+
+      - name: Register batch task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
+        with:
+          task-definition: ${{ steps.batch-task-def.outputs.task-definition }}

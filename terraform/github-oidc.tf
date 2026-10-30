@@ -56,21 +56,12 @@ resource "aws_iam_role_policy_attachment" "github_terraform_plan_readonly" {
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
-# ReadOnlyAccess에 없는데 plan에 필요한 것: 상태 잠금(쓰기), 시크릿 값 읽기(시크릿 버전 리소스를
-# refresh할 때 GetSecretValue를 부른다). 리소스를 바꾸는 권한은 넣지 않는다.
+# ReadOnlyAccess에 없는데 plan에 필요한 상태 잠금(쓰기)
 data "aws_iam_policy_document" "github_terraform_plan_extra" {
   statement {
     sid       = "StateLock"
     actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
     resources = ["arn:aws:dynamodb:${var.aws_region}:${local.account_id}:table/shgtrip-terraform-lock"]
-  }
-  statement {
-    sid     = "ReadManagedSecrets"
-    actions = ["secretsmanager:GetSecretValue"]
-    resources = [
-      aws_secretsmanager_secret.app_prod.arn,
-      aws_secretsmanager_secret.fsq_token.arn,
-    ]
   }
 }
 
@@ -180,7 +171,7 @@ resource "aws_iam_role_policy" "github_deploy" {
         Resource = [
           aws_ecr_repository.batch.arn,
           aws_ecr_repository.fsq_extractor.arn,
-          "arn:aws:ecr:${var.aws_region}:${local.account_id}:repository/shgtrip/app"
+          aws_ecr_repository.app.arn
         ]
       },
       {
@@ -202,6 +193,7 @@ resource "aws_iam_role_policy" "github_deploy" {
         Resource = [
           aws_iam_role.ecs_execution.arn,
           aws_iam_role.batch_task.arn,
+          aws_iam_role.fsq_extractor_task.arn,
           aws_iam_role.app_task.arn
         ]
       }
@@ -265,8 +257,7 @@ resource "aws_iam_role_policy" "github_deploy_front" {
           "ecr:UploadLayerPart",
           "ecr:CompleteLayerUpload"
         ]
-        # shgtrip/web 리포 (콘솔 생성 → ARN 직접 명시)
-        Resource = ["arn:aws:ecr:${var.aws_region}:${local.account_id}:repository/shgtrip/web"]
+        Resource = [aws_ecr_repository.web.arn]
       },
       {
         Sid    = "ECSDeployWeb"

@@ -1,0 +1,15 @@
+# 복사해서 terraform.tfvars로 쓴다(커밋 금지). 고치면 S3 사본도 갱신한다 — CI가 그걸 쓴다(README 2번).
+# 시크릿은 넣지 않는다 — terraform/scripts/set-secret.sh
+
+alert_email        = "you@example.com" # 월간 파이프라인 알림 — SNS 구독 확인 메일을 눌러야 받는다
+budget_alert_email = "you@example.com" # 월 비용 예산 알림
+
+# 바꾸면 RDS가 새로 만들어진다 — 마스터 사용자명은 생성 후 못 바꾼다
+db_username = "..."
+
+# shg-trip/prod에 들어가는 키 (set-secret.sh app <KEY>):
+#   DB_HOST DB_PORT DB_USERNAME DB_PASSWORD REDIS_HOST REDIS_PORT
+#   JWT_SECRET SESSION_SECRET CORS_ALLOWED_ORIGIN BACKEND_URL
+#   KAKAO_CLIENT_ID KAKAO_CLIENT_SECRET GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET NAVER_CLIENT_ID NAVER_CLIENT_SECRET
+#   ANTHROPIC_API_KEY OPENAI_API_KEY TOUR_API_SERVICE_KEY
+# shgtrip/fsq-access-token (set-secret.sh fsq): Foursquare Places Portal 토큰 — 30일마다 만료

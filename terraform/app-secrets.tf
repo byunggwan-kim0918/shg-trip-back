@@ -1,29 +1,6 @@
 # ── 앱 통합 Secret (application-prod.yml의 aws-secretsmanager:shg-trip/prod) ──
 # Spring Cloud AWS가 이 시크릿 하나를 읽어서 모든 ${변수}를 주입한다.
-
-variable "app_secrets" {
-  description = "shg-trip/prod Secrets Manager에 저장할 키-값 쌍"
-  type        = map(string)
-  sensitive   = true
-  # terraform.tfvars에서 입력:
-  # app_secrets = {
-  #   DB_HOST              = "shgtrip-postgres.xxxx.ap-northeast-2.rds.amazonaws.com"
-  #   DB_PORT              = "5432"
-  #   DB_USERNAME          = "weShg"
-  #   DB_PASSWORD          = "..."
-  #   REDIS_HOST           = "shgtrip-redis.xxxx.cache.amazonaws.com"
-  #   REDIS_PORT           = "6379"
-  #   JWT_SECRET           = "..."
-  #   KAKAO_CLIENT_ID      = "..."
-  #   KAKAO_CLIENT_SECRET  = "..."
-  #   GOOGLE_CLIENT_ID     = "..."
-  #   GOOGLE_CLIENT_SECRET = "..."
-  #   NAVER_CLIENT_ID      = "..."
-  #   NAVER_CLIENT_SECRET  = "..."
-  #   ANTHROPIC_API_KEY    = "..."
-  #   OPENAI_API_KEY       = "..."
-  # }
-}
+# 값은 Terraform 밖에서 넣는다(terraform/scripts/set-secret.sh) — tfvars·state에 평문이 남지 않게
 
 resource "aws_secretsmanager_secret" "app_prod" {
   name                    = "shg-trip/prod"
@@ -36,9 +13,12 @@ resource "aws_secretsmanager_secret" "app_prod" {
   }
 }
 
-resource "aws_secretsmanager_secret_version" "app_prod" {
-  secret_id     = aws_secretsmanager_secret.app_prod.id
-  secret_string = jsonencode(var.app_secrets)
+removed {
+  from = aws_secretsmanager_secret_version.app_prod
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 # ── ECS Task Execution Role에 앱 시크릿 읽기 권한 추가 ────────────────────────

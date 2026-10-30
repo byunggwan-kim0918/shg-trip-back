@@ -1,17 +1,7 @@
 # ── ElastiCache Valkey (세션/토큰 캐시) ───────────────────────────────────────
-variable "redis_subnet_group_name" {
-  description = "ElastiCache 서브넷 그룹명"
-  type        = string
-}
-
-variable "redis_security_group_ids" {
-  description = "ElastiCache에 적용할 보안그룹 ID 목록"
-  type        = list(string)
-}
-
 resource "aws_elasticache_subnet_group" "main" {
   name       = "shgtrip-valkey-subnet"
-  subnet_ids = var.vpc_subnet_ids
+  subnet_ids = local.private_subnet_ids
 
   tags = {
     Project = var.project
@@ -31,7 +21,7 @@ resource "aws_elasticache_replication_group" "main" {
   port               = 6379
 
   subnet_group_name  = aws_elasticache_subnet_group.main.name
-  security_group_ids = var.redis_security_group_ids
+  security_group_ids = [aws_security_group.valkey.id]
 
   parameter_group_name = "default.valkey9"
 
@@ -44,11 +34,22 @@ resource "aws_elasticache_replication_group" "main" {
   snapshot_retention_limit   = 1
 
   log_delivery_configuration {
-    destination      = "/elasticache/shgtrip-valkey/slow-logs"
+    destination      = aws_cloudwatch_log_group.valkey_slow_log.name
     destination_type = "cloudwatch-logs"
     log_format       = "json"
     log_type         = "slow-log"
   }
+
+  tags = {
+    Project = var.project
+    Env     = var.env
+  }
+}
+
+# 로그그룹 없이 설정된 전송은 오류로 멈춘 채 재시도하지 않는다 — 나중에 만들었으면 modify-replication-group으로 다시 켠다
+resource "aws_cloudwatch_log_group" "valkey_slow_log" {
+  name              = "/elasticache/shgtrip-valkey/slow-logs"
+  retention_in_days = 30
 
   tags = {
     Project = var.project

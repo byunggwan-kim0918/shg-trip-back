@@ -44,16 +44,29 @@ terraform apply
 CI 역할(`shgtrip-github-terraform-plan`/`-apply`)은 이 apply가 만든다. 그래서 첫 apply는 반드시 로컬에서 하고,
 그다음에 워크플로 변경을 main에 반영한다(역할이 없으면 CI의 plan/apply가 assume 단계에서 실패한다).
 
-태스크 정의의 환경변수·시크릿을 바꾼 apply는 실행 중인 서비스에 반영되지 않는다(서비스는 Terraform 밖).
-apply 뒤 강제 재배포한다:
+새 계정에서 처음 만들 때는 DB 마스터 비밀번호를 그때만 넘긴다: `terraform apply -var db_password=...`
+그다음 시크릿 값을 넣는다(Terraform은 그릇만 만든다):
 ```bash
-aws ecs update-service --cluster shgtrip-cluster --service shgtrip-app --force-new-deployment
-aws ecs update-service --cluster shgtrip-cluster --service shgtrip-web --force-new-deployment
+terraform/scripts/set-secret.sh fsq                  # FSQ 토큰
+terraform/scripts/set-secret.sh app DB_PASSWORD      # shg-trip/prod 키마다 (목록: terraform.tfvars.example)
 ```
-시크릿에 새 키(예: `TOUR_API_SERVICE_KEY`)를 추가했으면 S3의 `config/terraform.tfvars`도 먼저 갱신한다 —
-CI apply가 옛 사본으로 시크릿을 덮어쓰면 그 키를 참조하는 태스크가 시작하지 못한다.
+
+### 설정을 바꾼 뒤 반영하기
+- **태스크 정의(환경변수·시크릿 참조)를 바꾼 apply**: 실행 중인 서비스는 CI가 등록한 리비전을 계속 쓴다(Terraform은
+  서비스의 `task_definition`을 무시한다 — `ecs-service.tf`). GitHub Actions에서 **Deploy Backend / Deploy Frontend를
+  수동 실행(Run workflow)** 한다 — 방금 apply한 태스크 정의에 현재 커밋 SHA 이미지를 얹어 다시 배포한다.
+  `--force-new-deployment`는 쓰지 말 것: 서비스가 쓰던 옛 리비전 그대로 재시작해서 바뀐 설정이 안 들어간다.
+- **시크릿 값만 바꾼 경우**(`set-secret.sh`): 태스크 정의는 그대로이고 컨테이너가 시작할 때 값을 읽으므로 재시작만 하면 된다.
+  ```bash
+  aws ecs update-service --cluster shgtrip-cluster --service shgtrip-app --force-new-deployment
+  aws ecs update-service --cluster shgtrip-cluster --service shgtrip-web --force-new-deployment
+  ```
+  배치·추출기는 다음 월간 실행부터 새 값을 읽는다.
 
 ### 4. ECR에 이미지 푸시
+
+새 계정에서 처음 한 번만 손으로 올린다. Terraform 태스크 정의는 `:latest`를 가리키는 틀이고, 이후로는 CI가
+배포마다 커밋 SHA 태그로 push하고 그 SHA를 고정한 리비전을 등록한다(앱·웹 서비스, 배치·추출기 모두).
 
 FSQ 추출기:
 ```bash
@@ -104,6 +117,16 @@ Step Functions
 
 ## 주의사항
 
-- `terraform.tfvars`는 절대 git에 커밋하지 말 것 (.gitignore 확인)
-- FSQ 토큰은 Secrets Manager에 저장되므로 코드에 노출되지 않음
-- vpc_subnet_ids, vpc_security_group_ids는 기존 VPC 설정 확인 후 입력
+- `terraform.tfvars`는 절대 git에 커밋하지 말 것 (.gitignore 확인). 시크릿은 tfvars에 넣지 않는다 — 값은
+  `terraform/scripts/set-secret.sh`로 Secrets Manager에 직접 넣는다. FSQ 토큰 월간 갱신도 `set-secret.sh fsq` 한 줄이다.
+- 2026-10-30 이전 state·tfvars의 S3 이전 버전(버킷 버저닝)에는 시크릿이 평문으로 남아 있다. 버킷은 비공개·암호화지만,
+  유출이 의심되면 S3 이전 버전 삭제가 아니라 해당 키 교체로 대응한다.
+- 월간 파이프라인(Step Functions)은 태스크 정의 **패밀리 이름**으로 실행한다 → 최신 ACTIVE 리비전 = CI가 마지막으로
+  등록한 SHA 리비전. 특정 커밋으로 되돌리려면 그 SHA 이미지로 리비전을 등록하거나 이후 리비전을 해제(deregister)한다.
+- VPC·서브넷·보안그룹·ALB·NAT·ECS 서비스도 Terraform이 관리한다(2026-10-30 콘솔 리소스 편입). 콘솔에서 고치면
+  다음 apply가 되돌린다 — 코드로 고칠 것. 예외: tfstate 버킷·잠금 테이블(1번, 부트스트랩), ACM 인증서의 DNS 검증
+  레코드(Cloudflare).
+- `imports.tf`는 이 계정에서 편입을 한 번 수행하기 위한 파일이다. CI apply로 편입이 끝나면 지운다 — 남겨 두면
+  새 계정에서 처음부터 만들 때 "존재하지 않는 리소스를 import" 오류로 plan이 실패한다.
+- CI apply는 승인 대기 중 main의 `terraform/`이 바뀌면 거부된다(옛 설정으로 최신 상태를 덮지 않도록). 항상 최신
+  Terraform run을 승인한다. 코드만 바뀐 머지는 막지 않는다.

@@ -5,21 +5,6 @@ locals {
   ecr_base   = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com"
 }
 
-# ── ECS Fargate용 Target Group (콘솔에서 생성, target_type = ip) ──────────────
-data "aws_lb_target_group" "app" {
-  name = "shgtrip-app-tg"
-}
-
-data "aws_lb_target_group" "web" {
-  name = "shgtrip-web-tg"
-}
-
-# 웹(Next.js 서버)이 백엔드를 부르는 내부 ALB. 주소를 하드코딩하면 계정·ALB를 새로 만들 때
-# 옛 주소가 남는다(2026-10 계정 이전 때 실제로 옛 계정 ALB를 가리킨 채 배포됐다).
-data "aws_lb" "private" {
-  name = "shgTrip-private-alb"
-}
-
 # ── ECS 클러스터 ──────────────────────────────────────────────────────────────
 resource "aws_ecs_cluster" "main" {
   name = "${var.project}-cluster"
@@ -236,7 +221,7 @@ resource "aws_ecs_task_definition" "web" {
       { name = "NODE_ENV", value = "production" },
       { name = "HOSTNAME", value = "0.0.0.0" },
       # Next.js 서버가 백엔드 API 호출 시 사용하는 내부 ALB 주소
-      { name = "BACKEND_URL", value = "http://${data.aws_lb.private.dns_name}:8080" },
+      { name = "BACKEND_URL", value = "http://${aws_lb.private.dns_name}:8080" },
     ]
 
     # NEXT_PUBLIC_* 변수는 빌드타임에 주입됨 (런타임 secrets 아님)
@@ -275,13 +260,3 @@ resource "aws_ecs_task_definition" "web" {
 
   tags = { Project = var.project, Env = var.env }
 }
-
-# ── ECS Service는 콘솔에서 생성 (Terraform 관리 대상 아님) ─────────────────────
-# 콘솔에서 생성 시 참고:
-# - 클러스터: shgtrip-cluster
-# - 서비스명: shgtrip-app / shgtrip-web
-# - Task Definition: shgtrip-app / shgtrip-web
-# - 서브넷: private-2a, private-2c
-# - 보안그룹: shgTrip-app-sg / shgTrip-web-sg
-# - Target Group: shgtrip-app-tg / shgtrip-web-tg
-# - assign_public_ip: 비활성화

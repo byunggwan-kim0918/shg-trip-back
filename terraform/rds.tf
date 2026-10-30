@@ -5,20 +5,18 @@ variable "db_username" {
   default     = "postgres"
 }
 
+# DB를 처음 만들 때만 -var로 넘긴다. 이후 변경은 ignore_changes로 Terraform이 건드리지 않는다.
+# 바꿀 때는 RDS와 shg-trip/prod의 DB_PASSWORD를 같이 바꾼다 — 앱이 마스터 계정으로 붙는다
 variable "db_password" {
-  description = "RDS 마스터 비밀번호"
+  description = "RDS 마스터 비밀번호 (최초 생성 때만)"
   type        = string
   sensitive   = true
-}
-
-variable "db_security_group_ids" {
-  description = "RDS에 적용할 보안그룹 ID 목록"
-  type        = list(string)
+  default     = null
 }
 
 resource "aws_db_subnet_group" "main" {
   name       = "shgtrip-db-subnet"
-  subnet_ids = var.vpc_subnet_ids
+  subnet_ids = local.private_subnet_ids
 
   tags = {
     Project = var.project
@@ -40,7 +38,7 @@ resource "aws_db_instance" "main" {
   password = var.db_password
 
   db_subnet_group_name   = aws_db_subnet_group.main.name
-  vpc_security_group_ids = var.db_security_group_ids
+  vpc_security_group_ids = [aws_security_group.db.id]
 
   parameter_group_name         = "default.postgres18"
   performance_insights_enabled = true
@@ -56,6 +54,10 @@ resource "aws_db_instance" "main" {
   tags = {
     Project = var.project
     Env     = var.env
+  }
+
+  lifecycle {
+    ignore_changes = [password]
   }
 }
 
