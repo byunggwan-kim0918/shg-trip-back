@@ -13,9 +13,14 @@ output "ecr_batch_url" {
   value       = aws_ecr_repository.batch.repository_url
 }
 
-output "github_terraform_role_arn" {
-  description = "GitHub Actions Terraform OIDC Role ARN"
-  value       = aws_iam_role.github_terraform.arn
+output "github_terraform_plan_role_arn" {
+  description = "GitHub Actions Terraform plan(PR 전용, 읽기 전용) OIDC Role ARN"
+  value       = aws_iam_role.github_terraform_plan.arn
+}
+
+output "github_terraform_apply_role_arn" {
+  description = "GitHub Actions Terraform apply(환경 infrastructure 전용) OIDC Role ARN"
+  value       = aws_iam_role.github_terraform_apply.arn
 }
 
 output "github_deploy_role_arn" {

@@ -23,10 +23,12 @@ resource "aws_elasticache_replication_group" "main" {
   replication_group_id = "shgtrip-valkey"
   description          = "shgtrip valkey"
   engine               = "valkey"
-  engine_version       = "9.0"
-  node_type            = "cache.t4g.micro"
-  num_cache_clusters   = 1
-  port                 = 6379
+  # Valkey는 <major>.<minor> 형식이 필수라 마이너까지 고정해야 한다 (RDS처럼 메이저만 쓸 수 없음).
+  # 폐기되면 describe-cache-engine-versions로 확인 후 올릴 것.
+  engine_version     = "9.0"
+  node_type          = "cache.t4g.micro"
+  num_cache_clusters = 1
+  port               = 6379
 
   subnet_group_name  = aws_elasticache_subnet_group.main.name
   security_group_ids = var.redis_security_group_ids

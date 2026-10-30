@@ -14,6 +14,12 @@ data "aws_lb_target_group" "web" {
   name = "shgtrip-web-tg"
 }
 
+# 웹(Next.js 서버)이 백엔드를 부르는 내부 ALB. 주소를 하드코딩하면 계정·ALB를 새로 만들 때
+# 옛 주소가 남는다(2026-10 계정 이전 때 실제로 옛 계정 ALB를 가리킨 채 배포됐다).
+data "aws_lb" "private" {
+  name = "shgTrip-private-alb"
+}
+
 # ── ECS 클러스터 ──────────────────────────────────────────────────────────────
 resource "aws_ecs_cluster" "main" {
   name = "${var.project}-cluster"
@@ -119,6 +125,12 @@ resource "aws_ecs_task_definition" "batch" {
       # 로컬은 이 task 정의를 안 쓰므로 기본값 false 유지 → enrich 없이 적재.
       # 대상은 enriched_at IS NULL인 장소라 신규 유입분만 매 실행 보강된다(1회성 아님, 증분).
       { name = "BATCH_ENRICH_ENABLED", value = "true" },
+      # TourAPI 관광지 시딩 + 이미지 백필 (Google Places 제거 후 이미지의 유일한 공급원)
+      { name = "BATCH_TOURAPI_ENABLED", value = "true" },
+      { name = "BATCH_TOURAPI_IMAGE_BACKFILL", value = "true" },
+      # Wikidata 인기도(sitelinks). 기본값이 false라 이게 없으면 운영에서 한 번도 돌지 않는다 —
+      # 그러면 벡터 검색의 인기도 갈래가 비어 대표 명소를 지켜줄 장치가 없다. 무료·무인증 API.
+      { name = "BATCH_WIKIDATA_ENABLED", value = "true" },
     ]
 
     # 배치 프로필은 spring.config.import 미사용 → 개별 환경변수로 시크릿 주입 필요
@@ -131,6 +143,7 @@ resource "aws_ecs_task_definition" "batch" {
       { name = "REDIS_PORT", valueFrom = "${aws_secretsmanager_secret.app_prod.arn}:REDIS_PORT::" },
       { name = "ANTHROPIC_API_KEY", valueFrom = "${aws_secretsmanager_secret.app_prod.arn}:ANTHROPIC_API_KEY::" },
       { name = "OPENAI_API_KEY", valueFrom = "${aws_secretsmanager_secret.app_prod.arn}:OPENAI_API_KEY::" },
+      { name = "TOUR_API_SERVICE_KEY", valueFrom = "${aws_secretsmanager_secret.app_prod.arn}:TOUR_API_SERVICE_KEY::" },
     ]
 
     logConfiguration = {
@@ -172,6 +185,8 @@ resource "aws_ecs_task_definition" "app" {
     environment = [
       { name = "SPRING_PROFILES_ACTIVE", value = "prod" },
       { name = "AWS_REGION", value = var.aws_region },
+      # 없으면 application.yml 기본값(shgtrip-data — 타인 소유 버킷)을 가리킨다.
+      { name = "S3_BUCKET", value = aws_s3_bucket.data.bucket },
       { name = "CLOUDFRONT_DOMAIN", value = aws_cloudfront_distribution.images.domain_name },
     ]
 
@@ -221,7 +236,7 @@ resource "aws_ecs_task_definition" "web" {
       { name = "NODE_ENV", value = "production" },
       { name = "HOSTNAME", value = "0.0.0.0" },
       # Next.js 서버가 백엔드 API 호출 시 사용하는 내부 ALB 주소
-      { name = "BACKEND_URL", value = "http://internal-shgTrip-private-alb-745655561.ap-northeast-2.elb.amazonaws.com:8080" },
+      { name = "BACKEND_URL", value = "http://${data.aws_lb.private.dns_name}:8080" },
     ]
 
     # NEXT_PUBLIC_* 변수는 빌드타임에 주입됨 (런타임 secrets 아님)
@@ -242,8 +257,13 @@ resource "aws_ecs_task_definition" "web" {
       }
     }
 
+    # 이미지(node:20-alpine)에 curl이 없어 "curl -f"가 항상 실패했다 — 컨테이너가 떠 있어도 UNHEALTHY로
+    # 계속 교체됐다(2026-10 실측 12시간 12회). 헬스체크 하나 때문에 패키지를 넣지 않고 이미지에 반드시 있는
+    # node로 검사한다. 쉘 없는 exec 형식이라 slim·distroless로 바꿔도 동작한다.
+    # localhost는 IPv6(::1)로 풀릴 수 있는데 Next.js는 IPv4(0.0.0.0)로만 듣기 때문에 127.0.0.1을 쓴다.
     healthCheck = {
-      command     = ["CMD-SHELL", "curl -f http://localhost:3000/health || exit 1"]
+      command = ["CMD", "node", "-e",
+      "require('http').get('http://127.0.0.1:3000/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
       interval    = 30
       timeout     = 5
       retries     = 3

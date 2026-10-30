@@ -12,8 +12,16 @@ resource "aws_iam_openid_connect_provider" "github" {
   }
 }
 
-# ── Terraform CI/CD Role ─────────────────────────────────────────────────────
-data "aws_iam_policy_document" "github_terraform_assume" {
+# ── Terraform CI/CD Role (plan / apply 분리) ──────────────────────────────────
+# 예전엔 역할 하나(AdministratorAccess)를 저장소의 모든 브랜치·워크플로가 쓸 수 있었다
+# (sub = "repo:...:*"). 워크플로의 action 하나만 털려도 계정 전체가 넘어가는 구조라 둘로 나눈다.
+#   plan  — PR에서만. 읽기 전용이라 리소스를 바꿀 수 없다.
+#   apply — GitHub 환경 "infrastructure"에서만. 그 환경에 필수 승인자·main 브랜치 제한을
+#           걸어 두므로(저장소 설정, 수동) 사람이 승인해야만 이 역할이 발급된다.
+# sub는 이벤트에 따라 정해진다: pull_request 잡은 "repo:<repo>:pull_request",
+# environment가 지정된 잡은 "repo:<repo>:environment:<이름>".
+
+data "aws_iam_policy_document" "github_terraform_plan_assume" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
     principals {
@@ -26,16 +34,16 @@ data "aws_iam_policy_document" "github_terraform_assume" {
       values   = ["sts.amazonaws.com"]
     }
     condition {
-      test     = "StringLike"
+      test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repo}:*"]
+      values   = ["repo:${var.github_repo}:pull_request"]
     }
   }
 }
 
-resource "aws_iam_role" "github_terraform" {
-  name               = "${var.project}-github-terraform"
-  assume_role_policy = data.aws_iam_policy_document.github_terraform_assume.json
+resource "aws_iam_role" "github_terraform_plan" {
+  name               = "${var.project}-github-terraform-plan"
+  assume_role_policy = data.aws_iam_policy_document.github_terraform_plan_assume.json
 
   tags = {
     Project = var.project
@@ -43,10 +51,69 @@ resource "aws_iam_role" "github_terraform" {
   }
 }
 
-# Terraform은 거의 모든 리소스를 관리하므로 AdministratorAccess 부여
-# 프로덕션에서는 권한을 줄일 수 있음
-resource "aws_iam_role_policy_attachment" "github_terraform" {
-  role       = aws_iam_role.github_terraform.name
+resource "aws_iam_role_policy_attachment" "github_terraform_plan_readonly" {
+  role       = aws_iam_role.github_terraform_plan.name
+  policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+# ReadOnlyAccess에 없는데 plan에 필요한 것: 상태 잠금(쓰기), 시크릿 값 읽기(시크릿 버전 리소스를
+# refresh할 때 GetSecretValue를 부른다). 리소스를 바꾸는 권한은 넣지 않는다.
+data "aws_iam_policy_document" "github_terraform_plan_extra" {
+  statement {
+    sid       = "StateLock"
+    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
+    resources = ["arn:aws:dynamodb:${var.aws_region}:${local.account_id}:table/shgtrip-terraform-lock"]
+  }
+  statement {
+    sid     = "ReadManagedSecrets"
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [
+      aws_secretsmanager_secret.app_prod.arn,
+      aws_secretsmanager_secret.fsq_token.arn,
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "github_terraform_plan_extra" {
+  name   = "${var.project}-github-terraform-plan-extra"
+  role   = aws_iam_role.github_terraform_plan.id
+  policy = data.aws_iam_policy_document.github_terraform_plan_extra.json
+}
+
+data "aws_iam_policy_document" "github_terraform_apply_assume" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:${var.github_repo}:environment:infrastructure"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_terraform_apply" {
+  name               = "${var.project}-github-terraform-apply"
+  assume_role_policy = data.aws_iam_policy_document.github_terraform_apply_assume.json
+
+  tags = {
+    Project = var.project
+    Env     = var.env
+  }
+}
+
+# apply는 IAM 역할까지 만들기 때문에 권한을 좁혀도 스스로 권한을 올릴 수 있다(권한 경계 없이는
+# 의미가 없다). 그래서 권한은 유지하고, 누가·언제 이 역할을 받을 수 있는지(위 trust + 환경 승인)를 잠근다.
+resource "aws_iam_role_policy_attachment" "github_terraform_apply" {
+  role       = aws_iam_role.github_terraform_apply.name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 

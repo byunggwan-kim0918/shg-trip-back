@@ -1,6 +1,6 @@
 # ── 데이터 버킷 ───────────────────────────────────────────────────────────────
 resource "aws_s3_bucket" "data" {
-  bucket = "${var.project}-data"
+  bucket = "${var.project}-data-${data.aws_caller_identity.current.account_id}"
 
   tags = {
     Project = var.project
@@ -94,6 +94,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
 }
 
 # ── Terraform 상태 버킷 (최초 1회 수동 생성 후 import) ────────────────────────
-# aws s3 mb s3://shgtrip-terraform-state --region ap-northeast-2
-# aws s3api put-bucket-versioning --bucket shgtrip-terraform-state \
+# aws s3 mb s3://shgtrip-terraform-state-<ACCOUNT_ID> --region ap-northeast-2
+# aws s3api put-bucket-versioning --bucket shgtrip-terraform-state-<ACCOUNT_ID> \
 #   --versioning-configuration Status=Enabled
