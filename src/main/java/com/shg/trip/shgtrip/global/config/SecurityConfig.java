@@ -5,10 +5,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -38,12 +40,12 @@ public class SecurityConfig {
                         .requestMatchers("/api/shared/**").permitAll()
                         // 이미지 프록시: <img src> 태그는 Authorization 헤더 전달 불가
                         .requestMatchers("/api/places/*/photo").permitAll()
-                        // SSE 스트림: EventSource는 Authorization 헤더 불가, jobId(UUID v4, 128-bit)가 인증 역할.
-                        // itineraryId는 SSE에 포함되지 않으며, complete 후 인증된 GET /generate/{jobId}/result 로만 조회 가능.
-                        .requestMatchers("/api/itineraries/generate/{jobId}/stream").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .anyRequest().authenticated()
                 )
+                // 기본 entry point는 403이다. BFF는 401을 받아야 refresh 후 재시도하므로 미인증은 401로 돌려준다
+                // (권한 부족은 그대로 403).
+                .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .addFilterBefore(jwtAuthenticationFilter,
                         UsernamePasswordAuthenticationFilter.class)
                 .build();

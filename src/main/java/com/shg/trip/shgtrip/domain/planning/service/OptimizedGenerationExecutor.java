@@ -9,6 +9,7 @@ import com.shg.trip.shgtrip.domain.planning.service.ai.SelectionCallGenerator;
 import com.shg.trip.shgtrip.domain.planning.service.ai.OptimizedClaudeAIService;
 import com.shg.trip.shgtrip.domain.planning.service.validation.PlaceRegionValidator;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
+import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -63,7 +64,7 @@ public class OptimizedGenerationExecutor {
     private static final int CUSTOM_PLACE_SEARCH_LIMIT = 10;
 
     @Async("planningExecutor")
-    public void execute(String jobId, ItineraryGenerateRequest request, Long userId, SseEmitter emitter) {
+    public void execute(String jobId, ItineraryGenerateRequest request, Long userId, GenerationStream emitter) {
         MDC.put("jobId", jobId);
         final long pipelineStart = System.nanoTime();
         long stageMark = pipelineStart;
@@ -113,6 +114,13 @@ public class OptimizedGenerationExecutor {
             // [25%] Fallback/컴팩트 분기 판단
             if (cancellationRegistry.isCancelled(jobId)) return;
             logCandidatePool(candidates, days);
+            if (candidates.isEmpty()) {
+                // 후보가 하나도 없으면 fallback(Sonnet)이 이름만으로 일정을 지어도 DB에서 해소되는 장소가 없다
+                log.info("OptimizedGeneration 중단 (jobId={}, reason=no_candidates)", jobId);
+                ErrorCode code = ErrorCode.INSUFFICIENT_PLACE_DATA;
+                sendSseError(emitter, code.getCode(), code.getMessage());
+                return;
+            }
             FallbackDecider.PoolQuality poolQuality = fallbackDecider.assess(candidates, days);
 
             if (poolQuality == FallbackDecider.PoolQuality.FALLBACK) {
@@ -245,7 +253,7 @@ public class OptimizedGenerationExecutor {
             stageMark = logStage("save", stageMark);
 
             // [100%] 구조 완료 — emitter는 닫지 않고 story-ready까지 유지
-            resultStore.save(jobId, saved.getId());
+            resultStore.save(jobId, saved.getId(), userId);
             // R1/R2: 성공 시 실패 카운트 리셋 + 30일 쿼터 소모(성공 시에만)
             generationPolicyService.recordSuccess(userId);
             sendSseEvent(emitter, "COMPLETE", 100, "일정 생성이 완료되었습니다.");
@@ -264,7 +272,7 @@ public class OptimizedGenerationExecutor {
 
         } catch (BusinessException e) {
             log.error("OptimizedGeneration 비즈니스 오류 (jobId={}): {}", jobId, e.getMessage());
-            sendSseError(emitter, "GENERATION_FAILED", e.getMessage());
+            sendSseError(emitter, e.getErrorCode().getCode(), e.getMessage());
         } catch (Exception e) {
             log.error("OptimizedGeneration 예기치 않은 오류 (jobId={})", jobId, e);
             sendSseError(emitter, "UNEXPECTED_ERROR", "일정 생성 중 오류가 발생했습니다.");
@@ -726,7 +734,7 @@ public class OptimizedGenerationExecutor {
      * 좌표 없는 Place를 지어내 봐야 지도에도 동선에도 못 쓴다.
      */
     private List<Place> resolveCustomPlaces(ItineraryGenerateRequest request, VectorEnrichedInput enrichedInput,
-                                            List<PlaceCandidate> candidatesRaw, SseEmitter emitter) {
+                                            List<PlaceCandidate> candidatesRaw, GenerationStream emitter) {
         List<String> names = request.customPlaceNames();
         if (names == null || names.isEmpty()) return List.of();
 
@@ -969,7 +977,7 @@ public class OptimizedGenerationExecutor {
         );
     }
 
-    private void sendSseEvent(SseEmitter emitter, String status, int progress, String message) {
+    private void sendSseEvent(GenerationStream emitter, String status, int progress, String message) {
         try {
             emitter.send(SseEmitter.event()
                     .name("progress")
@@ -989,7 +997,7 @@ public class OptimizedGenerationExecutor {
      * 장소명이 없는 스텝은 건너뛴다. 전송 실패는 조용히 무시(critical path 아님).
      */
     /** 남은 품질 문제를 SSE로 전달한다. 전송 실패는 무시(critical path 아님). */
-    private void sendQualityNotices(SseEmitter emitter, List<String> notices) {
+    private void sendQualityNotices(GenerationStream emitter, List<String> notices) {
         if (notices == null || notices.isEmpty()) return;
         try {
             emitter.send(SseEmitter.event().name("quality-notice").data(Map.of("notices", notices)));
@@ -999,7 +1007,7 @@ public class OptimizedGenerationExecutor {
         }
     }
 
-    private void sendStepStream(SseEmitter emitter, List<StepData> steps) {
+    private void sendStepStream(GenerationStream emitter, List<StepData> steps) {
         if (steps == null || steps.isEmpty()) return;
 
         Map<Integer, List<Map<String, String>>> byDay = new LinkedHashMap<>();
@@ -1026,7 +1034,7 @@ public class OptimizedGenerationExecutor {
         }
     }
 
-    private void sendSseError(SseEmitter emitter, String errorCode, String message) {
+    private void sendSseError(GenerationStream emitter, String errorCode, String message) {
         try {
             emitter.send(SseEmitter.event()
                     .name("error")
@@ -1045,7 +1053,7 @@ public class OptimizedGenerationExecutor {
      * 구조 일정 완료를 알리지만 emitter는 닫지 않는다 — story-ready까지 같은 emitter로 추가
      * 이벤트를 보내야 하므로, 표준 SSE "complete=종료" 관례를 이 흐름에서만 예외로 둔다.
      */
-    private void sendCompleteKeepOpen(SseEmitter emitter, Long itineraryId) {
+    private void sendCompleteKeepOpen(GenerationStream emitter, Long itineraryId) {
         try {
             emitter.send(SseEmitter.event()
                     .name("complete")
@@ -1055,7 +1063,7 @@ public class OptimizedGenerationExecutor {
         }
     }
 
-    private <T> T executeWithHeartbeat(SseEmitter emitter, Callable<T> task) {
+    private <T> T executeWithHeartbeat(GenerationStream emitter, Callable<T> task) {
         ScheduledExecutorService heartbeat = Executors.newSingleThreadScheduledExecutor();
         ScheduledFuture<?> heartbeatFuture = heartbeat.scheduleAtFixedRate(() -> {
             try {

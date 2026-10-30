@@ -16,7 +16,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -58,7 +57,7 @@ class OptimizedGenerationExecutorTest {
     private OptimizedGenerationExecutor executor;
 
     private ItineraryGenerateRequest request;
-    private SseEmitter emitter;
+    private GenerationStream emitter;
     private VectorEnrichedInput vectorEnrichedInput;
     private EnrichmentResult successResult;
     private List<PlaceCandidate> candidates;
@@ -96,7 +95,7 @@ class OptimizedGenerationExecutorTest {
         null  // customPlaceNames
         );
 
-        emitter = new SseEmitter(300000L);
+        emitter = new GenerationStream("job");
 
         vectorEnrichedInput = new VectorEnrichedInput(
                 "도쿄", List.of("맛집", "쇼핑"), List.of("관광", "식당", "카페"),
@@ -170,7 +169,7 @@ class OptimizedGenerationExecutorTest {
         verify(selectionCallGenerator).selectPlaces(eq(vectorEnrichedInput), anyList());
         verify(routeOptimizer).schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any(), anyBoolean());
         verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any());
-        verify(resultStore).save("job-1", 42L);
+        verify(resultStore).save("job-1", 42L, 1L);
         // 임시 제목(짧은 결정론 문구)을 넘겨야 한다 — concept을 넘기면 제목 교체가 0행이 된다.
         verify(storyGenerationService).generateAndAttach(
                 eq("job-1"), eq(emitter), eq(42L), eq(fixedSteps), anyString(), eq(vectorEnrichedInput),
@@ -209,6 +208,22 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("후보가 0개면 Sonnet(fallback) 호출 없이 PLANNING_005로 끝낸다")
+    void execute_noCandidates_abortsBeforeFallback() {
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
+        when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(List.of());
+
+        executor.execute("job-empty", request, 1L, emitter);
+
+        verify(fallbackExecutor, never()).execute(anyString(), any(), anyLong(), any());
+        verify(fallbackDecider, never()).assess(any(), anyLong());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
+        verify(generationPolicyService, never()).recordSuccess(anyLong());
+        assertThat(emitter.isFinished()).isTrue();
+    }
+
+    @Test
     @DisplayName("구조 검증 실패는 결정론적 버그로 간주 — 재시도 없이 로그만 남기고 그대로 저장 진행")
     void execute_hardValidationFails_logsButStillSaves() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
@@ -231,7 +246,7 @@ class OptimizedGenerationExecutorTest {
         executor.execute("job-4", request, 1L, emitter);
 
         verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any());
-        verify(resultStore).save("job-4", 99L);
+        verify(resultStore).save("job-4", 99L, 1L);
         verify(storyGenerationService).generateAndAttach(eq("job-4"), any(), eq(99L), any(), any(), any(), any());
     }
 

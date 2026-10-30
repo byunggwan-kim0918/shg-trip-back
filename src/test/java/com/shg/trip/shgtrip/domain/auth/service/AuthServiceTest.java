@@ -128,6 +128,27 @@ class AuthServiceTest {
     }
 
     @Test
+    @DisplayName("회전 직후 10초 안의 재사용은 세션을 지우지 않고 이미 발급된 새 토큰을 돌려준다")
+    void refreshAccessToken_reuseWithinGrace_returnsReplacement() {
+        // given
+        RefreshToken old = RefreshToken.builder().token("old").userId(1L).expiration(604800000L).build();
+        old.revoke("new");
+        RefreshToken next = RefreshToken.builder().token("new").userId(1L).expiration(604800000L).build();
+        User user = User.builder().email("a@b.c").nickname("닉네임").build();
+        given(refreshTokenRepository.findByToken("old")).willReturn(Optional.of(old));
+        given(refreshTokenRepository.findByToken("new")).willReturn(Optional.of(next));
+        given(userRepository.findById(1L)).willReturn(Optional.of(user));
+        given(jwtTokenProvider.createAccessToken(any(), any())).willReturn("access");
+
+        // when
+        OAuthLoginResult result = authService.refreshAccessToken("old");
+
+        // then
+        assertThat(result.refreshToken()).isEqualTo("new");
+        verify(refreshTokenRepository, never()).deleteByUserId(any());
+    }
+
+    @Test
     @DisplayName("존재하지 않는 refresh token으로 갱신 시 예외가 발생한다")
     void refreshAccessToken_notFound_throwsException() {
         // given

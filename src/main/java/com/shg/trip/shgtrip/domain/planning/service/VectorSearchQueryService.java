@@ -285,7 +285,7 @@ public class VectorSearchQueryService {
                 vector, input.country(), input.regions(), null, input.searchTags(),
                 input.budgetRange(), overfetchFor(role, limit),
                 PlaceCategoryConstants.excludedCategoryPatterns(role),
-                center, radiusKm);
+                center, radiusKm, role == SearchRole.ATTRACTION);
 
         List<VectorSearchResult> raw = placeVectorSearchService.search(request);
         List<ScoredResult> accepted = applyThresholdAndRank(slot, raw, limit);
@@ -771,7 +771,10 @@ public class VectorSearchQueryService {
                 input.searchTags(),
                 input.budgetRange(),
                 limit,
-                slot.excludedCategoryPatterns()
+                slot.excludedCategoryPatterns(),
+                null,
+                0,
+                slot.role() == SearchRole.ATTRACTION
         );
     }
 

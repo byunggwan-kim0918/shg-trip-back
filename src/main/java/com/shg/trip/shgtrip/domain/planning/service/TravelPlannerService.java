@@ -27,9 +27,12 @@ import java.util.concurrent.ConcurrentHashMap;
  * - 취소 플래그는 CancellationRegistry에 위임 (순환 의존성 방지)
  * <p>
  * 다중 인스턴스 대응: "유저의 현재 활성 jobId"를 Redis 키(active:user:{userId})로 관리해
- * 인스턴스 간 공유한다. emitter 자체(jobs 맵)는 특정 인스턴스에 물리적으로 묶인 소켓이라
- * 인메모리로 유지하고, 같은 인스턴스로 라우팅되도록 하는 것은 ALB sticky session의 책임이다
- * (docs/sse-scaling.md 참고).
+ * 인스턴스 간 공유한다. 작업 출력(jobs 맵의 GenerationStream)은 특정 인스턴스의 메모리에 있으므로
+ * 같은 인스턴스로 라우팅되도록 하는 것은 ALB sticky session의 책임이다(docs/sse-scaling.md 참고).
+ * <p>
+ * 작업과 HTTP 연결은 수명이 다르다 — 새로고침으로 연결이 끊겨도 작업은 계속 돌고, 다시 붙은
+ * 연결은 {@link GenerationStream}이 기록한 이벤트로 따라잡는다. 끝난 작업도 정리 주기 전까지는
+ * 맵에 남아 재접속 시 결과 이벤트를 받는다.
  */
 @Slf4j
 @Service
@@ -68,10 +71,9 @@ public class TravelPlannerService {
         this.generationPolicyService = generationPolicyService;
     }
 
-    /** jobId → JobEntry (emitter는 이 인스턴스에 물리적으로 묶여 인메모리로만 관리) */
     private final ConcurrentHashMap<String, JobEntry> jobs = new ConcurrentHashMap<>();
 
-    private record JobEntry(SseEmitter emitter, Long userId, Instant createdAt) {}
+    private record JobEntry(GenerationStream stream, Long userId, Instant createdAt) {}
 
     // -------------------------------------------------------------------------
     // Public API
@@ -98,47 +100,63 @@ public class TravelPlannerService {
             cancelJobInternal(existingJobId);
         }
 
-        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+        GenerationStream stream = new GenerationStream(jobId, () -> onJobFinished(jobId));
+        jobs.put(jobId, new JobEntry(stream, userId, Instant.now()));
 
-        emitter.onCompletion(() -> cleanupJob(jobId));
-        emitter.onTimeout(() -> {
-            log.warn("SSE emitter timed out for job {}", jobId);
-            cleanupJob(jobId);
-        });
-        emitter.onError(e -> cleanupJob(jobId));
-
-        jobs.put(jobId, new JobEntry(emitter, userId, Instant.now()));
-
-        optimizedGenerationExecutor.execute(jobId, request, userId, emitter);
+        optimizedGenerationExecutor.execute(jobId, request, userId, stream);
 
         return new GenerateJobResponse(jobId);
     }
 
     /**
-     * SSE emitter 조회.
-     * jobId가 없으면 RESOURCE_NOT_FOUND — 클라이언트는 /plan/new로 안내.
-     * (다중 인스턴스에서 이 인스턴스에 emitter가 없다면 sticky session 미설정 신호 — docs/sse-scaling.md)
+     * 작업의 SSE 스트림을 연다. 진행 중이면 새 연결을 붙여 지금까지의 이벤트부터 다시 보내고,
+     * 이 인스턴스에 작업이 없지만 결과가 남아 있으면 complete만 보낸다. 둘 다 아니거나 남의 작업이면
+     * error 이벤트 하나를 보내고 닫는다 — 여기서 예외를 던지면 text/event-stream 응답에 JSON을
+     * 쓰지 못해 클라이언트가 응답 없이 매달린다.
      */
-    public SseEmitter getEmitter(String jobId) {
+    public SseEmitter openStream(String jobId, Long userId) {
         JobEntry entry = jobs.get(jobId);
-        if (entry == null) {
-            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
-                    "생성 작업을 찾을 수 없습니다: " + jobId);
+        if (entry != null && entry.userId().equals(userId)) {
+            SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+            GenerationStream stream = entry.stream();
+            emitter.onCompletion(() -> stream.detach(emitter));
+            emitter.onTimeout(() -> stream.detach(emitter));
+            emitter.onError(e -> stream.detach(emitter));
+            stream.attach(emitter);
+            return emitter;
         }
-        return entry.emitter();
+        if (entry == null && resultStore.findForOwner(jobId, userId) != null) {
+            return completedStream();
+        }
+        ErrorCode code = ErrorCode.GENERATION_JOB_NOT_FOUND;
+        return GenerationStream.rejected(code.getCode(), code.getMessage());
+    }
+
+    private static SseEmitter completedStream() {
+        SseEmitter emitter = new SseEmitter();
+        try {
+            emitter.send(SseEmitter.event().name("complete").data(Map.of("status", "DONE")));
+        } catch (java.io.IOException | IllegalStateException e) {
+            log.debug("SSE complete 재전송 실패: {}", e.getMessage());
+        }
+        emitter.complete();
+        return emitter;
     }
 
     /**
-     * 완료된 itineraryId 조회 (TTL 내 재조회 허용).
+     * 완료된 itineraryId 조회 (TTL 내 재조회 허용). 남의 jobId는 없는 것과 같게 응답한다.
      */
-    public Long getResult(String jobId) {
-        return resultStore.get(jobId);
+    public Long getResult(String jobId, Long userId) {
+        Long itineraryId = resultStore.findForOwner(jobId, userId);
+        if (itineraryId == null) {
+            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "완료된 생성 결과를 찾을 수 없습니다.");
+        }
+        return itineraryId;
     }
 
     /**
      * 작업 취소 (새 요청 시 기존 작업 중단용).
-     * 취소 플래그는 executor가 감지할 수 있도록 cleanupJob에서 제거하지 않음.
-     * executor가 return 후 emitter onCompletion 콜백 → cleanupJob 순서로 정리됨.
+     * 취소 플래그는 executor가 감지할 수 있도록 여기서 제거하지 않음.
      */
     public void cancelJob(String jobId) {
         JobEntry entry = jobs.get(jobId);
@@ -157,29 +175,22 @@ public class TravelPlannerService {
      */
     private void cancelJobInternal(String jobId) {
         cancellationRegistry.cancel(jobId);
-        JobEntry entry = jobs.get(jobId);
+        // 맵에서 먼저 빼야 onJobFinished가 취소 플래그를 지우지 않는다 — executor가 플래그를 보고 멈춘다.
+        JobEntry entry = jobs.remove(jobId);
         if (entry != null) {
-            try {
-                entry.emitter().complete();
-            } catch (Exception ignored) {}
+            entry.stream().complete();
         }
-        // cleanupJob은 emitter.onCompletion 콜백에서 자동 호출됨
-        // 여기서 직접 호출하면 cancellationRegistry.remove가 너무 일찍 실행될 수 있음
-        jobs.remove(jobId);
-        // 취소 플래그는 executor가 종료된 후 evictStaleEmitters에서 정리되거나
-        // 다음 startGeneration 시 덮어씌워짐 — 여기서 remove 하지 않음
     }
 
     // -------------------------------------------------------------------------
     // Internal
     // -------------------------------------------------------------------------
 
-    private void cleanupJob(String jobId) {
-        JobEntry entry = jobs.remove(jobId);
+    /** 작업이 끝났을 때(정상·오류). 재접속용으로 맵 항목은 정리 주기까지 남긴다. */
+    private void onJobFinished(String jobId) {
+        JobEntry entry = jobs.get(jobId);
         if (entry != null) {
             clearActiveUserIfMatches(entry.userId(), jobId);
-            // cancelJob 경로에서는 이미 jobs.remove가 됐으므로 entry == null → 여기 안 들어옴
-            // 정상 완료 / 타임아웃 경로에서만 취소 플래그 정리
             cancellationRegistry.remove(jobId);
         }
     }
@@ -193,7 +204,7 @@ public class TravelPlannerService {
                 List.of(ACTIVE_USER_KEY_PREFIX + userId), jobId);
     }
 
-    /** 1분 주기 — TTL 초과 emitter 강제 정리 */
+    /** 1분 주기 — TTL 초과 작업 강제 정리 */
     @Scheduled(fixedDelay = 60_000)
     public void evictStaleEmitters() {
         Instant threshold = Instant.now().minusMillis(EVICTION_THRESHOLD_MS);
@@ -203,9 +214,7 @@ public class TravelPlannerService {
         while (it.hasNext()) {
             Map.Entry<String, JobEntry> entry = it.next();
             if (entry.getValue().createdAt().isBefore(threshold)) {
-                try {
-                    entry.getValue().emitter().complete();
-                } catch (Exception ignored) {}
+                entry.getValue().stream().complete();
                 clearActiveUserIfMatches(entry.getValue().userId(), entry.getKey());
                 cancellationRegistry.remove(entry.getKey());
                 it.remove();
@@ -214,7 +223,7 @@ public class TravelPlannerService {
         }
 
         if (evicted > 0) {
-            log.info("Evicted {} stale SSE emitters", evicted);
+            log.info("Evicted {} stale generation jobs", evicted);
         }
     }
 }

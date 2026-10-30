@@ -93,16 +93,29 @@ class ItineraryValidationServiceTest {
     }
 
     @Test
-    @DisplayName("대안 장소가 3개 미만이면 hard 검증에 실패한다")
-    void validateHard_tooFewAlternatives_fails() {
+    @DisplayName("대안 장소가 3개 미만이면 경고만 남기고 hard 검증은 통과한다")
+    void validateHard_tooFewAlternatives_warns() {
         StepData step = new StepData(1, 1, "09:00", "11:00", makePlaceData("도쿄타워"),
                 makeAlternatives(2), null, null, null, null, null, null);
         ItineraryData data = makeItinerary("도쿄 여행", "도쿄", List.of(step));
 
         ValidationResult result = validationService.validateHard(data, baseInput);
 
+        assertThat(result.valid()).isTrue();
+        assertThat(result.warnings()).anyMatch(e -> e.contains("대안"));
+    }
+
+    @Test
+    @DisplayName("대안 장소가 5개를 넘으면 hard 검증에 실패한다")
+    void validateHard_tooManyAlternatives_fails() {
+        StepData step = new StepData(1, 1, "09:00", "11:00", makePlaceData("도쿄타워"),
+                makeAlternatives(6), null, null, null, null, null, null);
+        ItineraryData data = makeItinerary("도쿄 여행", "도쿄", List.of(step));
+
+        ValidationResult result = validationService.validateHard(data, baseInput);
+
         assertThat(result.valid()).isFalse();
-        assertThat(result.errors()).anyMatch(e -> e.contains("대안"));
+        assertThat(result.errors()).anyMatch(e -> e.contains("5개를 초과"));
     }
 
     @Test

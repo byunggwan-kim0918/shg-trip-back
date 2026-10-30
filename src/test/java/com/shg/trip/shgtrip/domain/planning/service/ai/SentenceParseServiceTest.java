@@ -122,14 +122,14 @@ class SentenceParseServiceTest {
     }
 
     @Test
-    @DisplayName("여행 기간이 10일을 초과하면 종료일을 버린다 (@ValidDateRange maxDays 보호)")
+    @DisplayName("여행 기간이 10일을 초과하면 시작일·종료일을 모두 버린다 (@ValidDateRange maxDays 보호)")
     void dropsOverMaxDays() {
         String json = """
                 { "startDate": "2026-08-01", "endDate": "2026-09-01" }
                 """;
         SentenceParseResponse r = service.parseResponse(json, today);
 
-        assertThat(r.startDate()).isEqualTo(LocalDate.of(2026, 8, 1));
+        assertThat(r.startDate()).isNull();
         assertThat(r.endDate()).isNull();
     }
 
@@ -254,7 +254,21 @@ class SentenceParseServiceTest {
     void capsLongDestination() {
         String longName = "가".repeat(200);
         SentenceParseResponse r = service.parseResponse("{ \"destination\": \"" + longName + "\" }", today);
-        assertThat(r.destination()).hasSize(80);
+        assertThat(r.destination()).hasSize(50);
+    }
+
+    @Test
+    @DisplayName("과거·10일 초과 기간 표현은 날짜를 버릴 대상으로 판정한다")
+    void detectsOutOfRangeDateExpressions() {
+        assertThat(SentenceParseService.hasOutOfRangeDate("작년 1월에 제주 한 달 살기")).isTrue();
+        assertThat(SentenceParseService.hasOutOfRangeDate("지난달 부산 다녀온 코스 그대로")).isTrue();
+        assertThat(SentenceParseService.hasOutOfRangeDate("제주 한 달 살기")).isTrue();
+        assertThat(SentenceParseService.hasOutOfRangeDate("오사카 2주 동안 여행")).isTrue();
+        assertThat(SentenceParseService.hasOutOfRangeDate("3개월 체류")).isTrue();
+
+        assertThat(SentenceParseService.hasOutOfRangeDate("한 달 뒤에 제주 2박 3일")).isFalse();
+        assertThat(SentenceParseService.hasOutOfRangeDate("다음 달 강릉 1주일 여행")).isFalse();
+        assertThat(SentenceParseService.hasOutOfRangeDate("7월 말에 제주로 2박 3일")).isFalse();
     }
 
     @Test

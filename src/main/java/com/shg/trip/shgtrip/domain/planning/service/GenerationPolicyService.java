@@ -39,6 +39,14 @@ public class GenerationPolicyService {
     private static final Duration FAIL_TTL = Duration.ofHours(24);
     private static final Duration QUOTA_TTL = Duration.ofDays(30);
 
+    // 문장 파싱(Haiku)은 디바운스 입력마다 불려 생성보다 훨씬 잦다 — 정상 타이핑은 분당 수 회 수준
+    private static final String PARSE_MINUTE_KEY_PREFIX = "parse:rate:min:";
+    private static final String PARSE_DAY_KEY_PREFIX = "parse:rate:day:";
+    static final int MAX_PARSE_PER_MINUTE = 20;
+    static final int MAX_PARSE_PER_DAY = 200;
+    private static final Duration PARSE_MINUTE_TTL = Duration.ofMinutes(1);
+    private static final Duration PARSE_DAY_TTL = Duration.ofDays(1);
+
     /**
      * 실패 카운트 대상 errorCode 화이트리스트 — <b>사용자 입력</b> 문제만 집계한다.
      * AI 포맷 오류·{@code valid} 키 누락(→ "INVALID_INPUT" 폴백)·미상 코드는 사용자 책임이 아니므로
@@ -101,9 +109,52 @@ public class GenerationPolicyService {
             // TTL 누락(크래시 시 영구 잠금)을 방지한다. 이미 존재하면 NX로 no-op(고정 창 유지).
             redisTemplate.opsForValue().setIfAbsent(key, "0", QUOTA_TTL);
             Long count = redisTemplate.opsForValue().increment(key);
+            restoreTtlIfMissing(key, QUOTA_TTL);
             log.info("Generation success for user {} — quota used={}", userId, count);
         } catch (Exception e) {
             log.warn("recordSuccess best-effort 실패 (user {}): {}", userId, e.getMessage());
+        }
+    }
+
+    /**
+     * 문장 파싱 호출 제한(고정 창). 초과면 BusinessException(TOO_MANY_REQUESTS).
+     * Redis 장애 시에는 통과시킨다 — 파싱은 생성 전 보조 기능이라 막는 쪽 피해가 더 크다.
+     */
+    public void checkParseAllowed(Long userId) {
+        long perMinute;
+        long perDay;
+        try {
+            perMinute = incrementWindow(PARSE_MINUTE_KEY_PREFIX + userId, PARSE_MINUTE_TTL);
+            perDay = perMinute > MAX_PARSE_PER_MINUTE ? 0
+                    : incrementWindow(PARSE_DAY_KEY_PREFIX + userId, PARSE_DAY_TTL);
+        } catch (Exception e) {
+            log.warn("checkParseAllowed 조회 실패 — 통과(fail-open, user {}): {}", userId, e.getMessage());
+            return;
+        }
+        if (perMinute > MAX_PARSE_PER_MINUTE) {
+            throw new BusinessException(ErrorCode.PARSE_RATE_LIMITED);
+        }
+        if (perDay > MAX_PARSE_PER_DAY) {
+            throw new BusinessException(ErrorCode.PARSE_RATE_LIMITED,
+                    "오늘 문장 분석 한도(" + MAX_PARSE_PER_DAY + "회)를 모두 사용했어요. 마법사로 직접 입력해 주세요.");
+        }
+    }
+
+    private long incrementWindow(String key, Duration ttl) {
+        redisTemplate.opsForValue().setIfAbsent(key, "0", ttl);
+        Long count = redisTemplate.opsForValue().increment(key);
+        restoreTtlIfMissing(key, ttl);
+        return count != null ? count : 0;
+    }
+
+    /**
+     * 시드(NX)와 INCR 사이에 키가 만료되면 INCR이 TTL 없는 새 키를 만든다 — 그대로 두면 창이 끝나지 않아
+     * 사용자가 영구 차단된다. -1(TTL 없음)일 때만 다시 건다.
+     */
+    private void restoreTtlIfMissing(String key, Duration ttl) {
+        Long remaining = redisTemplate.getExpire(key);
+        if (remaining != null && remaining == -1) {
+            redisTemplate.expire(key, ttl);
         }
     }
 

@@ -26,10 +26,17 @@ public class RefreshToken {
 
     private boolean revoked;
 
+    /** 회전으로 이 토큰을 대체한 새 토큰. 동시 요청 유예 판정에 쓴다. */
+    private String replacedBy;
+
+    private long revokedAt;
+
     @TimeToLive(unit = TimeUnit.MILLISECONDS)
     private long expiration;
 
-    public void revoke() {
+    public void revoke(String replacedBy) {
         this.revoked = true;
+        this.replacedBy = replacedBy;
+        this.revokedAt = System.currentTimeMillis();
     }
 }

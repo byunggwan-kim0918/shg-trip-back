@@ -89,6 +89,12 @@ public class ItineraryService {
     @Transactional
     public ItineraryResponse finalizeItinerary(Long itineraryId, Long userId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+        if (itinerary.getStatus() == Itinerary.ItineraryStatus.FINALIZED) {
+            return ItineraryResponse.from(itinerary);
+        }
+        if (itinerary.getSteps().isEmpty()) {
+            throw new BusinessException(ErrorCode.ITINERARY_EMPTY);
+        }
         itinerary.complete();
         return ItineraryResponse.from(itinerary);
     }
@@ -102,6 +108,11 @@ public class ItineraryService {
     @Transactional
     public ShareLinkResponse generateShareLink(Long itineraryId, Long userId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+        // 다시 누를 때마다 새로 발급하면 이미 보낸 링크가 바로 죽는다 — 유효한 토큰은 그대로 돌려준다
+        if (itinerary.getShareToken() != null
+                && (itinerary.getShareExpiresAt() == null || itinerary.getShareExpiresAt().isAfter(OffsetDateTime.now()))) {
+            return new ShareLinkResponse(itinerary.getShareToken(), itinerary.getShareExpiresAt());
+        }
         String token = UUID.randomUUID().toString().replace("-", "");
         OffsetDateTime expiresAt = OffsetDateTime.now().plusDays(SHARE_EXPIRE_DAYS);
         itinerary.generateShareToken(token, expiresAt);
@@ -127,6 +138,7 @@ public class ItineraryService {
     @Transactional
     public ItineraryResponse selectAlternative(Long itineraryId, Long stepId, Long alternativeId, Long userId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+        verifyEditable(itinerary);
 
         ItineraryStep step = itinerary.getSteps().stream()
                 .filter(s -> s.getId().equals(stepId))
@@ -160,6 +172,7 @@ public class ItineraryService {
     @Transactional
     public ItineraryResponse reorderSteps(Long itineraryId, Long userId, Integer dayNumber, List<Long> orderedStepIds) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+        verifyEditable(itinerary);
 
         List<ItineraryStep> daySteps = itinerary.getSteps().stream()
                 .filter(s -> dayNumber.equals(s.getDayNumber()))
@@ -207,6 +220,7 @@ public class ItineraryService {
     @Transactional
     public ItineraryResponse deleteStep(Long itineraryId, Long userId, Long stepId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+        verifyEditable(itinerary);
 
         ItineraryStep target = itinerary.getSteps().stream()
                 .filter(s -> s.getId().equals(stepId))
@@ -328,6 +342,13 @@ public class ItineraryService {
                 new double[]{fromPlace.getLatitude().doubleValue(), fromPlace.getLongitude().doubleValue()},
                 new double[]{toPlace.getLatitude().doubleValue(), toPlace.getLongitude().doubleValue()},
                 "any", MAX_REASONABLE_LEG_KM);
+    }
+
+    /** 확정은 장소 구성을 잠근다. 제목·태그는 표시 정보라 확정 뒤에도 고칠 수 있다. */
+    private void verifyEditable(Itinerary itinerary) {
+        if (itinerary.getStatus() == Itinerary.ItineraryStatus.FINALIZED) {
+            throw new BusinessException(ErrorCode.ITINERARY_FINALIZED);
+        }
     }
 
     private Itinerary findAndVerifyOwner(Long itineraryId, Long userId) {
