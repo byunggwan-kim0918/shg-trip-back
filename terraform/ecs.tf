@@ -116,6 +116,7 @@ resource "aws_ecs_task_definition" "batch" {
       # Wikidata 인기도(sitelinks). 기본값이 false라 이게 없으면 운영에서 한 번도 돌지 않는다 —
       # 그러면 벡터 검색의 인기도 갈래가 비어 대표 명소를 지켜줄 장치가 없다. 무료·무인증 API.
       { name = "BATCH_WIKIDATA_ENABLED", value = "true" },
+      { name = "BATCH_WIKIDATA_LANDMARKS_ENABLED", value = "true" },
     ]
 
     # 배치 프로필은 spring.config.import 미사용 → 개별 환경변수로 시크릿 주입 필요
