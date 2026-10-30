@@ -6,6 +6,9 @@ resource "aws_s3_bucket" "data" {
     Project = var.project
     Env     = var.env
   }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # S3 버킷 정책: ECS Task Role에 S3 접근 허용

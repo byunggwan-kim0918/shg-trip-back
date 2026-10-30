@@ -56,21 +56,6 @@ resource "aws_iam_role_policy_attachment" "github_terraform_plan_readonly" {
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
-# ReadOnlyAccess에 없는데 plan에 필요한 상태 잠금(쓰기)
-data "aws_iam_policy_document" "github_terraform_plan_extra" {
-  statement {
-    sid       = "StateLock"
-    actions   = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"]
-    resources = ["arn:aws:dynamodb:${var.aws_region}:${local.account_id}:table/shgtrip-terraform-lock"]
-  }
-}
-
-resource "aws_iam_role_policy" "github_terraform_plan_extra" {
-  name   = "${var.project}-github-terraform-plan-extra"
-  role   = aws_iam_role.github_terraform_plan.id
-  policy = data.aws_iam_policy_document.github_terraform_plan_extra.json
-}
-
 data "aws_iam_policy_document" "github_terraform_apply_assume" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]

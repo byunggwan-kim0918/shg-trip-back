@@ -44,6 +44,9 @@ resource "aws_elasticache_replication_group" "main" {
     Project = var.project
     Env     = var.env
   }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # 로그그룹 없이 설정된 전송은 오류로 멈춘 채 재시도하지 않는다 — 나중에 만들었으면 modify-replication-group으로 다시 켠다

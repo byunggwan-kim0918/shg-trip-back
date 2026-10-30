@@ -57,7 +57,8 @@ resource "aws_db_instance" "main" {
   }
 
   lifecycle {
-    ignore_changes = [password]
+    prevent_destroy = true
+    ignore_changes  = [password]
   }
 }
 

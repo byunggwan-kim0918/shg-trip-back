@@ -20,12 +20,13 @@ resource "aws_acm_certificate" "main" {
 }
 
 resource "aws_lb" "public" {
-  name               = "shgTrip-public-alb"
-  internal           = false
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.public_alb.id]
-  subnets            = local.public_subnet_ids
-  client_keep_alive  = 3600
+  name                       = "shgTrip-public-alb"
+  internal                   = false
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.public_alb.id]
+  subnets                    = local.public_subnet_ids
+  client_keep_alive          = 3600
+  enable_deletion_protection = true
 
   tags = {
     Name      = "shgTrip-public-alb"
@@ -33,21 +34,28 @@ resource "aws_lb" "public" {
     Env       = var.env
     ManagedBy = "manual"
   }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_lb" "private" {
-  name               = "shgTrip-private-alb"
-  internal           = true
-  load_balancer_type = "application"
-  security_groups    = [aws_security_group.private_alb.id]
-  subnets            = local.private_subnet_ids
-  client_keep_alive  = 3600
+  name                       = "shgTrip-private-alb"
+  internal                   = true
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.private_alb.id]
+  subnets                    = local.private_subnet_ids
+  client_keep_alive          = 3600
+  enable_deletion_protection = true
 
   tags = {
     Name      = "shgTrip-private-alb"
     Project   = var.project
     Env       = var.env
     ManagedBy = "manual"
+  }
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
