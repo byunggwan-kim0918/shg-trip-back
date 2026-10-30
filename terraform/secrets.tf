@@ -1,4 +1,5 @@
 # ── FSQ 토큰 ─────────────────────────────────────────────────────────────────
+# 30일마다 만료 — 갱신은 terraform/scripts/set-secret.sh fsq
 resource "aws_secretsmanager_secret" "fsq_token" {
   name                    = "${var.project}/fsq-access-token"
   description             = "Foursquare Places Portal 액세스 토큰"
@@ -10,7 +11,10 @@ resource "aws_secretsmanager_secret" "fsq_token" {
   }
 }
 
-resource "aws_secretsmanager_secret_version" "fsq_token" {
-  secret_id     = aws_secretsmanager_secret.fsq_token.id
-  secret_string = var.fsq_access_token
+removed {
+  from = aws_secretsmanager_secret_version.fsq_token
+
+  lifecycle {
+    destroy = false
+  }
 }

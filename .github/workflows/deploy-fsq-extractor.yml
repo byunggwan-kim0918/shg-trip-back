@@ -33,10 +33,35 @@ jobs:
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
       - name: Build and push FSQ Extractor image
+        id: build
         env:
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
           FSQ_REPO: shgtrip-fsq-extractor
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t fsq-extractor:latest ./fsq-extractor
-          docker tag fsq-extractor:latest $ECR_REGISTRY/$FSQ_REPO:latest
+          docker build -t fsq-extractor:$IMAGE_TAG ./fsq-extractor
+          docker tag fsq-extractor:$IMAGE_TAG $ECR_REGISTRY/$FSQ_REPO:$IMAGE_TAG
+          docker tag fsq-extractor:$IMAGE_TAG $ECR_REGISTRY/$FSQ_REPO:latest
+          docker push $ECR_REGISTRY/$FSQ_REPO:$IMAGE_TAG
           docker push $ECR_REGISTRY/$FSQ_REPO:latest
+          echo "image=$ECR_REGISTRY/$FSQ_REPO:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition shgtrip-fsq-extractor \
+            --query taskDefinition \
+            > task-def.json
+
+      - name: Render task definition with updated image
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
+        with:
+          task-definition: task-def.json
+          container-name: fsq-extractor
+          image: ${{ steps.build.outputs.image }}
+
+      - name: Register task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}

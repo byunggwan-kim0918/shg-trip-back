@@ -1,13 +1,3 @@
-variable "vpc_subnet_ids" {
-  description = "ECS Fargate Task가 실행될 서브넷 ID 목록"
-  type        = list(string)
-}
-
-variable "vpc_security_group_ids" {
-  description = "ECS Fargate Task에 적용할 보안그룹 ID 목록"
-  type        = list(string)
-}
-
 # ── SNS 알림 토픽 ─────────────────────────────────────────────────────────────
 resource "aws_sns_topic" "pipeline_alerts" {
   name = "${var.project}-pipeline-alerts"
@@ -31,6 +21,7 @@ resource "aws_sns_topic_subscription" "pipeline_alerts_email" {
 }
 
 # ── Step Functions State Machine ──────────────────────────────────────────────
+# TaskDefinition은 패밀리 이름 — 실행 시점의 최신 리비전(CI가 배포마다 커밋 SHA로 등록)을 쓴다
 resource "aws_sfn_state_machine" "monthly_pipeline" {
   name     = "${var.project}-monthly-pipeline"
   role_arn = aws_iam_role.sfn_pipeline.arn
@@ -46,11 +37,11 @@ resource "aws_sfn_state_machine" "monthly_pipeline" {
         Parameters = {
           LaunchType     = "FARGATE"
           Cluster        = aws_ecs_cluster.main.arn
-          TaskDefinition = aws_ecs_task_definition.fsq_extractor.arn
+          TaskDefinition = aws_ecs_task_definition.fsq_extractor.family
           NetworkConfiguration = {
             AwsvpcConfiguration = {
-              Subnets        = var.vpc_subnet_ids
-              SecurityGroups = var.vpc_security_group_ids
+              Subnets        = local.private_subnet_ids
+              SecurityGroups = [aws_security_group.app.id]
               AssignPublicIp = "ENABLED"
             }
           }
@@ -75,11 +66,11 @@ resource "aws_sfn_state_machine" "monthly_pipeline" {
         Parameters = {
           LaunchType     = "FARGATE"
           Cluster        = aws_ecs_cluster.main.arn
-          TaskDefinition = aws_ecs_task_definition.batch.arn
+          TaskDefinition = aws_ecs_task_definition.batch.family
           NetworkConfiguration = {
             AwsvpcConfiguration = {
-              Subnets        = var.vpc_subnet_ids
-              SecurityGroups = var.vpc_security_group_ids
+              Subnets        = local.private_subnet_ids
+              SecurityGroups = [aws_security_group.app.id]
               AssignPublicIp = "ENABLED"
             }
           }
