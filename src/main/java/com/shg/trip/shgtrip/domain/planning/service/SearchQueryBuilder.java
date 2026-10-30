@@ -24,6 +24,9 @@ import java.util.Set;
  */
 public final class SearchQueryBuilder {
 
+    /** 커플·가족 여행의 숙소 슬롯 기본 질의 — 다인실 숙소 대신 독립 객실 숙소로 향하게 한다. */
+    static final String COUPLE_FAMILY_LODGING_QUERY = "펜션 호텔 리조트 독채 숙소";
+
     private SearchQueryBuilder() {
         // Utility class — no instantiation
     }
@@ -114,11 +117,24 @@ public final class SearchQueryBuilder {
                 PlaceCategoryConstants.userCategoryQuery("restaurant"), aiQueries.get("restaurant")));
         slots.add(slot("cafe", SearchRole.CAFE, destination,
                 PlaceCategoryConstants.userCategoryQuery("cafe"), aiQueries.get("cafe")));
+        // 커플·가족은 게스트하우스를 결국 걸러내므로, 질의부터 독립 객실 숙소로 향하게 한다 —
+        // 기본 질의("호텔 리조트 게스트하우스")로 찾으면 슬롯 자리를 게스트하우스가 먹는다.
+        String lodgingQuery = input.companion().avoidsDormLodging()
+                ? COUPLE_FAMILY_LODGING_QUERY : PlaceCategoryConstants.userCategoryQuery("accommodation");
         slots.add(slot("accommodation", SearchRole.ACCOMMODATION, destination,
-                PlaceCategoryConstants.userCategoryQuery("accommodation"), aiQueries.get("accommodation")));
+                lodgingQuery, aiQueries.get("accommodation")));
 
         // 관광 슬롯: 사용자 카테고리별 → 테마별 → 기본 순. 같은 의미가 두 번 들어가지 않도록 key로 dedupe.
         Set<String> attractionKeys = new LinkedHashSet<>();
+        // 맛집 여행이면 사용자가 "시장"을 따로 고르지 않아도 시장 후보를 띄운다 — 로컬 시장은 미식 여행의
+        // 기본 코스인데, 시장 슬롯이 사용자 카테고리로만 생겨서 맛집 테마만 고른 일정엔 후보로도 안 나왔다
+        // (실측 115). 후보로 보이게만 하고 넣을지는 선택 단계가 정한다 — 영업일 데이터가 없는 오일장을
+        // 강제로 넣으면 장이 안 서는 날 보내게 된다.
+        if (userThemes.contains("food") && !userCategories.contains("market")) {
+            attractionKeys.add("attraction:market");
+            slots.add(slot("attraction:market", SearchRole.ATTRACTION, destination,
+                    PlaceCategoryConstants.userCategoryQuery("market"), null, "market"));
+        }
         for (String categoryId : userCategories) {
             if (!PlaceCategoryConstants.isAttractionSubtype(categoryId)) continue;
             if (!attractionKeys.add("attraction:" + categoryId)) continue;

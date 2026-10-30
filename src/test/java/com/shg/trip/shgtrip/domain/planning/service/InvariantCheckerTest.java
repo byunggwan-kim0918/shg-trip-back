@@ -43,7 +43,7 @@ class InvariantCheckerTest {
                     step(1, "12:00", "13:10", "식당", RESTAURANT),
                     step(2, "12:00", "13:10", "식당", RESTAURANT));
 
-            Map<Integer, DayStatus> result = checker.evaluate(days, steps, "car", List.of());
+            Map<Integer, DayStatus> result = checker.evaluate(days, steps, "car", List.of(), "normal");
 
             assertThat(result.get(1).lodging()).isFalse();
             assertThat(result.get(1).lodgingRequired())
@@ -59,7 +59,7 @@ class InvariantCheckerTest {
                     step(1, "12:00", "13:10", "식당", RESTAURANT),
                     step(2, "12:00", "13:10", "식당", RESTAURANT));
 
-            Map<Integer, DayStatus> result = checker.evaluate(days, steps, "car", List.of());
+            Map<Integer, DayStatus> result = checker.evaluate(days, steps, "car", List.of(), "normal");
 
             assertThat(result.get(2).lodgingRequired()).isFalse();
         }
@@ -72,7 +72,7 @@ class InvariantCheckerTest {
                     step(1, "12:00", "13:10", "점심식당", RESTAURANT),
                     step(1, "15:00", "16:10", "애매한시간식당", RESTAURANT)); // 저녁 창 밖
 
-            Map<Integer, DayStatus> result = checker.evaluate(days, steps, "car", List.of());
+            Map<Integer, DayStatus> result = checker.evaluate(days, steps, "car", List.of(), "normal");
 
             assertThat(result.get(1).lunch()).isTrue();
             assertThat(result.get(1).dinner()).isFalse();
@@ -89,10 +89,10 @@ class InvariantCheckerTest {
                     step(1, "12:00", "13:10", "식당", RESTAURANT),
                     step(2, "20:00", "21:00", "제주국제공항", AIRPORT));
 
-            assertThat(checker.evaluate(days, earlyDeparture, "car", null).get(2).dinnerRequired())
+            assertThat(checker.evaluate(days, earlyDeparture, "car", null, "normal").get(2).dinnerRequired())
                     .as("오전 비행기면 저녁이 필요 없다")
                     .isFalse();
-            assertThat(checker.evaluate(days, lateDeparture, "car", null).get(2).dinnerRequired())
+            assertThat(checker.evaluate(days, lateDeparture, "car", null, "normal").get(2).dinnerRequired())
                     .as("저녁 8시 출발이면 저녁을 먹고 가야 한다")
                     .isTrue();
         }
@@ -105,7 +105,7 @@ class InvariantCheckerTest {
             List<StepData> steps = List.of(
                     stepWithDistance(1, "09:00", "10:00", "먼곳", ATTRACTION, new BigDecimal("200.0")));
 
-            DayStatus status = checker.evaluate(days, steps, "car", List.of()).get(1);
+            DayStatus status = checker.evaluate(days, steps, "car", List.of(), "normal").get(1);
 
             assertThat(status.totalKm()).isCloseTo(200.0 / 1.3, org.assertj.core.data.Offset.offset(1.0));
             assertThat(status.withinBudget()).isFalse();

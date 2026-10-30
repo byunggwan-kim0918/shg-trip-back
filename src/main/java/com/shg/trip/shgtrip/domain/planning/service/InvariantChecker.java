@@ -22,7 +22,7 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.EARLY_
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LARGE_GAP_MINUTES;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LUNCH_END;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LUNCH_START;
-import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.TRANSPORT_ABS_LIMITS;
+import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.distanceLimits;
 
 /**
  * 확정된 일정이 불변식을 지켰는지 <b>판정만</b> 하는 클래스. 고치지는 않는다.
@@ -45,8 +45,8 @@ final class InvariantChecker {
      * 요약 로그는 표시값과 헷갈리지 않도록 도로 환산값을 함께 낸다.
      */
     Map<Integer, DayStatus> evaluate(List<DayState> days, List<StepData> steps,
-                                     String transportPref, List<PlaceCandidate> candidates) {
-        double[] limits = TRANSPORT_ABS_LIMITS.getOrDefault(transportPref, TRANSPORT_ABS_LIMITS.get("any"));
+                                     String transportPref, List<PlaceCandidate> candidates, String pace) {
+        double[] limits = distanceLimits(transportPref, pace);
         Map<Integer, List<StepData>> byDay = steps.stream()
                 .collect(Collectors.groupingBy(StepData::dayNumber, LinkedHashMap::new, Collectors.toList()));
 
@@ -111,8 +111,8 @@ final class InvariantChecker {
      */
     List<String> summarize(List<DayState> days, List<StepData> steps, String pace,
                            String transportPref, List<PlaceCandidate> candidates, ScheduleConfig cfg) {
-        Map<Integer, DayStatus> status = evaluate(days, steps, transportPref, candidates);
-        double[] limits = TRANSPORT_ABS_LIMITS.getOrDefault(transportPref, TRANSPORT_ABS_LIMITS.get("any"));
+        Map<Integer, DayStatus> status = evaluate(days, steps, transportPref, candidates, pace);
+        double[] limits = distanceLimits(transportPref, pace);
         int eveningCap = cfg != null ? cfg.eveningCap : DEFAULT_EVENING_CAP_MINUTES;
         int violationDays = 0;
         List<String> notices = new ArrayList<>();

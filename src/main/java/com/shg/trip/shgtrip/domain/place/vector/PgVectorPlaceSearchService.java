@@ -151,6 +151,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                   AND p.active = true
                   AND p.country = ?
                   AND NOT (p.latitude = 0 AND p.longitude = 0)
+                  AND (p.place_role IS NULL OR p.place_role <> 'NOT_VISITABLE')
                 """);
         List<Object> whereParams = new ArrayList<>();
         whereParams.add(request.destination());
@@ -191,7 +192,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         String columns = """
                 SELECT p.id, p.name, p.address, p.category, p.tags, p.region, p.country,
                        p.latitude, p.longitude, p.description, p.rating, p.user_rating_count,
-                       p.wikidata_sitelinks,
+                       p.wikidata_sitelinks, p.place_role, p.cuisine, p.wikidata_id,
                        1 - (p.embedding <=> ?::vector) AS similarity_score
                 FROM places p
                 """;
@@ -226,6 +227,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                   AND p.country = ?
                   AND p.region = ?
                   AND NOT (p.latitude = 0 AND p.longitude = 0)
+                  AND (p.place_role IS NULL OR p.place_role <> 'NOT_VISITABLE')
                 """);
         List<Object> whereParams = new ArrayList<>();
         whereParams.add(country);
@@ -306,7 +308,10 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                 rating,
                 userRatingCount,
                 wikidataSitelinks,
-                rs.getDouble("similarity_score")
+                rs.getDouble("similarity_score"),
+                rs.getString("place_role"),
+                rs.getString("cuisine"),
+                rs.getString("wikidata_id")
         );
     }
 

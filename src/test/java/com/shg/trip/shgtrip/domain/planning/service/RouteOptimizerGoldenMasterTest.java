@@ -120,7 +120,17 @@ class RouteOptimizerGoldenMasterTest {
                         itinerary40Selection(),
                         Itinerary40Fixture.candidates(),
                         "relaxed", "any", null,
-                        List.of("야경"), null, false, List.of())
+                        List.of("야경"), null, false, List.of()),
+
+                // itinerary 115 재구성 풀(46개) — 맛집 커플 3박4일. 흑돼지 반복·카페 트림·
+                // 숙소→점심 원정·등산 오후 갭필·우도·게스트하우스·마지막날 공백을 재현한다.
+                new Scenario("jeju-115-food-couple",
+                        Itinerary115Fixture.selection(),
+                        Itinerary115Fixture.candidates(),
+                        "normal", "car", LocalDate.of(2026, 11, 1),
+                        List.of("food", "romance"),
+                        new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"),
+                        false, List.of("restaurant"))
         );
     }
 

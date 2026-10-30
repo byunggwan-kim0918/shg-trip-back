@@ -150,6 +150,16 @@ public class AssemblyCallGenerator {
         if (input.seasonContext() != null && !input.seasonContext().isBlank()) {
             sb.append("- 시즌: ").append(input.seasonContext()).append("\n");
         }
+        // 누구와 가는지 알아야 "가족 단위로 즐기기 좋은" 같은 엇나간 문구를 피한다.
+        if (input.companion() != VectorEnrichedInput.CompanionType.UNKNOWN) {
+            sb.append("- 동행: ").append(switch (input.companion()) {
+                case SOLO -> "혼자";
+                case COUPLE -> "커플";
+                case FAMILY -> "가족";
+                case FRIENDS -> "친구";
+                case UNKNOWN -> "";
+            }).append("\n");
+        }
         sb.append("\n");
 
         sb.append("## 확정된 일정 (순서·시간 변경 절대 불가, story만 작성)\n");

@@ -127,4 +127,43 @@ class TourApiSeederTest {
         assertThat(captor.getValue().getPageSize()).isEqualTo(50);
         assertThat(captor.getValue().getPageNumber()).isZero();
     }
+
+    @Test
+    @DisplayName("음식점 중 카페 소분류(A05020900)는 카페로, 베이커리 이름은 베이커리로 적재한다")
+    void diningItemsAreSplitIntoCafeAndBakery() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        String restaurant = "Dining and Drinking > Restaurant";
+
+        assertThat(TourApiSeeder.diningCategory(om.readTree("{\"cat3\":\"A05020900\"}"), "랜딩커피", restaurant))
+                .isEqualTo(TourApiSeeder.CAFE_CATEGORY);
+        assertThat(TourApiSeeder.diningCategory(om.readTree("{\"cat3\":\"A05020100\"}"), "수애기베이커리", restaurant))
+                .isEqualTo(TourApiSeeder.BAKERY_CATEGORY);
+        assertThat(TourApiSeeder.diningCategory(om.readTree("{\"cat3\":\"A05020100\"}"), "형돈", restaurant))
+                .isEqualTo(restaurant);
+    }
+
+    @Test
+    @DisplayName("설정 토큰은 법정동 코드 조회로 바뀐다 — 광역은 시도 전체, 도 안의 도시는 시군구별로 나눠 조회")
+    void parseArea_metroAndCityTokens() {
+        assertThat(TourApiSeeder.parseArea("39").queries()).containsExactly("&lDongRegnCd=50");
+        assertThat(TourApiSeeder.parseArea(" 32-1 ").queries())
+                .containsExactly("&lDongRegnCd=51&lDongSignguCd=150");
+        assertThat(TourApiSeeder.parseArea("35-2").region()).isEqualTo("Gyeongju");
+        // 수원은 구가 넷이라 네 번 조회한다
+        assertThat(TourApiSeeder.parseArea("31-13").queries()).hasSize(4);
+    }
+
+    @Test
+    @DisplayName("광주는 법정동 코드 데이터 이상(12)으로 지역코드 조회를 유지한다")
+    void parseArea_gwangjuUsesLegacyAreaCode() {
+        assertThat(TourApiSeeder.parseArea("5").queries()).containsExactly("&areaCode=5");
+    }
+
+    @Test
+    @DisplayName("도 코드만 주면 거부한다 — 강원(32) 전체를 Gangneung으로 적재하면 평창·속초가 섞인다")
+    void parseArea_rejectsProvinceWithoutCity() {
+        assertThat(TourApiSeeder.parseArea("32")).isNull();
+        assertThat(TourApiSeeder.parseArea("99-1")).isNull();
+        assertThat(TourApiSeeder.parseArea("abc")).isNull();
+    }
 }

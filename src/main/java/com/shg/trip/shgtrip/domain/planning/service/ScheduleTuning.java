@@ -26,6 +26,8 @@ final class ScheduleTuning {
     static final int LUNCH_START  = 11 * 60 + 30; // 11:30
     static final int LUNCH_END    = 13 * 60 + 30; // 13:30
     static final int DINNER_START = 17 * 60 + 30; // 17:30
+    /** 저녁 성격 활동(야경·바)의 최소 시작 시각. 저녁 식사가 없는 날에도 오후에 당겨지지 않게 한다. */
+    static final int EVENING_ACTIVITY_EARLIEST_START = DINNER_START;
     static final int DINNER_END   = 19 * 60 + 30; // 19:30
 
     // ── 하루 시간창 ─────────────────────────────────────────────────────────
@@ -62,6 +64,11 @@ final class ScheduleTuning {
     /** 출발 허브 체류(탑승 수속) — {@link #DEFAULT_VISIT_MINUTES}를 쓰면 귀가가 더 늦어진다. */
     static final int DEPARTURE_HUB_MINUTES = 60;
     /**
+     * 차량 여행에서 출발 허브 체류에 더하는 렌터카 반납 시간(분) — 반납·셔틀·수속 순서.
+     * 공항이 마지막 스텝이라 이 값이 사용자가 보는 "일정 종료 시각"을 그대로 결정한다.
+     */
+    static final int RENTAL_RETURN_MINUTES = 30;
+    /**
      * 출발 허브(공항·역) 도착 시각 상한. 넘기면 앞 활동을 잘라 앞당긴다.
      * 없으면 "23:25 공항 도착" 같은 일정이 만들어진다(실측 itinerary 67 day3).
      */
@@ -78,8 +85,57 @@ final class ScheduleTuning {
      * {@link #ACTIVITY_SLOT_MINUTES}(버킷 용량 산정용)와 분리 — 실측에서 98/107분 공백이 미발동됐다.
      */
     static final int GAP_FILL_THRESHOLD_MINUTES = 90;
-    /** 이 시간 이상 비면 spare가 말라도 미사용 후보까지 넓혀 채운다(못 채우면 로그). */
+    /**
+     * 이 시간 이상 비면 spare가 말라도 미사용 후보까지 넓혀 채운다(못 채우면 로그).
+     * pace 상한(하루 장소 수)이 이미 찼어도 1곳은 넣는다 — 식사도 장소 수에 들어가서, 식사 2개가
+     * 상한을 먹으면 오후 4~5시간이 통째로 빈다(실측 115 day4 12:40~17:30). relaxed는 카페만 넣는다.
+     */
     static final int LARGE_GAP_MINUTES = 180;
+
+    /** 매일 오후 카페 스톱을 켜는 테마(슬러그). 커플 여행은 테마와 무관하게 켠다. */
+    static final java.util.Set<String> CAFE_STOP_THEMES = java.util.Set.of("food", "romance");
+    /**
+     * 카페 스톱을 고를 때 그날 중심에서의 최대 거리(km). 커버리지 기준(하루 예산의 25%, 차량 29km)은
+     * 카페에 너무 넓다 — 쉬어 가는 곳에 왕복 1시간 반을 쓰게 된다(재구성 115 day3: 20km 떨어진 카페).
+     * 도보 여행은 커버리지 기준(7.5km)이 더 작아 그쪽을 따른다.
+     */
+    static final double CAFE_STOP_MAX_FROM_CENTER_KM = 12.0;
+
+    /**
+     * 하루 거리 예산 트림에서 보호하는 대표 명소의 Wikidata 언어판 수 하한. 그날 가장 유명한 1곳만 보호한다 —
+     * 성산일출봉(16)을 지키려고 같은 날 카페·식당을 남기고 명소를 빼던 트림(실측 172: 94km/69km)을 막는다.
+     * 한 곳으로 제한하는 이유: 전부 보호하면 거리 예산이 의미를 잃는다.
+     */
+    static final int ICONIC_PROTECT_SITELINKS = 10;
+
+    // ── 긴 등산 ────────────────────────────────────────────────────────────
+
+    /**
+     * 등산·트레킹 성격이면서 체류가 이 값 이상이면 "긴 등산"이다 — 빈 시간 채우기 후보에서 뺀다.
+     * 실측 등산 태그 126곳 중 40곳.
+     */
+    static final int LONG_HIKE_MIN_MINUTES = 150;
+    /**
+     * 오전 시작만 허용하는 산행의 체류 하한. 긴 등산 기준(150)과 같게 두면 보강 후 체류 180분인 성산일출봉·미악산까지
+     * 오전 버킷(150분)에 못 들어가 조용히 빠지거나 "11시 이후 시작"으로 트림됐다(실측 175). 180분 오름은 오후에
+     * 올라도 되고, 하루를 거의 다 쓰는 산행(한라산국립공원·성판악 240)만 오전에 묶는다.
+     */
+    static final int MORNING_ONLY_HIKE_MIN_MINUTES = 240;
+    /**
+     * 요청 의도(timing·highlight)로 보호하는 장소의 하루 평균 상한. 보호된 장소는 거리·시간 트림에서 빠지지 않으므로,
+     * 모델이 전부 표시해도 일정 전체가 굳지 않게 묶는다.
+     */
+    static final int INTENT_PROTECT_PER_DAY = 2;
+    /**
+     * 긴 등산의 체류 상한. 일반 장소는 180분에서 자르지만, 등산은 그보다 길 수 있다
+     * (데이터 값이 있으면 그대로 쓰되 하루를 통째로 먹지 않게 5시간에서 자른다).
+     */
+    static final int LONG_HIKE_MAX_MINUTES = 300;
+    /**
+     * 긴 등산의 시작 상한. 산은 오후에 오르지 않는다 — 하산 전 일몰·입산 통제에 걸린다
+     * (실측 115: 한라산 백록담 15:09 출발 3시간).
+     */
+    static final int LONG_HIKE_LATEST_START_MINUTES = 11 * 60;
     /**
      * 긴 공백을 메울 때 완화하는 반경 배수.
      *
@@ -163,6 +219,41 @@ final class ScheduleTuning {
             "car", new double[]{40, 115},
             "any", new double[]{30, 92}
     );
+
+    /**
+     * pace가 거리 상한에 곱하는 계수. {@link #TRANSPORT_ABS_LIMITS}는 이동수단만 보므로,
+     * 이게 없으면 {@code relaxed}가 "적게 들르되 똑같이 멀리 간다"가 된다 — 장소 수만 줄고
+     * 하루 주행은 그대로라 여유로운 일정이 아니다({@link #PACE_RANGE}는 개수만 정한다).
+     *
+     * <p>{@code normal}은 1.0으로 둔다. 기본값을 조이면 거리 예산이 줄어 갭 충전
+     * ({@code RouteOptimizer.fillGapBeforeMeal})이 쓸 여력도 같이 줄고, 실측에서 이미
+     * 순공백 239분이 나온 상태다 — 측정 없이 모든 사용자의 기본값을 바꾸지 않는다.
+     * 반대로 {@code relaxed}는 사용자가 명시적으로 요청한 밀도라 적용 근거가 있다.
+     */
+    static final Map<String, Double> PACE_DISTANCE_FACTOR = Map.of(
+            "tight", 1.0,
+            "normal", 1.0,
+            "relaxed", 0.6
+    );
+
+    /**
+     * 이동수단·pace를 함께 본 거리 상한 {@code [구간 상한, 일일 상한]}(km, 직선 기준).
+     * 읽는 곳이 여섯 군데라 호출마다 따로 계산하면 pace가 한두 곳에서 조용히 빠진다.
+     */
+    static double[] distanceLimits(String transportPref, String pace) {
+        // Map.of는 null 키 조회에서 NPE를 던진다 — 읽는 곳이 여섯 군데였을 때는 각자 터질 수
+        // 있었고, 한 곳으로 모은 지금 여기서 한 번만 막는다.
+        double[] base = TRANSPORT_ABS_LIMITS.getOrDefault(
+                transportPref == null ? "any" : transportPref, TRANSPORT_ABS_LIMITS.get("any"));
+        double factor = PACE_DISTANCE_FACTOR.getOrDefault(
+                pace == null ? "" : pace.trim().toLowerCase(), 1.0);
+        if (factor == 1.0) return base;
+        // 계수는 일일 총주행에만 곱한다. 구간 상한까지 줄이면 "제주에서 한 번에 24km 이상
+        // 못 간다"가 되어 도로망 자체와 싸운다 — 골든 jeju-40-no-startdate에서 day1의
+        // 오후·저녁이 통째로 트림되고(스텝 12 → 11) 안내가 2건 → 6건으로 늘었다.
+        // pace는 "하루에 얼마나 하느냐"이고, 한 구간의 길이는 여행지의 지형이 정한다.
+        return new double[]{base[0], base[1] * factor};
+    }
     /**
      * 한 destination 내 하루 이동으로는 비현실적인 구간거리 임계값. 초과 시 불량 좌표로 보고
      * 해당 leg의 교통정보를 비운다(시간 누적 폭주 → 새벽시간 wrap 방지).
@@ -234,6 +325,11 @@ final class ScheduleTuning {
     static final double WALK_CONTINUITY_THRESHOLD_KM = 2.0;
     /** 아침 식사를 유지할 숙소 기준 최대 거리(km) — 초과하면 아침 슬롯을 생략한다(C3). */
     static final double BREAKFAST_MAX_KM_FROM_ACCOMMODATION = 10.0;
+    /**
+     * 아침과 점심 사이 최소 간격(분). 아침이 이보다 점심에 붙으면 한 끼를 연달아 두 번 먹는 셈이라
+     * 아침을 뺀다(실측 115 재구성: 은희네해장국 10:05~11:15 → 형돈 11:30).
+     */
+    static final int BREAKFAST_MIN_GAP_BEFORE_LUNCH_MINUTES = 60;
     /** 저녁(dinner 이후) 활동이 숙소-저녁식당 거리보다 이만큼 이상 숙소에서 멀어지면 spare로 뺀다. */
     static final double EVENING_AWAY_TOLERANCE_KM = 5.0;
     /**
@@ -241,6 +337,15 @@ final class ScheduleTuning {
      * 이보다 더 멀어지면 짐 이동 편의보다 동선 손해가 커진다.
      */
     static final double CONTINUITY_MAX_EXTRA_KM = 15.0;
+
+    /**
+     * 숙소 1곳이 담당하는 숙박 일수 — 숙소 종류 수 상한의 기준
+     * ({@code RouteOptimizer.enforceLodgingCountCap}). 3박이면 2곳, 5박이면 3곳까지.
+     *
+     * <p>인접 쌍만 보는 연박 통일로는 합계가 통제되지 않는다(실측 일정 100: 3박에 3곳).
+     * 짐을 다시 싸는 비용은 거리로 환산되지 않으므로 거리 판단과 별도로 숫자를 묶는다.
+     */
+    static final int NIGHTS_PER_LODGING = 2;
 
     // ── 일자 재배치 (진동 방지 히스테리시스) ────────────────────────────────
 

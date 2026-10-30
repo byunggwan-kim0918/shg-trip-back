@@ -1,0 +1,122 @@
+-- metrics --
+  스텝 24 / 숙소 3곳 / 총이동 402km
+  연속중복 0 / 최대공백 127분 / 늦은시작 0일 / 안내 1건
+== day 1 ==
+  #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
+      이동: - -분 -km -원
+      비용: 0원 / 메모: -
+  #2  11:30-12:40  봉순이네흑돼지 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
+      이동: CAR 63분 41.85km 12554원
+      비용: 13000원 / 메모: -
+      대안: 감따남 | Dining and Drinking > Restaurant | 13000원
+      대안: 흑돈가 제주 | Dining and Drinking > Restaurant | 13000원
+      대안: 영육일삼 | Dining and Drinking > Restaurant | 13000원
+  #3  13:30-14:30  외돌개(제주) | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
+      이동: CAR 50분 32.73km 9820원
+      비용: 0원 / 메모: -
+      대안: 송악산전망대 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 제주목 관아 | Landmarks and Outdoors > Tourist Attraction | 0원
+  #4  15:26-16:36  수애기베이커리 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
+      이동: CAR 56분 36.7km 11009원
+      비용: 13000원 / 메모: -
+      대안: 카페 귤꽃다락 | Dining and Drinking > Restaurant | 13000원
+      대안: 쉼표 | Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop | 6000원
+      대안: 카페콜라 | Dining and Drinking > Cafe, Coffee, and Tea House > Café | 6000원
+  #5  16:50-18:20  제주 서귀포 산방산 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
+      이동: CAR 14분 8.96km 2689원
+      비용: 1000원 / 메모: -
+  #6  18:39-19:49  고집돌우럭 중문점 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
+      이동: CAR 19분 12.63km 3788원
+      비용: 13000원 / 메모: -
+      대안: 중문색달통갈치 본점 | Dining and Drinking > Restaurant | 13000원
+      대안: 삼보식당 | Dining and Drinking > Restaurant | 13000원
+      대안: 올래국수 | Dining and Drinking > Restaurant | 13000원
+  #7  19:56-20:26  펜션연리 | Travel and Transportation > Lodging | 서귀포시 | Jeju
+      이동: CAR 7분 4.47km 1341원
+      비용: 120000원 / 메모: -
+      대안: 신라스테이 제주 | Travel and Transportation > Lodging | 120000원
+== day 2 ==
+  #8  09:43-11:43  협재해수욕장 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
+      이동: CAR 43분 28.42km 8525원
+      비용: 0원 / 메모: -
+      대안: 송악산전망대 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 제주목 관아 | Landmarks and Outdoors > Tourist Attraction | 0원
+  #9  12:08-13:18  반양 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
+      이동: CAR 25분 16.43km 4928원
+      비용: 13000원 / 메모: -
+      대안: 영육일삼 | Dining and Drinking > Restaurant | 13000원
+      대안: 감따남 | Dining and Drinking > Restaurant | 13000원
+      대안: 중문색달통갈치 본점 | Dining and Drinking > Restaurant | 13000원
+  #10 13:27-14:37  미쁜제과 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
+      이동: CAR 9분 5.85km 1754원
+      비용: 13000원 / 메모: -
+      대안: 쉼표 | Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop | 6000원
+      대안: 카페콜라 | Dining and Drinking > Cafe, Coffee, and Tea House > Café | 6000원
+      대안: 카페 귤꽃다락 | Dining and Drinking > Restaurant | 13000원
+  #11 15:14-16:14  한림민속오일시장 | Retail > Market | 제주시 | Jeju
+      이동: CAR 37분 24.62km 7387원
+      비용: 0원 / 메모: -
+  #12 17:30-18:40  크라운돼지 | Dining and Drinking > Restaurant | 제주시 | Jeju
+      이동: CAR 21분 13.74km 4123원
+      비용: 13000원 / 메모: -
+      대안: 흑돈가 제주 | Dining and Drinking > Restaurant | 13000원
+      대안: 바다속고등어쌈밥 | Dining and Drinking > Restaurant | 13000원
+      대안: 삼보식당 | Dining and Drinking > Restaurant | 13000원
+  #13 18:48-19:18  프레리아 커플 독채펜션 | Travel and Transportation > Lodging | 제주시 | Jeju
+      이동: CAR 8분 5.27km 1580원
+      비용: 120000원 / 메모: -
+      대안: 신라스테이 제주 | Travel and Transportation > Lodging | 120000원
+== day 3 ==
+  #14 09:21-11:21  열안지오름(오라동) | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
+      이동: CAR 21분 13.96km 4187원
+      비용: 0원 / 메모: -
+      대안: 제주목 관아 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 송악산전망대 | Landmarks and Outdoors > Tourist Attraction | 0원
+  #15 11:40-12:50  은희네해장국 | Dining and Drinking > Restaurant | 제주시 | Jeju
+      이동: CAR 19분 12.09km 3627원
+      비용: 13000원 / 메모: -
+      대안: 흑본오겹 함덕점 | Dining and Drinking > Restaurant | 13000원
+      대안: 올래국수 | Dining and Drinking > Restaurant | 13000원
+      대안: 흑돈가 제주 | Dining and Drinking > Restaurant | 13000원
+  #16 12:53-14:23  제주 삼성혈 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
+      이동: CAR 3분 1.56km 467원
+      비용: 0원 / 메모: -
+  #17 14:27-15:57  제주항 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
+      이동: CAR 4분 2.54km 763원
+      비용: 0원 / 메모: -
+  #18 17:30-18:40  형돈 | Dining and Drinking > Restaurant | 제주시 | Jeju
+      이동: CAR 7분 4.53km 1359원
+      비용: 13000원 / 메모: -
+      대안: 삼보식당 | Dining and Drinking > Restaurant | 13000원
+      대안: 영육일삼 | Dining and Drinking > Restaurant | 13000원
+      대안: 감따남 | Dining and Drinking > Restaurant | 13000원
+  #19 18:44-19:14  제주R호텔 | Travel and Transportation > Lodging > Hotel | 제주시 | Jeju
+      이동: CAR 4분 2.32km 697원
+      비용: 120000원 / 메모: -
+      대안: 신라스테이 제주 | Travel and Transportation > Lodging | 120000원
+      대안: 소낭게스트하우스 | Travel and Transportation > Lodging > Hostel | 50000원
+== day 4 ==
+  #20 10:17-12:17  성산일출봉 [유네스코 세계자연유산] | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
+      이동: CAR 77분 51.18km 15353원
+      비용: 5000원 / 메모: -
+      대안: 제주목 관아 | Landmarks and Outdoors > Tourist Attraction | 0원
+  #21 12:23-13:33  가시아방국수 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
+      이동: CAR 6분 3.94km 1181원
+      비용: 13000원 / 메모: -
+      대안: 해녀의 부엌 | Dining and Drinking > Restaurant | 13000원
+      대안: 소섬전복 | Dining and Drinking > Restaurant | 13000원
+      대안: 흑본오겹 함덕점 | Dining and Drinking > Restaurant | 13000원
+  #22 13:53-15:23  별방진 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
+      이동: CAR 20분 13.32km 3997원
+      비용: 0원 / 메모: -
+  #23 17:30-18:40  섬소나이 우도본점 | Dining and Drinking > Restaurant | 제주시 | Jeju
+      이동: CAR 14분 8.99km 2696원
+      비용: 13000원 / 메모: -
+      대안: 올래국수 | Dining and Drinking > Restaurant | 13000원
+      대안: 흑돈가 제주 | Dining and Drinking > Restaurant | 13000원
+      대안: 감따남 | Dining and Drinking > Restaurant | 13000원
+  #24 20:05-21:35  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
+      이동: CAR 85분 56.04km 16812원
+      비용: 0원 / 메모: -
+-- notices (1) --
+  4일차 이동이 133km로 다소 깁니다.

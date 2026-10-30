@@ -149,9 +149,16 @@ public class OptimizedGenerationExecutor {
             }
 
             // DB 최신 데이터 반영 + 숙소 보완 + 물리적 중복 제거(선택 이전 1회)
+            // 배로만 가는 부속섬 장소는 사용자가 원할 때만 남긴다(FerryAreaFilter). 토큰 검증은 풀 전체로 한 번.
+            final List<String> ferryTokens = FerryAreaFilter.activeTokens(enrichedInput.ferryOnlyAreas(),
+                    enrichedInput.description(), request.customPlaceNames(), candidates);
+            // 커플·가족이면 다인실 숙소를 뺀 뒤에 숙소 보완 여부를 판단한다(남은 숙소가 0이면 보완).
+            // DB 보완 숙소도 같은 필터를 거친다(두 번째 exclude) — 숙소가 들어오는 모든 경로에 같은 규칙.
             final List<PlaceCandidate> enrichedCandidates = dedupePhysicalCandidates(
-                    ensureAccommodationCandidates(
-                            enrichCandidatesFromDb(candidates), enrichedInput.regions()));
+                    FerryAreaFilter.exclude(ensureAccommodationCandidates(
+                            excludeDormLodging(FerryAreaFilter.exclude(enrichCandidatesFromDb(candidates),
+                                    ferryTokens), enrichedInput),
+                            enrichedInput.regions(), enrichedInput), ferryTokens));
             stageMark = logStage("sync", stageMark);
 
             // [50%] Call 1: Sonnet selectPlaces
@@ -162,15 +169,18 @@ public class OptimizedGenerationExecutor {
                     () -> selectionCallGenerator.selectPlaces(enrichedInput, enrichedCandidates));
 
             // 숙소·허브(코드 소유 필드) 제거 → 집합 POI 제외 (day 구성 확정)
-            SelectionOutput dayComposition = indexResultMapper.stripMealIneligibleAggregates(
+            SelectionOutput dayComposition = indexResultMapper.stripZoneLevelPicks(
                     indexResultMapper.stripCodeOwnedFields(rawSelectionOutput), enrichedCandidates);
 
             // day 구성이 확정됐으니, 방문지 중심에서 너무 먼 숙소밖에 없는 day가 있으면 그 day의
             // centroid 기준으로 숙소를 한 번 더 검색해 후보에 덧붙인다(3차 4번). 기존 인덱스는
             // 건드리지 않고 뒤에 이어 붙인다 — selectionOutput이 인덱스를 참조하고 있다.
             // **숙소 배정보다 먼저** 돌려야 새로 찾은 숙소가 배정 대상에 들어간다(예전엔 배정 뒤라 무용지물).
-            final List<PlaceCandidate> candidatesWithLocalStays = appendNearbyAccommodations(
-                    enrichedCandidates, dayComposition, enrichedInput);
+            // 같은 방식으로 날짜별 중심 근처의 관광·카페·식당을 예비 후보로 붙인다 — 빈 시간 채우기와
+            // 교체가 쓸 장소가 동선 근처에 남아 있게 한다(실측 116~118: 3~5시간 공백 미충전).
+            final List<PlaceCandidate> candidatesWithLocalStays = appendNearbyReserve(
+                    appendNearbyAccommodations(enrichedCandidates, dayComposition, enrichedInput, ferryTokens),
+                    dayComposition, enrichedInput, ferryTokens);
 
             // 숙소 결정론적 배정 → 사용자 필수 장소 주입 (추가 LLM 호출 없는 결정론적 보정)
             final SelectionOutput selectionOutput = indexResultMapper.injectRequiredPlaces(
@@ -189,8 +199,9 @@ public class OptimizedGenerationExecutor {
                             selectionOutput, candidatesWithLocalStays, enrichedInput.pace(),
                             enrichedInput.transportPref(), enrichedInput.startDate(),
                             enrichedInput.themes(), enrichedInput.transportationHub(), compact,
-                            enrichedInput.categories()));
-            List<StepData> fixedSteps = scheduleResult.steps();
+                            enrichedInput.categories(),
+                            enrichedInput.companion() == VectorEnrichedInput.CompanionType.COUPLE));
+            List<StepData> fixedSteps = scaleCostsForParty(scheduleResult.steps(), enrichedInput.partySize());
             List<String> qualityNotices = scheduleResult.notices();
 
             // [F4] 확정된 뼈대(장소·시간·Day구성)를 day별로 스트리밍 → 프론트 스켈레톤→실카드 교체.
@@ -264,6 +275,98 @@ public class OptimizedGenerationExecutor {
 
     // ── Private helpers ──
 
+    /**
+     * 1인 기준으로 산정된 식사·카페·입장료를 인원수만큼 곱한다. 숙소(1실)·교통(차 1대)은 그대로 둔다.
+     * 대안의 비용도 같이 곱한다 — 대안을 고르면 그 비용이 스텝 비용을 대체하므로 기준이 같아야 한다.
+     *
+     * <p>RouteOptimizer 밖에서 하는 이유: 거기는 입력만으로 결과가 정해지는 순수 계산기라 인원 같은
+     * 표시용 배수를 섞지 않는다. 실측 115: 커플 100만원 예산에 예상 33만원(1인 기준)이 표시됐다.
+     */
+    static List<StepData> scaleCostsForParty(List<StepData> steps, Integer partySize) {
+        if (partySize == null || partySize <= 1) return steps;
+        BigDecimal factor = BigDecimal.valueOf(partySize);
+        List<StepData> scaled = new ArrayList<>(steps.size());
+        for (StepData s : steps) {
+            List<AlternativeData> alts = s.alternatives() == null ? null : s.alternatives().stream()
+                    .map(a -> isPerPersonCost(a.category()) && a.estimatedCost() != null
+                            ? new AlternativeData(a.name(), a.address(), a.category(), a.region(), a.country(),
+                                    a.notes(), a.estimatedCost().multiply(factor))
+                            : a)
+                    .toList();
+            BigDecimal cost = s.place() != null && isPerPersonCost(s.place().category()) && s.estimatedCost() != null
+                    ? s.estimatedCost().multiply(factor) : s.estimatedCost();
+            scaled.add(new StepData(s.stepOrder(), s.dayNumber(), s.startTime(), s.endTime(), s.place(), alts,
+                    s.transportationMode(), s.transportationDuration(), s.transportationDistance(),
+                    s.transportationCost(), s.notes(), cost));
+        }
+        return scaled;
+    }
+
+    private static boolean isPerPersonCost(String category) {
+        String major = PlaceCategoryConstants.majorCategory(category);
+        return "DINING".equals(major) || "CAFE".equals(major) || "ATTRACTION".equals(major);
+    }
+
+    /**
+     * 커플·가족 여행이면 다인실 숙소(게스트하우스·호스텔)를 후보에서 뺀다. 사용자가 직접 고른 숙소는 남긴다.
+     *
+     * <p>숙소 후보가 들어오는 세 경로(검색 풀·DB 보완·day별 근처 검색)가 모두 이 메서드를 거친다 —
+     * 한 경로만 막으면 나머지 경로로 같은 숙소가 다시 들어온다.
+     */
+    private List<PlaceCandidate> excludeDormLodging(List<PlaceCandidate> candidates, VectorEnrichedInput input) {
+        if (input == null || !input.companion().avoidsDormLodging()) return candidates;
+        List<PlaceCandidate> kept = candidates.stream()
+                .filter(c -> c.userSelected()
+                        || !"LODGING".equals(PlaceCategoryConstants.majorCategory(c.category()))
+                        || !PlaceCategoryConstants.isDormLodging(c.name(), c.category(), c.tags()))
+                .toList();
+        if (kept.size() < candidates.size()) {
+            log.info("다인실 숙소 제외({}): {}개 → {}개", input.companion(), candidates.size(), kept.size());
+        }
+        return kept;
+    }
+
+    /** 예비 후보 검색 반경(km) — 이동수단별. 도보는 걸어서 들를 만한 거리만. */
+    private static double reserveRadiusKm(String transportPref) {
+        if ("walk".equals(transportPref)) return 3.0;
+        if ("car".equals(transportPref)) return 15.0;
+        return 10.0;
+    }
+
+    /** 날짜별로 덧붙일 예비 후보 수: 관광 4 · 카페 2 · 식당 3. */
+    private static final List<Map.Entry<PlaceCategoryConstants.SearchRole, Integer>> RESERVE_PER_DAY = List.of(
+            Map.entry(PlaceCategoryConstants.SearchRole.ATTRACTION, 4),
+            Map.entry(PlaceCategoryConstants.SearchRole.CAFE, 2),
+            Map.entry(PlaceCategoryConstants.SearchRole.RESTAURANT, 3));
+
+    /**
+     * 날짜별 방문지 중심 근처의 관광·카페·식당을 예비 후보로 덧붙인다. 선택(SelectionOutput)에는 넣지 않으므로
+     * Sonnet의 구성은 그대로이고, RouteOptimizer의 "미사용 후보" 경로(빈 시간 채우기·끼니 보충·교체)만 쓴다.
+     * 기존 인덱스는 건드리지 않고 뒤에 이어 붙인다. 숙소 보완과 같은 필터(다인실·도선 섬)를 거친다.
+     */
+    private List<PlaceCandidate> appendNearbyReserve(List<PlaceCandidate> candidates, SelectionOutput selection,
+                                                     VectorEnrichedInput input, List<String> ferryTokens) {
+        if (selection == null || selection.days() == null || selection.days().isEmpty()) return candidates;
+        List<double[]> centers = selection.days().stream().map(d -> dayCentroid(d, candidates)).toList();
+        double radius = reserveRadiusKm(input.transportPref());
+
+        List<PlaceCandidate> result = new ArrayList<>(candidates);
+        Set<String> known = knownKeys(candidates);
+        for (Map.Entry<PlaceCategoryConstants.SearchRole, Integer> role : RESERVE_PER_DAY) {
+            for (List<PlaceCandidate> found : vectorSearchQueryService.searchNearEach(
+                    input, role.getKey(), centers, radius, role.getValue())) {
+                for (PlaceCandidate c : excludeDormLodging(FerryAreaFilter.exclude(found, ferryTokens), input)) {
+                    if (!addIfNew(known, c)) continue;
+                    result.add(reindexCandidate(c, result.size() + 1));
+                }
+            }
+        }
+        if (result.size() > candidates.size()) {
+            log.info("날짜별 예비 후보 보완: {}개 → {}개 (반경 {}km)", candidates.size(), result.size(), radius);
+        }
+        return result;
+    }
+
     /** day 방문지 centroid에서 이 거리(km)를 넘는 숙소밖에 없으면 그 day 기준으로 추가 검색한다. */
     private static final double LOCAL_STAY_TRIGGER_KM = 30.0;
     /** 추가 검색 반경(km) — 트리거 거리보다 좁게 잡아 "그 지역 숙소"만 들어오게 한다. */
@@ -278,7 +381,8 @@ public class OptimizedGenerationExecutor {
      */
     private List<PlaceCandidate> appendNearbyAccommodations(List<PlaceCandidate> candidates,
                                                             SelectionOutput selection,
-                                                            VectorEnrichedInput input) {
+                                                            VectorEnrichedInput input,
+                                                            List<String> ferryTokens) {
         if (selection == null || selection.days() == null || selection.days().isEmpty()) return candidates;
 
         List<PlaceCandidate> lodgings = candidates.stream()
@@ -287,10 +391,7 @@ public class OptimizedGenerationExecutor {
                 .toList();
 
         List<PlaceCandidate> result = new ArrayList<>(candidates);
-        Set<Long> knownPlaceIds = candidates.stream()
-                .map(PlaceCandidate::placeId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(HashSet::new));
+        Set<String> knownPlaceIds = knownKeys(candidates);
 
         for (SelectionOutput.DayPlan day : selection.days()) {
             double[] centroid = dayCentroid(day, candidates);
@@ -310,8 +411,8 @@ public class OptimizedGenerationExecutor {
                             : "가장 가까운 숙소가 " + String.format("%.0f", nearest) + "km");
             List<PlaceCandidate> extra = vectorSearchQueryService.searchAccommodationsNear(
                     input, centroid, LOCAL_STAY_RADIUS_KM, LOCAL_STAY_LIMIT, result.size() + 1);
-            for (PlaceCandidate c : extra) {
-                if (c.placeId() != null && !knownPlaceIds.add(c.placeId())) continue; // 이미 있는 숙소
+            for (PlaceCandidate c : excludeDormLodging(FerryAreaFilter.exclude(extra, ferryTokens), input)) {
+                if (!addIfNew(knownPlaceIds, c)) continue; // 이미 있는 숙소
                 result.add(reindexCandidate(c, result.size() + 1));
             }
         }
@@ -376,6 +477,24 @@ public class OptimizedGenerationExecutor {
                         || containsIgnoreCase(c.category(), "outdoors")).count();
         log.info("후보 풀: total={}, 대분류={}, 판정기준(lodging={}/1, restaurant={}/{}, attraction={}/{})",
                 candidates.size(), byMajor, lodging, restaurant, days * 2, attraction, days);
+        logDiningSubTypes(candidates);
+    }
+
+    /**
+     * 식사 후보의 세부 유형 분포. 유형 상한(RouteOptimizer)이 "대체 후보 없음"으로 실패할 때
+     * 조립 로직이 아니라 <b>후보 풀 자체</b>가 한 유형으로 쏠린 것인지 구분하기 위해 남긴다.
+     */
+    private void logDiningSubTypes(List<PlaceCandidate> candidates) {
+        Map<String, Long> bySubType = candidates.stream()
+                .filter(c -> PlaceCategoryConstants.isMealPlace(c.name(), c.category()))
+                .collect(Collectors.groupingBy(
+                        c -> PlaceCategoryConstants.subType(c.name(), c.category(), List.of(), c.description()),
+                        Collectors.counting()));
+        if (bySubType.isEmpty()) return;
+        log.info("식사 후보 세부유형 분포: {}", bySubType.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .map(e -> e.getKey() + "(" + e.getValue() + ")")
+                .collect(Collectors.joining(", ")));
     }
 
     private boolean containsIgnoreCase(String value, String needle) {
@@ -426,7 +545,9 @@ public class OptimizedGenerationExecutor {
                     subRegionOrKeep(place.getAddress(), c.subRegion()),
                     place.getUserRatingCount() != null ? place.getUserRatingCount() : c.userRatingCount(),
                     place.getWikidataSitelinks() != null
-                            ? place.getWikidataSitelinks() : c.wikidataSitelinks()
+                            ? place.getWikidataSitelinks() : c.wikidataSitelinks(),
+                    place.getPlaceRole() != null ? place.getPlaceRole() : c.placeRole(),
+                    place.getCuisine() != null ? place.getCuisine() : c.cuisine()
             );
         }).collect(Collectors.toList());
     }
@@ -493,11 +614,41 @@ public class OptimizedGenerationExecutor {
         return rep;
     }
 
-    /** 이름 동일성 키: region + 공백제거·소문자 이름. 이름이 없으면 병합하지 않는다(고유 키). */
+    /**
+     * 이름 동일성 키: region + 공백제거·소문자 이름. 이름이 없으면 병합하지 않는다(고유 키).
+     *
+     * <p>Wikidata 항목에 붙은 명소는 괄호·대괄호 주석까지 떼고 언어판 수를 키에 넣는다 — "제주러브랜드"와
+     * "제주러브랜드 (Jeju Love Land)"가 출처별 좌표 차이(애월·안덕)로 따로 살아남아 1일차·4일차에 두 번
+     * 배치됐다(실측 171). 괄호 떼기를 명소에만 하는 이유: 식당 "OO (제주점)"·"OO (서귀포점)"은 다른 가게다.
+     */
     private String nameKey(PlaceCandidate c) {
-        String name = c.name() == null ? "" : c.name().toLowerCase().replaceAll("\\s+", "");
+        String raw = c.name() == null ? "" : c.name().toLowerCase();
+        boolean wikidataItem = c.wikidataSitelinks() != null && c.wikidataSitelinks() > 0;
+        if (wikidataItem) raw = raw.replaceAll("\\(.*?\\)|\\[.*?]", "");
+        String name = raw.replaceAll("\\s+", "");
         if (name.isEmpty()) return "idx:" + c.index();
-        return (c.region() == null ? "" : c.region()) + "|" + name;
+        String region = c.region() == null ? "" : c.region();
+        return wikidataItem ? region + "|wd" + c.wikidataSitelinks() + "|" + name : region + "|" + name;
+    }
+
+    /**
+     * 뒤에 이어 붙이는 후보(예비·숙소)용 중복 키 — id·이름·좌표. 앞 단계 dedupe는 이미 끝났으므로 id만 보면
+     * 출처만 다른 같은 장소(placeId가 다름)가 다시 들어와 일정에 두 번 배치될 수 있다.
+     */
+    private Set<String> knownKeys(List<PlaceCandidate> candidates) {
+        Set<String> keys = new HashSet<>();
+        candidates.forEach(c -> addIfNew(keys, c));
+        return keys;
+    }
+
+    private boolean addIfNew(Set<String> keys, PlaceCandidate c) {
+        List<String> mine = new ArrayList<>(3);
+        if (c.placeId() != null) mine.add("id:" + c.placeId());
+        mine.add(nameKey(c));
+        mine.add(physicalKey(c));
+        if (mine.stream().anyMatch(keys::contains)) return false;
+        keys.addAll(mine);
+        return true;
     }
 
     /** 물리적 동일성 키: 유효좌표면 4자리 반올림 좌표, 없으면 공백제거·소문자 이름. */
@@ -533,7 +684,7 @@ public class OptimizedGenerationExecutor {
                 c.tags(), c.region(), c.country(), c.latitude(), c.longitude(),
                 c.description(), c.rating(), c.similarityScore(), c.priceLevel(), c.openingHours(),
                 c.recommendedTimeSlots(), c.recommendedDurationMinutes(), c.userSelected(), c.admissionFee(),
-                c.subRegion(), c.userRatingCount(), c.wikidataSitelinks());
+                c.subRegion(), c.userRatingCount(), c.wikidataSitelinks(), c.placeRole(), c.cuisine());
     }
 
     /** 주소에서 세부지역을 재추출하되, 추출 실패 시 기존 값을 유지한다. */
@@ -702,7 +853,7 @@ public class OptimizedGenerationExecutor {
                     p.getDescription(), p.getRating(), 1.0, p.getPriceLevel(), p.getOpeningHours(),
                     p.getRecommendedTimeSlots(), p.getRecommendedDurationMinutes(), true, p.getAdmissionFee(),
                     PlaceCategoryConstants.extractSubRegion(p.getAddress()), p.getUserRatingCount(),
-                    p.getWikidataSitelinks()));
+                    p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine()));
         }
         for (PlaceCandidate c : candidates) {
             PlaceCandidate reindexed = reindexCandidate(c, index++);
@@ -715,7 +866,7 @@ public class OptimizedGenerationExecutor {
     }
 
     private List<PlaceCandidate> ensureAccommodationCandidates(
-            List<PlaceCandidate> candidates, List<String> regions) {
+            List<PlaceCandidate> candidates, List<String> regions, VectorEnrichedInput input) {
 
         boolean hasAccommodation = candidates.stream()
                 .anyMatch(c -> c.category() != null
@@ -725,8 +876,14 @@ public class OptimizedGenerationExecutor {
 
         if (regions == null || regions.isEmpty()) return candidates;
 
+        // 커플·가족이면 상위권이 게스트하우스로 채워질 수 있어 넉넉히 받아 거른 뒤 2곳만 쓴다.
+        boolean avoidDorm = input != null && input.companion().avoidsDormLodging();
         List<Place> hotels = placeRepository.findTopAccommodationsByRegions(
-                regions, PageRequest.of(0, 2));
+                regions, PageRequest.of(0, avoidDorm ? 8 : 2)).stream()
+                .filter(h -> !avoidDorm || !PlaceCategoryConstants.isDormLodging(
+                        h.getName(), h.getCategory(), h.getTags()))
+                .limit(2)
+                .toList();
 
         if (hotels.isEmpty()) {
             log.warn("숙소 후보 보완 실패: {}", regions);
@@ -753,7 +910,9 @@ public class OptimizedGenerationExecutor {
                     hotel.getRating(), 0.0, null, hotel.getOpeningHours(),
                     hotel.getRecommendedTimeSlots(), hotel.getRecommendedDurationMinutes(),
                     false, hotel.getAdmissionFee(),
-                    PlaceCategoryConstants.extractSubRegion(hotel.getAddress())
+                    PlaceCategoryConstants.extractSubRegion(hotel.getAddress()),
+                    hotel.getUserRatingCount(), hotel.getWikidataSitelinks(),
+                    hotel.getPlaceRole(), hotel.getCuisine()
             ));
         }
         return result;

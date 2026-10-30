@@ -1,6 +1,6 @@
 -- metrics --
-  스텝 12 / 숙소 1곳 / 총이동 180km
-  연속중복 0 / 최대공백 90분 / 늦은시작 0일 / 안내 5건
+  스텝 13 / 숙소 1곳 / 총이동 193km
+  연속중복 0 / 최대공백 90분 / 늦은시작 0일 / 안내 4건
 == day 1 ==
   #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: - -분 -km -원
@@ -40,9 +40,12 @@
   #12 11:30-12:40  어멍 | Dining and Drinking > Restaurant > BBQ Joint | 제주시 | Jeju
       이동: CAR 30분 19.57km 15659원
       비용: 13000원 / 메모: -
--- notices (5) --
+  #13 13:00-16:00  제주도 국가지질공원 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
+      이동: CAR 20분 13.21km 10566원
+      비용: 0원 / 메모: -
+      대안: 서프라이즈 테마파크 | Landmarks and Outdoors > Tourist Attraction | 0원
+-- notices (4) --
   2일차에 넣을 만한 관광지를 찾지 못했어요.
   2일차 이동이 129km로 다소 깁니다.
-  3일차에 넣을 만한 관광지를 찾지 못했어요.
-  3일차 이동이 20km로 다소 깁니다.
-  3일차 일정이 12:40에 일찍 끝납니다.
+  3일차 이동이 33km로 다소 깁니다.
+  3일차 일정이 16:00에 일찍 끝납니다.

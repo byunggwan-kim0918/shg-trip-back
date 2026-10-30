@@ -147,6 +147,15 @@ public class ClaudeAIService implements AIService {
                     .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
                             "AI 응답에서 일정 데이터를 추출할 수 없습니다."));
 
+            // 장소 이름이 빈 스텝만 있는 응답은 일정이 아니다 — 그대로 넘기면 빈 일정이 저장된다.
+            boolean placeholderOnly = result.steps() == null || result.steps().stream().allMatch(
+                    st -> st.place() == null || st.place().name() == null || st.place().name().isBlank());
+            if (placeholderOnly) {
+                log.error("AI 응답에 실제 장소가 없음 — steps={}, stopReason={}",
+                        result.steps() == null ? 0 : result.steps().size(), message.stopReason());
+                throw new BusinessException(ErrorCode.AI_SERVICE_ERROR, "AI 응답에 일정 장소가 없습니다.");
+            }
+
             // max_tokens 도달로 JSON이 잘린 경우 — stopReason이 max_tokens이면 데이터 불완전
             boolean truncated = message.stopReason().isPresent()
                     && String.valueOf(message.stopReason().get()).contains("max_tokens");
@@ -517,7 +526,6 @@ public class ClaudeAIService implements AIService {
      * ItineraryData 구조에 맞는 JSON Schema를 구성합니다.
      */
     private Tool buildItineraryTool() {
-        // strict 모드: additionalProperties:false 필수, minItems/maxItems 미지원(제거)
         Map<String, Object> placeSchema = Map.ofEntries(
                 Map.entry("type", "object"),
                 Map.entry("additionalProperties", false),
@@ -553,13 +561,11 @@ public class ClaudeAIService implements AIService {
                         Map.entry("stepOrder", Map.of("type", "integer", "description", "전체 일정에서의 순서 (1부터 연속 증가)")),
                         Map.entry("dayNumber", Map.of("type", "integer", "description", "여행 일차 (1부터 시작)")),
                         Map.entry("startTime", Map.of("type", "string",
-                                "pattern", "^([01]\\d|2[0-3]):[0-5]\\d$",
                                 "description", "HH:mm 형식 (예: 09:00)")),
                         Map.entry("endTime", Map.of("type", "string",
-                                "pattern", "^([01]\\d|2[0-3]):[0-5]\\d$",
                                 "description", "HH:mm 형식 (예: 11:00)")),
                         Map.entry("place", placeSchema),
-                        // strict 모드: minItems/maxItems 미지원 → 제거 (Java HardValidator가 3~5개 검증)
+                        // 개수(3~5개)는 HardValidator가 검증한다
                         Map.entry("alternatives", Map.of("type", "array", "items", alternativeSchema,
                                 "description", "메인 장소와 동일 카테고리의 대안 장소 3~5개. 각 대안마다 notes(추천 활동/팁)와 estimatedCost(예상 비용)를 반드시 포함하세요.")),
                         Map.entry("transportationMode", Map.of("type", "string",
@@ -595,7 +601,8 @@ public class ClaudeAIService implements AIService {
                 .name("generate_itinerary")
                 .description("여행 일정을 생성합니다. 각 단계별 장소, 대안, 교통 정보를 포함한 구조화된 일정을 반환합니다.")
                 .inputSchema(inputSchema)
-                .strict(true)
+                // strict(제약 디코딩)를 쓰지 않는다 — 이 큰 스키마에서는 steps가 빈 자리표시자로 채워졌다.
+                // 형식은 HardValidator가 검증한다.
                 .build();
     }
 

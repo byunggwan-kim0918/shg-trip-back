@@ -28,7 +28,7 @@ public final class SelectionToolSchema {
                                 "description", "여행 일차 (1부터)")),
                         Map.entry("placeIndices", Map.of("type", "array",
                                 "items", Map.of("type", "integer"),
-                                "description", "방문 장소 인덱스 (순서대로). 숙소·공항/역/터미널은 넣지 말 것 — 백엔드가 배정함"))
+                                "description", "그날 방문할 장소 인덱스 집합(순서는 백엔드가 동선으로 정함). 숙소·공항/역/터미널은 넣지 말 것 — 백엔드가 배정함"))
                 )),
                 Map.entry("required", List.of("dayNumber", "placeIndices"))
         );
@@ -59,7 +59,17 @@ public final class SelectionToolSchema {
                 .putAdditionalProperty("highlightIndices", JsonValue.from(Map.of(
                         "type", "array",
                         "items", Map.of("type", "integer"),
-                        "description", "이번 여행의 서사적 절정/핵심 경험 인덱스(day당 0~1개 권장). 백엔드가 day 내 순서를 정할 때 너무 일찍(그날 첫 스텝) 배치되지 않도록 가중치를 둠")))
+                        "description", "요청과 concept의 핵심 경험 인덱스(day당 0~1개, 식당 제외). 백엔드가 동선 조정에서 우선 지킴(휴무·영업시간에 걸리면 빠질 수 있음). 그날 첫 스텝으로 너무 일찍 배치되지 않도록 가중치도 둠")))
+                .putAdditionalProperty("timing", JsonValue.from(Map.of(
+                        "type", "array",
+                        "items", Map.of(
+                                "type", "object",
+                                "properties", Map.of(
+                                        "index", Map.of("type", "integer"),
+                                        "when", Map.of("type", "string",
+                                                "enum", List.of("morning", "evening"))),
+                                "required", List.of("index", "when")),
+                        "description", "시간대가 의미를 좌우하는 관광 장소만(식당 제외). 야경·야시장·일몰·조명 → evening, 아침시장·하루 대부분 걸리는 등산 → morning. 백엔드가 그 시간대에 배치함. 해당 없으면 빈 배열")))
                 .putAdditionalProperty("restIndices", JsonValue.from(Map.of(
                         "type", "array",
                         "items", Map.of("type", "integer"),

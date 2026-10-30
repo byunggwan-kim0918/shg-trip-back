@@ -7,15 +7,19 @@ import java.util.Map;
 
 /** day 구성 스냅샷 — 하위 수리가 상위 불변식을 깨면 이 상태로 되돌린다. */
 record DaySnapshot(Map<Integer, List<Integer>> placeIndices,
-                           Map<Integer, Integer[]> fixedSlots) {
+                           Map<Integer, Integer[]> fixedSlots,
+                           Map<Integer, java.util.Set<Integer>> coverageCritical) {
     static DaySnapshot of(List<DayState> days) {
         Map<Integer, List<Integer>> places = new LinkedHashMap<>();
         Map<Integer, Integer[]> slots = new LinkedHashMap<>();
+        Map<Integer, java.util.Set<Integer>> coverage = new LinkedHashMap<>();
         for (DayState d : days) {
             places.put(d.dayNumber, new ArrayList<>(d.placeIndices));
-            slots.put(d.dayNumber, new Integer[]{d.arrivalHubIndex, d.accommodationIndex, d.departureHubIndex});
+            slots.put(d.dayNumber, new Integer[]{d.arrivalHubIndex, d.accommodationIndex, d.departureHubIndex,
+                    d.cafeStopIndex});
+            coverage.put(d.dayNumber, new java.util.HashSet<>(d.coverageCriticalIndices));
         }
-        return new DaySnapshot(places, slots);
+        return new DaySnapshot(places, slots, coverage);
     }
 
     void restore(List<DayState> days) {
@@ -30,7 +34,10 @@ record DaySnapshot(Map<Integer, List<Integer>> placeIndices,
                 d.arrivalHubIndex = slots[0];
                 d.accommodationIndex = slots[1];
                 d.departureHubIndex = slots[2];
+                d.cafeStopIndex = slots[3];
             }
+            java.util.Set<Integer> cov = coverageCritical.get(d.dayNumber);
+            if (cov != null) d.coverageCriticalIndices = new java.util.HashSet<>(cov);
         }
     }
 }

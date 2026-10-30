@@ -54,11 +54,25 @@ public class VectorSearchQueryService {
     private static final int MIN_PER_ATTRACTION_SLOT = 4;
 
     /**
+     * 식사·카페 슬롯에서 한 세부 유형이 가질 수 있는 최소 자리 수. limit/4가 이보다 작아도
+     * 2는 보장한다 — 유형이 둘뿐인 소도시에서 다양화가 오히려 후보를 말려버리면 안 된다.
+     */
+    private static final int MIN_PER_SUB_TYPE = 2;
+
+    /**
      * 임계값·하이브리드 랭킹을 Java에서 적용하기 위한 오버페치 배수. SQL은 유사도 순 상위
      * N×배수를 가져오고, 임계 미달 제거 후 재랭킹해 상위 N만 채택한다.
      */
     private static final int OVERFETCH_FACTOR = 3;
     private static final int MAX_OVERFETCH = 60;
+
+    /**
+     * 식사·카페 슬롯의 오버페치. 유사도 상위 N×3은 한 종류로 쏠린다 — 교토 "커플 맛집" 질의의 상위 56곳이
+     * 거의 와규·스테이크였고(DB 교토 식당은 일식 365·고기 193·면 144), 다양화는 창 안에서만 고를 수 있어
+     * 고기 9 : 기타 2인 풀이 나왔다(실측 153: 고기 4끼). 창을 넓혀야 다양화가 실제로 작동한다.
+     */
+    private static final int DIVERSITY_OVERFETCH_FACTOR = 10;
+    private static final int DIVERSITY_MAX_OVERFETCH = 200;
 
     /**
      * 하이브리드 랭킹의 인기도 가중치.
@@ -139,7 +153,7 @@ public class VectorSearchQueryService {
             }
 
             int limit = slotLimits.getOrDefault(slot.key(), MIN_PER_ATTRACTION_SLOT);
-            int overfetch = Math.min(MAX_OVERFETCH, limit * OVERFETCH_FACTOR);
+            int overfetch = overfetchFor(slot.role(), limit);
             int unitLimit = Math.max(1, overfetch / unitsPerSlot);
 
             List<VectorSearchResult> raw = placeVectorSearchService.search(
@@ -187,7 +201,18 @@ public class VectorSearchQueryService {
 
         List<VectorSearchResult> cleaned = filterGeographicOutliers(allResults);
 
-        return convertToCandidates(cleaned);
+        // 일정 자리에 들어갈 수 없는 장소(편의시설·저가치 시설·식사도 카페도 아닌 식당류)는 후보 풀에서 뺀다.
+        // 풀에 두면 Sonnet이 고르거나 보충 경로가 집어 들 수 있다 — 판정은 CandidatePolicy 한 곳.
+        List<PlaceCandidate> candidates = convertToCandidates(cleaned);
+        List<PlaceCandidate> visitable = candidates.stream()
+                .filter(c -> CandidatePolicy.roleOf(c) != CandidatePolicy.Role.NOT_VISITABLE)
+                .toList();
+        if (visitable.size() < candidates.size()) {
+            log.info("비방문 역할 후보 제외: {}개 → {}개 ({})", candidates.size(), visitable.size(),
+                    candidates.stream().filter(c -> CandidatePolicy.roleOf(c) == CandidatePolicy.Role.NOT_VISITABLE)
+                            .map(PlaceCandidate::name).limit(8).toList());
+        }
+        return reindex(visitable);
     }
 
     /**
@@ -203,21 +228,63 @@ public class VectorSearchQueryService {
      */
     public List<PlaceCandidate> searchAccommodationsNear(VectorEnrichedInput input, double[] center,
                                                          double radiusKm, int limit, int startIndex) {
-        if (center == null || limit <= 0) return List.of();
+        return searchNear(input, SearchRole.ACCOMMODATION, center, radiusKm, limit, startIndex);
+    }
 
-        SearchSlot slot = SearchQueryBuilder.buildSearchSlots(input).stream()
-                .filter(sl -> sl.role() == SearchRole.ACCOMMODATION)
+    /**
+     * 특정 좌표 주변에서 역할(관광·카페·식당·숙소)별로 후보를 추가 검색한다.
+     *
+     * <p>숙소 보완(3차 4번)을 일반화했다. 검색 풀은 여행지 전체를 한 번 훑은 결과라, 하루 동선 근처에는
+     * 빈 시간을 채우거나 교체할 장소가 남아 있지 않은 경우가 많았다(실측 116~118: 3~5시간 공백 미충전).
+     * day 구성이 정해진 뒤 그날 중심 근처를 다시 훑어 예비 후보를 붙인다.
+     *
+     * @param startIndex 이미 부여된 인덱스 다음 번호 — 기존 인덱스를 건드리지 않도록 이어서 매긴다
+     */
+    public List<PlaceCandidate> searchNear(VectorEnrichedInput input, SearchRole role, double[] center,
+                                           double radiusKm, int limit, int startIndex) {
+        if (center == null || limit <= 0) return List.of();
+        SearchSlot slot = slotFor(input, role);
+        float[] vector = slot != null ? embedOne(slot.queryText()) : null;
+        if (vector == null) return List.of();
+        return searchNearWith(input, role, slot, vector, center, radiusKm, limit, startIndex);
+    }
+
+    /**
+     * 여러 중심점에서 같은 역할로 주변 검색 — 질의 임베딩은 한 번만 한다(날짜 수만큼 임베딩을 부르면
+     * 생성 시간이 그만큼 늘어난다). 결과 인덱스는 호출부가 다시 매긴다.
+     */
+    public List<List<PlaceCandidate>> searchNearEach(VectorEnrichedInput input, SearchRole role,
+                                                     List<double[]> centers, double radiusKm, int limit) {
+        SearchSlot slot = slotFor(input, role);
+        float[] vector = slot != null ? embedOne(slot.queryText()) : null;
+        List<List<PlaceCandidate>> out = new ArrayList<>(centers.size());
+        for (double[] center : centers) {
+            out.add(vector == null || center == null || limit <= 0 ? List.of()
+                    : searchNearWith(input, role, slot, vector, center, radiusKm, limit, 1));
+        }
+        return out;
+    }
+
+    private SearchSlot slotFor(VectorEnrichedInput input, SearchRole role) {
+        return SearchQueryBuilder.buildSearchSlots(input).stream()
+                .filter(sl -> sl.role() == role)
                 .findFirst()
                 .orElse(null);
-        if (slot == null) return List.of();
+    }
 
-        List<float[]> vectors = embeddingService.embedBatch(List.of(slot.queryText()));
-        if (vectors.isEmpty() || vectors.get(0) == null || vectors.get(0).length == 0) return List.of();
+    private float[] embedOne(String text) {
+        List<float[]> vectors = embeddingService.embedBatch(List.of(text));
+        if (vectors.isEmpty() || vectors.get(0) == null || vectors.get(0).length == 0) return null;
+        return vectors.get(0);
+    }
 
+    private List<PlaceCandidate> searchNearWith(VectorEnrichedInput input, SearchRole role, SearchSlot slot,
+                                                float[] vector, double[] center, double radiusKm,
+                                                int limit, int startIndex) {
         VectorSearchRequest request = new VectorSearchRequest(
-                vectors.get(0), input.country(), input.regions(), null, input.searchTags(),
-                input.budgetRange(), limit * OVERFETCH_FACTOR,
-                PlaceCategoryConstants.excludedCategoryPatterns(SearchRole.ACCOMMODATION),
+                vector, input.country(), input.regions(), null, input.searchTags(),
+                input.budgetRange(), overfetchFor(role, limit),
+                PlaceCategoryConstants.excludedCategoryPatterns(role),
                 center, radiusKm);
 
         List<VectorSearchResult> raw = placeVectorSearchService.search(request);
@@ -232,15 +299,18 @@ public class VectorSearchQueryService {
             double dist = GeoUtils.haversine(center,
                     new double[]{r.latitude().doubleValue(), r.longitude().doubleValue()});
             if (dist > radiusKm) continue;
-            result.add(new PlaceCandidate(
-                    index++, r.placeId(), r.name(), r.address(), r.category(), r.tags(),
+            PlaceCandidate c = new PlaceCandidate(
+                    index, r.placeId(), r.name(), r.address(), r.category(), r.tags(),
                     r.region(), r.country(), r.latitude(), r.longitude(), r.description(),
                     r.rating(), r.similarityScore(), null, null, null, null, false, null,
                     PlaceCategoryConstants.extractSubRegion(r.address()), r.userRatingCount(),
-                    r.wikidataSitelinks()));
+                    r.wikidataSitelinks(), r.placeRole(), r.cuisine());
+            if (CandidatePolicy.roleOf(c) == CandidatePolicy.Role.NOT_VISITABLE) continue;
+            result.add(c);
+            index++;
         }
-        log.info("day centroid 기준 숙소 보완 검색: 반경 {}km, 조회={}, 채택={}",
-                String.format("%.0f", radiusKm), raw.size(), result.size());
+        log.info("day centroid 기준 {} 보완 검색: 반경 {}km, 조회={}, 채택={}",
+                role, String.format("%.0f", radiusKm), raw.size(), result.size());
         return result;
     }
 
@@ -255,7 +325,7 @@ public class VectorSearchQueryService {
         List<VectorSearchResult> passed = new ArrayList<>();
         int dropped = 0;
         for (VectorSearchResult r : raw) {
-            if (r.similarityScore() < minSimilarity) {
+            if (r.similarityScore() < thresholdFor(r, slotMajor, minSimilarity, exemptsIconic(slot))) {
                 dropped++;
                 continue;
             }
@@ -268,12 +338,131 @@ public class VectorSearchQueryService {
             kept.add(new ScoredResult(r, hybridScore(r, slotMajor, slot.labelTokens(), neutral)));
         }
         kept.sort(Comparator.comparingDouble(ScoredResult::score).reversed());
-        List<ScoredResult> accepted = kept.size() > limit ? new ArrayList<>(kept.subList(0, limit)) : kept;
+        // "대표 관광지" 슬롯은 이름 그대로 그 지역의 대표 명소를 뽑는 자리다 — 인기도 순으로 고른다.
+        // 유사도 순이면 일반어 질의("대표 관광지 명소")와 이름이 겹치는 무명 장소가 이긴다(실측: 제주 가족
+        // 일정 후보에 성산일출봉·비자림이 없고 열안지오름·알작지왓·"제주도"가 들어왔다). 테마별 슬롯은
+        // 주제 적합성이 우선이라 유사도 중심 점수를 그대로 쓴다.
+        if (REPRESENTATIVE_SLOT_KEY.equals(slot.key())) {
+            double n0 = neutral;
+            kept.sort(Comparator.<ScoredResult>comparingDouble(sr -> prominence(sr.result(), n0)).reversed()
+                    .thenComparing(Comparator.comparingDouble(ScoredResult::score).reversed()));
+        }
+        kept = dropSameWikidataItem(kept);
+        List<ScoredResult> accepted = isDiversitySlot(slot.role())
+                ? selectWithSubTypeDiversity(kept, limit)
+                : kept.size() > limit ? new ArrayList<>(kept.subList(0, limit)) : kept;
 
         log.info("슬롯 검색: key={}, role={}, 조회={}, 임계탈락={}, 채택={} (임계값={}, 인기도미상 중립={})",
                 slot.key(), slot.role(), raw.size(), dropped, accepted.size(),
                 String.format("%.2f", minSimilarity), String.format("%.2f", neutral));
         return accepted;
+    }
+
+    /** 지역 대표 명소를 뽑는 기본 관광 슬롯 키(SearchQueryBuilder가 항상 1개 만든다). */
+    static final String REPRESENTATIVE_SLOT_KEY = "attraction";
+
+    /** 인기 명소로 보는 Wikidata 언어판 수 하한 — 이 이상이면 유사도 임계값에서 면제한다. */
+    static final int ICONIC_SITELINKS = 3;
+    /** 대분류가 슬롯과 같을 때 낮춰 주는 임계값 폭. */
+    static final double SAME_MAJOR_THRESHOLD_RELIEF = 0.10;
+
+    /**
+     * 후보별 최소 유사도. 슬롯 임계값을 기본으로 하되 두 경우를 완화한다.
+     * <ul>
+     *   <li>대분류가 슬롯과 같은 <b>인기 명소</b>(언어판 {@value #ICONIC_SITELINKS}개 이상)는 면제한다. 인기도 갈래로
+     *       뽑아 온 명소를 유사도로 다시 자르면 갈래를 둔 의미가 없다 — 교토 사찰 슬롯은 24곳 중 21곳이 탈락해
+     *       금각사(57)·후시미 이나리(41)가 후보에 없었다. 일반어 질의와 고유 명소의 유사도는 원래 낮다.</li>
+     *   <li>대분류가 슬롯과 같은 후보는 {@value #SAME_MAJOR_THRESHOLD_RELIEF}만큼 낮춘다. 보강 전 행은
+     *       임베딩 텍스트가 이름+카테고리뿐이고 이름이 외국어라, 카테고리가 카페인 곳도 한국어 질의와의
+     *       유사도가 낮아 전부 탈락했다(교토 카페 36곳 중 36곳).</li>
+     * </ul>
+     */
+    private static double thresholdFor(VectorSearchResult r, String slotMajor, double minSimilarity,
+                                       boolean exemptIconic) {
+        boolean sameMajor = slotMajor != null && slotMajor.equals(PlaceCategoryConstants.majorCategory(r.category()));
+        if (!sameMajor) return minSimilarity;
+        if (exemptIconic && r.wikidataSitelinks() != null && r.wikidataSitelinks() >= ICONIC_SITELINKS) {
+            return Double.NEGATIVE_INFINITY;
+        }
+        return minSimilarity - SAME_MAJOR_THRESHOLD_RELIEF;
+    }
+
+    /**
+     * 인기 명소 면제를 적용할 슬롯 — 대표 명소 슬롯과 사용자 카테고리 슬롯(사찰·해변 등)만. 테마 슬롯
+     * ("attraction:theme:*")은 주제 적합성이 핵심이라 유명해도 주제와 무관하면 뺀다.
+     */
+    private static boolean exemptsIconic(SearchSlot slot) {
+        if (slot.role() != SearchRole.ATTRACTION) return false;
+        String key = slot.key();
+        return REPRESENTATIVE_SLOT_KEY.equals(key) || (key.startsWith("attraction:") && !key.startsWith("attraction:theme:"));
+    }
+
+    /**
+     * 같은 Wikidata 항목에 붙은 여러 행(출처별 중복: "제주러브랜드"·영문 병기 행)을 하나로 줄인다 — 순위가 높은 행만
+     * 남긴다. 줄이지 않으면 인기도 순 대표 슬롯을 한 장소가 여러 자리 차지한다.
+     */
+    private static List<ScoredResult> dropSameWikidataItem(List<ScoredResult> ranked) {
+        Set<String> seen = new HashSet<>();
+        List<ScoredResult> out = new ArrayList<>(ranked.size());
+        for (ScoredResult s : ranked) {
+            String qid = s.result().wikidataId();
+            if (qid == null || seen.add(qid)) out.add(s);
+        }
+        return out;
+    }
+
+    private int overfetchFor(SearchRole role, int limit) {
+        return isDiversitySlot(role)
+                ? Math.min(DIVERSITY_MAX_OVERFETCH, limit * DIVERSITY_OVERFETCH_FACTOR)
+                : Math.min(MAX_OVERFETCH, limit * OVERFETCH_FACTOR);
+    }
+
+    /** 다양화에서 세는 종류 — 보강된 음식 종류가 있으면 그것(RouteOptimizer 유형 상한과 같은 키). */
+    private static String mealTypeKey(VectorSearchResult r) {
+        return PlaceCategoryConstants.mealKind(r.name(), r.category(), r.tags(), r.description(), r.cuisine());
+    }
+
+    /** 세부 유형(cuisine) 쏠림이 일정 품질을 직접 깨는 슬롯 — 끼니·카페는 종류가 반복되면 티가 난다. */
+    private boolean isDiversitySlot(SearchRole role) {
+        return role == SearchRole.RESTAURANT || role == SearchRole.CAFE;
+    }
+
+    /**
+     * 상위 limit을 그대로 자르지 않고 세부 유형 상한을 걸어 뽑는다(식사·카페 슬롯 전용).
+     *
+     * <p>실측: 제주 restaurant 슬롯은 임계 통과 48곳 중 상위 16곳이
+     * {@code pork(12), seafood(2), noodle(1), 미분류(1)}이었다 — DB의 제주 식당 중 돼지고기
+     * 비중은 3.5%인데 코사인 유사도 상위가 전부 흑돼지로 채워진다. 3박4일이면 8끼인데
+     * 비(非)돼지 식사 후보가 4곳뿐이라, 조립 단계의 유형 상한(3회)은 <b>수학적으로 만족할 수
+     * 없었다</b> — {@code RouteOptimizer}의 "해소 실패(같은 대분류 대체 후보 없음)" 로그가 그
+     * 결과다. 상한을 올리거나 프롬프트에 금지 문구를 더 넣는 대신 윈도를 고친다.
+     *
+     * <p>상한을 채운 유형은 건너뛰고 다음 순위로 내려가며 채우고, 한 바퀴 돌고도 limit이 남으면
+     * 밀어둔 후보를 점수 순으로 되돌린다 — 한 유형뿐인 지역에서 후보 수가 줄면 안 된다.
+     */
+    private List<ScoredResult> selectWithSubTypeDiversity(List<ScoredResult> ranked, int limit) {
+        if (ranked.size() <= limit) return ranked;
+        int perType = Math.max(MIN_PER_SUB_TYPE, (int) Math.ceil(limit / 4.0));
+        Map<String, Integer> taken = new HashMap<>();
+        List<ScoredResult> picked = new ArrayList<>(limit);
+        List<ScoredResult> deferred = new ArrayList<>();
+
+        for (ScoredResult s : ranked) {
+            if (picked.size() >= limit) break;
+            String type = mealTypeKey(s.result());
+            if (taken.getOrDefault(type, 0) >= perType) {
+                deferred.add(s);
+                continue;
+            }
+            taken.merge(type, 1, Integer::sum);
+            picked.add(s);
+        }
+        for (ScoredResult s : deferred) {
+            if (picked.size() >= limit) break;
+            picked.add(s);
+        }
+        log.info("세부유형 다양화: limit={}, 유형당 상한={}, 채택 유형={}", limit, perType, taken);
+        return picked;
     }
 
     /**
@@ -425,10 +614,17 @@ public class VectorSearchQueryService {
                 .toList();
         // 교통이 없으면 그 10%를 관광에 추가 (기존 규칙 유지)
         double attractionRatio = hasTransportation ? 0.40 : 0.50;
-        int attractionTotal = Math.max((int) (days * 2), (int) (totalLimit * attractionRatio));
-        int perAttraction = attractionSlots.isEmpty()
+        // 관광은 하루 2곳 + 빈 시간 채우기·교체 여유로 최소 days×4. days×2였을 때 4일 일정의 관광 후보가
+        // 14~15곳(슬롯당 5곳)뿐이라 3시간 공백을 채울 장소가 없었다(실측 116~118).
+        int attractionTotal = Math.max((int) (days * 4), (int) (totalLimit * attractionRatio));
+        // 시장 슬롯은 작게 둔다 — 시장은 지역에 몇 곳뿐이라 큰 몫을 주면 유사도 낮은 상점으로 채워지고
+        // 그만큼 다른 관광 슬롯 몫이 줄었다(실측: 시장 슬롯 5곳 중 시장 1곳).
+        boolean hasMarketSlot = attractionSlots.stream().anyMatch(sl -> sl.key().equals("attraction:market"));
+        int marketLimit = (int) Math.max(2, days);
+        int sharedSlots = attractionSlots.size() - (hasMarketSlot ? 1 : 0);
+        int perAttraction = sharedSlots <= 0
                 ? 0
-                : Math.max(MIN_PER_ATTRACTION_SLOT, attractionTotal / attractionSlots.size());
+                : Math.max(MIN_PER_ATTRACTION_SLOT, (attractionTotal - (hasMarketSlot ? marketLimit : 0)) / sharedSlots);
 
         for (SearchSlot slot : slots) {
             int limit = switch (slot.role()) {
@@ -436,9 +632,15 @@ public class VectorSearchQueryService {
                 // 하루 2식 + 대안·갭필 여유. 바/베이커리를 슬롯에서 뺀 만큼(A2) 실제 식사 후보로만
                 // 채워지므로 days×4를 하한으로 둔다 — 3일 여행 기준 12곳.
                 case RESTAURANT -> Math.max((int) (days * 4), (int) (totalLimit * 0.25));
-                case ACCOMMODATION -> Math.max(3, (int) (totalLimit * 0.1));
-                case CAFE -> Math.max((int) days, (int) (totalLimit * 0.15));
-                case ATTRACTION -> perAttraction;
+                // 하한 6 — 숙소는 day별로 방문지 중심 최근접을 고르므로 후보가 넓게 퍼져 있어야 한다.
+                // 3~4곳이면 전부 한쪽에 몰려 매일 장거리 귀가가 된다(실측 115: 제주 숙소 78곳 중 4곳).
+                case ACCOMMODATION -> Math.max(6, (int) (totalLimit * 0.1));
+                // 카페 스톱(하루 1곳) + 대안·빈 시간 채우기 여유.
+                case CAFE -> Math.max((int) (days * 2), (int) (totalLimit * 0.15));
+                case ATTRACTION -> slot.key().equals("attraction:market") ? marketLimit
+                        // 대표 명소 슬롯은 하루 2곳 몫을 보장한다(나머지 테마 슬롯과 균등 분할하면 4곳뿐이었다).
+                        : slot.key().equals(REPRESENTATIVE_SLOT_KEY) ? Math.max(perAttraction, (int) (days * 2))
+                        : perAttraction;
             };
             limits.put(slot.key(), Math.min(limit, MAX_PER_CATEGORY));
         }
@@ -573,6 +775,20 @@ public class VectorSearchQueryService {
         );
     }
 
+    /** 1-based 연속 인덱스로 다시 매긴다(중간 후보를 뺀 뒤). */
+    private static List<PlaceCandidate> reindex(List<PlaceCandidate> candidates) {
+        List<PlaceCandidate> out = new ArrayList<>(candidates.size());
+        for (int i = 0; i < candidates.size(); i++) {
+            PlaceCandidate c = candidates.get(i);
+            out.add(c.index() == i + 1 ? c : new PlaceCandidate(i + 1, c.placeId(), c.name(), c.address(),
+                    c.category(), c.tags(), c.region(), c.country(), c.latitude(), c.longitude(), c.description(),
+                    c.rating(), c.similarityScore(), c.priceLevel(), c.openingHours(), c.recommendedTimeSlots(),
+                    c.recommendedDurationMinutes(), c.userSelected(), c.admissionFee(), c.subRegion(),
+                    c.userRatingCount(), c.wikidataSitelinks(), c.placeRole(), c.cuisine()));
+        }
+        return out;
+    }
+
     /**
      * VectorSearchResult 목록을 PlaceCandidate 목록으로 변환한다.
      * 1-based 연속 인덱싱을 유지하고, 주소에서 세부지역(시/군/구)을 추출해 부여한다(A6).
@@ -607,7 +823,9 @@ public class VectorSearchQueryService {
                     null,  // admissionFee
                     subRegion,
                     r.userRatingCount(),
-                    r.wikidataSitelinks()
+                    r.wikidataSitelinks(),
+                    r.placeRole(),
+                    r.cuisine()
             ));
         }
         if (!results.isEmpty()) {

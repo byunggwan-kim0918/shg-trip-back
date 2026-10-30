@@ -51,7 +51,7 @@
   #15 17:30-18:40  공천포식당 | Dining and Drinking > Restaurant > Seafood Restaurant | 서귀포시 | Jeju
       이동: CAR 53분 34.8km 10439원
       비용: 13000원 / 메모: -
-  #16 19:39-20:39  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
+  #16 19:39-21:09  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: CAR 59분 39.18km 11753원
       비용: 0원 / 메모: -
 -- notices (2) --

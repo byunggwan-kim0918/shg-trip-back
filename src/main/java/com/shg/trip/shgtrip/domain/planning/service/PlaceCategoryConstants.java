@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -127,21 +128,102 @@ public final class PlaceCategoryConstants {
     public static boolean isBar(String category) {
         if (category == null) return false;
         String lower = category.toLowerCase();
+        // 술 없는 "~bar"(주스·샐러드·스낵·오일 바)는 술집이 아니다 — endsWith("bar")에 걸려 FSQ 227곳이
+        // 술집으로 분류됐다. 반대로 양조장류는 "bar"가 없어도 술집이다.
+        if (NON_ALCOHOL_BARS.stream().anyMatch(lower::contains)) return false;
+        if (ALCOHOL_VENUES.stream().anyMatch(lower::contains)) return true;
         return lower.contains("> bar") || lower.contains("nightlife")
                 || lower.endsWith("bar") || lower.contains("pub");
     }
 
+    /** 태그까지 보는 술집 판정 — 총칭 "Restaurant"인데 보강 태그가 술집인 곳(호프·포차)을 잡는다. */
+    public static boolean isBar(String category, List<String> tags) {
+        if (isBar(category)) return true;
+        return tags != null && tags.stream().anyMatch(t -> t != null && BAR_TAGS.stream().anyMatch(t::contains));
+    }
+
+    private static final List<String> NON_ALCOHOL_BARS = List.of(
+            "juice bar", "salad bar", "snack bar", "oxygen bar", "smoothie");
+    private static final List<String> ALCOHOL_VENUES = List.of(
+            "brewery", "winery", "distillery", "meadery", "cidery", "izakaya", "sake bar");
+    private static final List<String> BAR_TAGS = List.of("술집", "호프", "주점", "포차", "이자카야");
+
     /**
-     * 카테고리 기반 체류시간 휴리스틱(분) — enrich 권장 체류시간이 없을 때의 폴백.
-     * 등산·트레킹류는 길게, 해변·시장은 짧게, 그 외 관광지는 기존 90분 유지.
+     * 체류시간 휴리스틱(분) — enrich가 채운 {@code recommended_duration_minutes}가 없을 때의 폴백.
+     *
+     * <p>기준값은 제주 실측에서 뽑았다. 제주는 enrich 배치가 끝나 관광지 364건 전부에
+     * 권장 체류시간이 있고(다른 지역은 0%), 이름 유형별 중앙값이 이렇다 —
+     * {@code 오름 120 / 산 180 / 폭포 120 / 해변 90 / 공원 90 / 박물관 90 / 그 외 90}.
+     *
+     * <p>그래서 두 가지를 고친다. ① 해변 60 → 90: 제주 해변 20건 중앙값이 90이다.
+     * ② 이름도 본다: TourAPI 적재분은 카테고리가 전부 "Tourist Attraction" 하나로 뭉쳐 있어
+     * 카테고리만 보면 오름(120)과 전시관(90)이 같은 값을 받는다. 커버리지 0%인 지역에서만
+     * 쓰이는 경로이므로 영향 범위도 거기에 한정된다.
+     *
+     * <p>계획 단계에서 세웠던 "오름 60분·폭포 45분"은 폐기한다 — 데이터가 반대로 말한다.
      */
-    public static int heuristicVisitMinutes(String category) {
-        if (category == null) return 90;
-        String lower = category.toLowerCase();
+    public static int heuristicVisitMinutes(String name, String category) {
+        String lower = category == null ? "" : category.toLowerCase();
         if (lower.contains("hiking") || lower.contains("trail") || lower.contains("mountain")) return 150;
-        if (lower.contains("beach") || lower.contains("market")) return 60;
+        if (lower.contains("market")) return 60;
+
+        if (name != null && !name.isBlank()) {
+            Integer byName = NAME_VISIT_MINUTES.get(subType(name, category, List.of(), null));
+            if (byName != null) return byName;
+        }
         return 90;
     }
+
+    /**
+     * 세부 유형별 체류시간(분) — 제주 실측 중앙값. 90분(기본값)과 같은 유형은 넣지 않는다.
+     * "hill"은 오름과 한라산을 함께 담지만 중앙값이 각각 120·180이라 보수적으로 120을 쓴다.
+     */
+    private static final Map<String, Integer> NAME_VISIT_MINUTES = Map.of(
+            "hill", 120,
+            "waterfall", 120,
+            "viewpoint", 120);
+
+    /**
+     * 다인실·공용공간 중심 숙소(게스트하우스·호스텔)인지. 커플·가족 여행에서 숙소 후보로 쓰지 않는다
+     * (실측 115: 커플 여행에 "소낭게스트하우스"가 2박).
+     *
+     * <p>태그는 카테고리가 총칭("Lodging")일 때만 본다 — 호텔인데 enrich가 태그에 "게스트하우스"를
+     * 붙인 행이 있다(제주R호텔: Hotel 카테고리, 태그 "게스트하우스").
+     */
+    public static boolean isDormLodging(String name, String category, List<String> tags) {
+        String leaf = leafCategory(category);
+        if (leaf.contains("hostel")) return true;
+        if (name != null && containsAny(name.toLowerCase(), DORM_KEYWORDS)) return true;
+        if (!"lodging".equals(leaf)) return false;
+        return tags != null && tags.stream()
+                .anyMatch(t -> t != null && containsAny(t.toLowerCase(), DORM_KEYWORDS));
+    }
+
+    private static boolean containsAny(String lower, List<String> keywords) {
+        return keywords.stream().anyMatch(lower::contains);
+    }
+
+    private static final List<String> DORM_KEYWORDS = List.of(
+            "게스트하우스", "호스텔", "백패커", "도미토리", "hostel", "guesthouse", "guest house",
+            "backpacker", "dormitory");
+
+    /**
+     * 등산·트레킹 성격의 장소인지(이름·태그). 체류시간과 함께 "긴 등산" 판정에 쓴다 —
+     * 이 판정만으로는 성산일출봉처럼 30분이면 오르는 곳도 걸리므로 단독으로 쓰지 않는다.
+     */
+    public static boolean isHikingPlace(String name, List<String> tags) {
+        if (name != null && containsHikingKeyword(name)) return true;
+        return tags != null && tags.stream().anyMatch(PlaceCategoryConstants::containsHikingKeyword);
+    }
+
+    private static boolean containsHikingKeyword(String s) {
+        if (s == null) return false;
+        String lower = s.toLowerCase();
+        return HIKING_KEYWORDS.stream().anyMatch(lower::contains);
+    }
+
+    private static final List<String> HIKING_KEYWORDS = List.of(
+            "등산", "등반", "트레킹", "하이킹", "hiking", "trekking");
 
     /** 야간 방문이 부적합한 야외/주간 성격 장소인지 판정(해변/골프/등산로 등). */
     public static boolean isDaytimeOutdoor(String category) {
@@ -159,17 +241,48 @@ public final class PlaceCategoryConstants {
         if (category == null) return "OTHER";
         String lower = category.toLowerCase();
         if (lower.contains("lodging")) return "LODGING";
-        if (lower.contains("dining and drinking") && (lower.contains("cafe") || lower.contains("coffee"))) return "CAFE";
+        // "Cafeteria"(구내식당)는 "cafe"를 포함하지만 카페가 아니다.
+        if (lower.contains("dining and drinking") && !lower.contains("cafeteria")
+                && (lower.contains("cafe") || lower.contains("coffee"))) return "CAFE";
         if (lower.contains("dining and drinking") || lower.contains("restaurant")) return "DINING";
         if (lower.contains("landmarks") || lower.contains("arts and entertainment")
                 || lower.contains("sports and recreation") || lower.contains("outdoors")) return "ATTRACTION";
-        // 시장·쇼핑몰(Foursquare "Retail > ...")도 사용자가 고르는 방문지다. 이 매핑이 없으면
-        // majorCategory가 OTHER가 돼 방문 스텝 보충(isVisitableFill)에서 통째로 배제됐다 —
-        // 마법사에 market/shopping 카테고리가 있는데 일정에 절대 나올 수 없던 구멍.
-        // (카페/식당 계열은 위에서 이미 판정되므로 "Coffee Shop" 같은 이름과 충돌하지 않는다)
-        if (lower.contains("retail") || lower.contains("market") || lower.contains("shopping")) return "ATTRACTION";
-        if (TRANSIT_HUB_KEYWORDS.stream().anyMatch(lower::contains)) return "TRANSIT_HUB";
+        // 신사·사찰·성당(Foursquare "Community and Government > Spiritual Center > ...")은 명소다.
+        // 이 분기가 없으면 OTHER로 떨어져 교토 사찰 252곳이 관광 후보에서 통째로 빠졌다.
+        if (lower.contains("spiritual center")) return "ATTRACTION";
+        // 소매는 "여행자가 찾아가는 곳"만 방문지다 — 시장·몰·백화점·기념품·면세·아울렛.
+        // 예전엔 Retail 전체를 관광지로 봐서 편의점·약국·휴대폰 매장·자동차 대리점이 관광 후보와
+        // 빈 시간 채우기에 들어왔다(실측: 서울 관광 풀의 85%가 상점·편의시설).
+        if (lower.contains("retail")) return isTravelRetail(lower) ? "ATTRACTION" : "OTHER";
+        if (lower.contains("market") || lower.contains("shopping")) return "ATTRACTION";
+        if (isTransitHubCategory(lower)) return "TRANSIT_HUB";
         return "OTHER";
+    }
+
+    /** 여행자가 일부러 찾아가는 소매(시장·몰·백화점·기념품·면세·아울렛). 슈퍼·편의점·일반 매장은 아니다. */
+    static boolean isTravelRetail(String lowerCategory) {
+        if (NON_TRAVEL_RETAIL_PATTERNS.stream().anyMatch(lowerCategory::contains)) return false;
+        return TRAVEL_RETAIL_PATTERNS.stream().anyMatch(lowerCategory::contains);
+    }
+
+    private static final List<String> TRAVEL_RETAIL_PATTERNS = List.of(
+            "market", "shopping mall", "shopping plaza", "department store", "souvenir", "duty-free",
+            "duty free", "outlet");
+
+    /** "market"이 들어가지만 여행 시장이 아닌 것(슈퍼마켓 등). */
+    private static final List<String> NON_TRAVEL_RETAIL_PATTERNS = List.of(
+            "supermarket", "minimarket", "convenience store", "grocery");
+
+    /**
+     * 교통 허브 카테고리. 예전엔 {@link #TRANSIT_HUB_KEYWORDS}를 카테고리 전체에 부분 일치시켰는데,
+     * "transportation" 안의 "port"가 걸려 도로·주차장·버스정류장까지 허브가 됐다(교토 도로 93곳,
+     * 후쿠오카 버스정류장 330곳). 공항·철도역·버스터미널·여객선만 허브로 본다.
+     */
+    private static boolean isTransitHubCategory(String lower) {
+        if (lower.contains("bus stop") || lower.contains("taxi stand") || lower.contains("rental car")) return false;
+        return lower.contains("airport") || lower.contains("rail station") || lower.contains("train station")
+                || lower.contains("metro station") || lower.contains("bus station") || lower.contains("terminal")
+                || lower.contains("boat or ferry") || lower.contains("ferry") || lower.contains("pier");
     }
 
     // ── 사용자 입력(마법사) ↔ 검색 슬롯 매핑 ─────────────────────────────────────
@@ -273,10 +386,63 @@ public final class PlaceCategoryConstants {
         String lower = category == null ? "" : category.toLowerCase();
         if (NON_MEAL_DINING_PATTERNS.stream().anyMatch(lower::contains)) return false;
         if (tags != null && tags.stream().anyMatch(PlaceCategoryConstants::isNonMealByName)) return false;
+        // 카테고리는 총칭 식당인데 보강 태그가 술집인 곳(호프·포차)은 저녁 식사 자리가 아니다.
+        if (isBar(category, tags)) return false;
         // 이름도 본다 — TourAPI는 음식점(contentTypeId=39)을 전부 "Dining and Drinking > Restaurant"
         // 하나로 적재해서, 카테고리만 보면 베이커리·북카페가 저녁 식사로 들어간다
         // (실측: "젤코바 베이커리 카페" 17:30 저녁 슬롯, "올드북촌"(북카페) 식사 후보).
         return !isNonMealByName(name);
+    }
+
+    /**
+     * 카페·디저트처럼 짧게 쉬어 가는 곳인지. 대분류 CAFE에 더해, 식당으로 적재됐지만 한 끼 식사가 아닌 곳
+     * (베이커리·디저트 — TourAPI는 음식점을 전부 "Restaurant"로 적재한다)도 포함한다.
+     *
+     * <p>분류 정보가 없는 행(총칭 "Restaurant")에서 태그가 식당을 말하고 커피·디저트 신호가 없으면
+     * 카페로 보지 않는다(V39 재분류와 같은 기준). 단 이 태그는 개요 없이 LLM이 이름만 보고 붙인 경우가
+     * 있어 틀릴 수 있다 — 관광공사 분류상 카페인 "카페리·카페서연의집"에 식사 태그가 붙어 있었다.
+     * 적재 단계 분류(TourApiSeeder.diningCategory, 신분류 lclsSystm)가 우선이고 이 규칙은 그게 없을 때만 쓴다.
+     *
+     * <p>편의점·휴게소는 FSQ "Snack Place"에 섞여 있어도 쉬어 가는 카페 자리가 아니다.
+     */
+    public static boolean isCafeLike(String name, String category, List<String> tags) {
+        if (name != null && CONVENIENCE_NAMES.stream().anyMatch(name::contains)) return false;
+        String major = majorCategory(category);
+        if ("CAFE".equals(major)) return true;
+        if (!"DINING".equals(major) || isMealPlace(name, category, tags)) return false;
+        if (isBar(category, tags) || isAggregatePoi(name, category)) return false;
+        return !looksLikeRestaurantByTags(tags);
+    }
+
+    /** 카페 자리로 쓰면 안 되는 편의점·휴게소 이름 신호(FSQ Snack Place 혼입). */
+    private static final List<String> CONVENIENCE_NAMES = List.of(
+            "휴게소", "편의점", "7~11", "세븐일레븐", "GS25", "CU ", "이마트24", "미니스톱", "7-Eleven", "FamilyMart",
+            "ファミリーマート", "ローソン", "Lawson");
+
+    private static boolean looksLikeRestaurantByTags(List<String> tags) {
+        if (tags == null || tags.isEmpty()) return false;
+        boolean restaurant = tags.stream().anyMatch(t -> t != null && containsAny(t, RESTAURANT_TAG_KEYWORDS));
+        boolean drink = tags.stream().anyMatch(t -> t != null && containsAny(t, CAFE_TAG_KEYWORDS));
+        return restaurant && !drink;
+    }
+
+    private static final List<String> RESTAURANT_TAG_KEYWORDS = List.of(
+            "한식", "레스토랑", "다이닝", "음식점", "식당", "해산물");
+    private static final List<String> CAFE_TAG_KEYWORDS = List.of(
+            "커피", "디저트", "베이커리", "제과", "빵");
+
+    /**
+     * 이 태그가 하나라도 붙으면 식사 후보에서 빠지거나({@link #isMealPlace}) 음료 신호로 읽힌다
+     * ({@link #isCafeLike}). enrich 배치가 식당·술집 태그에서 걸러낼 때 같은 목록을 보게 하려고 연다.
+     */
+    public static boolean isNonMealTag(String tag) {
+        if (tag == null) return false;
+        return isNonMealByName(tag) || containsAny(tag, CAFE_TAG_KEYWORDS);
+    }
+
+    /** 이 태그가 붙으면 {@link #isCafeLike}가 식당으로 읽는다. enrich 배치가 카페류 태그에서 걸러낼 때 쓴다. */
+    public static boolean isRestaurantTag(String tag) {
+        return tag != null && containsAny(tag, RESTAURANT_TAG_KEYWORDS);
     }
 
     /** 이름에 드러나는 비식사 신호(카페·베이커리·디저트류). 카테고리가 뭉뚱그려진 데이터 방어용. */
@@ -500,6 +666,11 @@ public final class PlaceCategoryConstants {
             // 끝나는 식당이 매우 많고(실측 79번 식당 8곳 전부 동일), 그러면 subType이 추론 없이
             // "restaurant" 하나로 고정돼 유형 상한이 "돼지고기 6끼"를 한 종류로 센다.
             "restaurant", "dining and drinking",
+            // 나라 단위 요리 리프도 총칭이다. 한국에서 "Korean Restaurant"는 종류가 아니라 그냥 식당이라
+            // (DB 1,939곳), 이걸 한 종류로 세면 해물탕집과 국숫집이 같은 종류로 상한에 걸린다
+            // (실측 jeju-3d: 시내 해물탕이 빠지고 39km 떨어진 식당으로 교체). 오사카의
+            // "Japanese Restaurant"(1,968곳)도 같다. 추론으로 넘겨 이름·태그로 실제 종류를 본다.
+            "korean restaurant", "japanese restaurant", "asian restaurant",
             "기타", "other", "general"
     );
 
@@ -512,10 +683,10 @@ public final class PlaceCategoryConstants {
         // ── 음식 유형(식당 세부 분류) ──
         // 유형 상한·대안 매칭이 이 값을 공유하므로, 식당이 전부 한 종류로 묶이면
         // "돼지고기만 6끼"를 아무도 막지 못한다(실측 79번). 지형 키워드보다 먼저 판정한다.
-        SUB_TYPE_KEYWORDS.put("pork", List.of("흑돼지", "돼지", "삼겹", "오겹", "돈가", "뒷고기",
-                "족발", "보쌈", "pork"));
-        SUB_TYPE_KEYWORDS.put("beef", List.of("한우", "소고기", "갈비", "불고기", "스테이크",
-                "야키니쿠", "beef", "steak"));
+        // 돼지·소를 한 종류로 센다 — 여행자에게 흑돼지 구이와 한우 구이는 같은 "고기 굽는 끼니"다.
+        SUB_TYPE_KEYWORDS.put("meat", List.of("흑돼지", "돼지", "삼겹", "오겹", "돈가", "뒷고기",
+                "족발", "보쌈", "pork", "한우", "소고기", "갈비", "불고기", "스테이크",
+                "야키니쿠", "beef", "steak", "焼肉"));
         SUB_TYPE_KEYWORDS.put("chicken", List.of("치킨", "닭", "chicken"));
         SUB_TYPE_KEYWORDS.put("seafood", List.of("해물", "해산물", "회", "물회", "전복", "갈치",
                 "고등어", "조개", "장어", "seafood", "sushi", "초밥"));
@@ -583,12 +754,42 @@ public final class PlaceCategoryConstants {
      * 평점 없는 명소(TourAPI 적재 성산일출봉·천지연폭포)가 전부 탈락한다.
      */
     public static boolean isVisitableEntity(String name, String address) {
-        if (name != null && ADMINISTRATIVE_ZONE_PATTERNS.stream().anyMatch(name::contains)) return false;
+        if (isAdministrativeZone(name)) return false;
         String addr = address == null ? "" : address.trim();
         // 광역 단위만 있는 주소는 좌표는 맞아도 "어디로 가라"는 정보가 없다.
         if (addr.length() < MIN_USABLE_ADDRESS_LENGTH) return false;
         return !BROAD_ONLY_ADDRESSES.contains(addr);
     }
+
+    /**
+     * 개별 방문지가 아니라 <b>지정 구역</b>임이 이름에서 드러나는지. 주소·좌표와 무관하게
+     * 이름만으로 판정하므로, 후보 풀을 줄이는 부작용({@link #isVisitableEntity} javadoc의
+     * 주소 길이 규칙)이 없다 — Sonnet이 고른 메인 스텝에도 안전하게 걸 수 있다.
+     */
+    public static boolean isAdministrativeZone(String name) {
+        if (name == null) return false;
+        if (ADMINISTRATIVE_ZONE_PATTERNS.stream().anyMatch(name::contains)) return true;
+        return endsWithZoneDesignation(name);
+    }
+
+    /**
+     * 괄호 주석을 떼고 남은 이름이 지정 명칭으로 끝나면 방문지가 아니라 지정 구역이다.
+     *
+     * <p>"지질공원"을 단순 포함으로 막으면 안 된다 — DB 실측 28건 중 대부분이
+     * {@code 서석대 (무등산권 국가지질공원)}처럼 <b>개별 명소에 붙은 괄호 주석</b>이라
+     * 포함으로 막으면 그 명소들이 전부 날아간다. 섬 전체를 가리키는
+     * {@code 제주도 국가지질공원}만 괄호를 뗀 뒤 지정 명칭으로 끝난다(실측 일정 95·99).
+     *
+     * <p>"국립공원"은 넣지 않는다 — {@code 북한산 국립공원}은 입구와 탐방로가 정해진
+     * 실제 방문지다.
+     */
+    private static boolean endsWithZoneDesignation(String name) {
+        String bare = name.replaceAll("\\(.*?\\)", " ").trim();
+        return ZONE_DESIGNATION_SUFFIXES.stream().anyMatch(bare::endsWith);
+    }
+
+    /** 이름 끝에 붙으면 "지정 구역"을 뜻하는 명칭. 접미 전용이라 괄호 주석은 걸리지 않는다. */
+    private static final Set<String> ZONE_DESIGNATION_SUFFIXES = Set.of("지질공원");
 
     /** 방문지가 아니라 구역 이름임이 드러나는 접미 패턴. */
     private static final Set<String> ADMINISTRATIVE_ZONE_PATTERNS = Set.of(
@@ -627,6 +828,8 @@ public final class PlaceCategoryConstants {
      */
     public static String subType(String name, String category, List<String> tags, String description) {
         String leaf = leafCategory(category);
+        String alias = LEAF_ALIAS.get(leaf);
+        if (alias != null) return alias;
         if (!isGenericLeaf(leaf)) return leaf;
 
         String haystack = haystack(name, tags, description);
@@ -638,6 +841,46 @@ public final class PlaceCategoryConstants {
             if (inferred != null) return inferred;
         }
         return leaf;
+    }
+
+    /**
+     * 음식 종류를 직접 말하는 Foursquare 리프 → 이름 키워드와 같은 키. 별칭이 없으면 "Korean BBQ Restaurant"·
+     * "BBQ Joint"·이름의 "흑돼지"가 서로 다른 종류로 세여 유형 상한이 안 걸린다(실측 141: 흑돼지 5끼).
+     */
+    private static final Map<String, String> LEAF_ALIAS = Map.ofEntries(
+            Map.entry("korean bbq restaurant", "meat"), Map.entry("bbq joint", "meat"),
+            Map.entry("barbecue restaurant", "meat"), Map.entry("steakhouse", "meat"),
+            Map.entry("yakiniku restaurant", "meat"), Map.entry("korean beef restaurant", "meat"),
+            Map.entry("seafood restaurant", "seafood"), Map.entry("sushi restaurant", "seafood"),
+            Map.entry("fish restaurant", "seafood"),
+            Map.entry("noodle restaurant", "noodle"), Map.entry("ramen restaurant", "noodle"),
+            Map.entry("udon restaurant", "noodle"), Map.entry("soba restaurant", "noodle"),
+            Map.entry("korean noodle house", "noodle"),
+            Map.entry("fried chicken joint", "chicken"), Map.entry("korean fried chicken joint", "chicken"),
+            Map.entry("soup place", "soup"));
+
+    /**
+     * 보강이 정한 음식 종류(DiningEnrichment) → 종류 키. "무엇을 먹는가"(고기·해산물·면·국물)만 구체 종류로 보고,
+     * 나라 단위(한식·일식·중식·양식)·분식·기타는 null — 해물탕집과 국숫집을 "한식" 하나로 묶어 상한을 걸면 안 된다.
+     */
+    public static String cuisineKey(String cuisine) {
+        if (cuisine == null) return null;
+        return switch (cuisine.trim().toUpperCase(Locale.ROOT)) {
+            case "MEAT" -> "meat";
+            case "SEAFOOD" -> "seafood";
+            case "NOODLE" -> "noodle";
+            case "SOUP" -> "soup";
+            default -> null;
+        };
+    }
+
+    /**
+     * 식사 장소의 종류 키 — 다양화(검색)와 유형 상한(스케줄)이 같은 값을 쓰도록 한 곳에 둔다. 보강된 구체 종류가
+     * 있으면 그것, 없으면 이름·카테고리 추론.
+     */
+    public static String mealKind(String name, String category, List<String> tags, String description, String cuisine) {
+        String key = cuisineKey(cuisine);
+        return key != null ? key : subType(name, category, tags, description);
     }
 
     /** 이 세부 유형이 야외·주간 성격인지(야간 버킷 배치 금지). */
@@ -713,4 +956,5 @@ public final class PlaceCategoryConstants {
         }
         return false;
     }
+
 }

@@ -131,20 +131,28 @@ public class IndexResultMapper {
             stripped.add(new SelectionOutput.DayPlan(d.dayNumber(), null,
                     d.placeIndices() != null ? d.placeIndices() : List.of(), null, null));
         }
-        return new SelectionOutput(selection.concept(), stripped, selection.pairs(),
-                selection.spareIndices(), selection.highlightIndices(), selection.restIndices());
+        return selection.withDays(stripped);
     }
 
     /**
-     * Sonnet이 식당으로 오인해 고른 <b>집합 POI</b>(음식거리·먹자골목처럼 개별 가게가 아니라
-     * 구역을 가리키는 장소)를 방문 목록에서 빼고 spare로 돌린다.
+     * Sonnet이 고른 <b>구역 단위 장소</b>를 방문 목록에서 빼고 spare로 돌린다. 두 부류다.
      *
-     * <p>검색 슬롯은 SQL로, 최종 보정 패스는 {@code mealEligible}로 이미 걸러내지만 선택 결과에는
-     * 검사가 없어서, Sonnet이 고르면 그대로 통과해 저녁 시간대를 차지했다(실측 58 day2
-     * "Seogwipo's food streets" 18:23). 세 경로가 같은 기준을 보도록 여기서도 같은 판정을 쓴다.
-     * 좌표가 구역 중심이라 동선까지 왜곡되므로 활동으로도 남기지 않는다.
+     * <p>① 식당으로 오인한 집합 POI — 음식거리·먹자골목처럼 개별 가게가 아니라 구역을
+     * 가리키는 장소({@link PlaceCategoryConstants#isAggregatePoi}). 검색 슬롯은 SQL로,
+     * 최종 보정 패스는 {@code mealEligible}로 이미 걸러내지만 선택 결과에는 검사가 없어서,
+     * Sonnet이 고르면 그대로 통과해 저녁 시간대를 차지했다(실측 58 day2
+     * "Seogwipo's food streets" 18:23).
+     *
+     * <p>② 행정·지정 구역 이름 — {@code 제주도 관광특구}(주소 "제주특별자치도"),
+     * {@code 제주도 국가지질공원}처럼 섬 절반을 가리키는 이름이 90분 관광 스텝으로 들어왔다
+     * (실측 93·95·99). 충전·보충 경로는 {@link PlaceCategoryConstants#isVisitableEntity}로
+     * 막고 있었지만 Sonnet의 메인 선택에는 걸리지 않았다. 여기서는 주소 길이 규칙이 없는
+     * {@link PlaceCategoryConstants#isAdministrativeZone}만 쓴다 — 주소 길이로 걸면
+     * 서울·오사카 후보의 절반이 함께 날아간다(그 함정은 isVisitableEntity javadoc에 있다).
+     *
+     * <p>좌표가 구역 중심이라 동선까지 왜곡되므로 둘 다 활동으로도 남기지 않는다.
      */
-    public SelectionOutput stripMealIneligibleAggregates(SelectionOutput selection,
+    public SelectionOutput stripZoneLevelPicks(SelectionOutput selection,
                                                         List<PlaceCandidate> allCandidates) {
         if (selection == null || selection.days() == null || selection.days().isEmpty()) {
             return selection;
@@ -165,14 +173,20 @@ public class IndexResultMapper {
                     log.info("집합 POI 선택 제외: day={} {} (개별 가게가 아니라 구역)", d.dayNumber(), c.name());
                     continue;
                 }
+                if (c != null && PlaceCategoryConstants.isAdministrativeZone(c.name())) {
+                    if (!spare.contains(idx)) spare.add(idx);
+                    changed = true;
+                    log.info("지정 구역 선택 제외: day={} {} (개별 방문지가 아니라 구역명)",
+                            d.dayNumber(), c.name());
+                    continue;
+                }
                 kept.add(idx);
             }
             days.add(new SelectionOutput.DayPlan(d.dayNumber(), d.arrivalHubIndex(), kept,
                     d.accommodationIndex(), d.departureHubIndex()));
         }
         if (!changed) return selection;
-        return new SelectionOutput(selection.concept(), days, selection.pairs(), spare,
-                selection.highlightIndices(), selection.restIndices());
+        return selection.withDaysAndSpare(days, spare);
     }
 
     /**
@@ -239,9 +253,8 @@ public class IndexResultMapper {
             }
         }
 
-        // 4-인자 생성자는 highlight/rest를 빈 리스트로 만들어 Sonnet의 서사 가중치를 유실한다 — 보존.
-        return new SelectionOutput(selection.concept(), fixedDays, selection.pairs(),
-                selection.spareIndices(), selection.highlightIndices(), selection.restIndices());
+        // 필드를 나열해 다시 만들면 highlight/rest/timing이 유실된다 — withDays로 보존.
+        return selection.withDays(fixedDays);
     }
 
     /**
@@ -320,8 +333,7 @@ public class IndexResultMapper {
                     target.dayNumber(), idx, cand.name());
         }
 
-        return new SelectionOutput(selection.concept(), days, selection.pairs(), spare,
-                selection.highlightIndices(), selection.restIndices());
+        return selection.withDaysAndSpare(days, spare);
     }
 
     /** 필수 장소와 day centroid가 가장 가까운 day. 좌표 불명이면 장소 수가 가장 적은 day. */

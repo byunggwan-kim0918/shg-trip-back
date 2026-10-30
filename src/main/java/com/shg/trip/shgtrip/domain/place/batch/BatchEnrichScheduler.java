@@ -7,7 +7,6 @@ import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
@@ -28,11 +27,16 @@ import java.util.*;
  * 3. 배치 제출 → 폴링 → 결과 처리
  * 4. 성공: tags, description, recommended_time_slots 갱신 + enriched_at 기록
  * 5. 실패: 로그 기록 (다음 사이클에서 enriched_at이 여전히 NULL이므로 자동 재시도)
+ * <p>
+ * 식당·카페·술집은 프롬프트와 결과 해석이 따로 있다({@link DiningEnrichment}).
  */
 @Slf4j
 @Component
 @Profile("batch")
 public class BatchEnrichScheduler {
+
+    /** 연속으로 전부 실패한 청크가 이만큼이면 보강을 멈춘다. */
+    static final int MAX_CONSECUTIVE_FAILED_CHUNKS = 3;
 
     private static final String BATCH_API_URL = "https://api.anthropic.com/v1/messages/batches";
     private static final int MAX_RETRIES = 3;
@@ -55,9 +59,10 @@ public class BatchEnrichScheduler {
     /**
      * 보강용 모델. 기존엔 "claude-sonnet-4-20250514" 하드코딩 상수였는데 모델이 은퇴되면서
      * 전건 not_found_error로 실패했고(실측 484/484), yml의 anthropic.batch.model 설정은
-     * 코드가 읽지 않는 설정 표류 상태였다. 설정으로 일원화 — 태그/설명 생성은 Haiku 4.5로 충분.
+     * 코드가 읽지 않는 설정 표류 상태였다. 설정으로 일원화 — 태그/설명 생성은 Haiku로 충분.
+     * Haiku 5.5는 4.5 대비 단가 1/10($0.10/$0.50 per MTok).
      */
-    @Value("${anthropic.batch.model:claude-haiku-4-5-20251001}")
+    @Value("${anthropic.batch.model:claude-haiku-5-5}")
     private String enrichModel;
 
     /**
@@ -66,6 +71,13 @@ public class BatchEnrichScheduler {
      */
     @Value("${batch.enrich.regions:}")
     private String enrichRegions;
+
+    /**
+     * 지역당 보강 상한(0이면 무제한). 대상 조회 순서가 인기도 → 비식당이라 상한 안에는 유명한 곳부터 들어간다.
+     * 지역 목록(batch.enrich.regions)과 함께 써야 지역별로 센다 — 목록이 비어 있으면 전체 합계 상한이다.
+     */
+    @Value("${batch.enrich.max-per-region:0}")
+    private int maxPerRegion;
 
     /**
      * 이미 제출·완료된 배치의 결과를 다시 적용할 때 쓰는 batchId.
@@ -95,9 +107,12 @@ public class BatchEnrichScheduler {
     /**
      * 태그/설명 배치 보강을 실행한다.
      * <p>
-     * page offset을 증가시키는 방식 대신, 이번 실행에서 실패한 place ID를 메모리에 누적해
-     * 매번 첫 페이지를 다시 조회하면서 그 ID들을 걸러낸다(EmbeddingBatchJob과 동일한 이유 —
-     * 고정 offset 증가는 실제 남은 건수보다 앞서나가 조용히 조기 종료될 수 있다).
+     * page offset을 증가시키는 방식 대신 매번 첫 페이지를 다시 조회하고, 이번 실행에서 실패한
+     * place ID는 쿼리에서 제외한다(고정 offset 증가는 실제 남은 건수보다 앞서나가 조용히 조기 종료될 수
+     * 있다). 조회 순서는 인기도 → 비식당 순이라 중간에 끊겨도 중요한 장소부터 끝나 있다.
+     * <p>
+     * 연속 {@value #MAX_CONSECUTIVE_FAILED_CHUNKS}개 청크가 전부 실패하면 멈춘다 — API 키 오류처럼
+     * 모든 요청이 실패하는 상황에서 수만 건을 헛돌지 않게 한다.
      */
     public void enrich() {
         if (anthropicApiKey == null || anthropicApiKey.isBlank()) {
@@ -106,41 +121,63 @@ public class BatchEnrichScheduler {
         }
 
         List<String> regions = parseRegions();
-        log.info("BatchEnrichScheduler 시작 - chunkSize={}, regions={}",
-                chunkSize, regions.isEmpty() ? "전체" : regions);
+        log.info("BatchEnrichScheduler 시작 - chunkSize={}, regions={}, maxPerRegion={}",
+                chunkSize, regions.isEmpty() ? "전체" : regions, maxPerRegion > 0 ? maxPerRegion : "무제한");
 
-        int totalProcessed = 0;
-        int totalFailed = 0;
+        int[] totals = new int[2];
+        if (maxPerRegion > 0 && !regions.isEmpty()) {
+            // 지역별로 따로 돌려야 큰 지역(서울)이 상한을 다 먹지 않는다.
+            for (String region : regions) {
+                enrichScope(List.of(region), totals);
+            }
+        } else {
+            enrichScope(regions, totals);
+        }
+
+        log.info("BatchEnrichScheduler 완료 - 보강 성공: {}건, 실패: {}건", totals[0], totals[1]);
+    }
+
+    /** 한 범위(지역 목록, 비면 전체)를 상한까지 보강한다. totals[0]=성공, [1]=실패 누적. */
+    private void enrichScope(List<String> regions, int[] totals) {
+        int processed = 0;
+        int failed = 0;
+        int consecutiveFailedChunks = 0;
         Set<Long> excludedIds = new HashSet<>();
 
         while (true) {
-            Page<Place> page = regions.isEmpty()
-                    ? placeRepository.findByEnrichedAtIsNullAndActiveTrue(PageRequest.of(0, chunkSize))
-                    : placeRepository.findByEnrichedAtIsNullAndActiveTrueAndRegionIn(
-                            regions, PageRequest.of(0, chunkSize));
-
-            if (page.isEmpty()) {
-                break;
+            int pageSize = chunkSize;
+            if (maxPerRegion > 0) {
+                int remaining = maxPerRegion - processed - failed;
+                if (remaining <= 0) break;
+                pageSize = Math.min(chunkSize, remaining);
             }
-
-            List<Place> places = page.getContent().stream()
-                    .filter(p -> !excludedIds.contains(p.getId()))
-                    .toList();
+            // NOT IN에 빈 컬렉션을 넘기지 않는다(존재할 수 없는 id로 대신한다).
+            Collection<Long> excluded = excludedIds.isEmpty() ? List.of(-1L) : excludedIds;
+            List<Place> places = regions.isEmpty()
+                    ? placeRepository.findEnrichTargets(excluded, PageRequest.of(0, pageSize))
+                    : placeRepository.findEnrichTargetsInRegions(regions, excluded, PageRequest.of(0, pageSize));
 
             if (places.isEmpty()) {
-                // 남은 건 이번 실행에서 이미 실패 처리된 장소뿐 — 다음 실행에서 재시도
                 break;
             }
 
-            log.info("배치 보강 청크 처리 중 - {}건 (전체 미보강: {}건)", places.size(), page.getTotalElements());
+            log.info("배치 보강 청크 처리 중 - {} {}건 (누적 성공 {}건, 실패 {}건)",
+                    regions.isEmpty() ? "전체" : regions, places.size(), processed, failed);
 
             ChunkResult result = processChunk(places);
-            totalProcessed += result.success();
-            totalFailed += result.failed();
+            processed += result.success();
+            failed += result.failed();
             excludedIds.addAll(result.failedIds());
-        }
 
-        log.info("BatchEnrichScheduler 완료 - 보강 성공: {}건, 실패: {}건", totalProcessed, totalFailed);
+            consecutiveFailedChunks = result.success() == 0 ? consecutiveFailedChunks + 1 : 0;
+            if (consecutiveFailedChunks >= MAX_CONSECUTIVE_FAILED_CHUNKS) {
+                log.error("배치 보강 중단 - 연속 {}개 청크 전부 실패 (API 키·모델명·쿼터 확인 필요)",
+                        consecutiveFailedChunks);
+                break;
+            }
+        }
+        totals[0] += processed;
+        totals[1] += failed;
     }
 
     private List<String> parseRegions() {
@@ -209,6 +246,9 @@ public class BatchEnrichScheduler {
                     "params", Map.of(
                             "model", enrichModel,
                             "max_tokens", 1024,
+                            // Haiku 5.5는 thinking이 기본으로 켜진다. 단순 JSON 생성엔 불필요하고,
+                            // 켜두면 thinking 토큰이 max_tokens를 잡아먹어 JSON이 잘린다.
+                            "thinking", Map.of("type", "disabled"),
                             "messages", List.of(
                                     Map.of("role", "user", "content", prompt)
                             )
@@ -224,6 +264,11 @@ public class BatchEnrichScheduler {
      * 장소 정보를 기반으로 보강 프롬프트를 생성한다.
      */
     String buildEnrichPrompt(Place place) {
+        if (DiningEnrichment.isDining(place.getCategory())) {
+            return DiningEnrichment.buildPrompt(place.getName(), place.getCategory(), place.getDescription(),
+                    DiningEnrichment.venueOf(place.getCategory()),
+                    DiningEnrichment.isFamous(place.getWikidataSitelinks()));
+        }
         StringBuilder sb = new StringBuilder();
         sb.append("다음 장소 정보를 분석하여 태그, 설명, 추천 방문 시간대를 생성해주세요.\n\n");
         sb.append("장소 정보:\n");
@@ -245,12 +290,16 @@ public class BatchEnrichScheduler {
         sb.append("  \"description\": \"장소에 대한 2~3문장 설명 (한국어)\",\n");
         sb.append("  \"recommended_time_slots\": [\"morning\", \"afternoon\", \"evening\"],  // 추천 방문 시간대\n");
         sb.append("  \"recommended_duration_minutes\": 90,  // 평균 체류시간(분, 정수)\n");
-        sb.append("  \"admission_fee\": 0  // 입장료(원, 정수). 무료면 0, 유료면 성인 1인 기준 실제 입장료\n");
+        sb.append("  \"admission_fee\": 0,  // 입장료(원, 정수). 무료면 0, 유료면 성인 1인 기준 실제 입장료\n");
+        sb.append("  \"place_role\": \"SIGHT\"  // 여행 일정에서의 역할(아래 목록 중 하나)\n");
         sb.append("}\n");
         sb.append("\n추천 시간대는 다음 중에서 선택: morning, afternoon, evening, night, all_day");
         sb.append("\n체류시간 가이드: 등산·오름·트레킹 150~240 / 해변·시장 60 / 박물관·미술관 90 / 카페 60 / 식당 70");
         sb.append("\n입장료 가이드: 오름·해변·포구·공원·산책로 등 자연 명소는 대부분 0(무료). "
                 + "성산일출봉 5000, 산방산 1000처럼 관리되는 유료 명소만 실제 금액. 식당·카페·숙소는 0.");
+        sb.append("\nplace_role: SIGHT(명소·자연·유적·박물관·공원) / ACTIVITY(체험·레저·테마파크) / "
+                + "SHOPPING(쇼핑몰·백화점·쇼핑거리) / MARKET(전통시장·야시장) / LODGING(숙소) / TRANSIT(공항·역·터미널) / "
+                + "NOT_VISITABLE(여행자가 일부러 찾아갈 곳이 아님: 편의점·은행·병원·사무실·주차장·일반 매장·아파트·학교 등)");
         return sb.toString();
     }
 
@@ -411,77 +460,7 @@ public class BatchEnrichScheduler {
                 return new ChunkResult(0, places.size(), allIds(places));
             }
 
-            // 장소 ID → Place 매핑
-            Map<Long, Place> placeMap = new HashMap<>();
-            for (Place place : places) {
-                placeMap.put(place.getId(), place);
-            }
-
-            int success = 0;
-            int failed = 0;
-            List<Long> failedIds = new ArrayList<>();
-            List<Long> succeededIds = new ArrayList<>();
-
-            // JSONL 형식으로 한 줄씩 처리
-            String[] lines = response.body().split("\n");
-            for (String line : lines) {
-                if (line.isBlank()) continue;
-
-                try {
-                    JsonNode resultNode = objectMapper.readTree(line);
-                    String customId = resultNode.get("custom_id").asText();
-                    Long placeId = Long.parseLong(customId.replace("place_", ""));
-                    Place place = placeMap.get(placeId);
-
-                    if (place == null) {
-                        log.warn("결과에 매칭되는 장소 없음 - customId={}", customId);
-                        failed++;
-                        continue;
-                    }
-
-                    JsonNode resultBody = resultNode.get("result");
-                    if (resultBody == null || !"succeeded".equals(resultBody.path("type").asText())) {
-                        log.warn("장소 보강 실패 - placeId={}, result={}", placeId, resultBody);
-                        failed++;
-                        failedIds.add(placeId);
-                        continue;
-                    }
-
-                    // 메시지 응답에서 텍스트 추출
-                    JsonNode message = resultBody.get("message");
-                    String content = extractTextContent(message);
-
-                    if (content == null) {
-                        log.warn("응답 텍스트 추출 실패 - placeId={}", placeId);
-                        failed++;
-                        failedIds.add(placeId);
-                        continue;
-                    }
-
-                    // JSON 파싱 및 장소 보강
-                    if (applyEnrichment(place, content)) {
-                        placeRepository.save(place);
-                        succeededIds.add(placeId);
-                        success++;
-                    } else {
-                        failed++;
-                        failedIds.add(placeId);
-                    }
-
-                } catch (Exception e) {
-                    log.warn("결과 행 처리 중 오류: {}", e.getMessage());
-                    failed++;
-                }
-            }
-
-            // 보강 성공분은 임베딩을 초기화해 다음 임베딩 단계가 새 tags/description으로
-            // 재임베딩하게 한다(embedding 컬럼은 updatable=false라 save()로는 반영 불가).
-            if (!succeededIds.isEmpty()) {
-                placeRepository.resetEmbeddings(succeededIds);
-            }
-
-            log.info("배치 결과 처리 완료 - 성공: {}건, 실패: {}건", success, failed);
-            return new ChunkResult(success, failed, failedIds);
+            return applyResults(response.body(), places);
 
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {
@@ -490,6 +469,70 @@ public class BatchEnrichScheduler {
             log.error("배치 결과 처리 중 예외: {}", e.getMessage(), e);
             return new ChunkResult(0, places.size(), allIds(places));
         }
+    }
+
+    /**
+     * 결과 JSONL을 장소에 반영한다.
+     * <p>
+     * 실패 목록은 "청크에서 성공하지 못한 전부"로 계산한다. 행 처리 중 예외가 나거나 결과에서 빠진
+     * 장소를 하나씩 챙기지 않으면 enriched_at이 NULL로 남아 다음 청크마다 다시 제출된다.
+     */
+    ChunkResult applyResults(String jsonl, List<Place> places) {
+        Map<Long, Place> placeMap = new HashMap<>();
+        for (Place place : places) {
+            placeMap.put(place.getId(), place);
+        }
+
+        List<Long> succeededIds = new ArrayList<>();
+
+        for (String line : jsonl.split("\n")) {
+            if (line.isBlank()) continue;
+
+            try {
+                JsonNode resultNode = objectMapper.readTree(line);
+                String customId = resultNode.get("custom_id").asText();
+                Long placeId = Long.parseLong(customId.replace("place_", ""));
+                Place place = placeMap.get(placeId);
+
+                if (place == null) {
+                    log.warn("결과에 매칭되는 장소 없음 - customId={}", customId);
+                    continue;
+                }
+
+                JsonNode resultBody = resultNode.get("result");
+                if (resultBody == null || !"succeeded".equals(resultBody.path("type").asText())) {
+                    log.warn("장소 보강 실패 - placeId={}, result={}", placeId, resultBody);
+                    continue;
+                }
+
+                // 메시지 응답에서 텍스트 추출
+                String content = extractTextContent(resultBody.get("message"));
+                if (content == null) {
+                    log.warn("응답 텍스트 추출 실패 - placeId={}", placeId);
+                    continue;
+                }
+
+                // JSON 파싱 및 장소 보강
+                if (applyEnrichment(place, content)) {
+                    placeRepository.save(place);
+                    succeededIds.add(placeId);
+                }
+
+            } catch (Exception e) {
+                log.warn("결과 행 처리 중 오류: {}", e.getMessage());
+            }
+        }
+
+        // 보강 성공분은 임베딩을 초기화해 다음 임베딩 단계가 새 tags/description으로
+        // 재임베딩하게 한다(embedding 컬럼은 updatable=false라 save()로는 반영 불가).
+        if (!succeededIds.isEmpty()) {
+            placeRepository.resetEmbeddings(succeededIds);
+        }
+
+        Set<Long> succeeded = new HashSet<>(succeededIds);
+        List<Long> failedIds = places.stream().map(Place::getId).filter(id -> !succeeded.contains(id)).toList();
+        log.info("배치 결과 처리 완료 - 성공: {}건, 실패: {}건", succeededIds.size(), failedIds.size());
+        return new ChunkResult(succeededIds.size(), failedIds.size(), failedIds);
     }
 
     /**
@@ -518,11 +561,38 @@ public class BatchEnrichScheduler {
      * @param content LLM 응답 텍스트 (JSON 형식)
      * @return 보강 성공 여부
      */
+    /** 관광지 프롬프트가 허용하는 역할 값만 받는다. 모르는 값이면 null(일정 로직이 카테고리로 추정). */
+    static String parseAttractionRole(JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        String v = node.asText("").trim().toUpperCase(java.util.Locale.ROOT);
+        return ATTRACTION_ROLES.contains(v) ? v : null;
+    }
+
+    private static final java.util.Set<String> ATTRACTION_ROLES = java.util.Set.of(
+            "SIGHT", "ACTIVITY", "SHOPPING", "MARKET", "LODGING", "TRANSIT", "NOT_VISITABLE");
+
     boolean applyEnrichment(Place place, String content) {
         try {
             // JSON 블록 추출 (코드 블록이 있을 수 있음)
             String json = extractJson(content);
             JsonNode root = objectMapper.readTree(json);
+
+            if (DiningEnrichment.isDining(place.getCategory())) {
+                if (!root.isObject()) {
+                    log.warn("식당 보강 응답이 JSON 객체가 아님 - placeId={}", place.getId());
+                    return false;
+                }
+                DiningEnrichment.Result dining = DiningEnrichment.interpret(root,
+                        DiningEnrichment.venueOf(place.getCategory()),
+                        DiningEnrichment.isFamous(place.getWikidataSitelinks()));
+                place.enrichWith(dining.tags(), dining.description(), dining.timeSlots(),
+                        dining.durationMinutes(), null);
+                // 카테고리 리프까지 보고 음식 종류를 다시 정한다(태그만으로는 "라멘집"의 면요리가 빠질 수 있다).
+                String cuisine = "MEAL".equals(dining.placeRole())
+                        ? DiningEnrichment.cuisineOf(dining.tags(), place.getCategory()) : null;
+                place.assignRole(dining.placeRole(), cuisine);
+                return true;
+            }
 
             List<String> tags = new ArrayList<>();
             JsonNode tagsNode = root.get("tags");
@@ -561,6 +631,7 @@ public class BatchEnrichScheduler {
             }
 
             place.enrichWith(tags, description, timeSlots, durationMinutes, admissionFee);
+            place.assignRole(parseAttractionRole(root.get("place_role")), null);
             return true;
 
         } catch (Exception e) {

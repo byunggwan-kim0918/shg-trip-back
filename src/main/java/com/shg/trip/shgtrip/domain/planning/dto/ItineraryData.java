@@ -1,5 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -10,6 +12,7 @@ import java.util.List;
  *                       "저장하되 알린다"는 graceful degradation 계약의 전달 수단이다 —
  *                       예전엔 로그로만 남아 숙소 없는 일정이 그대로 사용자에게 나갔다.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record ItineraryData(
         String title,
         String destination,

@@ -113,7 +113,7 @@ class VectorSearchQueryServiceTest {
                     (long) (i + 1),
                     "장소 " + (i + 1),
                     "주소 " + (i + 1),
-                    i % 2 == 0 ? "음식" : "관광",
+                    i % 2 == 0 ? "Dining and Drinking > Restaurant" : "Landmarks and Outdoors > Tourist Attraction",
                     List.of("태그" + i),
                     "시부야",
                     "일본",
@@ -848,6 +848,111 @@ class VectorSearchQueryServiceTest {
                     .map(s -> s.result().name()).toList();
 
             assertThat(accepted).containsExactly("주제에 맞는 해안");
+        }
+    }
+
+    @Nested
+    @DisplayName("세부유형 다양화 — 식사 후보가 한 종류로 쏠리지 않게 윈도를 고른다")
+    class SubTypeDiversityTests {
+
+        private final SearchQueryBuilder.SearchSlot restaurantSlot = new SearchQueryBuilder.SearchSlot(
+                "restaurant", PlaceCategoryConstants.SearchRole.RESTAURANT, "제주 맛집", List.of(), List.of());
+
+        private final SearchQueryBuilder.SearchSlot attractionSlot = new SearchQueryBuilder.SearchSlot(
+                "attraction", PlaceCategoryConstants.SearchRole.ATTRACTION, "제주 관광", List.of(), List.of());
+
+        private VectorSearchResult dining(String name, double similarity) {
+            return new VectorSearchResult(
+                    (long) name.hashCode(), name, name + " 주소",
+                    "Dining and Drinking > Restaurant", List.of(),
+                    "Jeju", "KR", BigDecimal.valueOf(33.4), BigDecimal.valueOf(126.5),
+                    name + " 설명", BigDecimal.valueOf(4.3), null, null, similarity);
+        }
+
+        /** 유사도 내림차순으로 돼지고기 n곳 + 다른 종류를 섞은 원본 결과. */
+        private List<VectorSearchResult> porkHeavyRaw() {
+            List<VectorSearchResult> raw = new java.util.ArrayList<>();
+            double sim = 0.90;
+            for (int i = 1; i <= 10; i++) raw.add(dining("흑돼지구이 " + i + "호점", sim -= 0.01));
+            for (int i = 1; i <= 4; i++) raw.add(dining("물회 해산물집 " + i, sim -= 0.01));
+            for (int i = 1; i <= 4; i++) raw.add(dining("고기국수 " + i, sim -= 0.01));
+            return raw;
+        }
+
+        private long countContaining(List<String> names, String needle) {
+            return names.stream().filter(n -> n.contains(needle)).count();
+        }
+
+        @Test
+        @DisplayName("유사도 상위가 전부 같은 종류여도 유형당 상한만큼만 채택한다")
+        void capsDominantCuisine() {
+            // 실측: 제주 restaurant 슬롯 상위 16곳이 pork 12 / seafood 2 / noodle 1 / 미분류 1이었다.
+            // 3박4일 8끼에 비(非)돼지 후보가 4곳이면 조립 단계 유형 상한(3회)을 만족할 수 없다.
+            // 다른 종류로 limit을 채울 수 있을 때는 상한이 끝까지 지켜져야 한다.
+            List<VectorSearchResult> raw = new java.util.ArrayList<>();
+            double sim = 0.90;
+            for (int i = 1; i <= 10; i++) raw.add(dining("흑돼지구이 " + i + "호점", sim -= 0.01));
+            for (int i = 1; i <= 4; i++) raw.add(dining("물회 해산물집 " + i, sim -= 0.01));
+            for (int i = 1; i <= 4; i++) raw.add(dining("고기국수 " + i, sim -= 0.01));
+            for (int i = 1; i <= 4; i++) raw.add(dining("한우 구이 " + i, sim -= 0.01));
+            for (int i = 1; i <= 4; i++) raw.add(dining("치킨 " + i + "번가", sim -= 0.01));
+
+            List<String> accepted = service.applyThresholdAndRank(restaurantSlot, raw, 12).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted).hasSize(12);
+            // limit 12 → 유형당 상한 3. 5개 유형 × 3 = 15 ≥ 12이므로 되돌림이 일어나지 않는다.
+            assertThat(countContaining(accepted, "흑돼지")).isEqualTo(3);
+            assertThat(countContaining(accepted, "물회")).isEqualTo(3);
+            assertThat(countContaining(accepted, "고기국수")).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("다양화해도 후보 수는 줄지 않는다 — 상한 초과분을 점수 순으로 되돌린다")
+        void neverReturnsFewerThanLimit() {
+            // 한 종류뿐인 소도시에서 다양화가 후보를 말려버리면 fallback 경로로 떨어진다.
+            List<VectorSearchResult> onlyPork = new java.util.ArrayList<>();
+            double sim = 0.90;
+            for (int i = 1; i <= 10; i++) onlyPork.add(dining("흑돼지구이 " + i + "호점", sim -= 0.01));
+
+            List<String> accepted = service.applyThresholdAndRank(restaurantSlot, onlyPork, 8).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted).hasSize(8);
+        }
+
+        @Test
+        @DisplayName("상한을 채운 뒤 되돌리는 순서는 점수 순이다")
+        void backfillFollowsScoreOrder() {
+            // limit 8 → 유형당 상한 2. 돼지 2 + 물회 2 + 국수 2 = 6을 먼저 채우고,
+            // 남은 2자리는 밀어둔 후보 중 점수가 가장 높은 돼지 3·4호점이 받아야 한다.
+            List<String> accepted = service.applyThresholdAndRank(restaurantSlot, porkHeavyRaw(), 8).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted).hasSize(8);
+            assertThat(accepted).contains("흑돼지구이 3호점", "흑돼지구이 4호점");
+            assertThat(accepted).doesNotContain("흑돼지구이 5호점");
+        }
+
+        @Test
+        @DisplayName("관광 슬롯은 다양화 대상이 아니다 — 점수 상위를 그대로 자른다")
+        void attractionSlotIsUntouched() {
+            // 관광은 커버리지 규칙(viewpoint·theme 슬롯 분리)이 이미 종류를 나눠 담당한다.
+            // 여기에 유형 상한을 겹치면 테마 적합도 상위가 밀려난다.
+            List<String> accepted = service.applyThresholdAndRank(attractionSlot, porkHeavyRaw(), 4).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted).containsExactly(
+                    "흑돼지구이 1호점", "흑돼지구이 2호점", "흑돼지구이 3호점", "흑돼지구이 4호점");
+        }
+
+        @Test
+        @DisplayName("후보가 limit 이하면 다양화가 개입하지 않는다")
+        void noOpWhenPoolSmallerThanLimit() {
+            List<String> accepted = service.applyThresholdAndRank(restaurantSlot, porkHeavyRaw(), 50).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted).hasSize(18);
         }
     }
 }
