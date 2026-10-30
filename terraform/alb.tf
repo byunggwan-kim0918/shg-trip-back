@@ -61,10 +61,10 @@ resource "aws_lb_target_group" "web" {
   health_check {
     path                = "/health"
     matcher             = "200"
-    interval            = 30
+    interval            = 15
     timeout             = 5
-    healthy_threshold   = 5
-    unhealthy_threshold = 2
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
   }
 
   tags = {
@@ -85,10 +85,10 @@ resource "aws_lb_target_group" "app" {
   health_check {
     path                = "/actuator/health"
     matcher             = "200"
-    interval            = 30
+    interval            = 15
     timeout             = 5
-    healthy_threshold   = 5
-    unhealthy_threshold = 2
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
   }
 
   tags = {
