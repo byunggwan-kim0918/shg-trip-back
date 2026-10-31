@@ -43,6 +43,7 @@ class OptimizedGenerationExecutorTest {
     @Mock private HardValidator hardValidator;
     @Mock private IndexResultMapper indexResultMapper;
     @Mock private RouteOptimizer routeOptimizer;
+    @Mock private GenerationTraceRecorder traceRecorder;
     @Mock private ItineraryGenerationExecutor fallbackExecutor;
     @Mock private ItinerarySaveHelper saveHelper;
     @Mock private StoryGenerationService storyGenerationService;
@@ -152,7 +153,7 @@ class OptimizedGenerationExecutorTest {
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+        when(routeOptimizer.schedule(eq(selectionOutput), anyList(), argThat((ScheduleArgs a) -> "normal".equals(a.pace()) && "any".equals(a.transportPref()))))
                 .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
                 .thenReturn(draftData);
@@ -167,7 +168,7 @@ class OptimizedGenerationExecutorTest {
         verify(optimizedClaudeAIService).enrichInput(request);
         verify(vectorSearchQueryService).search(vectorEnrichedInput);
         verify(selectionCallGenerator).selectPlaces(eq(vectorEnrichedInput), anyList());
-        verify(routeOptimizer).schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any(), anyBoolean());
+        verify(routeOptimizer).schedule(eq(selectionOutput), anyList(), argThat((ScheduleArgs a) -> "normal".equals(a.pace()) && "any".equals(a.transportPref())));
         verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any());
         verify(resultStore).save("job-1", 42L, 1L);
         // 임시 제목(짧은 결정론 문구)을 넘겨야 한다 — concept을 넘기면 제목 교체가 0행이 된다.
@@ -233,7 +234,7 @@ class OptimizedGenerationExecutorTest {
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+        when(routeOptimizer.schedule(eq(selectionOutput), anyList(), argThat((ScheduleArgs a) -> "normal".equals(a.pace()) && "any".equals(a.transportPref()))))
                 .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
                 .thenReturn(draftData);
@@ -284,7 +285,7 @@ class OptimizedGenerationExecutorTest {
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
-        when(routeOptimizer.schedule(eq(selectionOutput), anyList(), eq("normal"), eq("any"), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+        when(routeOptimizer.schedule(eq(selectionOutput), anyList(), argThat((ScheduleArgs a) -> "normal".equals(a.pace()) && "any".equals(a.transportPref()))))
                 .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
                 .thenReturn(draftData);

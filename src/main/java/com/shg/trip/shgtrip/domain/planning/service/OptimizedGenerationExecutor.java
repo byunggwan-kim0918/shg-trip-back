@@ -55,6 +55,7 @@ public class OptimizedGenerationExecutor {
     private final GenerationPolicyService generationPolicyService;
     private final PlaceRepository placeRepository;
     private final PlaceRegionValidator placeRegionValidator;
+    private final GenerationTraceRecorder traceRecorder;
 
     /** 보완 숙소가 기존 후보 median 중심점에서 이 거리(km)를 초과하면 지역 오태깅으로 보고 제외. */
     private static final double MAX_ACCOMMODATION_RADIUS_KM = 100.0;
@@ -201,14 +202,9 @@ public class OptimizedGenerationExecutor {
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "OPTIMIZING", 65, "동선과 시간을 확정하고 있습니다...");
 
-            final boolean compact = compactMode;
+            final ScheduleArgs scheduleArgs = ScheduleArgs.of(enrichedInput, compactMode);
             RouteOptimizer.ScheduleResult scheduleResult = executeWithHeartbeat(emitter,
-                    () -> routeOptimizer.schedule(
-                            selectionOutput, candidatesWithLocalStays, enrichedInput.pace(),
-                            enrichedInput.transportPref(), enrichedInput.startDate(),
-                            enrichedInput.themes(), enrichedInput.transportationHub(), compact,
-                            enrichedInput.categories(),
-                            enrichedInput.companion() == VectorEnrichedInput.CompanionType.COUPLE));
+                    () -> routeOptimizer.schedule(selectionOutput, candidatesWithLocalStays, scheduleArgs));
             List<StepData> fixedSteps = scaleCostsForParty(scheduleResult.steps(), enrichedInput.partySize());
             List<String> qualityNotices = scheduleResult.notices();
 
@@ -258,6 +254,9 @@ public class OptimizedGenerationExecutor {
             generationPolicyService.recordSuccess(userId);
             sendSseEvent(emitter, "COMPLETE", 100, "일정 생성이 완료되었습니다.");
             sendCompleteKeepOpen(emitter, saved.getId());
+            traceRecorder.record(saved.getId(), jobId, request, enrichedInput, rawSelectionOutput,
+                    selectionOutput, candidatesWithLocalStays, scheduleArgs,
+                    (System.nanoTime() - pipelineStart) / 1_000_000);
 
             log.info("OptimizedGeneration 구조 완료: jobId={}, itineraryId={}, days={}",
                     jobId, saved.getId(), days);

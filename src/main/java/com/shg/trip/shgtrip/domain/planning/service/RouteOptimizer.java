@@ -4,6 +4,7 @@ import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
+import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.TransportationHub;
@@ -406,6 +407,11 @@ public class RouteOptimizer {
                                    boolean compactMode, List<String> userCategories) {
         return schedule(selection, candidates, pace, transportPref, startDate, themes, hub,
                 compactMode, userCategories, false);
+    }
+
+    public ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args) {
+        return schedule(selection, candidates, args.pace(), args.transportPref(), args.startDate(),
+                args.themes(), args.hub(), args.compact(), args.categories(), args.couple());
     }
 
     /**
