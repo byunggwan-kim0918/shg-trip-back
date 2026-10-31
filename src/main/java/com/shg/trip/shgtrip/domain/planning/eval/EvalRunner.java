@@ -59,6 +59,10 @@ public class EvalRunner implements CommandLineRunner {
     @Value("${eval.out:build/eval}")
     private String outDir;
 
+    /** true면 replay한 일정마다 저장본·재실행 스텝을 나란히 steps-{id}.txt로 남긴다. */
+    @Value("${eval.dump-steps:false}")
+    private boolean dumpSteps;
+
     @Override
     @Transactional(readOnly = true)
     public void run(String... args) throws Exception {
@@ -103,6 +107,12 @@ public class EvalRunner implements CommandLineRunner {
         if (!replay) return new Row(itinerary.getId(), itinerary.getDestination(), true, saved, null, null);
 
         List<StepData> replayedSteps = routeOptimizer.schedule(selection, candidates, args).steps();
+        if (dumpSteps) {
+            Path dir = Path.of(outDir);
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve("steps-" + itinerary.getId() + ".txt"),
+                    "== 저장본\n" + renderSteps(savedSteps) + "\n== 재실행\n" + renderSteps(replayedSteps));
+        }
         ScoreReport replayed = scorer.score(new ItineraryScorer.Input(replayedSteps, args.pace(),
                 args.transportPref(), args.startDate(), candidates, selection));
         return new Row(itinerary.getId(), itinerary.getDestination(), true, saved, replayed,
@@ -122,6 +132,17 @@ public class EvalRunner implements CommandLineRunner {
             }
         }
         return true;
+    }
+
+    private static String renderSteps(List<StepData> steps) {
+        StringBuilder sb = new StringBuilder();
+        for (StepData s : steps) {
+            sb.append(String.format("d%d %s-%s %s | %s | %skm%n", s.dayNumber(), s.startTime(), s.endTime(),
+                    s.place() == null ? "-" : s.place().name(),
+                    s.place() == null ? "-" : s.place().category(),
+                    s.transportationDistance() == null ? "-" : s.transportationDistance().toPlainString()));
+        }
+        return sb.toString();
     }
 
     private static List<StepData> toStepData(Itinerary itinerary) {
