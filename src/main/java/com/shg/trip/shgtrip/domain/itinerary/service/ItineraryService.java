@@ -4,6 +4,7 @@ import com.shg.trip.shgtrip.domain.itinerary.dto.*;
 import com.shg.trip.shgtrip.domain.itinerary.entity.AlternativeOption;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
+import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
@@ -43,6 +44,7 @@ public class ItineraryService {
 
     private final ItineraryRepository itineraryRepository;
     private final PlaceRepository placeRepository;
+    private final GenerationTraceRepository generationTraceRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -103,6 +105,8 @@ public class ItineraryService {
     public void deleteItinerary(Long itineraryId, Long userId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
         itinerary.softDelete();
+        // 요청 문장이 들어 있어 개인정보처리방침상 같이 지운다
+        generationTraceRepository.deleteByItineraryId(itineraryId);
     }
 
     @Transactional

@@ -1,0 +1,4 @@
+# 평가 러너 전용(EvalRunner). local 등 DB 프로필과 함께 켠다: --spring.profiles.active=local,eval
+spring:
+  main:
+    web-application-type: none

@@ -4,6 +4,7 @@ import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryResponse;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryStepResponse;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
+import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
@@ -29,6 +30,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -40,6 +42,7 @@ class ItineraryServiceTest {
 
     @Mock private ItineraryRepository itineraryRepository;
     @Mock private PlaceRepository placeRepository;
+    @Mock private GenerationTraceRepository generationTraceRepository;
     @Mock private EntityManager entityManager;
 
     @InjectMocks private ItineraryService itineraryService;
@@ -98,6 +101,17 @@ class ItineraryServiceTest {
 
     private Map<Long, ItineraryStepResponse> byId(ItineraryResponse res) {
         return res.steps().stream().collect(java.util.stream.Collectors.toMap(ItineraryStepResponse::id, s -> s));
+    }
+
+    @Test
+    @DisplayName("일정을 삭제하면 요청 문장이 담긴 생성 기록도 함께 지운다")
+    void deletesGenerationTraceWithItinerary() {
+        mockFind();
+
+        itineraryService.deleteItinerary(ITINERARY_ID, USER_ID);
+
+        assertThat(itinerary.isDeleted()).isTrue();
+        verify(generationTraceRepository).deleteByItineraryId(ITINERARY_ID);
     }
 
     // ── reorder ──
