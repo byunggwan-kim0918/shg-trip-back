@@ -62,6 +62,7 @@ public class OptimizedClaudeAIService {
         try {
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(anthropicProperties.haiku())
+                    .thinking(ModelRequestPolicy.HAIKU_THINKING)
                     .maxTokens(ENRICH_MAX_TOKENS)
                     .addUserMessage(prompt)
                     .build();

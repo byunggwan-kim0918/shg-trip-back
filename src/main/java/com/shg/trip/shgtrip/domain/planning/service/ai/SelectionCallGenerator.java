@@ -181,11 +181,12 @@ public class SelectionCallGenerator {
 
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(anthropicProperties.sonnet())
-                .maxTokens((long) maxTokens)
+                .maxTokens(ModelRequestPolicy.sonnetMaxTokens(maxTokens, anthropicProperties.maxOutputTokens()))
                 .systemOfTextBlockParams(List.of(systemBlock))
                 .addUserMessage(userMessage)
                 .addTool(tool)
-                .toolToolChoice("select_places")
+                .toolChoice(ModelRequestPolicy.SONNET_TOOL_CHOICE)
+                .outputConfig(ModelRequestPolicy.SONNET_OUTPUT)
                 .build();
 
         return executeWithRetry(() -> anthropicClient.messages().create(params), MAX_RETRIES);

@@ -118,6 +118,7 @@ public class AssemblyCallGenerator {
 
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(anthropicProperties.haiku())
+                .thinking(ModelRequestPolicy.HAIKU_THINKING)
                 .maxTokens((long) maxTokens)
                 .systemOfTextBlockParams(List.of(systemBlock))
                 .addUserMessage(userMessage)

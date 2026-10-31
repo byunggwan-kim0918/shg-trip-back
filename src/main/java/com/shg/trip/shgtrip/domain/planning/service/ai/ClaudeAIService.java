@@ -67,6 +67,7 @@ public class ClaudeAIService implements AIService {
         try {
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(anthropicProperties.haiku())
+                    .thinking(ModelRequestPolicy.HAIKU_THINKING)
                     .maxTokens(1024)
                     .addUserMessage(prompt)
                     .build();
@@ -112,10 +113,11 @@ public class ClaudeAIService implements AIService {
         try {
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(anthropicProperties.sonnet())
-                    .maxTokens(maxTokens)
+                    .maxTokens(ModelRequestPolicy.sonnetMaxTokens(maxTokens, anthropicProperties.maxOutputTokens()))
                     .addUserMessage(prompt)
                     .addTool(tool)
-                    .toolToolChoice("generate_itinerary")
+                    .toolChoice(ModelRequestPolicy.SONNET_TOOL_CHOICE)
+                    .outputConfig(ModelRequestPolicy.SONNET_OUTPUT)
                     .build();
 
             Message message = executeWithRetry(
@@ -196,10 +198,11 @@ public class ClaudeAIService implements AIService {
         try {
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(anthropicProperties.sonnet())
-                    .maxTokens(maxTokens)
+                    .maxTokens(ModelRequestPolicy.sonnetMaxTokens(maxTokens, anthropicProperties.maxOutputTokens()))
                     .addUserMessage(prompt)
                     .addTool(tool)
-                    .toolToolChoice("generate_itinerary")
+                    .toolChoice(ModelRequestPolicy.SONNET_TOOL_CHOICE)
+                    .outputConfig(ModelRequestPolicy.SONNET_OUTPUT)
                     .build();
 
             Message message = executeWithRetry(
@@ -234,10 +237,11 @@ public class ClaudeAIService implements AIService {
         try {
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(anthropicProperties.sonnet())
-                    .maxTokens(calculateMaxTokens(days))
+                    .maxTokens(ModelRequestPolicy.sonnetMaxTokens(calculateMaxTokens(days), anthropicProperties.maxOutputTokens()))
                     .addUserMessage(prompt)
                     .addTool(tool)
-                    .toolToolChoice("generate_itinerary")
+                    .toolChoice(ModelRequestPolicy.SONNET_TOOL_CHOICE)
+                    .outputConfig(ModelRequestPolicy.SONNET_OUTPUT)
                     .build();
 
             Message message = executeWithRetry(
@@ -305,6 +309,7 @@ public class ClaudeAIService implements AIService {
         try {
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(anthropicProperties.haiku())
+                    .thinking(ModelRequestPolicy.HAIKU_THINKING)
                     .maxTokens(512)
                     .addUserMessage(prompt)
                     .build();
