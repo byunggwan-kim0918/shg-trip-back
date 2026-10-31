@@ -377,4 +377,32 @@ class OptimizedGenerationExecutorTest {
             assertThat(kept).hasSize(1);
         }
     }
+
+    @Test
+    @DisplayName("덧붙인 후보 중 앞선 후보와 같은 위키데이터 항목은 빼고, 남은 꼬리 번호를 다시 매긴다")
+    void dropsAppendedRowOfSameWikidataItem() {
+        PlaceCandidate base = place(1, 10L, "경주 불국사 [유네스코 세계유산]");
+        PlaceCandidate dup = place(2, 11L, "불국사 (佛國寺)");
+        PlaceCandidate fresh = place(3, 12L, "석굴암");
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of(
+                placeWithQid(10L, "Q408318"), placeWithQid(11L, "Q408318"), placeWithQid(12L, "Q483813")));
+
+        List<PlaceCandidate> result = executor.dropAppendedSameWikidataItem(List.of(base, dup, fresh), 1);
+
+        assertThat(result).extracting(PlaceCandidate::name).containsExactly("경주 불국사 [유네스코 세계유산]", "석굴암");
+        assertThat(result).extracting(PlaceCandidate::index).containsExactly(1, 2);
+    }
+
+    private static PlaceCandidate place(int index, long placeId, String name) {
+        return new PlaceCandidate(index, placeId, name, "경주", "Landmarks and Outdoors > Temple", List.of(),
+                "Gyeongju", "KR", java.math.BigDecimal.valueOf(35.79), java.math.BigDecimal.valueOf(129.33),
+                null, null, 0.8, null, null, null, null, false, null, null);
+    }
+
+    private static com.shg.trip.shgtrip.domain.place.entity.Place placeWithQid(long id, String qid) {
+        com.shg.trip.shgtrip.domain.place.entity.Place p =
+                com.shg.trip.shgtrip.domain.place.entity.Place.builder().id(id).name("x").build();
+        p.markWikidataMatch(qid, 10);
+        return p;
+    }
 }
