@@ -133,8 +133,11 @@ public class VectorSearchQueryService {
         log.info("검색 슬롯 {}개, 실행 단위 {}개, 슬롯별 limit={}", slots.size(), units.size(), slotLimits);
 
         // A5: 슬롯 수만큼 순차 호출하던 임베딩을 1회 배치 호출로 (슬롯이 늘어도 지연이 늘지 않게)
+        long embedStart = System.nanoTime();
         List<float[]> queryVectors = embeddingService.embedBatch(
                 units.stream().map(SearchUnit::queryText).toList());
+        long embedMs = elapsedMs(embedStart);
+        Map<String, Long> dbMsBySlot = new LinkedHashMap<>();
         if (queryVectors.size() != units.size()) {
             log.warn("임베딩 배치 결과 수 불일치: units={}, vectors={} — 부족분은 건너뜀",
                     units.size(), queryVectors.size());
@@ -156,6 +159,7 @@ public class VectorSearchQueryService {
             int overfetch = overfetchFor(slot.role(), limit);
             int unitLimit = Math.max(1, overfetch / unitsPerSlot);
 
+            long queryStart = System.nanoTime();
             List<VectorSearchResult> raw = placeVectorSearchService.search(
                     buildRequest(input, queryVector, unit.filterRegions(), slot, unitLimit));
 
@@ -169,7 +173,10 @@ public class VectorSearchQueryService {
             }
 
             rawBySlot.computeIfAbsent(slot.key(), k -> new ArrayList<>()).addAll(raw);
+            dbMsBySlot.merge(slot.key(), elapsedMs(queryStart), Long::sum);
         }
+        log.info("검색 시간: 임베딩 {}ms, DB 합계 {}ms, 슬롯별 {}", embedMs,
+                dbMsBySlot.values().stream().mapToLong(Long::longValue).sum(), dbMsBySlot);
 
         // 같은 장소가 여러 슬롯에 걸릴 수 있으므로(관광 하위유형끼리 겹침) placeId 기준으로 최고 점수만 유지
         Map<Long, ScoredResult> bestByPlace = new LinkedHashMap<>();
@@ -193,9 +200,9 @@ public class VectorSearchQueryService {
             }
         }
 
-        List<VectorSearchResult> allResults = new ArrayList<>(bestByPlace.size() + withoutId.size());
-        bestByPlace.values().forEach(s -> allResults.add(s.result()));
-        withoutId.forEach(s -> allResults.add(s.result()));
+        List<ScoredResult> merged = new ArrayList<>(bestByPlace.values());
+        merged.addAll(withoutId);
+        List<VectorSearchResult> allResults = keepBestPerWikidataItem(merged);
 
         log.info("전체 벡터 검색 결과: {}개 장소 반환 (요청 총 limit: {})", allResults.size(), totalLimit);
 
@@ -273,7 +280,9 @@ public class VectorSearchQueryService {
     }
 
     private float[] embedOne(String text) {
+        long start = System.nanoTime();
         List<float[]> vectors = embeddingService.embedBatch(List.of(text));
+        log.info("보완 검색 임베딩 {}ms", elapsedMs(start));
         if (vectors.isEmpty() || vectors.get(0) == null || vectors.get(0).length == 0) return null;
         return vectors.get(0);
     }
@@ -287,7 +296,9 @@ public class VectorSearchQueryService {
                 PlaceCategoryConstants.excludedCategoryPatterns(role),
                 center, radiusKm, role == SearchRole.ATTRACTION);
 
+        long queryStart = System.nanoTime();
         List<VectorSearchResult> raw = placeVectorSearchService.search(request);
+        long queryMs = elapsedMs(queryStart);
         List<ScoredResult> accepted = applyThresholdAndRank(slot, raw, limit);
 
         List<PlaceCandidate> result = new ArrayList<>(accepted.size());
@@ -309,8 +320,8 @@ public class VectorSearchQueryService {
             result.add(c);
             index++;
         }
-        log.info("day centroid 기준 {} 보완 검색: 반경 {}km, 조회={}, 채택={}",
-                role, String.format("%.0f", radiusKm), raw.size(), result.size());
+        log.info("day centroid 기준 {} 보완 검색: 반경 {}km, 조회={}, 채택={}, DB {}ms",
+                role, String.format("%.0f", radiusKm), raw.size(), result.size(), queryMs);
         return result;
     }
 
@@ -409,6 +420,29 @@ public class VectorSearchQueryService {
             if (qid == null || seen.add(qid)) out.add(s);
         }
         return out;
+    }
+
+    /**
+     * 슬롯 안에서는 dropSameWikidataItem이 거르지만, 같은 장소의 다른 행이 서로 다른 슬롯에 걸리면 둘 다 남는다.
+     * 항목별로 점수가 가장 높은 행만 남기고, 남는 행의 순서는 그대로 둔다.
+     */
+    static List<VectorSearchResult> keepBestPerWikidataItem(List<ScoredResult> merged) {
+        Map<String, ScoredResult> best = new HashMap<>();
+        for (ScoredResult s : merged) {
+            String qid = s.result().wikidataId();
+            if (qid == null) continue;
+            best.merge(qid, s, (a, b) -> b.score() > a.score() ? b : a);
+        }
+        List<VectorSearchResult> out = new ArrayList<>(merged.size());
+        for (ScoredResult s : merged) {
+            String qid = s.result().wikidataId();
+            if (qid == null || best.get(qid) == s) out.add(s.result());
+        }
+        return out;
+    }
+
+    private static long elapsedMs(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000;
     }
 
     private int overfetchFor(SearchRole role, int limit) {

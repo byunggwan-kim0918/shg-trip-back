@@ -978,4 +978,25 @@ class VectorSearchQueryServiceTest {
             assertThat(accepted).hasSize(18);
         }
     }
+
+    @Test
+    @DisplayName("다른 슬롯에 걸린 같은 위키데이터 항목은 점수가 높은 행 하나만 남고, 남는 행의 순서는 유지된다")
+    void keepsBestRowPerWikidataItemAcrossSlots() {
+        VectorSearchQueryService.ScoredResult templeSlot = scored(1L, "불국사 (佛國寺)", "Q408318", 0.62);
+        VectorSearchQueryService.ScoredResult noQid = scored(2L, "경주밀면", null, 0.70);
+        VectorSearchQueryService.ScoredResult attractionSlot = scored(3L, "경주 불국사 [유네스코 세계유산]", "Q408318", 0.81);
+        VectorSearchQueryService.ScoredResult other = scored(4L, "첨성대", "Q562765", 0.55);
+
+        List<VectorSearchResult> kept = VectorSearchQueryService.keepBestPerWikidataItem(
+                List.of(templeSlot, noQid, attractionSlot, other));
+
+        assertThat(kept).extracting(VectorSearchResult::placeId).containsExactly(2L, 3L, 4L);
+    }
+
+    private static VectorSearchQueryService.ScoredResult scored(long id, String name, String qid, double score) {
+        VectorSearchResult r = new VectorSearchResult(id, name, "주소", "Landmarks and Outdoors > Temple", List.of(),
+                "Gyeongju", "KR", BigDecimal.valueOf(35.79), BigDecimal.valueOf(129.33), null, null, null, 10,
+                score, null, null, qid);
+        return new VectorSearchQueryService.ScoredResult(r, score);
+    }
 }

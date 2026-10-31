@@ -104,9 +104,9 @@ public class AssemblyCallGenerator {
         return read + "/" + write;
     }
 
-    /** 구조 필드가 없어 매우 가벼움: step당 대략 80토큰 가정. */
+    /** step당 약 110토큰. Haiku 5.5 토크나이저는 같은 한국어 문장을 이전 모델보다 30%가량 더 센다. */
     int calculateMaxTokens(int stepCount) {
-        int estimated = stepCount * 80 + 300;
+        int estimated = stepCount * 110 + 300;
         return Math.min(estimated, anthropicProperties.maxOutputTokens());
     }
 

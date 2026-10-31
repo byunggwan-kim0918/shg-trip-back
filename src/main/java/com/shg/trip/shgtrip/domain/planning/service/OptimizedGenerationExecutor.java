@@ -188,9 +188,11 @@ public class OptimizedGenerationExecutor {
             // 같은 방식으로 날짜별 중심 근처의 관광·카페·식당을 예비 후보로 붙인다 — 빈 시간 채우기와
             // 교체가 쓸 장소가 동선 근처에 남아 있게 한다(실측 116~118: 3~5시간 공백 미충전).
             // 덧붙인 후보는 벡터 검색 결과라 체류시간·시간대·입장료가 비어 있다. DB 값으로 채운다.
-            final List<PlaceCandidate> candidatesWithLocalStays = enrichCandidatesFromDb(appendNearbyReserve(
-                    appendNearbyAccommodations(enrichedCandidates, dayComposition, enrichedInput, ferryTokens),
-                    dayComposition, enrichedInput, ferryTokens));
+            final List<PlaceCandidate> candidatesWithLocalStays = dropAppendedSameWikidataItem(
+                    enrichCandidatesFromDb(appendNearbyReserve(
+                            appendNearbyAccommodations(enrichedCandidates, dayComposition, enrichedInput, ferryTokens),
+                            dayComposition, enrichedInput, ferryTokens)),
+                    enrichedCandidates.size());
 
             // 숙소 결정론적 배정 → 사용자 필수 장소 주입 (추가 LLM 호출 없는 결정론적 보정)
             final SelectionOutput selectionOutput = indexResultMapper.injectRequiredPlaces(
@@ -685,6 +687,34 @@ public class OptimizedGenerationExecutor {
     private boolean isTrustedCategory(PlaceCandidate c) {
         boolean isHub = "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category()));
         return !(isHub && !PlaceCategoryConstants.hasTransitNameSignal(c.name()));
+    }
+
+    /**
+     * 덧붙인 후보 중 앞선 후보와 같은 위키데이터 항목인 것을 뺀다. 날짜마다 따로 검색해 붙이므로 같은 장소의
+     * 다른 행(출처별)이 이름·좌표가 달라 addIfNew를 통과한다. 덧붙인 후보는 선택에 없어 번호를 다시 매겨도 된다.
+     */
+    List<PlaceCandidate> dropAppendedSameWikidataItem(List<PlaceCandidate> candidates, int baseSize) {
+        if (candidates.size() <= baseSize) return candidates;
+        List<Long> ids = candidates.stream().map(PlaceCandidate::placeId).filter(Objects::nonNull).distinct().toList();
+        Map<Long, String> qidById = new HashMap<>();
+        for (Place p : placeRepository.findAllById(ids)) {
+            if (p.getWikidataId() != null) qidById.put(p.getId(), p.getWikidataId());
+        }
+        Set<String> seen = new HashSet<>();
+        for (int i = 0; i < baseSize; i++) {
+            String qid = qidById.get(candidates.get(i).placeId());
+            if (qid != null) seen.add(qid);
+        }
+        List<PlaceCandidate> result = new ArrayList<>(candidates.subList(0, baseSize));
+        for (PlaceCandidate c : candidates.subList(baseSize, candidates.size())) {
+            String qid = qidById.get(c.placeId());
+            if (qid != null && !seen.add(qid)) continue;
+            result.add(reindexCandidate(c, result.size() + 1));
+        }
+        if (result.size() < candidates.size()) {
+            log.info("덧붙인 후보 중 같은 장소 {}개 제외", candidates.size() - result.size());
+        }
+        return result;
     }
 
     private PlaceCandidate reindexCandidate(PlaceCandidate c, int index) {
