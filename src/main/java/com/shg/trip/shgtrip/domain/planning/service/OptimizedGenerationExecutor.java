@@ -187,9 +187,10 @@ public class OptimizedGenerationExecutor {
             // **숙소 배정보다 먼저** 돌려야 새로 찾은 숙소가 배정 대상에 들어간다(예전엔 배정 뒤라 무용지물).
             // 같은 방식으로 날짜별 중심 근처의 관광·카페·식당을 예비 후보로 붙인다 — 빈 시간 채우기와
             // 교체가 쓸 장소가 동선 근처에 남아 있게 한다(실측 116~118: 3~5시간 공백 미충전).
-            final List<PlaceCandidate> candidatesWithLocalStays = appendNearbyReserve(
+            // 덧붙인 후보는 벡터 검색 결과라 체류시간·시간대·입장료가 비어 있다. DB 값으로 채운다.
+            final List<PlaceCandidate> candidatesWithLocalStays = enrichCandidatesFromDb(appendNearbyReserve(
                     appendNearbyAccommodations(enrichedCandidates, dayComposition, enrichedInput, ferryTokens),
-                    dayComposition, enrichedInput, ferryTokens);
+                    dayComposition, enrichedInput, ferryTokens));
 
             // 숙소 결정론적 배정 → 사용자 필수 장소 주입 (추가 LLM 호출 없는 결정론적 보정)
             final SelectionOutput selectionOutput = indexResultMapper.injectRequiredPlaces(

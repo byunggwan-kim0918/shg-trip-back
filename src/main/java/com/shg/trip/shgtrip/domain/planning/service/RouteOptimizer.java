@@ -1099,9 +1099,12 @@ public class RouteOptimizer {
     }
 
     /** 그 스텝이 점심·저녁 슬롯을 채우고 있는지 — 교체·트림 보호 대상 판정용. */
-    private boolean isMealSlotStep(StepData step) {
+    private boolean isMealSlotStep(StepData step, List<DayState> days, List<PlaceCandidate> candidates) {
         if (step.place() == null) return false;
-        if (!PlaceCategoryConstants.isMealPlace(step.place().name(), step.place().category())) return false;
+        PlaceCandidate c = candidateOfStep(days, step, candidates);
+        boolean meal = c != null ? c.mealEligible()
+                : PlaceCategoryConstants.isMealPlace(step.place().name(), step.place().category());
+        if (!meal) return false;
         int start = toMinutesOrZero(step.startTime());
         return (start >= LUNCH_START - 60 && start <= LUNCH_END)
                 || (start >= DINNER_START - 60 && start <= DINNER_END);
@@ -1170,7 +1173,7 @@ public class RouteOptimizer {
         int bestCount = 0;
         for (Integer idx : day.placeIndices) {
             PlaceCandidate c = byIndex(candidates, idx);
-            if (c == null || c.keepsPlace() || isDiningCand(c)) continue;
+            if (c == null || c.keepsPlace() || c.mealEligible()) continue;
             // 카페 스톱·카테고리 유일 대표는 끼니 자리를 만들려고 빼지 않는다.
             if (idx.equals(day.cafeStopIndex) || day.coverageCriticalIndices.contains(idx)) continue;
             int count = counts.getOrDefault(subTypeOf(c), 0);
@@ -1448,7 +1451,7 @@ public class RouteOptimizer {
         Map<String, Integer> typeCount = countSubTypes(days, candidates);
         // 식사 슬롯을 채우고 있는 장소 이름 — 교체하면 끼니가 사라지므로 대상에서 뺀다.
         Set<String> mealSlotNames = steps.stream()
-                .filter(this::isMealSlotStep)
+                .filter(st -> isMealSlotStep(st, days, candidates))
                 .map(st -> normalizeName(st.place().name()))
                 .collect(Collectors.toSet());
 
@@ -1478,7 +1481,7 @@ public class RouteOptimizer {
             for (Integer idx : d.placeIndices) {
                 PlaceCandidate c = byIndex(candidates, idx);
                 if (c == null || c.keepsPlace()) continue;
-                if (isDiningCand(c)) continue;                                  // 식사 대분류는 제외
+                if (c.mealEligible()) continue;
                 if (mealSlotNames.contains(normalizeName(c.name()))) continue;   // 식사 슬롯 점유분 제외
                 int count = typeCount.getOrDefault(subTypeOf(c), 0);
                 if (count > bestCount) {
@@ -1537,7 +1540,7 @@ public class RouteOptimizer {
             // 건너뛸 이유가 없다: replaceStepWithDifferentSubType은 이미 **같은 대분류 안에서만**
             // 교체하므로 식당이 식당으로 바뀐다. 다만 대분류 DINING에는 카페·바도 들어오므로,
             // 식사 슬롯일 때는 대체 후보도 식사 장소여야 한다는 조건을 더한다.
-            boolean mealSlot = isMealSlotStep(step);
+            boolean mealSlot = isMealSlotStep(step, days, candidates);
 
             DayState day = findDayContainingStep(days, step, candidates);
             if (day == null) continue;
@@ -1555,7 +1558,7 @@ public class RouteOptimizer {
                 .collect(Collectors.groupingBy(StepData::dayNumber, LinkedHashMap::new, Collectors.toList()));
         for (DayState day : days) {
             List<StepData> meals = byDay.getOrDefault(day.dayNumber, List.of()).stream()
-                    .filter(this::isMealSlotStep)
+                    .filter(st -> isMealSlotStep(st, days, candidates))
                     .toList();
             if (meals.size() < 2) continue;
             StepData lunch = meals.get(0);
@@ -3856,7 +3859,7 @@ public class RouteOptimizer {
             if (breakfastIdx != null && idx == breakfastIdx) currentMinutes = Math.max(currentMinutes, cfg.morningStart);
             if (lunchIdx != null && idx == lunchIdx) currentMinutes = Math.max(currentMinutes, LUNCH_START);
             if (dinnerIdx != null && idx == dinnerIdx) currentMinutes = Math.max(currentMinutes, DINNER_START);
-            if (!isDiningCand(cand) && timePreference(cand) == TimePreference.EVENING) {
+            if (!cand.mealEligible() && timePreference(cand) == TimePreference.EVENING) {
                 currentMinutes = Math.max(currentMinutes, EVENING_ACTIVITY_EARLIEST_START);
             }
 
@@ -4625,10 +4628,10 @@ public class RouteOptimizer {
     /** 그날의 유일한 식사(DINING)는 거리 때문에 제거하지 않는다. */
     private boolean isRemovableForBudget(Integer idx, List<Integer> order, List<PlaceCandidate> candidates) {
         PlaceCandidate c = byIndex(candidates, idx);
-        if (c == null || !isDiningCand(c)) return true;
+        if (c == null || !c.mealEligible()) return true;
         long dining = order.stream()
                 .map(i -> byIndex(candidates, i))
-                .filter(this::isDiningCand)
+                .filter(x -> x != null && x.mealEligible())
                 .count();
         return dining > 1;
     }
