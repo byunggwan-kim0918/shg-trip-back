@@ -30,7 +30,7 @@ resource "aws_db_instance" "main" {
   engine_version    = "18"
   instance_class    = "db.t3.micro"
   allocated_storage = 20
-  storage_type      = "gp2"
+  storage_type      = "gp3"
   storage_encrypted = true
 
   db_name  = "trip"
