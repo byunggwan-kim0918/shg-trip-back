@@ -89,6 +89,7 @@ public class SentenceParseService {
         try {
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(anthropicProperties.haiku())
+                    .thinking(ModelRequestPolicy.HAIKU_THINKING)
                     .maxTokens(MAX_TOKENS)
                     .addUserMessage(prompt)
                     .build();

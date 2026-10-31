@@ -97,8 +97,8 @@ planning:
 
 anthropic:
   models:
-    haiku: claude-haiku-4-5-20251001
-    sonnet: claude-sonnet-5
+    haiku: claude-haiku-5-5
+    sonnet: claude-sonnet-5-5
     max-output-tokens: 64000
 
 openai:
