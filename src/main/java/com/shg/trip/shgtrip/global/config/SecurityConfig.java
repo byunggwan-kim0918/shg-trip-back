@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.global.config;
 
 import com.shg.trip.shgtrip.global.security.JwtAuthenticationFilter;
+import jakarta.servlet.DispatcherType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -36,6 +37,9 @@ public class SecurityConfig {
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // SSE의 async dispatch는 JWT 필터(OncePerRequestFilter)를 다시 타지 않아 인증 정보가 없다.
+                        // 최초 요청에서 이미 인가됐으므로 통과시킨다 — 막으면 스트림 종료 시 Access Denied가 난다.
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/shared/**").permitAll()
                         // 이미지 프록시: <img src> 태그는 Authorization 헤더 전달 불가
