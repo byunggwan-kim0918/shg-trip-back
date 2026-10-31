@@ -160,4 +160,34 @@ class GenerationPolicyServiceTest {
         GenerationQuotaResponse status = service.getStatus(USER);
         assertThat(status.blockedUntil()).isNotNull();
     }
+
+    @Test
+    @DisplayName("문장 파싱: 분당 한도 이내는 통과, 초과는 PLANNING_007")
+    void parseRateLimitPerMinute() {
+        when(valueOps.increment("parse:rate:min:100")).thenReturn((long) GenerationPolicyService.MAX_PARSE_PER_MINUTE);
+        when(valueOps.increment("parse:rate:day:100")).thenReturn(1L);
+        assertThatCode(() -> service.checkParseAllowed(USER)).doesNotThrowAnyException();
+
+        when(valueOps.increment("parse:rate:min:100")).thenReturn((long) GenerationPolicyService.MAX_PARSE_PER_MINUTE + 1);
+        assertThatThrownBy(() -> service.checkParseAllowed(USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.PARSE_RATE_LIMITED);
+    }
+
+    @Test
+    @DisplayName("문장 파싱: 일일 한도 초과는 PLANNING_007")
+    void parseRateLimitPerDay() {
+        when(valueOps.increment("parse:rate:min:100")).thenReturn(1L);
+        when(valueOps.increment("parse:rate:day:100")).thenReturn((long) GenerationPolicyService.MAX_PARSE_PER_DAY + 1);
+        assertThatThrownBy(() -> service.checkParseAllowed(USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.PARSE_RATE_LIMITED);
+    }
+
+    @Test
+    @DisplayName("문장 파싱: Redis 장애 시 통과(fail-open)")
+    void parseRateLimitFailOpen() {
+        when(valueOps.increment("parse:rate:min:100")).thenThrow(new RuntimeException("redis down"));
+        assertThatCode(() -> service.checkParseAllowed(USER)).doesNotThrowAnyException();
+    }
 }

@@ -39,7 +39,7 @@ public class StoryGenerationService {
      * itineraryId 기준으로 동작하므로 취소돼도 손상은 없음).
      */
     @Async("planningExecutor")
-    public void generateAndAttach(String jobId, SseEmitter emitter, Long itineraryId, List<StepData> fixedSteps,
+    public void generateAndAttach(String jobId, GenerationStream emitter, Long itineraryId, List<StepData> fixedSteps,
                                    String draftTitle, VectorEnrichedInput enrichedInput, String concept) {
         if (cancellationRegistry.isCancelled(jobId)) {
             log.info("Story 생성 스킵 - 취소된 job (jobId={}, itineraryId={})", jobId, itineraryId);
@@ -62,7 +62,7 @@ public class StoryGenerationService {
         }
     }
 
-    private void sendStoryReady(SseEmitter emitter, Long itineraryId) {
+    private void sendStoryReady(GenerationStream emitter, Long itineraryId) {
         try {
             emitter.send(SseEmitter.event()
                     .name("story-ready")
@@ -74,7 +74,7 @@ public class StoryGenerationService {
         }
     }
 
-    private void sendStoryFailed(SseEmitter emitter, Long itineraryId) {
+    private void sendStoryFailed(GenerationStream emitter, Long itineraryId) {
         try {
             emitter.send(SseEmitter.event()
                     .name("story-failed")

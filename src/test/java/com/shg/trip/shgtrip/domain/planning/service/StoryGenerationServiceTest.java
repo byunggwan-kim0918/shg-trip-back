@@ -30,14 +30,14 @@ class StoryGenerationServiceTest {
     private CancellationRegistry cancellationRegistry;
 
     private StoryGenerationService service;
-    private SseEmitter emitter;
+    private GenerationStream emitter;
     private List<StepData> fixedSteps;
     private VectorEnrichedInput enrichedInput;
 
     @BeforeEach
     void setUp() {
         service = new StoryGenerationService(assemblyCallGenerator, storySaveHelper, cancellationRegistry);
-        emitter = mock(SseEmitter.class);
+        emitter = mock(GenerationStream.class);
         fixedSteps = List.of(new StepData(1, 1, "09:00", "11:00",
                 new PlaceData("센소지", null, "관광", "아사쿠사", "일본"),
                 List.of(), "WALK", 10, BigDecimal.ONE, BigDecimal.ZERO, null, BigDecimal.ZERO));

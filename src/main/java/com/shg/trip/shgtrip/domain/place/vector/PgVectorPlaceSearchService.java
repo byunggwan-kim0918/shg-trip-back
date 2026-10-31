@@ -126,7 +126,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         for (String region : regions) {
             List<VectorSearchResult> regionResults = executeRegionQuery(
                     vectorString, request.destination(), region, limitPerRegion,
-                    request.excludedCategoryPatterns()
+                    request.excludedCategoryPatterns(), request.popularitySeed()
             );
             allResults.addAll(regionResults);
         }
@@ -165,7 +165,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         appendCategoryExclusions(where, whereParams, request.excludedCategoryPatterns());
         appendRadiusFilter(where, whereParams, request.center(), request.radiusKm());
 
-        return queryTwoLeg(vectorString, where.toString(), whereParams, request.limit());
+        return queryTwoLeg(vectorString, where.toString(), whereParams, request.limit(), request.popularitySeed());
     }
 
     /**
@@ -183,9 +183,12 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
      *
      * <p>두 갈래를 UNION할 뿐 채택은 하지 않는다 — 호출부가 슬롯 최소 유사도로 거르고
      * 하이브리드 점수로 재랭킹한다. 명소가 슬롯 의미에 안 맞으면 거기서 탈락한다.
+     *
+     * <p>{@code popularitySeed}가 false면 유사도 갈래만 쓴다(관광 외 슬롯).
      */
     private List<VectorSearchResult> queryTwoLeg(
-            String vectorString, String whereClause, List<Object> whereParams, int limit) {
+            String vectorString, String whereClause, List<Object> whereParams, int limit,
+            boolean popularitySeed) {
 
         int seedLimit = Math.min(POPULARITY_SEED_MAX, Math.max(POPULARITY_SEED_MIN, limit));
 
@@ -197,7 +200,17 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                 FROM places p
                 """;
 
-        String sql = "(" + columns + whereClause + "ORDER BY p.embedding <=> ?::vector\nLIMIT ?)\n"
+        String similarityLeg = "(" + columns + whereClause + "ORDER BY p.embedding <=> ?::vector\nLIMIT ?)";
+        if (!popularitySeed) {
+            List<Object> params = new ArrayList<>();
+            params.add(vectorString);
+            params.addAll(whereParams);
+            params.add(vectorString);
+            params.add(limit);
+            return jdbcTemplate.query(similarityLeg, params.toArray(), (rs, rowNum) -> mapRow(rs));
+        }
+
+        String sql = similarityLeg + "\n"
                 + "UNION\n"
                 + "(" + columns + whereClause + "  AND p.wikidata_sitelinks > 0\n"
                 + "ORDER BY p.wikidata_sitelinks DESC\nLIMIT ?)";
@@ -219,7 +232,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
      */
     private List<VectorSearchResult> executeRegionQuery(
             String vectorString, String country, String targetRegion, int limitPerRegion,
-            List<String> excludedCategoryPatterns) {
+            List<String> excludedCategoryPatterns, boolean popularitySeed) {
 
         StringBuilder where = new StringBuilder("""
                 WHERE p.embedding IS NOT NULL
@@ -235,7 +248,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
 
         appendCategoryExclusions(where, whereParams, excludedCategoryPatterns);
 
-        return queryTwoLeg(vectorString, where.toString(), whereParams, limitPerRegion);
+        return queryTwoLeg(vectorString, where.toString(), whereParams, limitPerRegion, popularitySeed);
     }
 
     /**

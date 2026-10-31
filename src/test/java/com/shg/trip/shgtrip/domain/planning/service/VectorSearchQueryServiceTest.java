@@ -163,6 +163,29 @@ class VectorSearchQueryServiceTest {
         }
 
         @Test
+        @DisplayName("인기도 시딩 갈래는 관광 슬롯에만 켜진다 (숙소·식당·카페 슬롯에 공항·역이 섞이지 않게)")
+        void search_popularitySeedOnlyForAttractionSlots() {
+            VectorEnrichedInput input = createBasicInput(3);
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(createMockResults(5));
+
+            service.search(input);
+
+            verify(placeVectorSearchService, atLeastOnce()).search(requestCaptor.capture());
+            long seeded = 0;
+            long unseeded = 0;
+            for (VectorSearchRequest req : requestCaptor.getAllValues()) {
+                // "transport hub" 배제는 관광 슬롯에만 있다
+                boolean attraction = req.excludedCategoryPatterns().contains("transport hub");
+                assertThat(req.popularitySeed()).isEqualTo(attraction);
+                if (req.popularitySeed()) seeded++; else unseeded++;
+            }
+            assertThat(seeded).isPositive();
+            assertThat(unseeded).isPositive();
+        }
+
+        @Test
         @DisplayName("슬롯마다 '명백히 틀린 대분류' 배제 패턴이 요청에 실린다 (하드 카테고리 필터는 없음)")
         void search_passesSlotExclusionsNotCategoryFilter() {
             VectorEnrichedInput input = createBasicInput(3);

@@ -17,6 +17,9 @@ import java.util.List;
  *                                 방어용이며, 비어 있으면 배제하지 않는다.
  * @param center                   좌표 반경 검색의 중심 {lat, lng} — null이면 반경 제한 없음
  * @param radiusKm                 center 기준 허용 반경(km). center가 있을 때만 의미가 있다.
+ * @param popularitySeed           인기도(Wikidata sitelinks) 상위 갈래를 함께 가져올지. 관광 슬롯 전용 —
+ *                                 숙소·식당·카페 슬롯에 켜면 공항·역·대학 같은 유명 장소가 대분류 배제를
+ *                                 빠져나와 인기도 가점으로 실제 호텔·식당을 밀어낸다.
  */
 public record VectorSearchRequest(
     float[] queryVector,
@@ -28,7 +31,8 @@ public record VectorSearchRequest(
     int limit,
     List<String> excludedCategoryPatterns,
     double[] center,
-    double radiusKm
+    double radiusKm,
+    boolean popularitySeed
 ) {
 
     public VectorSearchRequest {
@@ -38,7 +42,7 @@ public record VectorSearchRequest(
     /** 대분류 배제 없이 생성하는 기존 호환 생성자. */
     public VectorSearchRequest(float[] queryVector, String destination, List<String> regions,
                                List<String> categories, List<String> tags, String budgetRange, int limit) {
-        this(queryVector, destination, regions, categories, tags, budgetRange, limit, List.of(), null, 0);
+        this(queryVector, destination, regions, categories, tags, budgetRange, limit, List.of(), null, 0, true);
     }
 
     /** 좌표 반경 없이 생성하는 기존 호환 생성자. */
@@ -46,7 +50,7 @@ public record VectorSearchRequest(
                                List<String> categories, List<String> tags, String budgetRange, int limit,
                                List<String> excludedCategoryPatterns) {
         this(queryVector, destination, regions, categories, tags, budgetRange, limit,
-                excludedCategoryPatterns, null, 0);
+                excludedCategoryPatterns, null, 0, true);
     }
 
     /**

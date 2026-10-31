@@ -1,7 +1,9 @@
 package com.shg.trip.shgtrip.global.exception;
 
 import com.shg.trip.shgtrip.global.response.ApiResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -15,8 +17,10 @@ import java.util.stream.Collectors;
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e) {
+    public ResponseEntity<ApiResponse<Void>> handleBusinessException(BusinessException e,
+                                                                     HttpServletResponse response) {
         log.warn("Business exception: {}", e.getMessage());
+        resetEventStreamContentType(response);
         return ResponseEntity
                 .status(e.getErrorCode().getHttpStatus())
                 .body(ApiResponse.error(e.getErrorCode()));
@@ -53,10 +57,22 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiResponse<Void>> handleException(Exception e) {
+    public ResponseEntity<ApiResponse<Void>> handleException(Exception e, HttpServletResponse response) {
         log.error("Unexpected error", e);
+        resetEventStreamContentType(response);
         return ResponseEntity
                 .internalServerError()
                 .body(ApiResponse.error(ErrorCode.INTERNAL_SERVER_ERROR));
+    }
+
+    /**
+     * SSE 핸들러는 응답 Content-Type을 text/event-stream으로 미리 정해 둔다. 그대로 두면 JSON 오류 본문을
+     * 쓸 컨버터가 없어 HttpMessageNotWritableException이 나고 클라이언트는 응답 없이 매달린다.
+     */
+    private static void resetEventStreamContentType(HttpServletResponse response) {
+        String contentType = response.getContentType();
+        if (contentType != null && contentType.startsWith(MediaType.TEXT_EVENT_STREAM_VALUE) && !response.isCommitted()) {
+            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        }
     }
 }

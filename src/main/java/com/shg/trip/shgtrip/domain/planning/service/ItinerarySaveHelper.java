@@ -4,6 +4,8 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.EnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.ItineraryData;
+import com.shg.trip.shgtrip.global.exception.BusinessException;
+import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -39,6 +41,11 @@ public class ItinerarySaveHelper {
     public Itinerary save(ItineraryData data, EnrichedInput input, Long userId,
                           boolean alreadyOptimized, double[] referenceCoord) {
         Itinerary itinerary = itineraryDataMapper.toEntity(data, input, userId, alreadyOptimized, referenceCoord);
+        // 매퍼는 DB에서 못 찾은 장소의 스텝을 버린다. 전부 버려지면 제목만 있는 빈 일정이 저장되고
+        // 성공으로 집계돼 쿼터까지 깎이므로, 저장 전에 실패로 돌린다.
+        if (itinerary.getSteps().isEmpty()) {
+            throw new BusinessException(ErrorCode.INSUFFICIENT_PLACE_DATA);
+        }
         itinerary.assignCoverFromSteps();
         return itineraryRepository.save(itinerary);
     }

@@ -4,6 +4,7 @@ import com.anthropic.client.AnthropicClient;
 import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.shg.trip.shgtrip.domain.itinerary.dto.WizardOptionIds;
 import com.shg.trip.shgtrip.domain.planning.dto.SentenceParseResponse;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
@@ -42,21 +43,24 @@ public class SentenceParseService {
     private static final int MAX_RETRIES = 1;            // 동기(요청 스레드) 호출이라 재시도 최소화
     private static final int MAX_TOKENS = 512;
     private static final int MAX_TRIP_DAYS = 10;         // ItineraryGenerateRequest @ValidDateRange(maxDays=10)
-    private static final int MAX_DESTINATION_LEN = 80;
+    private static final int MAX_DESTINATION_LEN = 50;     // ItineraryGenerateRequest @Size(max=50)
     private static final int MAX_PARTY_LEN = 40;
     private static final BigDecimal MAX_BUDGET = new BigDecimal("100000000"); // 마법사/@DecimalMax 1억원
 
-    // 프론트 고정 enum ID와 1:1 (wizardOptions.ts / itinerary.ts). 목록 밖 값은 버린다.
-    private static final Set<String> VALID_THEMES = Set.of(
-            "healing", "activity", "food", "culture", "shopping", "nature", "adventure", "romance",
-            "family", "budget", "luxury", "photo", "walking", "ocean", "mountain", "nightview",
-            "local", "art", "festival", "pet");
-    private static final Set<String> VALID_CATEGORIES = Set.of(
-            "attraction", "restaurant", "cafe", "accommodation", "experience", "shopping", "nightlife",
-            "nature", "museum", "theme_park", "spa", "market", "beach", "temple", "street_food",
-            "viewpoint", "trail");
-    private static final Set<String> VALID_PACE = Set.of("tight", "normal", "relaxed");
-    private static final Set<String> VALID_TRANSPORT = Set.of("walk", "car", "any");
+    private static final Set<String> VALID_THEMES = WizardOptionIds.THEMES;
+    private static final Set<String> VALID_CATEGORIES = WizardOptionIds.CATEGORIES;
+    private static final Set<String> VALID_PACE = WizardOptionIds.PACES;
+    private static final Set<String> VALID_TRANSPORT = WizardOptionIds.TRANSPORTS;
+
+    /**
+     * 날짜를 프리필하면 안 되는 표현 — 과거("작년 1월")와 10일 초과 기간("한 달 살기").
+     * 모델은 "작년 1월"을 내년 1월로 옮기거나 종료일 없이 시작일만 내곤 해서, 응답 날짜만 보고는
+     * 걸러낼 수 없다. 문장에 이 표현이 있으면 날짜를 통째로 버린다.
+     */
+    private static final java.util.regex.Pattern OUT_OF_RANGE_DATE_EXPRESSION = java.util.regex.Pattern.compile(
+            "작년|지난\\s?해|재작년|지난\\s?달|지난\\s?주|어제|그저께"
+                    // "한 달 뒤"·"2주 후"는 출발 시점이라 막지 않는다 — 기간을 뜻하는 꼬리가 붙을 때만
+                    + "|([한두세네]\\s?달|\\d+\\s?개월|보름|(?<!\\d)([2-9]|\\d{2,})\\s?주일?)\\s?(살기|동안|간|짜리|여행|일정|체류|머물)");
 
     private final AnthropicClient anthropicClient;
     private final AnthropicProperties anthropicProperties;
@@ -99,7 +103,17 @@ public class SentenceParseService {
                 .map(block -> block.asText().text())
                 .collect(Collectors.joining());
 
-        return parseResponse(responseText, today);
+        SentenceParseResponse parsed = parseResponse(responseText, today);
+        return hasOutOfRangeDate(sentence) ? withoutDates(parsed) : parsed;
+    }
+
+    static boolean hasOutOfRangeDate(String sentence) {
+        return sentence != null && OUT_OF_RANGE_DATE_EXPRESSION.matcher(sentence).find();
+    }
+
+    private static SentenceParseResponse withoutDates(SentenceParseResponse r) {
+        return new SentenceParseResponse(r.destination(), null, null, r.party(), r.themes(), r.categories(),
+                r.pace(), r.transportPref(), r.budget());
     }
 
     /**
@@ -150,7 +164,8 @@ public class SentenceParseService {
                 // 당일치기(같은 날)·역순 — @ValidDateRange가 endDate>startDate를 강제하므로 폐기
                 endDate = null;
             } else if (ChronoUnit.DAYS.between(startDate, endDate) + 1 > MAX_TRIP_DAYS) {
-                // 최대 여행 기간(10일) 초과 — endDate만 버려 사용자가 다시 고르게
+                // 10일 초과는 마법사에서 고를 수 없는 기간이라 시작일만 남기면 엉뚱한 일정이 프리필된다
+                startDate = null;
                 endDate = null;
             }
         }

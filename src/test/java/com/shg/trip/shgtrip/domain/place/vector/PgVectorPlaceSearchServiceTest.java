@@ -130,6 +130,31 @@ class PgVectorPlaceSearchServiceTest {
         }
 
         @Test
+        @DisplayName("인기도 시딩을 끄면 유사도 갈래만 조회한다")
+        void search_withoutPopularitySeed_queriesSimilarityLegOnly() {
+            float[] vector = {0.1f, 0.2f, 0.3f};
+            VectorSearchRequest request = new VectorSearchRequest(
+                    vector, "KR", List.of("Seoul"), null, null, null, 20,
+                    List.of("dining and drinking"), null, 0, false
+            );
+
+            given(jdbcTemplate.query(anyString(), any(Object[].class), any(RowMapper.class)))
+                    .willReturn(List.of());
+
+            service.search(request);
+
+            ArgumentCaptor<Object[]> paramsCaptor = ArgumentCaptor.forClass(Object[].class);
+            ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+            verify(jdbcTemplate).query(sqlCaptor.capture(), paramsCaptor.capture(), any(RowMapper.class));
+
+            assertThat(sqlCaptor.getValue()).doesNotContain("UNION");
+            assertThat(sqlCaptor.getValue()).doesNotContain("wikidata_sitelinks DESC");
+            // [vec, country, region, exclusion, vec(ORDER BY), limit]
+            assertThat(paramsCaptor.getValue()).hasSize(6);
+            assertThat(paramsCaptor.getValue()[5]).isEqualTo(20);
+        }
+
+        @Test
         @DisplayName("지역 필터 없이 검색한다")
         void search_noRegion_queriesWithoutRegionFilter() {
             float[] vector = {0.1f, 0.2f};

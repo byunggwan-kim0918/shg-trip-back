@@ -42,6 +42,7 @@ public class ItineraryValidationService {
      */
     public ValidationResult validateHard(ItineraryData data, EnrichedInput input) {
         List<String> errors = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
 
         // 필수 필드 검증
         if (data.title() == null || data.title().isBlank()) {
@@ -81,11 +82,12 @@ public class ItineraryValidationService {
                     errors.add(prefix + "종료 시간 형식이 올바르지 않습니다 (HH:mm).");
                 }
 
-                // 대안 개수 검증 (3~5개) — 교통 허브(공항/기차역 등) step은 대안이 비현실적이므로 제외
+                // 대안 개수 검증 (3~5개) — 교통 허브(공항/기차역 등) step은 대안이 비현실적이므로 제외.
+                // 부족은 경고만 — 후보가 적은 지역에서 대안 부족만으로 생성 전체가 실패했다(대안은 부가 정보다).
                 boolean isTransitHub = isTransitHub(step);
                 if (!isTransitHub) {
                     if (step.alternatives() == null || step.alternatives().size() < 3) {
-                        errors.add(prefix + "대안 장소가 3개 미만입니다.");
+                        warnings.add(prefix + "대안 장소가 3개 미만입니다.");
                     }
                     if (step.alternatives() != null && step.alternatives().size() > 5) {
                         errors.add(prefix + "대안 장소가 5개를 초과합니다.");
@@ -104,7 +106,9 @@ public class ItineraryValidationService {
                     .forEach(e -> errors.add(String.format("장소 '%s'이(가) 일정에 %d회 중복 배치되었습니다.", e.getKey(), e.getValue())));
         }
 
-        return errors.isEmpty() ? ValidationResult.hardPass() : ValidationResult.hardFail(errors);
+        if (!errors.isEmpty()) return ValidationResult.hardFail(errors);
+        if (!warnings.isEmpty()) log.info("Hard 검증 경고 {}건: {}", warnings.size(), warnings);
+        return new ValidationResult(true, 100, "HARD", List.of(), warnings, null);
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.user.dto;
 
+import com.shg.trip.shgtrip.domain.auth.dto.OAuthUserInfo;
 import com.shg.trip.shgtrip.domain.user.entity.User;
 
 public record ProfileResponse(
@@ -13,7 +14,8 @@ public record ProfileResponse(
                 user.getId(),
                 user.getEmail(),
                 user.getNickname(),
-                user.getProfileImage()
+                // 이미 http://로 저장된 기존 가입자 행
+                OAuthUserInfo.toHttps(user.getProfileImage())
         );
     }
 }

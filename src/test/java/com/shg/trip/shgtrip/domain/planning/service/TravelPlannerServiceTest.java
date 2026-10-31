@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import org.mockito.ArgumentCaptor;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.math.BigDecimal;
@@ -73,7 +74,7 @@ class TravelPlannerServiceTest {
 
         // then
         assertThat(response.jobId()).isNotNull();
-        verify(optimizedGenerationExecutor).execute(eq(response.jobId()), eq(request), eq(userId), any(SseEmitter.class));
+        verify(optimizedGenerationExecutor).execute(eq(response.jobId()), eq(request), eq(userId), any(GenerationStream.class));
         // 활성 jobId를 Redis에 등록하고 TTL을 건다
         verify(valueOperations).getAndSet("active:user:1", response.jobId());
         verify(redisTemplate).expire(eq("active:user:1"), any());
@@ -98,7 +99,7 @@ class TravelPlannerServiceTest {
         assertThat(response.jobId()).isNotEqualTo(existingJobId);
         // 기존 job을 취소한다 (다른 인스턴스에서 시작됐을 수 있음)
         verify(cancellationRegistry).cancel(existingJobId);
-        verify(optimizedGenerationExecutor).execute(eq(response.jobId()), eq(request), eq(userId), any(SseEmitter.class));
+        verify(optimizedGenerationExecutor).execute(eq(response.jobId()), eq(request), eq(userId), any(GenerationStream.class));
     }
 
     @Test
@@ -113,6 +114,41 @@ class TravelPlannerServiceTest {
 
         // then — 자기 자신을 취소하지 않는다
         verify(cancellationRegistry, never()).cancel(response.jobId());
+    }
+
+    @Test
+    @DisplayName("진행 중 작업에 다시 연결하면 매번 새 emitter를 붙이고, 작업 출력은 같은 스트림으로 유지된다")
+    void openStream_reattachesFreshEmitter() {
+        GenerateJobResponse response = service.startGeneration(createRequest(), 1L);
+        ArgumentCaptor<GenerationStream> captor = ArgumentCaptor.forClass(GenerationStream.class);
+        verify(optimizedGenerationExecutor).execute(eq(response.jobId()), any(), eq(1L), captor.capture());
+
+        SseEmitter first = service.openStream(response.jobId(), 1L);
+        SseEmitter second = service.openStream(response.jobId(), 1L);
+
+        assertThat(second).isNotSameAs(first);
+        assertThat(captor.getValue().isFinished()).isFalse();
+    }
+
+    @Test
+    @DisplayName("없는 jobId·남의 jobId 스트림은 예외 없이 error 이벤트 스트림을 돌려주고 작업에 붙지 않는다")
+    void openStream_unknownOrForeignJob_returnsRejectedStream() {
+        GenerateJobResponse response = service.startGeneration(createRequest(), 1L);
+        when(resultStore.findForOwner(anyString(), anyLong())).thenReturn(null);
+
+        assertThat(service.openStream("no-such-job", 1L)).isNotNull();
+        assertThat(service.openStream(response.jobId(), 2L)).isNotNull();
+    }
+
+    @Test
+    @DisplayName("결과 조회는 owner가 아니면 404로 응답한다")
+    void getResult_rejectsNonOwner() {
+        when(resultStore.findForOwner("job", 1L)).thenReturn(42L);
+        when(resultStore.findForOwner("job", 2L)).thenReturn(null);
+
+        assertThat(service.getResult("job", 1L)).isEqualTo(42L);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.getResult("job", 2L))
+                .isInstanceOf(com.shg.trip.shgtrip.global.exception.BusinessException.class);
     }
 
     private ItineraryGenerateRequest createRequest() {

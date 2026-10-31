@@ -6,6 +6,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.GenerationQuotaResponse;
 import com.shg.trip.shgtrip.domain.planning.dto.SentenceParseRequest;
 import com.shg.trip.shgtrip.domain.planning.dto.SentenceParseResponse;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationPolicyService;
+import com.shg.trip.shgtrip.domain.planning.service.GenerationStream;
 import com.shg.trip.shgtrip.domain.planning.service.TravelPlannerService;
 import com.shg.trip.shgtrip.domain.planning.service.ai.SentenceParseService;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
@@ -40,6 +41,7 @@ public class PlanningController {
         if (principal == null) {
             throw new BusinessException(ErrorCode.INVALID_TOKEN, "인증 정보가 없습니다.");
         }
+        generationPolicyService.checkParseAllowed(principal.id());
         return ApiResponse.success(sentenceParseService.parse(request.sentence()));
     }
 
@@ -56,6 +58,7 @@ public class PlanningController {
     @GetMapping(value = "/generate/{jobId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamGeneration(
             @PathVariable String jobId,
+            @AuthenticationPrincipal UserPrincipal principal,
             HttpServletResponse response) {
 
         response.setBufferSize(0);
@@ -67,7 +70,11 @@ public class PlanningController {
         response.setHeader("Transfer-Encoding", "chunked");
         response.setContentType("text/event-stream;charset=UTF-8");
 
-        return travelPlannerService.getEmitter(jobId);
+        if (principal == null) {
+            ErrorCode code = ErrorCode.INVALID_TOKEN;
+            return GenerationStream.rejected(code.getCode(), code.getMessage());
+        }
+        return travelPlannerService.openStream(jobId, principal.id());
     }
 
     /**
@@ -89,6 +96,6 @@ public class PlanningController {
         if (principal == null) {
             throw new BusinessException(ErrorCode.INVALID_TOKEN, "인증 정보가 없습니다.");
         }
-        return ApiResponse.success(travelPlannerService.getResult(jobId));
+        return ApiResponse.success(travelPlannerService.getResult(jobId, principal.id()));
     }
 }

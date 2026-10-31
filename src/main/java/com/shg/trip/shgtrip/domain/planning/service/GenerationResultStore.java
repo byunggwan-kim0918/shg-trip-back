@@ -1,7 +1,5 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
-import com.shg.trip.shgtrip.global.exception.BusinessException;
-import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -12,8 +10,7 @@ import java.time.Duration;
 /**
  * 일정 생성 완료 결과(itineraryId) 임시 저장소.
  * Redis에 TTL 10분으로 저장 — 서버 재시작/멀티 인스턴스 환경에서도 안전.
- * SSE complete 이벤트에 itineraryId를 노출하지 않고,
- * 인증된 클라이언트가 GET /generate/{jobId}/result 로 1회 조회하도록 분리.
+ * 인증된 owner가 GET /generate/{jobId}/result 로 조회한다(새로고침 재조회를 위해 TTL 동안 삭제하지 않음).
  */
 @Slf4j
 @Component
@@ -25,28 +22,17 @@ public class GenerationResultStore {
 
     private final StringRedisTemplate redisTemplate;
 
-    public void save(String jobId, Long itineraryId) {
-        redisTemplate.opsForValue().set(KEY_PREFIX + jobId, itineraryId.toString(), TTL);
+    /** 값은 "itineraryId:userId" — 조회 시 jobId만 아는 다른 사용자를 걸러낸다. */
+    public void save(String jobId, Long itineraryId, Long userId) {
+        redisTemplate.opsForValue().set(KEY_PREFIX + jobId, itineraryId + ":" + userId, TTL);
     }
 
-    /**
-     * 조회 (TTL 내에서 재조회 허용).
-     * 새로고침 시 result를 다시 가져올 수 있도록 삭제하지 않음.
-     */
-    public Long get(String jobId) {
-        String key = KEY_PREFIX + jobId;
-        String value = redisTemplate.opsForValue().get(key);
-        if (value == null) {
-            throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
-                    "완료된 생성 결과를 찾을 수 없습니다. 만료된 jobId입니다: " + jobId);
-        }
-        return Long.parseLong(value);
-    }
-
-    /**
-     * 결과 존재 여부 확인 (SSE 연결 시 이미 완료된 작업인지 판단용).
-     */
-    public boolean exists(String jobId) {
-        return Boolean.TRUE.equals(redisTemplate.hasKey(KEY_PREFIX + jobId));
+    /** 결과가 없거나 owner가 다르면 null. */
+    public Long findForOwner(String jobId, Long userId) {
+        String value = redisTemplate.opsForValue().get(KEY_PREFIX + jobId);
+        if (value == null) return null;
+        int sep = value.indexOf(':');
+        if (sep < 0 || !value.substring(sep + 1).equals(String.valueOf(userId))) return null;
+        return Long.parseLong(value.substring(0, sep));
     }
 }

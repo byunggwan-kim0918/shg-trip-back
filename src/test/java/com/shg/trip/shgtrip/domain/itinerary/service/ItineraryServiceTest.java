@@ -242,4 +242,72 @@ class ItineraryServiceTest {
                 .toList();
         assertThat(orders).containsExactly(0, 1, 2, 3, 4); // 연속
     }
+
+    // ── 확정·공유 ──
+
+    @Test
+    @DisplayName("확정된 일정은 재정렬·삭제·대안 선택을 막고 제목·태그 수정은 허용한다")
+    void finalizedItineraryLocksSteps() {
+        mockFind();
+        itinerary.complete();
+
+        assertThatThrownBy(() -> itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 1, List.of(12L, 10L, 11L)))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.ITINERARY_FINALIZED);
+        assertThatThrownBy(() -> itineraryService.deleteStep(ITINERARY_ID, USER_ID, 11L))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.ITINERARY_FINALIZED);
+        assertThatThrownBy(() -> itineraryService.selectAlternative(ITINERARY_ID, 11L, 1L, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.ITINERARY_FINALIZED);
+
+        ItineraryResponse res = itineraryService.updateItinerary(ITINERARY_ID, USER_ID,
+                new com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryUpdateRequest("새 제목", List.of("태그")));
+        assertThat(res.title()).isEqualTo("새 제목");
+    }
+
+    @Test
+    @DisplayName("이미 확정된 일정을 다시 확정해도 오류 없이 그대로 반환한다")
+    void finalizeIsIdempotent() {
+        mockFind();
+        itineraryService.finalizeItinerary(ITINERARY_ID, USER_ID);
+        itineraryService.finalizeItinerary(ITINERARY_ID, USER_ID);
+
+        assertThat(itinerary.getStatus()).isEqualTo(Itinerary.ItineraryStatus.FINALIZED);
+    }
+
+    @Test
+    @DisplayName("스텝이 없는 일정은 확정할 수 없다")
+    void rejectsFinalizingEmptyItinerary() {
+        itinerary.getSteps().clear();
+        mockFind();
+
+        assertThatThrownBy(() -> itineraryService.finalizeItinerary(ITINERARY_ID, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.ITINERARY_EMPTY);
+        assertThat(itinerary.getStatus()).isEqualTo(Itinerary.ItineraryStatus.DRAFT);
+    }
+
+    @Test
+    @DisplayName("유효한 공유 토큰이 있으면 새로 발급하지 않고 그대로 돌려준다")
+    void reusesValidShareToken() {
+        mockFind();
+        var first = itineraryService.generateShareLink(ITINERARY_ID, USER_ID);
+        var second = itineraryService.generateShareLink(ITINERARY_ID, USER_ID);
+
+        assertThat(second.shareToken()).isEqualTo(first.shareToken());
+        assertThat(second.expiresAt()).isEqualTo(first.expiresAt());
+    }
+
+    @Test
+    @DisplayName("만료된 공유 토큰은 새로 발급한다")
+    void reissuesExpiredShareToken() {
+        mockFind();
+        itinerary.generateShareToken("expired", java.time.OffsetDateTime.now().minusDays(1));
+
+        var link = itineraryService.generateShareLink(ITINERARY_ID, USER_ID);
+
+        assertThat(link.shareToken()).isNotEqualTo("expired");
+        assertThat(link.expiresAt()).isAfter(java.time.OffsetDateTime.now());
+    }
 }

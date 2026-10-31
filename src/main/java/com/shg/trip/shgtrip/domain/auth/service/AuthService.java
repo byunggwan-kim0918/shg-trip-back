@@ -33,6 +33,8 @@ public class AuthService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final JwtTokenProvider jwtTokenProvider;
 
+    private static final long REUSE_GRACE_MS = 10_000;
+
     @Transactional
     public OAuthLoginResult processOAuthCallback(OAuthCallbackRequest request) {
         OAuthProvider provider;
@@ -97,8 +99,10 @@ public class AuthService {
         RefreshToken refreshToken = refreshTokenRepository.findByToken(refreshTokenValue)
                 .orElseThrow(() -> new BusinessException(ErrorCode.REFRESH_TOKEN_NOT_FOUND));
 
-        // revoked된 토큰으로 접근 → 탈취 감지 → 해당 유저의 전체 세션 무효화
         if (refreshToken.isRevoked()) {
+            Optional<OAuthLoginResult> concurrent = reuseWithinGrace(refreshToken);
+            if (concurrent.isPresent()) return concurrent.get();
+            // 유예 밖의 재사용 → 탈취로 보고 해당 유저의 전체 세션 무효화
             log.warn("Refresh Token 재사용 감지 (탈취 의심). userId={}", refreshToken.getUserId());
             refreshTokenRepository.deleteByUserId(refreshToken.getUserId());
             throw new BusinessException(ErrorCode.REFRESH_TOKEN_REUSE_DETECTED);
@@ -124,10 +128,29 @@ public class AuthService {
             throw new BusinessException(ErrorCode.REFRESH_TOKEN_NOT_FOUND);
         }
 
-        refreshToken.revoke();
+        refreshToken.revoke(newRefreshToken);
         refreshTokenRepository.save(refreshToken);
 
         return new OAuthLoginResult(newAccessToken, newRefreshToken, false, refreshExpirationMs, ProfileResponse.from(user));
+    }
+
+    /**
+     * 회전 직후 같은 토큰으로 들어온 요청. 탭 하나가 동시에 보낸 API 호출들이 각자 refresh하면
+     * 첫 요청만 회전에 성공하고 나머지는 revoked 토큰을 들고 온다 — 이를 탈취로 보면 정상 사용자가
+     * 로그아웃된다. 유예 안이면 이미 발급된 새 refresh 토큰을 그대로 돌려준다(새로 회전하지 않는다).
+     */
+    private Optional<OAuthLoginResult> reuseWithinGrace(RefreshToken revoked) {
+        if (revoked.getReplacedBy() == null
+                || System.currentTimeMillis() - revoked.getRevokedAt() > REUSE_GRACE_MS) {
+            return Optional.empty();
+        }
+        return refreshTokenRepository.findByToken(revoked.getReplacedBy())
+                .filter(next -> !next.isRevoked())
+                .flatMap(next -> userRepository.findById(next.getUserId()))
+                .map(user -> new OAuthLoginResult(
+                        jwtTokenProvider.createAccessToken(user.getId(), user.getRole().name()),
+                        revoked.getReplacedBy(), false, jwtTokenProvider.getRefreshExpiration(),
+                        ProfileResponse.from(user)));
     }
 
     @Transactional

@@ -25,7 +25,7 @@ class ItineraryGenerateRequestValidationTest {
     private ItineraryGenerateRequest request(ItineraryGenerateRequest.PlanningMode mode,
                                              BigDecimal budget, LocalDate start, LocalDate end,
                                              List<Long> selectedIds, List<String> customNames) {
-        return new ItineraryGenerateRequest(mode, "제주도", List.of("힐링"), List.of("관광"),
+        return new ItineraryGenerateRequest(mode, "제주도", List.of("healing"), List.of("attraction"),
                 "normal", "any", budget, start, end, null, selectedIds, customNames);
     }
 
@@ -86,5 +86,45 @@ class ItineraryGenerateRequestValidationTest {
 
         assertThat(messages(five)).noneMatch(m -> m.contains("최대 5개"));
         assertThat(messages(six)).anyMatch(m -> m.contains("최대 5개"));
+    }
+
+    private ItineraryGenerateRequest withOptions(String destination, List<String> themes, List<String> categories,
+                                                 String pace, String transport, String description) {
+        return new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, destination, themes,
+                categories, pace, transport, null, base, base.plusDays(2), description, null, null);
+    }
+
+    @Test
+    @DisplayName("마법사 선택지 id는 모두 통과한다")
+    void wizardIdsPass() {
+        var req = withOptions("제주도", List.copyOf(WizardOptionIds.THEMES).subList(0, 10),
+                List.copyOf(WizardOptionIds.CATEGORIES).subList(0, 10), "relaxed", "walk", null);
+        assertThat(validator.validate(req)).isEmpty();
+        assertThat(validator.validate(withOptions("제주도", List.of("pet"), List.of("street_food"), null, null, null)))
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("목록에 없는 테마·카테고리·pace·이동수단은 거부된다")
+    void rejectsUnknownIds() {
+        assertThat(messages(withOptions("제주도", List.of("이상한테마"), List.of("attraction"), null, null, null)))
+                .contains("지원하지 않는 테마입니다.");
+        assertThat(messages(withOptions("제주도", List.of("healing"), List.of("관광"), null, null, null)))
+                .contains("지원하지 않는 카테고리입니다.");
+        assertThat(messages(withOptions("제주도", List.of("healing"), List.of("cafe"), "MEDIUM", null, null)))
+                .contains("지원하지 않는 일정 밀도입니다.");
+        assertThat(messages(withOptions("제주도", List.of("healing"), List.of("cafe"), null, "plane", null)))
+                .contains("지원하지 않는 이동 수단입니다.");
+    }
+
+    @Test
+    @DisplayName("여행지 50자·AI에게 한마디 500자를 넘으면 거부된다")
+    void rejectsLongTextFields() {
+        assertThat(messages(withOptions("가".repeat(50), List.of("healing"), List.of("cafe"), null, null, "나".repeat(500))))
+                .isEmpty();
+        assertThat(messages(withOptions("가".repeat(51), List.of("healing"), List.of("cafe"), null, null, null)))
+                .anyMatch(m -> m.contains("50자"));
+        assertThat(messages(withOptions("제주도", List.of("healing"), List.of("cafe"), null, null, "나".repeat(501))))
+                .anyMatch(m -> m.contains("500자"));
     }
 }

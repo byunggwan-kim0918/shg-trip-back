@@ -17,19 +17,24 @@ public record ItineraryGenerateRequest(
         PlanningMode mode,
 
         @NotBlank(message = "여행지를 입력해주세요.")
+        @Size(max = 50, message = "여행지는 50자 이내로 입력해주세요.")
         String destination,
 
         @NotEmpty(message = "테마를 1개 이상 선택해주세요.")
         @Size(max = 10, message = "테마는 최대 10개까지 선택할 수 있습니다.")
-        List<String> themes,
+        List<@NotNull(message = "테마 값이 비어 있습니다.")
+             @Pattern(regexp = WizardOptionIds.THEME_PATTERN, message = "지원하지 않는 테마입니다.") String> themes,
 
         @NotEmpty(message = "카테고리를 1개 이상 선택해주세요.")
         @Size(max = 10, message = "카테고리는 최대 10개까지 선택할 수 있습니다.")
-        List<String> categories,
+        List<@NotNull(message = "카테고리 값이 비어 있습니다.")
+             @Pattern(regexp = WizardOptionIds.CATEGORY_PATTERN, message = "지원하지 않는 카테고리입니다.") String> categories,
 
-        String pace,  // tight, normal, relaxed (기본: normal)
+        @Pattern(regexp = WizardOptionIds.PACE_PATTERN, message = "지원하지 않는 일정 밀도입니다.")
+        String pace,  // null이면 normal
 
-        String transportPref,  // walk, car, any (기본: any)
+        @Pattern(regexp = WizardOptionIds.TRANSPORT_PATTERN, message = "지원하지 않는 이동 수단입니다.")
+        String transportPref,  // null이면 any
 
         @Positive(message = "예산은 0보다 큰 값이어야 합니다.")
         @DecimalMax(value = "100000000", message = "예산은 최대 1억원까지 입력할 수 있습니다.")
@@ -43,6 +48,7 @@ public record ItineraryGenerateRequest(
         @Future(message = "종료일은 미래 날짜여야 합니다.")
         LocalDate endDate,
 
+        @Size(max = 500, message = "AI에게 한마디는 500자 이내로 입력해주세요.")
         String description,
 
         List<Long> selectedPlaceIds,  // Manual Mode 전용, nullable

@@ -61,7 +61,7 @@ public class ItineraryGenerationExecutor {
     }
 
     @Async("planningExecutor")
-    public void execute(String jobId, ItineraryGenerateRequest request, Long userId, SseEmitter emitter) {
+    public void execute(String jobId, ItineraryGenerateRequest request, Long userId, GenerationStream emitter) {
         MDC.put("jobId", jobId);
         try {
             if (cancellationRegistry.isCancelled(jobId)) return;
@@ -91,7 +91,7 @@ public class ItineraryGenerationExecutor {
             sendProgress(emitter, 90, "일정을 저장하고 있습니다...", "SAVING");
             Itinerary saved = saveHelper.save(validated, enrichedInput, userId);
 
-            resultStore.save(jobId, saved.getId());
+            resultStore.save(jobId, saved.getId(), userId);
             // R1/R2: 성공 시 실패 카운트 리셋 + 30일 쿼터 소모(optimized 성공 지점과 상호배타 → 정확히 1회)
             generationPolicyService.recordSuccess(userId);
             sendProgress(emitter, 100, "일정 생성이 완료되었습니다.", "COMPLETE");
@@ -101,10 +101,10 @@ public class ItineraryGenerationExecutor {
             log.warn("Generation failed for job {}: {}", jobId, e.getErrorCode());
             // BusinessException은 사용자에게 의미 있는 메시지를 담으므로 그대로 전달한다.
             String msg = e.getMessage() != null ? e.getMessage() : "요청 처리 중 문제가 발생했습니다.";
-            sendError(emitter, msg);
+            sendError(emitter, e.getErrorCode().getCode(), msg);
         } catch (Exception e) {
             log.error("Unexpected error during generation for job {}", jobId, e);
-            sendError(emitter, "일정 생성 중 예기치 않은 오류가 발생했습니다.");
+            sendError(emitter, "UNEXPECTED_ERROR", "일정 생성 중 예기치 않은 오류가 발생했습니다.");
         } finally {
             MDC.remove("jobId");
         }
@@ -153,7 +153,7 @@ public class ItineraryGenerationExecutor {
         return found;
     }
 
-    private void sendProgress(SseEmitter emitter, int percentage, String message, String stage) {
+    private void sendProgress(GenerationStream emitter, int percentage, String message, String stage) {
         try {
             emitter.send(SseEmitter.event()
                     .name("progress")
@@ -163,7 +163,7 @@ public class ItineraryGenerationExecutor {
         }
     }
 
-    private <T> T executeWithHeartbeat(SseEmitter emitter, Callable<T> task) throws Exception {
+    private <T> T executeWithHeartbeat(GenerationStream emitter, Callable<T> task) throws Exception {
         ScheduledFuture<?> heartbeatFuture = heartbeatExecutor.scheduleAtFixedRate(() -> {
             try {
                 emitter.send(SseEmitter.event().comment("heartbeat"));
@@ -183,7 +183,7 @@ public class ItineraryGenerationExecutor {
      * [F4] 확정된 뼈대를 day별 step-stream 이벤트로 전송 (OptimizedGenerationExecutor와 동일 계약).
      * payload: {@code { dayNumber, steps: [{name, startTime, category}] }}.
      */
-    private void sendStepStream(SseEmitter emitter, List<StepData> steps) {
+    private void sendStepStream(GenerationStream emitter, List<StepData> steps) {
         if (steps == null || steps.isEmpty()) return;
 
         Map<Integer, List<Map<String, String>>> byDay = new LinkedHashMap<>();
@@ -210,7 +210,7 @@ public class ItineraryGenerationExecutor {
         }
     }
 
-    private void sendComplete(SseEmitter emitter) {
+    private void sendComplete(GenerationStream emitter) {
         try {
             emitter.send(SseEmitter.event()
                     .name("complete")
@@ -221,11 +221,11 @@ public class ItineraryGenerationExecutor {
         }
     }
 
-    private void sendError(SseEmitter emitter, String message) {
+    private void sendError(GenerationStream emitter, String errorCode, String message) {
         try {
             emitter.send(SseEmitter.event()
                     .name("error")
-                    .data(Map.of("message", message)));
+                    .data(Map.of("status", "error", "errorCode", errorCode, "message", message)));
             emitter.complete();
         } catch (IOException | IllegalStateException e) {
             log.warn("Failed to send error event");
