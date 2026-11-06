@@ -16,7 +16,7 @@ import java.util.Map;
  * 사용자에게 보이는 이동거리는 도로 환산({@code GeoUtils.ROAD_DISTANCE_FACTOR}, ×1.3)을 거치므로
  * 표시 기준으로 상한을 잡으려면 {@code 표시값 ÷ 1.3}을 넣어야 한다.
  */
-final class ScheduleTuning {
+public final class ScheduleTuning {
 
     private ScheduleTuning() {}
 
@@ -195,12 +195,27 @@ final class ScheduleTuning {
 
     // ── 밀도 · 반복 상한 ────────────────────────────────────────────────────
 
-    /** pace별 하루 활동 개수 [최소, 최대]. */
-    static final Map<String, int[]> PACE_RANGE = Map.of(
-            "tight", new int[]{5, 7},
-            "normal", new int[]{4, 5},
-            "relaxed", new int[]{2, 3}
+    /**
+     * pace별 하루 관광·체험 개수 [최소, 최대]. 끼니는 따로 세고, 카페·간식은 관광 자리 하나를 쓴다.
+     * 선택·fallback 프롬프트와 채점기가 이 값을 읽는다. 프론트 wizardOptions.ts의 페이스 설명은 숫자를 따로 적고 있어 같이 바꿔야 한다.
+     */
+    static final Map<String, int[]> SIGHTS_PER_DAY = Map.of(
+            "tight", new int[]{3, 5},
+            "normal", new int[]{2, 3},
+            "relaxed", new int[]{1, 2}
     );
+    /** 점심·저녁. 아침은 숙소에서 출발하는 날만 붙는 선택이라 세지 않는다. */
+    static final int MEALS_PER_DAY = 2;
+
+    public static int[] sightsPerDay(String pace) {
+        return SIGHTS_PER_DAY.getOrDefault(pace == null ? "" : pace.trim().toLowerCase(), SIGHTS_PER_DAY.get("normal"));
+    }
+
+    /** 날짜 배분이 맞추는 하루 장소 수 [최소, 최대](숙소·허브 제외). */
+    static int[] paceRange(String pace) {
+        int[] sights = sightsPerDay(pace);
+        return new int[]{sights[0] + MEALS_PER_DAY, sights[1] + MEALS_PER_DAY};
+    }
     /** 세부 유형 반복 상한 계산: ceil(days/2) + 1 (C1). */
     static final int TYPE_CAP_BASE = 1;
     /** 경유형(해안도로·드라이브코스 등) 전체 일정 허용 개수 — 방문지가 아니라 지나가는 구간이므로 1개. */
@@ -240,7 +255,7 @@ final class ScheduleTuning {
     /**
      * pace가 거리 상한에 곱하는 계수. {@link #TRANSPORT_ABS_LIMITS}는 이동수단만 보므로,
      * 이게 없으면 {@code relaxed}가 "적게 들르되 똑같이 멀리 간다"가 된다 — 장소 수만 줄고
-     * 하루 주행은 그대로라 여유로운 일정이 아니다({@link #PACE_RANGE}는 개수만 정한다).
+     * 하루 주행은 그대로라 여유로운 일정이 아니다({@link #SIGHTS_PER_DAY}는 개수만 정한다).
      *
      * <p>{@code normal}은 1.0으로 둔다. 기본값을 조이면 거리 예산이 줄어 갭 충전
      * ({@code RouteOptimizer.fillGapBeforeMeal})이 쓸 여력도 같이 줄고, 실측에서 이미

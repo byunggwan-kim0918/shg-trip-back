@@ -46,6 +46,14 @@ final class EvalReport {
             sb.append("- ").append(r.itineraryId()).append(": ")
                     .append(String.join(", ", r.saved().violations())).append("\n");
         }
+        if (rows.stream().anyMatch(r -> r.replayed() != null && !r.replayed().violations().isEmpty())) {
+            sb.append("\n## 하드 위반 (재실행)\n\n");
+            for (EvalRunner.Row r : rows) {
+                if (r.replayed() == null || r.replayed().violations().isEmpty()) continue;
+                sb.append("- ").append(r.itineraryId()).append(": ")
+                        .append(String.join(", ", r.replayed().violations())).append("\n");
+            }
+        }
         return sb.toString();
     }
 

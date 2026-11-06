@@ -729,11 +729,12 @@ class RouteOptimizerTest {
                 place(5, "AltB", "Dining and Drinking > Restaurant > BBQ", 37.504, 127.004, "강남"),
                 place(6, "AltC", "Dining and Drinking > Restaurant > Seafood", 37.505, 127.005, "강남"),
                 place(7, "FarRest", "Dining and Drinking > Restaurant > Korean", 38.50, 128.50, "부산"), // ~140km
-                place(8, "AltPark", "Landmarks and Outdoors > Park", 37.506, 127.006, "강남")
+                place(8, "AltPark", "Landmarks and Outdoors > Park", 37.506, 127.006, "강남"),
+                place(9, "DayPark", "Landmarks and Outdoors > Park", 37.501, 127.002, "강남")
         );
         SelectionOutput selection = new SelectionOutput(
                 "concept",
-                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2), 3, null)),
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 9), 3, null)),
                 List.of(),
                 List.of(4, 5, 6, 7, 8)
         );
@@ -796,11 +797,12 @@ class RouteOptimizerTest {
                 // walk 반경(3km) 밖이지만 완화 반경(6km) 안 → 2차 패스에서 채워짐
                 place(4, "NearFarAlt", "Dining and Drinking > Restaurant > BBQ", 37.545, 127.000, "강남"),
                 // 완화 반경(6km)도 초과 → 대안으로 쓰지 않음(60km 밖 식당이 대안으로 나오던 문제 방지)
-                place(5, "VeryFarAlt", "Dining and Drinking > Restaurant > BBQ", 37.680, 127.000, "경기")
+                place(5, "VeryFarAlt", "Dining and Drinking > Restaurant > BBQ", 37.680, 127.000, "경기"),
+                place(6, "DayPark", "Landmarks and Outdoors > Park", 37.501, 127.002, "강남")
         );
         SelectionOutput selection = new SelectionOutput(
                 "concept",
-                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2), 3, null)),
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 6), 3, null)),
                 List.of(),
                 List.of(4, 5)
         );
@@ -849,12 +851,13 @@ class RouteOptimizerTest {
                 place(1, "RestA", "Dining and Drinking > Restaurant > Korean", 37.500, 127.000, "강남"),
                 place(2, "RestB", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
                 place(3, "Hotel", "Travel and Transportation > Lodging > Hotel", 37.502, 127.002, "강남"),
-                place(4, "RestC", "Dining and Drinking > Restaurant > BBQ", 37.503, 127.003, "강남")
+                place(4, "RestC", "Dining and Drinking > Restaurant > BBQ", 37.503, 127.003, "강남"),
+                place(5, "DayPark", "Landmarks and Outdoors > Park", 37.501, 127.002, "강남")
         );
         // 프롬프트 위반 시뮬레이션: RestA(1)가 메인(day1)과 spare 양쪽에 있음
         SelectionOutput selection = new SelectionOutput(
                 "concept",
-                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2), 3, null)),
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 5), 3, null)),
                 List.of(),
                 List.of(1, 4)
         );
