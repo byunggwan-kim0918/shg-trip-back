@@ -24,9 +24,8 @@ import java.util.Map;
 /**
  * 후보 장소를 TourAPI 콘텐츠와 연결하고(searchKeyword2), 공식 이용시간·쉬는날·요금(detailIntro2)을 반영한다.
  *
- * <p>개발 계정은 하루 1,000건이라 실행당 호출 상한을 둔다. 매칭은 시도 시각, 상세는 조회 시각을 남겨
- * 다음 실행이 이어서 처리한다. 한도 초과 등으로 응답을 읽지 못하면 그 자리에서 멈추고 아무것도 기록하지 않는다.
- *
+ * <p>하루 한도는 기능(오퍼레이션)마다 따로 세므로 검색·상세 상한도 따로 둔다. 매칭은 시도 시각, 상세는 조회 시각을
+ * 남겨 다음 실행이 이어서 처리한다. 응답을 읽지 못하면 그 자리에서 멈추고 아무것도 기록하지 않는다.
  */
 @Slf4j
 @Component
@@ -59,10 +58,14 @@ public class TourApiDetailJob {
     @Value("${batch.tourapi.detail.regions:}")
     private String regionsRaw;
 
-    @Value("${batch.tourapi.detail.max-calls:900}")
-    private int maxCalls;
+    @Value("${batch.tourapi.detail.max-search-calls:950}")
+    private int maxSearchCalls;
 
-    private int calls;
+    @Value("${batch.tourapi.detail.max-detail-calls:950}")
+    private int maxDetailCalls;
+
+    private int searchCalls;
+    private int detailCalls;
 
     public TourApiDetailJob(PlaceRepository placeRepository, ObjectMapper objectMapper) {
         this.placeRepository = placeRepository;
@@ -84,7 +87,8 @@ public class TourApiDetailJob {
             log.warn("TourAPI 상세: 서비스키 또는 batch.tourapi.detail.regions가 없어 건너뜁니다");
             return;
         }
-        calls = 0;
+        searchCalls = 0;
+        detailCalls = 0;
         int[] detail = new int[4]; // 조회, 영업시간 반영, 요금 반영, 원문은 있는데 영업시간 판독 실패
         int[] match = new int[2];  // 연결, 못 찾음
         try {
@@ -94,20 +98,24 @@ public class TourApiDetailJob {
         } catch (ApiUnavailable e) {
             log.error("TourAPI 상세 중단: {}", e.getMessage());
         }
-        log.info("TourAPI 상세 완료 - 호출 {}건, 연결 {}건, 못 찾음 {}건, 상세 {}건(영업시간 {}건, 판독 실패 {}건, 요금 {}건)",
-                calls, match[0], match[1], detail[0], detail[1], detail[3], detail[2]);
+        log.info("TourAPI 상세 완료 - 호출 검색 {}건·상세 {}건, 연결 {}건, 못 찾음 {}건, 상세 {}건(영업시간 {}건, 판독 실패 {}건, 요금 {}건)",
+                searchCalls, detailCalls, match[0], match[1], detail[0], detail[1], detail[3], detail[2]);
     }
 
-    private boolean budgetLeft() {
-        return calls < maxCalls;
+    private boolean searchBudgetLeft() {
+        return searchCalls < maxSearchCalls;
+    }
+
+    private boolean detailBudgetLeft() {
+        return detailCalls < maxDetailCalls;
     }
 
     private void matchPlaces(List<String> regions, int[] counts) throws ApiUnavailable {
-        while (budgetLeft()) {
+        while (searchBudgetLeft()) {
             List<Object[]> targets = placeRepository.findTourApiMatchTargets(regions, PAGE);
             if (targets.isEmpty()) return;
             for (Object[] row : targets) {
-                if (!budgetLeft()) return;
+                if (!searchBudgetLeft()) return;
                 long id = ((Number) row[0]).longValue();
                 String name = (String) row[1];
                 String category = (String) row[2];
@@ -132,11 +140,11 @@ public class TourApiDetailJob {
     }
 
     private void fetchDetails(List<String> regions, int[] counts) throws ApiUnavailable {
-        while (budgetLeft()) {
+        while (detailBudgetLeft()) {
             List<Object[]> targets = placeRepository.findTourApiDetailTargets(regions, PAGE);
             if (targets.isEmpty()) return;
             for (Object[] row : targets) {
-                if (!budgetLeft()) return;
+                if (!detailBudgetLeft()) return;
                 long id = ((Number) row[0]).longValue();
                 String contentId = (String) row[1];
                 int type = ((Number) row[2]).intValue();
@@ -196,7 +204,8 @@ public class TourApiDetailJob {
     }
 
     private JsonNode call(String operation, String query) throws ApiUnavailable {
-        calls++;
+        if ("detailIntro2".equals(operation)) detailCalls++;
+        else searchCalls++;
         String url = BASE_URL + operation + "?serviceKey=" + serviceKey
                 + "&MobileOS=ETC&MobileApp=shgtrip&_type=json&" + query;
         try {

@@ -109,11 +109,12 @@ batch:
     # data.go.kr 발급 서비스키 — URL 인코딩된 키를 그대로 입력
     service-key: ${TOUR_API_SERVICE_KEY:}
     # 공식 영업시간 연결(searchKeyword2 매칭 → detailIntro2). 실행당 호출 상한까지 하고 다음 실행이 이어 간다.
-    # 시딩(enabled)과 같은 키·같은 하루 한도(개발 계정 1,000건)를 쓴다 — 같은 날 둘 다 켜지 않는다.
+    # 개발 계정 한도는 기능별 하루 1,000건이다. 시딩의 이미지 백필도 searchKeyword2를 쓰므로 같은 날 켜면 검색 몫을 줄인다.
     detail:
       enabled: ${BATCH_TOURAPI_DETAIL_ENABLED:false}
       regions: ${BATCH_TOURAPI_DETAIL_REGIONS:}
-      max-calls: ${BATCH_TOURAPI_DETAIL_MAX_CALLS:900}
+      max-search-calls: ${BATCH_TOURAPI_DETAIL_MAX_SEARCH_CALLS:950}
+      max-detail-calls: ${BATCH_TOURAPI_DETAIL_MAX_DETAIL_CALLS:950}
     # 시딩 대상 (쉼표 구분): "areaCode" 또는 "areaCode-sigunguCode"
     #   1=서울 2=인천 3=대전 4=대구 5=광주 6=부산 39=제주
     #   31-13=수원 32-1=강릉 35-2=경주 37-12=전주 38-13=여수 (도 안의 도시는 시군구 코드로 좁힌다)
