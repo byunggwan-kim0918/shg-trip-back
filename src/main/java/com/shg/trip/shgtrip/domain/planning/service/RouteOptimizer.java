@@ -1339,8 +1339,8 @@ public class RouteOptimizer {
 
         int runStart = 0;
         for (int i = 1; i <= visits.size(); i++) {
-            String prevKind = consecutiveKind(visits.get(i - 1));
-            String curKind = i < visits.size() ? consecutiveKind(visits.get(i)) : null;
+            String prevKind = consecutiveKind(visits.get(i - 1), day, candidates);
+            String curKind = i < visits.size() ? consecutiveKind(visits.get(i), day, candidates) : null;
             if (curKind != null && curKind.equals(prevKind)) continue;
 
             int runLength = i - runStart;
@@ -1357,10 +1357,14 @@ public class RouteOptimizer {
         return false;
     }
 
-    /** 연속 판정 키: 식음료는 대분류, 관광은 세부 유형. */
-    private String consecutiveKind(StepData step) {
+    /** 연속 판정 키: 식음료는 대분류, 관광은 세부 유형(보강 속성이 있으면 그 유형 — kindOf와 같은 기준). */
+    private String consecutiveKind(StepData step, DayState day, List<PlaceCandidate> candidates) {
         String major = PlaceCategoryConstants.majorCategory(step.place().category());
         if ("DINING".equals(major) || "CAFE".equals(major)) return major;
+        Integer idx = indexOfStep(step, day, candidates);
+        PlaceCandidate c = idx == null ? null : byIndex(candidates, idx);
+        String byAttribute = c == null ? null : PlaceCategoryConstants.attributeSubTypeKey(c.attributes());
+        if (byAttribute != null) return byAttribute;
         return PlaceCategoryConstants.subType(
                 step.place().name(), step.place().category(), List.of(), step.place().description());
     }
@@ -5332,6 +5336,8 @@ public class RouteOptimizer {
         if (c == null) return "";
         // 식사는 검색 다양화와 같은 종류 키로 센다(보강된 종류 우선) — 두 곳이 다르게 세면 상한이 엇나간다.
         if (c.mealEligible()) return CandidatePolicy.cuisineOf(c);
+        String byAttribute = PlaceCategoryConstants.attributeSubTypeKey(c.attributes());
+        if (byAttribute != null) return byAttribute;
         return PlaceCategoryConstants.subType(c.name(), c.category(), c.tags(), c.description());
     }
 
