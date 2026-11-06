@@ -236,6 +236,12 @@ public record PlaceCandidate(
                     && !com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants
                     .isAggregatePoi(name, category);
         }
+        // 카테고리가 총칭이면 이름 추정이 베이커리를 식당으로 본다.
+        if (attributes != null && attributes.venue() != null) {
+            return "MEAL".equals(attributes.venue())
+                    && !com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants
+                    .isAggregatePoi(name, category);
+        }
         return com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants
                 .isMealPlace(name, category, tags);
     }
