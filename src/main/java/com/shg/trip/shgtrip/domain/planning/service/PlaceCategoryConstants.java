@@ -559,6 +559,18 @@ public final class PlaceCategoryConstants {
         return SLOT_MAJOR_CATEGORY.get(role);
     }
 
+    /**
+     * 방문지가 아니라 지나가는 구간인지. 관광지는 보강 속성의 경유형이 있으면 그것을 따른다 — 키워드는 태그의
+     * "산책로"·"드라이브코스"만으로 송악산 같은 일반 명소까지 경유형으로 잡는다. 공항·역·숙소는 모델이
+     * PASS_THROUGH를 붙여도 경유형 상한으로 잘리면 안 되므로 키워드 판정을 유지한다.
+     */
+    public static boolean isViaRoute(PlaceAttributes attributes, String name, String category, List<String> tags) {
+        if (attributes != null && attributes.visitStyle() != null && "ATTRACTION".equals(majorCategory(category))) {
+            return "PASS_THROUGH".equals(attributes.visitStyle());
+        }
+        return isViaRoute(name, category, tags);
+    }
+
     /** 이름·카테고리·태그에 경유형 신호가 있으면 true(방문지가 아니라 지나가는 구간). */
     public static boolean isViaRoute(String name, String category, List<String> tags) {
         StringBuilder sb = new StringBuilder();

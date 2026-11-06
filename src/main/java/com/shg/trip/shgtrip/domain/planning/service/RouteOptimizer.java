@@ -1875,7 +1875,7 @@ public class RouteOptimizer {
         if (!CandidatePolicy.roleOf(c).isFillable()) return false;
         // 행정 지정 구역·주소 불명 레코드는 어떤 보충 경로로도 넣지 않는다(공용 게이트).
         if (!PlaceCategoryConstants.isVisitableEntity(c.name(), c.address())) return false;
-        if (PlaceCategoryConstants.isViaRoute(c.name(), c.category(), c.tags())) return false;
+        if (PlaceCategoryConstants.isViaRoute(c.attributes(), c.name(), c.category(), c.tags())) return false;
         // 집합 POI(음식거리·먹자골목)도 자동 보충으로 넣지 않는다 — 선택 단계에서 뺀 장소를
         // 최종 패스가 활동으로 되살리면 같은 규칙이 경로마다 다르게 적용되는 셈이다
         // (실측: 선택에서 제외된 "Seogwipo's food streets"가 조기 종료 보충으로 재유입).
@@ -5249,7 +5249,7 @@ public class RouteOptimizer {
                 if (c == null) continue;
                 String type = subTypeOf(c);
                 if (isSpecificType(type)) byType.computeIfAbsent(type, k -> new ArrayList<>()).add(idx);
-                if (PlaceCategoryConstants.isViaRoute(c.name(), c.category(), c.tags())) vias.add(idx);
+                if (PlaceCategoryConstants.isViaRoute(c.attributes(), c.name(), c.category(), c.tags())) vias.add(idx);
             }
         }
         Map<Integer, String> trimReason = new LinkedHashMap<>();
@@ -5351,7 +5351,7 @@ public class RouteOptimizer {
                 .filter(Objects::nonNull)
                 .filter(this::isVisitableFill)
                 .filter(c -> !used.contains(c.index()))
-                .filter(c -> !PlaceCategoryConstants.isViaRoute(c.name(), c.category(), c.tags()))
+                .filter(c -> !PlaceCategoryConstants.isViaRoute(c.attributes(), c.name(), c.category(), c.tags()))
                 .filter(c -> typeCount.getOrDefault(subTypeOf(c), 0) < typeCapFor(c, dayCount))
                 .filter(c -> centroid == null || coordsOf(c) != null)
                 .min(Comparator.comparingDouble(c -> centroid == null ? 0
