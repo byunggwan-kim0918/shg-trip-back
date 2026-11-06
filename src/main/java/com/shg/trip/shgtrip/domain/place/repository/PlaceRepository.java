@@ -421,6 +421,68 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                                      @Param("version") short version);
 
     /**
+     * TourAPI 매칭 대상 (id, name, category, latitude, longitude) — 후보 등장·인기 장소 중 아직 시도하지 않은 것.
+     * 숙소·교통·행사는 영업시간을 쓰지 않아 뺀다.
+     */
+    @Query(value = """
+            SELECT id, name, category, latitude, longitude FROM places
+            WHERE active AND region IN (:regions)
+              AND tourapi_content_id IS NULL AND tourapi_checked_at IS NULL
+              AND (last_candidate_at IS NOT NULL OR wikidata_sitelinks > 0)
+              AND (place_role IS NULL OR place_role NOT IN ('NOT_VISITABLE', 'TRANSIT', 'LODGING'))
+              AND category NOT ILIKE '%lodging%'
+              AND category NOT LIKE 'Travel and Transportation%'
+              AND category NOT LIKE 'Event%'
+            ORDER BY last_candidate_at DESC NULLS LAST, COALESCE(wikidata_sitelinks, 0) DESC, id
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<Object[]> findTourApiMatchTargets(@Param("regions") List<String> regions, @Param("limit") int limit);
+
+    /** 매칭 결과를 기록한다. 못 찾았으면 contentId·type이 null이고 시도 시각만 남는다. */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places
+            SET tourapi_content_id = COALESCE(CAST(:contentId AS varchar), tourapi_content_id),
+                tourapi_content_type = COALESCE(CAST(:contentType AS smallint), tourapi_content_type),
+                tourapi_checked_at = now()
+            WHERE id = :id
+            """, nativeQuery = true)
+    int writeTourApiMatch(@Param("id") Long id, @Param("contentId") String contentId,
+                          @Param("contentType") Short contentType);
+
+    /** 상세 조회 대상 (id, tourapi_content_id, tourapi_content_type). */
+    @Query(value = """
+            SELECT id, tourapi_content_id, tourapi_content_type FROM places
+            WHERE active AND region IN (:regions)
+              AND tourapi_content_id IS NOT NULL AND tourapi_detail_at IS NULL
+              AND tourapi_content_type IN (12, 14, 28, 38, 39)
+            ORDER BY last_candidate_at DESC NULLS LAST, COALESCE(wikidata_sitelinks, 0) DESC, id
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<Object[]> findTourApiDetailTargets(@Param("regions") List<String> regions, @Param("limit") int limit);
+
+    /**
+     * 상세 원문을 attributes.official에 넣고, 판독된 영업시간·요금만 덮어쓴다(null이면 기존 값 유지).
+     * 분류 키는 건드리지 않는다.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places
+            SET attributes = COALESCE(attributes, CAST('{}' AS jsonb))
+                             || jsonb_build_object('official', CAST(:officialJson AS jsonb)),
+                opening_hours = COALESCE(CAST(:hours AS varchar), opening_hours),
+                opening_hours_source = CASE WHEN CAST(:hours AS varchar) IS NULL THEN opening_hours_source
+                                            ELSE 'official' END,
+                admission_fee = COALESCE(CAST(:fee AS integer), admission_fee),
+                tourapi_detail_at = now()
+            WHERE id = :id
+            """, nativeQuery = true)
+    int writeTourApiDetail(@Param("id") Long id, @Param("officialJson") String officialJson,
+                           @Param("hours") String hours, @Param("fee") Integer fee);
+
+    /**
      * 보강 성공 장소의 임베딩을 초기화한다 — 임베딩 텍스트가 tags/description을 포함하므로
      * 보강 내용이 벡터 검색에 반영되려면 재임베딩이 필요하다(embedding 컬럼은 updatable=false라
      * 엔티티 flush로는 못 바꿈). NULL이 되면 다음 임베딩 배치가 자동으로 다시 잡는다.
