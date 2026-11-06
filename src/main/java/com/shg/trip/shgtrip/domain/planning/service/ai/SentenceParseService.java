@@ -27,14 +27,8 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
- * 자연어 여행 문장 → 구조화 필드 파싱 (Haiku 1회, 경량).
- * NewTripShell의 실시간 "이해했어요" 패널과 마법사 프리필에 쓰인다.
- *
- * <p>설계는 {@link OptimizedClaudeAIService}를 미러한다: 프롬프트 템플릿은 생성자에서 1회 로드하되
- * {@code today}는 매 요청 주입한다(생성자 캐싱 시 날짜 고정 버그). AI 응답은 {@code Map}으로 받아
- * 필드별로 방어적으로 추출하므로 한 필드의 타입 오류가 나머지 필드를 죽이지 않는다.
- * sanitize는 마법사가 강제하는 제약(enum 화이트리스트, @FutureOrPresent, @ValidDateRange의
- * endDate&gt;startDate·maxDays)을 서버에서 재확인해 프리필→제출 시 400을 예방한다.
+ * {@code today}는 생성자에서 캐싱하면 날짜가 고정되므로 매 요청 주입하고, 응답은 필드별로 방어 추출해 한 필드 오류가 나머지를 죽이지 않게 한다.
+ * sanitize는 마법사 제약(enum, @FutureOrPresent, @ValidDateRange)을 서버에서 재확인해 프리필 후 제출 시 400을 막는다.
  */
 @Slf4j
 @Service
@@ -56,13 +50,12 @@ public class SentenceParseService {
     private static final Set<String> VALID_TRANSPORT = WizardOptionIds.TRANSPORTS;
 
     /**
-     * 날짜를 프리필하면 안 되는 표현 — 과거("작년 1월")와 10일 초과 기간("한 달 살기").
-     * 모델은 "작년 1월"을 내년 1월로 옮기거나 종료일 없이 시작일만 내곤 해서, 응답 날짜만 보고는
-     * 걸러낼 수 없다. 문장에 이 표현이 있으면 날짜를 통째로 버린다.
+     * 과거("작년 1월")나 10일 초과 기간("한 달 살기") 표현이 있으면 날짜를 통째로 버린다.
+     * 모델이 "작년 1월"을 내년으로 옮기거나 시작일만 내서 응답 날짜만으로는 걸러낼 수 없다.
      */
     private static final java.util.regex.Pattern OUT_OF_RANGE_DATE_EXPRESSION = java.util.regex.Pattern.compile(
             "작년|지난\\s?해|재작년|지난\\s?달|지난\\s?주|어제|그저께"
-                    // "한 달 뒤"·"2주 후"는 출발 시점이라 막지 않는다 — 기간을 뜻하는 꼬리가 붙을 때만
+                    // "한 달 뒤"·"2주 후"는 출발 시점이라 기간을 뜻하는 꼬리가 붙을 때만 막는다.
                     + "|([한두세네]\\s?달|\\d+\\s?개월|보름|(?<!\\d)([2-9]|\\d{2,})\\s?주일?)\\s?(살기|동안|간|짜리|여행|일정|체류|머물)");
 
     private final AnthropicClient anthropicClient;
@@ -80,9 +73,8 @@ public class SentenceParseService {
     }
 
     /**
-     * 문장을 파싱한다.
-     * 콘텐츠 실패(JSON 깨짐·여행 무관 문장)는 {@link SentenceParseResponse#empty()}로 graceful degradation.
-     * Anthropic 인프라 실패(재시도 소진)만 {@link BusinessException}(AI_SERVICE_ERROR)으로 던진다.
+     * 콘텐츠 실패(JSON 깨짐·여행 무관 문장)는 {@link SentenceParseResponse#empty()}를 반환한다.
+     * 재시도를 소진한 Anthropic 인프라 실패만 {@link BusinessException}(AI_SERVICE_ERROR)으로 던진다.
      */
     public SentenceParseResponse parse(String sentence) {
         LocalDate today = LocalDate.now();
@@ -120,10 +112,6 @@ public class SentenceParseService {
                 r.pace(), r.transportPref(), r.budget(), r.companion(), r.partySize(), r.arrivalTime(), r.departureTime());
     }
 
-    /**
-     * Haiku JSON 응답을 파싱·sanitize하여 안전한 응답으로 만든다.
-     * 필드별 방어 추출 — 한 필드가 잘못돼도 나머지는 살린다. package-private for testing.
-     */
     SentenceParseResponse parseResponse(String responseText, LocalDate today) {
         try {
             int start = responseText.indexOf('{');
@@ -142,10 +130,6 @@ public class SentenceParseService {
         }
     }
 
-    /**
-     * AI 원시 Map을 검증한다. 마법사 enum·날짜·기간 제약을 서버에서 재확인해 프리필 안전성을 보장한다.
-     * package-private for testing.
-     */
     SentenceParseResponse sanitize(Map<String, Object> map, LocalDate today) {
         String destination = capLength(blankToNull(getString(map, "destination")), MAX_DESTINATION_LEN);
         String party = capLength(blankToNull(getString(map, "party")), MAX_PARTY_LEN);
@@ -155,17 +139,16 @@ public class SentenceParseService {
         String pace = inWhitelist(getString(map, "pace"), VALID_PACE);
         String transportPref = inWhitelist(getString(map, "transportPref"), VALID_TRANSPORT);
 
-        // 날짜: @FutureOrPresent / endDate>startDate / maxDays 를 모두 재확인
         LocalDate startDate = parseDate(getString(map, "startDate"));
         LocalDate endDate = parseDate(getString(map, "endDate"));
         if (startDate != null && startDate.isBefore(today)) {
-            // 시작일이 과거면 날짜 쌍을 통째로 버린다(사용자가 마법사에서 직접 선택)
+            // 시작일이 과거면 날짜 쌍을 통째로 버리고 사용자가 마법사에서 직접 고르게 한다.
             startDate = null;
             endDate = null;
         }
         if (startDate != null && endDate != null) {
             if (!endDate.isAfter(startDate)) {
-                // 당일치기(같은 날)·역순 — @ValidDateRange가 endDate>startDate를 강제하므로 폐기
+                // @ValidDateRange가 endDate>startDate를 강제해 당일치기·역순은 버린다.
                 endDate = null;
             } else if (ChronoUnit.DAYS.between(startDate, endDate) + 1 > MAX_TRIP_DAYS) {
                 // 10일 초과는 마법사에서 고를 수 없는 기간이라 시작일만 남기면 엉뚱한 일정이 프리필된다
@@ -174,7 +157,6 @@ public class SentenceParseService {
             }
         }
         if (endDate != null && startDate == null) {
-            // 시작일 없이 종료일만 있으면 무의미 → 버림
             endDate = null;
         }
 
@@ -192,8 +174,6 @@ public class SentenceParseService {
         return new SentenceParseResponse(destination, startDate, endDate, party, themes, categories, pace,
                 transportPref, budget, companion, partySize, arrivalTime, departureTime);
     }
-
-    // ── helpers ──
 
     private String buildPrompt(String sentence, LocalDate today) {
         String weekday = today.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.KOREAN);
@@ -238,7 +218,7 @@ public class SentenceParseService {
         return TIME.matcher(v).matches() ? v : null;
     }
 
-    /** budget을 방어적으로 추출 — Number이면 그대로, 숫자 문자열이면 파싱, "50만원" 등은 null. */
+    /** Number면 그대로, 숫자 문자열이면 파싱하고, "50만원" 등은 null. */
     private BigDecimal getBigDecimal(Map<String, Object> map, String key) {
         Object value = map.get(key);
         if (value instanceof Number n) {
@@ -254,7 +234,7 @@ public class SentenceParseService {
         return null;
     }
 
-    /** themes/categories를 방어적으로 추출 — 배열이면 각 원소, 단일 문자열이면 1원소, 그 외 빈 리스트. */
+    /** 배열이면 각 원소, 단일 문자열이면 1원소, 그 외는 빈 리스트. */
     private List<String> getStringList(Map<String, Object> map, String key) {
         Object value = map.get(key);
         if (value instanceof List<?> list) {

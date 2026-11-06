@@ -17,11 +17,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/**
- * OpenAI text-embedding-3-small 기반 임베딩 생성 서비스.
- * Java HttpClient를 사용하여 OpenAI API를 호출한다.
- * 재시도 3회 + 지수 백오프 적용.
- */
 @Service
 public class OpenAIEmbeddingService implements EmbeddingService {
 
@@ -70,7 +65,7 @@ public class OpenAIEmbeddingService implements EmbeddingService {
 
         List<float[]> allResults = new ArrayList<>();
 
-        // OpenAI API는 최대 2048개 per request, 초과 시 분할
+        // OpenAI API는 요청당 입력이 최대 2048개다
         for (int i = 0; i < texts.size(); i += MAX_BATCH_SIZE) {
             List<String> chunk = texts.subList(i, Math.min(i + MAX_BATCH_SIZE, texts.size()));
             List<float[]> chunkResults = callEmbeddingsApi(chunk);
@@ -80,9 +75,6 @@ public class OpenAIEmbeddingService implements EmbeddingService {
         return allResults;
     }
 
-    /**
-     * OpenAI Embeddings API를 호출한다. 재시도 3회 + 지수 백오프 적용.
-     */
     private List<float[]> callEmbeddingsApi(List<String> inputs) {
         String requestBody = buildRequestBody(inputs);
         HttpRequest request = HttpRequest.newBuilder()
@@ -111,7 +103,7 @@ public class OpenAIEmbeddingService implements EmbeddingService {
                     continue;
                 }
 
-                // 4xx 에러 (재시도 불필요)
+                // 4xx는 재시도해도 같다
                 throw new OpenAIApiException(
                         "OpenAI API 호출 실패 (HTTP " + response.statusCode() + "): " + response.body());
 
@@ -153,7 +145,7 @@ public class OpenAIEmbeddingService implements EmbeddingService {
                 throw new OpenAIApiException("OpenAI 응답에 data 배열이 없습니다: " + responseBody);
             }
 
-            // index 순서대로 정렬하여 반환
+            // 응답 순서가 아니라 index 필드로 입력 순서를 맞춘다
             List<float[]> results = new ArrayList<>(expectedCount);
             for (int i = 0; i < expectedCount; i++) {
                 results.add(null);
@@ -169,7 +161,6 @@ public class OpenAIEmbeddingService implements EmbeddingService {
                 results.set(index, embedding);
             }
 
-            // null 검증
             for (int i = 0; i < results.size(); i++) {
                 if (results.get(i) == null) {
                     throw new OpenAIApiException("인덱스 " + i + "에 대한 임베딩이 누락되었습니다.");

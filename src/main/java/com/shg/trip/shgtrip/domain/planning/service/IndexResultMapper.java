@@ -15,26 +15,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/**
- * 2-Call LLM 파이프라인 결과를 원본 후보 장소 데이터와 결합하여
- * ItineraryData를 생성한다.
- *
- * Call 1 (Sonnet selectPlaces) → SelectionOutput
- * Call 2 (Haiku assembleItinerary) → AssemblyItineraryOutput
- * 결합 → ItineraryData
- */
+/** 인덱스만 참조하는 LLM 선택 결과를 원본 후보 장소 데이터와 결합한다. */
 @Slf4j
 @Component
 public class IndexResultMapper {
 
     /**
-     * RouteOptimizer.repairAndSchedule()이 확정한 step 목록(구조 전부 확정, notes=null)에
-     * Haiku의 story를 stepOrder 기준으로 병합한다. 구조(day·순서·시간·교통·대안)는 건드리지 않음.
+     * 확정된 step 목록에 Haiku story를 stepOrder 기준으로 병합한다. 구조(day·순서·시간·교통·대안)는 바꾸지 않는다.
      *
-     * @param fixedSteps     백엔드가 확정한 최종 step 목록
-     * @param assemblyOutput Call 2 (Haiku) 응답 — title/tags/steps[{stepOrder, story}]
-     * @param destination    여행지명 (enrichedInput에서 가져옴, Haiku가 더 이상 생성하지 않음)
-     * @return story가 채워진 ItineraryData
+     * @param destination 여행지명. Haiku 응답에는 없으므로 enrichedInput 값을 쓴다.
      */
     public ItineraryData mergeStory(List<StepData> fixedSteps, AssemblyItineraryOutput assemblyOutput,
                                      String destination) {
@@ -74,10 +63,7 @@ public class IndexResultMapper {
         return new ItineraryData(assemblyOutput.title(), destination, totalCost, assemblyOutput.tags(), merged);
     }
 
-    /**
-     * 구조만 먼저 저장할 때 사용 — story는 비어있고 title/tags는 임시값.
-     * Haiku 비동기 단계가 끝나기 전, SSE complete 시점에 구조 일정을 저장하기 위함.
-     */
+    /** Haiku story 전에 구조만 저장할 때 쓴다. story는 비어 있고 title은 concept 임시값이다. */
     public ItineraryData toDraftItineraryData(
             List<StepData> fixedSteps, String destination, String concept, List<String> tagSeed) {
         return toDraftItineraryData(fixedSteps, destination, concept, tagSeed, List.of());
@@ -99,9 +85,7 @@ public class IndexResultMapper {
     }
 
     /**
-     * 구조 저장 시점 태그 시드 정규화 — 공백/중복 제거 후 최대 8개(프론트 MAX_TAGS와 동일).
-     * story(notes)는 비동기로 채우되 title/tags는 여기서 확정하므로(StorySaveHelper가 덮지 않음),
-     * enrich의 searchTags를 태그 시드로 넘겨 AI 생성 일정의 태그가 빈값으로 저장되는 것을 막는다.
+     * 최대 8개는 프론트 MAX_TAGS와 맞춘다. StorySaveHelper가 tags를 덮지 않으므로 여기서 정한 값이 최종이다.
      */
     private List<String> normalizeTags(List<String> raw) {
         if (raw == null) return List.of();
@@ -114,13 +98,8 @@ public class IndexResultMapper {
     }
 
     /**
-     * 백엔드가 소유하는 필드(숙소·도착/출발 허브)를 비운다(B3).
-     *
-     * <p>세 필드는 Tool Use 스키마에서 제거됐지만, 모델이 규약 밖 필드를 보내거나 fallback 경로가
-     * 값을 채워 넘길 수 있다. 어느 경우든 뒤따르는 결정론적 보정(fillMissingAccommodation /
-     * repairHubs / repairNamedHubs / repairAccommodationByProximity)이 최종 값을 정하므로,
-     * 중간 상태에 모델 값이 섞여 판단이 흔들리지 않도록 진입 시점에 한 번 비운다.
-     * placeIndices에 잘못 들어온 숙소·허브는 RouteOptimizer가 별도로 정리한다.
+     * 백엔드가 소유하는 필드(숙소·도착/출발 허브)를 비운다. 모델이나 fallback 경로가 값을 채워 보내도
+     * 뒤따르는 결정론적 보정이 최종 값을 정하므로, 중간 판단에 모델 값이 섞이지 않게 한다.
      */
     public SelectionOutput stripCodeOwnedFields(SelectionOutput selection) {
         if (selection == null || selection.days() == null || selection.days().isEmpty()) {
@@ -135,22 +114,9 @@ public class IndexResultMapper {
     }
 
     /**
-     * Sonnet이 고른 <b>구역 단위 장소</b>를 방문 목록에서 빼고 spare로 돌린다. 두 부류다.
-     *
-     * <p>① 식당으로 오인한 집합 POI — 음식거리·먹자골목처럼 개별 가게가 아니라 구역을
-     * 가리키는 장소({@link PlaceCategoryConstants#isAggregatePoi}). 검색 슬롯은 SQL로,
-     * 최종 보정 패스는 {@code mealEligible}로 이미 걸러내지만 선택 결과에는 검사가 없어서,
-     * Sonnet이 고르면 그대로 통과해 저녁 시간대를 차지했다(실측 58 day2
-     * "Seogwipo's food streets" 18:23).
-     *
-     * <p>② 행정·지정 구역 이름 — {@code 제주도 관광특구}(주소 "제주특별자치도"),
-     * {@code 제주도 국가지질공원}처럼 섬 절반을 가리키는 이름이 90분 관광 스텝으로 들어왔다
-     * (실측 93·95·99). 충전·보충 경로는 {@link PlaceCategoryConstants#isVisitableEntity}로
-     * 막고 있었지만 Sonnet의 메인 선택에는 걸리지 않았다. 여기서는 주소 길이 규칙이 없는
-     * {@link PlaceCategoryConstants#isAdministrativeZone}만 쓴다 — 주소 길이로 걸면
-     * 서울·오사카 후보의 절반이 함께 날아간다(그 함정은 isVisitableEntity javadoc에 있다).
-     *
-     * <p>좌표가 구역 중심이라 동선까지 왜곡되므로 둘 다 활동으로도 남기지 않는다.
+     * Sonnet이 고른 집합 POI(음식거리 등)와 행정·지정 구역 이름을 방문 목록에서 빼고 spare로 돌린다.
+     * 좌표가 구역 중심이라 동선까지 왜곡된다. 주소 길이 규칙으로 걸면 서울·오사카 후보 절반이 날아가므로
+     * {@link PlaceCategoryConstants#isAdministrativeZone}만 쓴다.
      */
     public SelectionOutput stripZoneLevelPicks(SelectionOutput selection,
                                                         List<PlaceCandidate> allCandidates) {
@@ -190,19 +156,8 @@ public class IndexResultMapper {
     }
 
     /**
-     * 마지막 날을 제외한 모든 날에 accommodationIndex가 채워지도록 보정한다.
-     * Sonnet이 중간 날 숙소를 누락하는 경우(Tool Use 스키마가 강제하지 않음)를
-     * 추가 LLM 호출 없이 코드로 메운다.
-     *
-     * 1) 직전 날에 배정된 accommodationIndex가 있으면 재사용(연박 가정)
-     * 2) 없으면 방문 스텝으로 쓰이지 않은 LODGING 카테고리 후보를 새로 배정
-     *
-     * <p><b>spare에 있는 숙소도 배정 대상이다.</b> 예전엔 {@link #collectAllUsedIndices}(spare 포함)로
-     * 걸러서, 프롬프트가 "남는 숙소는 전부 spareIndices에 넣어라"고 지시한 대로 동작한 Sonnet 출력에서
-     * LODGING이 전량 탈락해 숙소 스텝이 0개가 됐다(실측: itinerary 60·66·67). spare는 "메인 스텝으로
-     * 쓰지 않음"을 뜻할 뿐이고, 숙소는 애초에 메인 스텝이 아니라 별도 슬롯이라 무관하다.
-     *
-     * @return 보정된 SelectionOutput (변경 없으면 원본과 동일한 내용의 새 인스턴스)
+     * 마지막 날을 제외한 모든 날에 accommodationIndex를 채운다. Tool Use 스키마가 강제하지 않아 Sonnet이 누락한다.
+     * 프롬프트가 남는 숙소를 spare에 넣으라고 하므로 spare 숙소도 배정 대상이어야 숙소가 0개가 되지 않는다.
      */
     public SelectionOutput fillMissingAccommodation(SelectionOutput selection, List<PlaceCandidate> allCandidates) {
         if (selection == null || selection.days() == null || selection.days().isEmpty()) {
@@ -232,7 +187,7 @@ public class IndexResultMapper {
                         usedIndices.add(accomIdx);
                         log.info("day={} 숙소 자동 배정: index={}", day.dayNumber(), accomIdx);
                     } else {
-                        // 마지막 안전망 — 방문 스텝으로 쓰인 숙소밖에 없더라도 "숙소 없는 숙박일"보다는 낫다.
+                        // 방문 스텝과 겹치더라도 숙소 없는 숙박일보다는 낫다.
                         accomIdx = findAnyAccommodation(allCandidates);
                         if (accomIdx != null) {
                             log.warn("day={} 미사용 LODGING 없음 → 방문 스텝과 중복이지만 최선책 배정: index={}",
@@ -253,20 +208,13 @@ public class IndexResultMapper {
             }
         }
 
-        // 필드를 나열해 다시 만들면 highlight/rest/timing이 유실된다 — withDays로 보존.
+        // 필드를 나열해 다시 만들면 highlight/rest/timing이 유실된다.
         return selection.withDays(fixedDays);
     }
 
     /**
-     * 사용자 필수 방문 장소(userSelected)가 Sonnet 출력에서 누락된 경우 결정론적으로 주입한다
-     * (LLM 재호출 없음). 프롬프트의 ★ 지시는 강한 힌트일 뿐 보장이 아니므로 코드가 최종 보증한다.
-     * <ul>
-     *   <li>일반 장소: 어느 day의 placeIndices에도 없으면 spare에서 제거하고, day 장소들의
-     *       centroid가 가장 가까운 day에 append (좌표 불명이면 장소 수가 가장 적은 day)</li>
-     *   <li>LODGING: 어느 day의 accommodationIndex도 아니면 첫 day의 숙소로 교체
-     *       (≤3일 여행은 repairAccommodationContinuity가 전 일정으로 전파)</li>
-     *   <li>TRANSIT_HUB: 방문 개념이 아니므로 제외</li>
-     * </ul>
+     * Sonnet 출력에서 누락된 사용자 필수 장소를 주입한다. 프롬프트의 ★ 지시는 보장이 아니라서 코드가 보증한다.
+     * 일반 장소는 centroid가 가장 가까운 day에, LODGING은 귀가일을 뺀 전 일정 숙소로 넣는다.
      */
     public SelectionOutput injectRequiredPlaces(SelectionOutput selection, List<PlaceCandidate> allCandidates) {
         if (selection == null || selection.days() == null || selection.days().isEmpty()) {
@@ -295,10 +243,8 @@ public class IndexResultMapper {
                 boolean usedAsAccommodation = days.stream()
                         .anyMatch(d -> Integer.valueOf(idx).equals(d.accommodationIndex()));
                 if (!usedAsAccommodation) {
-                    // 마지막날(귀가일, accommodationIndex=null)을 제외한 모든 날의 숙소를 사용자
-                    // 필수 숙소로 교체한다. 첫날만 바꾸면 4일+ 여행에서 나머지 날이 다른 숙소로
-                    // 남는다(repairAccommodationContinuity는 ≤3일만 전파). 밀려난 원래 숙소
-                    // 인덱스는 spare로 회수해 대안·트림에서 계속 활용되게 한다(후보 누수 방지).
+                    // repairAccommodationContinuity는 3일 이하만 전파하므로 첫날만 바꾸면 4일 이상 여행에서 숙소가 섞인다.
+                    // 밀려난 숙소는 spare로 회수해 대안·트림에서 계속 쓰이게 한다.
                     Set<Integer> displaced = new HashSet<>();
                     for (int i = 0; i < days.size(); i++) {
                         SelectionOutput.DayPlan d = days.get(i);
@@ -309,7 +255,6 @@ public class IndexResultMapper {
                                 d.placeIndices(), idx, d.departureHubIndex()));
                     }
                     spare.remove(Integer.valueOf(idx));
-                    // 다른 어디에도 안 쓰인 원래 숙소만 spare로 회수
                     Set<Integer> stillUsed = collectAllUsedIndices(
                             new SelectionOutput(selection.concept(), days, selection.pairs(), spare));
                     for (Integer old : displaced) {
@@ -392,13 +337,7 @@ public class IndexResultMapper {
         return used;
     }
 
-    /**
-     * 메인 방문 스텝으로 점유된 인덱스만 모은다 — <b>spare는 제외</b>.
-     *
-     * <p>{@link #collectAllUsedIndices}는 "한 장소는 전체 일정에서 1회"라는 방문 스텝 유일성을 위한
-     * 것이라 spare까지 점유로 센다. 숙소 배정은 다른 질문("이 호텔을 호텔로 쓸 수 있나")이라 그 집합을
-     * 쓰면 안 된다 — spare에 있다고 해서 숙소로 못 쓸 이유가 없다.
-     */
+    /** spare는 제외한다. 숙소 배정에 {@link #collectAllUsedIndices}를 쓰면 spare 숙소가 전부 탈락한다. */
     private Set<Integer> collectMainStepIndices(SelectionOutput selection) {
         Set<Integer> used = new HashSet<>();
         for (SelectionOutput.DayPlan day : selection.days()) {
@@ -409,13 +348,11 @@ public class IndexResultMapper {
         return used;
     }
 
-    /** 방문 스텝으로 쓰이지 않은 LODGING 중 평점이 가장 높은 후보. */
     private Integer findUnusedAccommodation(List<PlaceCandidate> allCandidates, Set<Integer> usedIndices) {
         return bestAccommodation(allCandidates.stream()
                 .filter(c -> !usedIndices.contains(c.index())));
     }
 
-    /** 점유 여부를 무시한 최선책 LODGING — 숙소 없는 숙박일을 만들지 않기 위한 마지막 수단. */
     private Integer findAnyAccommodation(List<PlaceCandidate> allCandidates) {
         return bestAccommodation(allCandidates.stream());
     }
@@ -423,21 +360,16 @@ public class IndexResultMapper {
     private Integer bestAccommodation(java.util.stream.Stream<PlaceCandidate> candidates) {
         return candidates
                 .filter(c -> "LODGING".equals(PlaceCategoryConstants.majorCategory(c.category())))
-                // 리뷰 없는 평점 5.0 스텁이 실제 호텔을 이기는 것을 막는다(실측 79번 Hengwa Stay).
+                // 리뷰 없는 평점 5.0 스텁이 실제 호텔을 이기지 못하게 한다.
                 .filter(c -> PlaceCategoryConstants.isVisitableEntity(c.name(), c.address()))
-                // 평점 최댓값이 아니라 인기도(평점 × 리뷰 수) 최댓값 — 주소 게이트를 통과한
-                // 리뷰 없는 5.0 스텁이 여전히 남아 있을 수 있다.
+                // 주소 게이트를 통과한 스텁도 있어 평점이 아니라 인기도(평점 × 리뷰 수)로 고른다.
                 .max(Comparator.<PlaceCandidate>comparingDouble(PlaceProminence::of)
                         .thenComparing(c -> c.rating() != null ? c.rating() : BigDecimal.ZERO))
                 .map(PlaceCandidate::index)
                 .orElse(null);
     }
 
-    /**
-     * SelectionOutput을 PlaceCandidate flat 목록으로 변환.
-     * arrivalHub → placeIndices → accommodationIndex → departureHub 순서대로 단일 리스트로.
-     * 또한 spareIndices를 별도로 반환.
-     */
+    /** 날마다 arrivalHub → placeIndices → accommodation → departureHub 순으로 펼친다. */
     public FlattenedSelection flattenSelection(SelectionOutput selection,
                                               List<PlaceCandidate> allCandidates) {
         List<PlaceCandidate> mainSteps = new ArrayList<>();
@@ -471,9 +403,7 @@ public class IndexResultMapper {
         return new FlattenedSelection(mainSteps, spareSteps);
     }
 
-    /**
-     * 후보 인덱스(1-based)로 PlaceCandidate를 조회한다.
-     */
+    /** index는 1-based다. */
     private PlaceCandidate getCandidateByIndex(List<PlaceCandidate> candidates, Integer index) {
         if (index == null || index < 1 || index > candidates.size()) {
             throw new IllegalArgumentException(
@@ -482,9 +412,6 @@ public class IndexResultMapper {
         return candidates.get(index - 1);
     }
 
-    /**
-     * 플래트닝 결과.
-     */
     public static class FlattenedSelection {
         public final List<PlaceCandidate> mainSteps;
         public final List<PlaceCandidate> spareSteps;

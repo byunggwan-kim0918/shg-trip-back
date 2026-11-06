@@ -2,9 +2,6 @@ package com.shg.trip.shgtrip.domain.planning.dto;
 
 import java.util.List;
 
-/**
- * 일정 검증 결과.
- */
 public record ValidationResult(
         boolean valid,
         int score,          // 0~100

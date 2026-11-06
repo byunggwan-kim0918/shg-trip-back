@@ -5,11 +5,7 @@ import lombok.*;
 
 import java.time.OffsetDateTime;
 
-/**
- * FSQ 장소 시딩 배치 실행 이력.
- * 배치가 시작할 때 RUNNING 상태로 row를 먼저 생성하고,
- * 완료/실패 시 업데이트하여 진행 중 컨테이너가 죽어도 RUNNING 상태가 남아 추적 가능하다.
- */
+/** FSQ 시딩 실행 이력. 시작 시 RUNNING으로 먼저 남겨 컨테이너가 죽어도 추적된다. */
 @Entity
 @Table(name = "place_seeding_history")
 @Getter

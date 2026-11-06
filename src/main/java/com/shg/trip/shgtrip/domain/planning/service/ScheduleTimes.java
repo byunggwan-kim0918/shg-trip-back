@@ -8,10 +8,8 @@ import java.util.List;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.END_OF_DAY_MINUTES;
 
 /**
- * 일정 확정에서 되풀이되는 잔손질 — 시각 파싱/표기와 1-based 후보 인덱싱.
- *
- * <p>{@link RouteOptimizer}와 {@link InvariantChecker}가 같은 규칙을 봐야 해서 밖으로 뺐다.
- * 특히 시각 표기는 자정 wrap 처리가 한쪽에만 있으면 "26:16"과 "02:16"이 섞여 나온다.
+ * {@link RouteOptimizer}와 {@link InvariantChecker}가 같은 시각·인덱스 규칙을 봐야 한다.
+ * 자정 wrap 처리가 한쪽에만 있으면 "26:16"과 "02:16"이 섞여 나온다.
  */
 @Slf4j
 final class ScheduleTimes {
@@ -37,10 +35,8 @@ final class ScheduleTimes {
     }
 
     /**
-     * 분 → "HH:mm".
-     *
-     * <p>누적 시각이 자정을 넘으면 %24 wrap으로 26:16→02:16처럼 시간이 역행해 보인다.
-     * 일과 종료(23:59)로 클램프해 같은 날 안에서 시각이 단조증가하도록 보장한다.
+     * 분 → "HH:mm". 자정을 넘으면 23:59로 클램프한다.
+     * %24 wrap이면 26:16→02:16처럼 같은 날 안에서 시각이 역행해 보인다.
      */
     static String formatMinutes(int minutes) {
         int clamped = minutes;

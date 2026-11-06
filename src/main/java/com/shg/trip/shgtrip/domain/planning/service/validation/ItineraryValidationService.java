@@ -20,12 +20,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 일정 검증 서비스.
- * - validateHard: 필수 필드 검증 (순수 Java 로직)
- * - validateSoft: AI 품질 검증 (Haiku 4.5)
- * - validateWithRetry: 보강 → 재검증 → 재생성 파이프라인
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -36,15 +30,10 @@ public class ItineraryValidationService {
     private final AIService aiService;
     private final PlanningProperties planningProperties;
 
-    /**
-     * Hard 검증: 필수 필드, 날짜 범위, 장소 존재 여부, 대안 개수.
-     * 순수 Java 로직 — AI 호출 없음.
-     */
     public ValidationResult validateHard(ItineraryData data, EnrichedInput input) {
         List<String> errors = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
 
-        // 필수 필드 검증
         if (data.title() == null || data.title().isBlank()) {
             errors.add("일정 제목이 없습니다.");
         }
@@ -56,7 +45,6 @@ public class ItineraryValidationService {
         }
 
         if (data.steps() != null) {
-            // 날짜 범위 검증
             long expectedDays = ChronoUnit.DAYS.between(input.startDate(), input.endDate()) + 1;
             int maxDayNumber = data.steps().stream()
                     .mapToInt(StepData::dayNumber)
@@ -69,12 +57,10 @@ public class ItineraryValidationService {
                 StepData step = data.steps().get(i);
                 String prefix = String.format("Step %d: ", i + 1);
 
-                // 장소 존재 여부
                 if (step.place() == null || step.place().name() == null || step.place().name().isBlank()) {
                     errors.add(prefix + "장소 정보가 없습니다.");
                 }
 
-                // 시간 형식 검증
                 if (step.startTime() == null || !step.startTime().matches("\\d{2}:\\d{2}")) {
                     errors.add(prefix + "시작 시간 형식이 올바르지 않습니다 (HH:mm).");
                 }
@@ -82,8 +68,8 @@ public class ItineraryValidationService {
                     errors.add(prefix + "종료 시간 형식이 올바르지 않습니다 (HH:mm).");
                 }
 
-                // 대안 개수 검증 (3~5개) — 교통 허브(공항/기차역 등) step은 대안이 비현실적이므로 제외.
-                // 부족은 경고만 — 후보가 적은 지역에서 대안 부족만으로 생성 전체가 실패했다(대안은 부가 정보다).
+                // 교통 허브 step은 대안이 비현실적이라 대안 개수(3~5개) 검증에서 뺀다.
+                // 대안은 부가 정보라 후보가 적은 지역에서 생성 전체가 실패하지 않게 부족은 경고만 한다.
                 boolean isTransitHub = isTransitHub(step);
                 if (!isTransitHub) {
                     if (step.alternatives() == null || step.alternatives().size() < 3) {
@@ -95,7 +81,6 @@ public class ItineraryValidationService {
                 }
             }
 
-            // 메인 장소 중복 검증 (숙소·교통 허브 제외)
             Map<String, Long> placeNameCount = data.steps().stream()
                     .filter(s -> s.place() != null && s.place().name() != null)
                     .filter(s -> !isTransitHubOrAccommodation(s))
@@ -112,19 +97,15 @@ public class ItineraryValidationService {
     }
 
     /**
-     * Soft 검증: Haiku 4.5 AI 품질 평가 + Java 규칙 검사.
-     * AI 평가 (validate-soft.txt): 문맥 일관성(30점), 동선 효율성(40점), 정보 완전성(30점)
+     * AI 평가(validate-soft.txt): 문맥 일관성(30점), 동선 효율성(40점), 정보 완전성(30점)
      * Java 추가 감점: 예산 초과(-15), 일정 밀도(-10), 교통 정보 누락(-5/건)
      */
     public ValidationResult validateSoft(ItineraryData data, EnrichedInput input) {
         try {
-            // 1. AI 품질 평가 (Haiku 4.5)
             SoftEvaluationResult aiEval = aiService.evaluateSoftQuality(data, input);
             int score = aiEval.score();
             List<String> warnings = new ArrayList<>(aiEval.issues());
 
-            // 2. Java 규칙 추가 감점
-            // 예산 초과
             if (data.estimatedCost() != null && input.budget() != null
                     && data.estimatedCost().compareTo(input.budget()) > 0) {
                 warnings.add(String.format("예상 비용(%s원)이 예산(%s원)을 초과합니다.",
@@ -133,7 +114,6 @@ public class ItineraryValidationService {
                 log.debug("Soft 감점: 예산 초과 -15 → score={}", score);
             }
 
-            // 일정 밀도 (하루 평균 단계 수) — pace에 따라 기준 다름
             if (data.steps() != null && !data.steps().isEmpty()) {
                 long days = ChronoUnit.DAYS.between(input.startDate(), input.endDate()) + 1;
                 double avgSteps = (double) data.steps().size() / days;
@@ -147,7 +127,7 @@ public class ItineraryValidationService {
                         }
                     }
                     case "relaxed" -> {
-                        // relaxed는 2~3개가 정상 — 과밀만 체크
+                        // relaxed는 2~3개가 정상이라 과밀만 본다.
                         if (avgSteps > 5) {
                             warnings.add("여유롭게 페이스인데 하루 평균 일정이 5개를 초과합니다.");
                             score = Math.max(score - 10, 0);
@@ -169,9 +149,8 @@ public class ItineraryValidationService {
                 }
             }
 
-            // 교통 정보 누락 — 각 날의 첫 번째 단계는 제외
+            // 각 날의 첫 단계는 들어오는 이동이 없어 교통 정보 누락 검사에서 뺀다.
             if (data.steps() != null) {
-                // 각 dayNumber별 최소 stepOrder를 구해서 해당 step은 교통 정보 불필요
                 Map<Integer, Integer> firstStepPerDay = new HashMap<>();
                 for (StepData s : data.steps()) {
                     firstStepPerDay.merge(s.dayNumber(), s.stepOrder(), Math::min);
@@ -189,7 +168,7 @@ public class ItineraryValidationService {
                     log.debug("Soft 감점: 교통 정보 누락 {}건 × -5 → score={}", missingTransport, score);
                 }
 
-                // 이동 시간 > 시간 갭 검증 (물리적으로 불가능한 이동)
+                // 이동 시간이 시간 갭보다 길면 물리적으로 불가능한 이동이다.
                 List<StepData> sorted = data.steps().stream()
                         .sorted(java.util.Comparator.comparingInt(StepData::stepOrder))
                         .toList();
@@ -227,8 +206,7 @@ public class ItineraryValidationService {
             }
         } catch (Exception e) {
             log.error("Soft validation failed: {}", e.getMessage(), e);
-            // AI 장애 시 threshold 미만 점수로 enhance 루프 진입 보장
-            // softThreshold - 1로 동적 계산하여 threshold 설정 변경에도 안전하게 대응
+            // AI 장애 시 threshold 미만 점수를 줘야 enhance 루프에 들어간다.
             int failScore = Math.max(0, planningProperties.validation().softThreshold() - 1);
             return ValidationResult.softFail(failScore, List.of(), List.of("Soft 검증 중 오류 발생"),
                     "AI 품질 평가 실패: " + e.getMessage());
@@ -236,12 +214,10 @@ public class ItineraryValidationService {
     }
 
     /**
-     * 보강 → 재검증 → 재생성 파이프라인.
-     * 최대 3회 보강 시도. AI 호출 자체가 수초 소요되므로 인위적 backoff 없음.
-     * 3회 실패 시 처음부터 재생성.
+     * 보강을 최대 3회 시도하고 모두 실패하면 처음부터 재생성한다.
+     * AI 호출 자체가 수초 걸려 시도 사이에 backoff를 두지 않는다.
      */
     public ItineraryData validateWithRetry(ItineraryData data, EnrichedInput input, List<Place> selectedPlaces) {
-        // 1. Hard 검증
         ValidationResult hardResult = validateHard(data, input);
         if (!hardResult.valid()) {
             log.warn("Hard validation failed: {}", hardResult.errors());
@@ -249,7 +225,6 @@ public class ItineraryValidationService {
                     "일정 필수 검증 실패: " + String.join(", ", hardResult.errors()));
         }
 
-        // 2. Soft 검증 + 보강 루프
         ItineraryData current = data;
         ValidationResult lastSoftResult = null;
         for (int attempt = 0; attempt < MAX_ENHANCE_ATTEMPTS; attempt++) {
@@ -264,18 +239,15 @@ public class ItineraryValidationService {
             log.info("Soft validation failed (score={}, attempt={}/{}), enhancing...",
                     softResult.score(), attempt + 1, MAX_ENHANCE_ATTEMPTS);
 
-            // 보강
             current = aiService.enhanceItinerary(current, softResult, input);
 
-            // 보강 후 Hard 재검증
             ValidationResult reHard = validateHard(current, input);
             if (!reHard.valid()) {
                 log.warn("Enhanced itinerary failed hard validation: {}", reHard.errors());
-                // 보강이 오히려 구조를 깨뜨린 경우 → 재생성으로 전환
+                // 보강이 구조를 깨뜨렸으면 재생성으로 간다.
                 break;
             }
 
-            // 마지막 enhance 후에도 soft 재검증 수행
             if (attempt == MAX_ENHANCE_ATTEMPTS - 1) {
                 ValidationResult finalSoft = validateSoft(current, input);
                 lastSoftResult = finalSoft;
@@ -286,7 +258,7 @@ public class ItineraryValidationService {
             }
         }
 
-        // 3. 3회 실패 → 재생성 (마지막 실패 사유를 전달하여 같은 문제 반복 방지)
+        // 마지막 실패 사유를 넘겨야 재생성이 같은 문제를 반복하지 않는다.
         String failureReason = lastSoftResult != null && lastSoftResult.feedback() != null
                 ? lastSoftResult.feedback()
                 : "이전 생성 결과가 3회 보강 후에도 품질 기준을 충족하지 못했습니다.";
@@ -294,14 +266,13 @@ public class ItineraryValidationService {
                 MAX_ENHANCE_ATTEMPTS, failureReason);
         ItineraryData regenerated = aiService.regenerateItinerary(input, failureReason, selectedPlaces);
 
-        // 재생성 결과 Hard 검증
         ValidationResult finalHard = validateHard(regenerated, input);
         if (!finalHard.valid()) {
             throw new BusinessException(ErrorCode.AI_SERVICE_ERROR,
                     "재생성된 일정도 필수 검증에 실패했습니다: " + String.join(", ", finalHard.errors()));
         }
 
-        // 재생성 결과 Soft 검증 (best-effort: 실패해도 반환, 경고만 기록)
+        // 재생성 결과의 Soft 검증은 best-effort라 실패해도 반환하고 경고만 남긴다.
         ValidationResult regeneratedSoft = validateSoft(regenerated, input);
         if (!regeneratedSoft.valid()) {
             log.warn("Regenerated itinerary did not pass soft validation (score={}), returning as-is.",
@@ -313,9 +284,7 @@ public class ItineraryValidationService {
         return regenerated;
     }
 
-    /** "HH:mm" 형식 시간 문자열을 분으로 변환 */
-
-    /** 교통 허브 장소명 패턴 — "역사박물관" 등 오탐 방지를 위해 정밀 매칭 */
+    /** "역사박물관" 같은 오탐을 막으려고 교통 허브 장소명을 정밀 매칭한다. */
     private static final java.util.regex.Pattern TRANSIT_NAME_PATTERN = java.util.regex.Pattern.compile(
             "공항|기차역|버스터미널|터미널|항구|페리|"
                     + "airport|(?:train|bus|subway|metro)\\s*station|terminal|port|ferry|"
@@ -325,7 +294,7 @@ public class ItineraryValidationService {
             java.util.regex.Pattern.CASE_INSENSITIVE
     );
 
-    /** 교통 허브 step인지 — 장소명 패턴 매칭 또는 FLIGHT 교통수단 */
+    /** 장소명 패턴 또는 FLIGHT 교통수단으로 교통 허브를 판정한다. */
     private boolean isTransitHub(StepData step) {
         if (step.transportationMode() != null && step.transportationMode().equals("FLIGHT")) {
             return true;
@@ -335,7 +304,6 @@ public class ItineraryValidationService {
         return TRANSIT_NAME_PATTERN.matcher(placeName).find();
     }
 
-    /** 숙소 또는 교통 허브 step인지 */
     private boolean isTransitHubOrAccommodation(StepData step) {
         String cat = step.place() != null ? step.place().category() : null;
         if (cat != null && (cat.equals("숙소") || cat.equalsIgnoreCase("accommodation"))) {

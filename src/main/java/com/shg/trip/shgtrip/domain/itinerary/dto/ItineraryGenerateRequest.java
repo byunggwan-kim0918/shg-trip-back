@@ -7,9 +7,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
-/**
- * 일정 생성 요청 DTO.
- */
 @ValidDateRange(maxDays = 10)
 public record ItineraryGenerateRequest(
 
@@ -53,8 +50,7 @@ public record ItineraryGenerateRequest(
 
         List<Long> selectedPlaceIds,  // Manual Mode 전용, nullable
 
-        // Manual Mode 자유입력 장소명 — 생성 시 DB에서 이름으로 실장소화한다(외부 호출 없음).
-        // DB에 없는 이름은 만들어내지 않고 "찾지 못함"으로 안내한다.
+        // Manual Mode 자유입력 장소명은 DB 이름 매칭으로만 실장소화하고, 없는 이름은 "찾지 못함"으로 안내한다.
         @Size(max = 5, message = "직접 입력 장소는 최대 5개까지 가능합니다.")
         List<@Size(max = 100, message = "장소명은 100자 이내여야 합니다.") String> customPlaceNames,
 
@@ -108,9 +104,8 @@ public record ItineraryGenerateRequest(
     }
 
     /**
-     * MANUAL 모드는 선택 장소(ID) 또는 자유입력 장소명 중 하나가 반드시 있어야 한다.
-     * 기존엔 Fallback 경로에서만 검증돼 최적화 경로로는 빈 선택이 조용히 AUTO처럼 동작했다.
-     * Controller @Valid에서 동기 400으로 차단한다(SSE 진입 전).
+     * MANUAL 모드는 선택 장소(ID)나 자유입력 장소명이 하나는 있어야 한다.
+     * 최적화 경로는 따로 검증하지 않아 빈 선택이 AUTO처럼 동작하므로 SSE 진입 전 400으로 막는다.
      */
     @AssertTrue(message = "MANUAL 모드에서는 장소를 1개 이상 선택하거나 직접 입력해야 합니다.")
     public boolean isManualSelectionPresent() {

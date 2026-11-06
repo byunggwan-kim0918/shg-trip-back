@@ -12,19 +12,13 @@ import java.util.Set;
 /**
  * 식당·카페·술집(카테고리 "Dining and Drinking ...") 전용 보강 규칙.
  *
- * <p>관광지 프롬프트를 그대로 쓰면 두 가지가 깨진다.
- * <ul>
- *   <li><b>업종 태그를 모델이 정한다.</b> 동선 층은 태그로 식사·카페를 가른다
- *       ({@link PlaceCategoryConstants#isMealPlace}, {@link PlaceCategoryConstants#isCafeLike}).
- *       규칙을 프롬프트로 적어도 모델은 식당에 카페·커피를 붙이곤 했다(실측 19건 중 2건).
- *       그래서 업종은 카테고리에서 코드로 정하고, 업종과 어긋나는 태그는 코드로 지운다.
- *       카테고리가 총칭("Dining and Drinking > Restaurant")일 때만 모델이 이름을 보고 고른다.</li>
- *   <li><b>무명 식당에 지어낸 설명이 붙는다.</b> 모델은 동네 식당을 모른다. 설명은 Wikidata에
- *       잡힌 곳(sitelinks &gt; 0)만 받고, 나머지는 기존 설명(TourAPI 개요 등)을 그대로 둔다.</li>
- * </ul>
+ * <p>동선 층은 태그로 식사·카페를 가르는데({@link PlaceCategoryConstants#isMealPlace},
+ * {@link PlaceCategoryConstants#isCafeLike}) 프롬프트 규칙만으로는 모델이 식당에 카페 태그를 붙인다.
+ * 그래서 업종은 카테고리에서 코드로 정하고 어긋나는 태그는 코드로 지운다. 총칭 카테고리일 때만 모델이 고른다.
  *
- * <p>체류시간은 묻지 않는다. 동선 층이 식사 스텝에 고정 체류시간을 쓰고, 나머지 경로에서도
- * 업종별 기본값이면 충분하다. 입장료도 식음료는 비용 산정에 쓰이지 않아 넣지 않는다.
+ * <p>모델은 동네 식당을 몰라 설명을 지어내므로 설명은 Wikidata에 잡힌 곳(sitelinks &gt; 0)만 받는다.
+ *
+ * <p>체류시간·입장료는 묻지 않는다. 동선 층이 식사 스텝에 고정 체류시간을 쓰고 식음료는 비용 산정에 쓰이지 않는다.
  */
 final class DiningEnrichment {
 
@@ -52,7 +46,7 @@ final class DiningEnrichment {
             this.defaultMinutes = defaultMinutes;
         }
 
-        /** 잠깐 들르는 곳 — 식당 신호가 붙으면 카페로 안 읽힌다. */
+        /** 잠깐 들르는 곳. 식당 신호가 붙으면 카페로 안 읽힌다. */
         boolean isLightStop() {
             return this == CAFE || this == BAKERY || this == DESSERT || this == SNACK;
         }
@@ -68,9 +62,8 @@ final class DiningEnrichment {
     }
 
     /**
-     * @param placeRole 일정 속 역할(MEAL/CAFE/BAR) — 업종에서 코드로 파생한다. 모델에게 따로 물으면
-     *                  업종과 역할이 어긋나는 응답이 생긴다(업종을 카테고리로 정한 이유와 같다).
-     * @param cuisine   음식 종류(MEAL만) — 갈래 태그·카테고리 리프에서 파생. 식사가 아니면 null.
+     * @param placeRole MEAL/CAFE/BAR. 모델에게 따로 물으면 업종과 어긋나므로 업종에서 파생한다.
+     * @param cuisine   음식 종류. 식사가 아니면 null.
      */
     record Result(List<String> tags, String description, List<String> timeSlots, int durationMinutes,
                   String placeRole, String cuisine) {
@@ -224,15 +217,13 @@ final class DiningEnrichment {
     }
 
     /**
-     * 음식 갈래 태그(프롬프트가 고정 목록에서만 고르게 함)와 카테고리 리프로 음식 종류를 정한다.
-     * 여러 갈래가 붙으면 "무엇을 먹는가"(고기·해산물·면·국물)를 "어느 나라 음식인가"(일식·중식·양식)보다
-     * 우선한다 — 같은 끼니 반복을 막는 데는 앞쪽이 더 정확하다(스시집과 라멘집은 둘 다 일식이지만
-     * 연달아 먹어도 반복이 아니다). 한식만 있으면 한정식·백반류(KOREAN_SET).
+     * 갈래가 여럿이면 고기·해산물·면·국물을 일식·중식·양식보다 우선한다. 스시집과 라멘집은 연달아 먹어도
+     * 반복이 아니기 때문이다. 한식만 있으면 한정식·백반류(KOREAN_SET).
      */
     static String cuisineOf(List<String> tags, String category) {
         String c = category == null ? "" : category.toLowerCase(Locale.ROOT);
         java.util.Set<String> t = tags == null ? java.util.Set.of() : new java.util.HashSet<>(tags);
-        // 치킨집은 고기로 묶지 않는다 — 일정 쪽은 이름·리프로 "chicken"을 따로 센다(PlaceCategoryConstants.LEAF_ALIAS).
+        // 치킨집은 고기로 묶지 않는다. 일정 쪽은 이름·리프로 "chicken"을 따로 센다(PlaceCategoryConstants.LEAF_ALIAS).
         if (c.contains("fried chicken")) return "OTHER";
         if (t.contains("돼지고기") || t.contains("소고기") || t.contains("닭고기")
                 || c.contains("bbq") || c.contains("steakhouse") || c.contains("yakiniku")) return "MEAT";

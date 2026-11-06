@@ -26,8 +26,7 @@ public class AsyncConfig {
     }
 
     /**
-     * SSE heartbeat 전용 스케줄러.
-     * 요청마다 새로운 스케줄러를 생성하지 않고 공유해서 스레드 낭비를 막는다.
+     * 요청마다 스케줄러를 만들지 않고 공유해 스레드 낭비를 막는다.
      */
     @Bean(name = "sseHeartbeatScheduler")
     public ScheduledExecutorService sseHeartbeatScheduler() {

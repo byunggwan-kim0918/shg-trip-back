@@ -19,9 +19,8 @@ import java.util.List;
 import java.util.function.Supplier;
 
 /**
- * Call 2 Haiku: 백엔드(RouteOptimizer)가 day·순서·시간·교통·대안을 전부 확정한 일정 위에,
- * Sonnet이 정의한 concept을 반영한 story 텍스트만 생성한다. 순서/시간은 절대 변경하지 않음
- * (스키마에 구조 필드 자체가 없음). 비동기로 호출되며 critical path 밖에서 동작한다.
+ * RouteOptimizer가 확정한 일정 위에 concept을 반영한 story 텍스트만 생성한다.
+ * 스키마에 구조 필드가 없어 순서·시간을 바꿀 수 없고, 비동기라 critical path 밖에서 동작한다.
  */
 @Slf4j
 @Service
@@ -41,9 +40,6 @@ public class AssemblyCallGenerator {
     }
 
     /**
-     * Call 2: Haiku가 확정된 일정 위에 concept을 반영한 story를 생성한다.
-     * maxTokens = steps × 80 + 300 (구조 필드가 없어 매우 가벼움).
-     *
      * @param fixedSteps 백엔드가 day·순서·시간·교통·대안을 확정한 최종 step 목록
      * @param concept    Sonnet이 정의한 여행 전체 컨셉
      * @param input      여행 정보 (확장된 enrichInput 결과)
@@ -92,11 +88,7 @@ public class AssemblyCallGenerator {
     }
 
     /**
-     * 프롬프트 캐시 적중 현황을 "읽음/쓰기" 형태로 포맷한다.
-     *
-     * <p>적중 없는 캐시는 쓰기 프리미엄(1.25배)만 내고 이득이 없다. 생성이 희박해서 기본 TTL
-     * 안에 재사용되지 않으면 캐시가 순손실인데, 지금은 적중률 로그가 없어 이득인지 손실인지
-     * 판단할 수 없었다. 읽음이 계속 0이면 캐시를 떼는 게 맞다.
+     * 적중 없는 캐시는 쓰기 프리미엄(1.25배)만 낸다. 읽음이 계속 0이면 캐시를 떼야 한다.
      */
     private String cacheInfo(Message message) {
         long read = message.usage().cacheReadInputTokens().orElse(0L);
@@ -134,10 +126,6 @@ public class AssemblyCallGenerator {
                 && String.valueOf(message.stopReason().get()).contains("max_tokens");
     }
 
-    /**
-     * 확정된 일정(장소·순서·시간·지역) + concept을 컨텍스트로 제공.
-     * 출력은 stepOrder별 story뿐 — 순서/시간을 바꿀 수 있는 필드가 스키마에 없음.
-     */
     String buildUserMessage(List<StepData> fixedSteps, String concept, VectorEnrichedInput input) {
         StringBuilder sb = new StringBuilder();
 
@@ -169,13 +157,12 @@ public class AssemblyCallGenerator {
         for (StepData step : fixedSteps) {
             sb.append("[stepOrder ").append(step.stepOrder()).append("] ")
                     .append(step.dayNumber()).append("일차");
-            // 날짜·요일을 준다. 없으면 모델이 11:30 점심을 "아침을 깨우고"로 쓰고,
-            // 18:43 호텔 체크인을 "야경"으로 쓴다(실측 79번).
+            // 날짜·요일이 없으면 모델이 11:30 점심을 "아침을 깨우고"로 쓴다.
             appendDayDate(sb, input, step.dayNumber());
             sb.append(" ").append(step.startTime()).append("-").append(step.endTime()).append(" ")
                     .append(step.place().name())
                     .append(" (").append(displayRegion(step)).append(")");
-            // 슬롯 역할을 명시한다 — 같은 시각이라도 "점심 식사"와 "숙소 체크인"은 문장이 달라야 한다.
+            // 같은 시각이라도 "점심 식사"와 "숙소 체크인"은 문장이 달라야 해서 슬롯 역할을 명시한다.
             String role = slotRole(step);
             if (role != null) sb.append(" · ").append(role);
             String category = leafCategory(step.place().category());
@@ -193,7 +180,6 @@ public class AssemblyCallGenerator {
         return sb.toString();
     }
 
-    /** 표시 지역: 세부지역(시/군/구) 우선, 없으면 상위 region. */
     /** D일차의 실제 날짜와 요일. {@code startDate}가 없으면 아무것도 붙이지 않는다. */
     private void appendDayDate(StringBuilder sb, VectorEnrichedInput input, int dayNumber) {
         if (input == null || input.startDate() == null) return;
@@ -205,8 +191,7 @@ public class AssemblyCallGenerator {
     }
 
     /**
-     * 스텝의 역할(점심/저녁/숙소/도착·출발). 시각만 주면 모델이 역할을 추측하다 틀린다 —
-     * 실측 79번: 11:30 점심을 "아침을 깨우고", 18:43 호텔 체크인을 "해변의 야경"으로 썼다.
+     * 스텝의 역할(점심/저녁/숙소/도착·출발). 시각만 주면 모델이 역할을 추측하다 틀린다.
      */
     private String slotRole(StepData step) {
         if (step.place() == null) return null;
@@ -232,9 +217,8 @@ public class AssemblyCallGenerator {
     }
 
     /**
-     * 일몰 시각 안내. 없으면 모델이 "해질녘", "야경"을 시각과 무관하게 쓴다
-     * (실측 79번: 5월 제주 일몰은 19:30경인데 18:16을 "저녁이 물드는"으로 썼다).
-     * 위도별 정밀 계산 대신 월별 대략값을 준다 — 틀린 단정을 막는 것이 목적이다.
+     * 일몰 시각이 없으면 모델이 "해질녘", "야경"을 시각과 무관하게 쓴다.
+     * 틀린 단정을 막는 것이 목적이라 위도별 계산 대신 월별 대략값을 준다.
      */
     private void appendSunsetHint(StringBuilder sb, VectorEnrichedInput input) {
         if (input == null || input.startDate() == null) return;
@@ -265,7 +249,7 @@ public class AssemblyCallGenerator {
         return leaf.isEmpty() ? null : leaf;
     }
 
-    /** 장소 설명 한 줄 — 너무 길면 잘라 토큰을 아낀다. URL만 있는 값은 버린다. */
+    /** 너무 길면 잘라 토큰을 아끼고, URL만 있는 값은 버린다. */
     private String shortDescription(String description) {
         if (description == null || description.isBlank()) return null;
         String trimmed = description.trim().replaceAll("\\s+", " ");

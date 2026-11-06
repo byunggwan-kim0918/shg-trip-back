@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** day 구성 스냅샷 — 하위 수리가 상위 불변식을 깨면 이 상태로 되돌린다. */
+/** 하위 수리가 상위 불변식을 깨면 이 상태로 되돌린다. */
 record DaySnapshot(Map<Integer, List<Integer>> placeIndices,
                            Map<Integer, Integer[]> fixedSlots,
                            Map<Integer, java.util.Set<Integer>> coverageCritical) {

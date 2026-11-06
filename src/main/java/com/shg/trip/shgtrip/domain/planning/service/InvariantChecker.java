@@ -26,23 +26,17 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LUNCH_
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.distanceLimits;
 
 /**
- * 확정된 일정이 불변식을 지켰는지 <b>판정만</b> 하는 클래스. 고치지는 않는다.
+ * 확정된 일정이 불변식을 지켰는지 판정만 하고 고치지 않는다.
+ * 검사와 수리가 섞이면 검사 항목 하나 늘리는 데도 수리 로직을 건드리게 되고, 검사망에 없는 항목은 조용히 깨진다.
  *
- * <p>검사와 수리가 한 클래스에 있으면 검사 항목 하나를 늘리는 데도 4천 줄짜리 수리 로직을 건드리게
- * 된다. 실제로 그래서 "숙소 배정 여부"가 오랫동안 검사 항목에 없었고, 4일 전부 숙소가 없는 일정이
- * "위반 없음"으로 통과했다(실측 itinerary 60). <b>검사망에 없는 항목은 조용히 깨진다.</b>
- *
- * <p>{@link RouteOptimizer}와 떨어져 있어 확정된 스텝만 있으면 단독으로 돌릴 수 있다 — 저장된
- * 일정을 일괄 재검사해 품질 지표를 뽑는 용도로도 쓸 수 있다.
- *
- * <p>현재 검사 항목은 <b>기계적 축</b>(슬롯 충족·거리·종료 시각)에 한정된다. 빈 시간, 메뉴 반복,
- * 하루 관광지 수, 숙소 연박 같은 <b>여행자 체감 축</b>은 아직 없다.
+ * <p>검사 항목은 기계적 축(슬롯 충족·거리·종료 시각)에 한정된다.
+ * 빈 시간·메뉴 반복·하루 관광지 수 같은 여행자 체감 축은 보지 않는다.
  */
 @Slf4j
 final class InvariantChecker {
 
     /**
-     * 확정 스텝을 기준으로 day별 불변식 상태를 계산한다. 거리는 <b>직선 기준</b>(예산과 같은 단위)이며,
+     * 거리는 예산과 같은 직선 기준이다.
      * 요약 로그는 표시값과 헷갈리지 않도록 도로 환산값을 함께 낸다.
      */
     Map<Integer, DayStatus> evaluate(List<DayState> days, List<StepData> steps,
@@ -62,7 +56,7 @@ final class InvariantChecker {
             double maxLeg = 0;
             for (StepData step : daySteps) {
                 if (step.transportationDistance() == null) continue;
-                // 저장된 이동거리는 도로 환산값 — 예산과 같은 직선 단위로 되돌려 비교한다.
+                // 저장된 이동거리는 도로 환산값이라 예산과 같은 직선 단위로 되돌려 비교한다.
                 double straight = step.transportationDistance().doubleValue() / GeoUtils.ROAD_DISTANCE_FACTOR;
                 total += straight;
                 maxLeg = Math.max(maxLeg, straight);
@@ -89,8 +83,8 @@ final class InvariantChecker {
     }
 
     /**
-     * 우선순위 역전 탐지: 이전에 충족하던 상위 불변식(식사 슬롯 → 하루 거리 예산)이 깨졌으면
-     * 그 사유를 문자열로 반환한다. 없으면 null. 하위 불변식(커버리지·유형 상한) 악화는 보지 않는다.
+     * 이전에 충족하던 상위 불변식(식사 슬롯 → 하루 거리 예산)이 깨졌으면 그 사유를, 아니면 null을 반환한다.
+     * 하위 불변식(커버리지·유형 상한) 악화는 보지 않는다.
      */
     String findPriorityRegression(Map<Integer, DayStatus> before, Map<Integer, DayStatus> after) {
         for (Map.Entry<Integer, DayStatus> entry : after.entrySet()) {
@@ -109,9 +103,7 @@ final class InvariantChecker {
     }
 
     /**
-     * 최종 결과를 day별 한 줄로 요약해 로그에 남기고, 끝내 해소하지 못한 위반을 <b>사용자 안내
-     * 문구</b>로 돌려준다. 흩어진 보정 로그만으로는 "결국 어떤 일정이 나왔는지"를 읽을 수 없어
-     * 루프 종료 후 단일 요약을 남긴다.
+     * 흩어진 보정 로그만으로는 최종 일정을 읽을 수 없어 루프 종료 후 day별 한 줄 요약을 남긴다.
      *
      * @return 남은 위반의 안내 문구. 비어 있으면 모든 구조적 불변식을 만족한 일정이다
      */
@@ -161,10 +153,8 @@ final class InvariantChecker {
                 violations.add("늦은 종료(" + formatMinutes(st.endMinutes()) + ")");
                 notices.add(dayNumber + "일차 일정이 " + formatMinutes(st.endMinutes()) + "까지 이어집니다.");
             }
-            // 메우지 못한 긴 공백은 숨기지 말고 알린다. 식사 슬롯이 11:30/17:30에 고정돼 있어
-            // 그 사이에 넣을 장소가 없으면 4시간 이상 비는데(실측: 골든 스냅샷 다수가 290분),
-            // 경로에서 멀리 떨어진 곳을 억지로 끼우면 "앉아서 3시간" 대신 "2.5시간 운전"이 된다.
-            // 채우지 못하는 것 자체는 후보 데이터의 한계이므로, 자유시간으로 정직하게 보여준다.
+            // 고정된 식사 슬롯 사이에 먼 곳을 억지로 끼우면 "앉아서 3시간"이 "2.5시간 운전"이 된다.
+            // 그래서 메우지 못한 긴 공백은 자유시간으로 알린다.
             int gap = maxIntraDayGap(steps, dayNumber);
             if (gap >= LARGE_GAP_MINUTES) {
                 violations.add("긴 공백(" + gap + "분)");
@@ -196,9 +186,7 @@ final class InvariantChecker {
 
     /**
      * 식사 시간창(시작 60분 전까지 허용) 안에 식사 가능한 장소가 있는지.
-     *
-     * <p>수리 경로({@link RouteOptimizer})도 같은 판정을 써야 한다 — 수리기와 검사기가 "점심이 있다"를
-     * 다르게 정의하면 수리가 끝난 뒤에도 검사가 계속 위반을 잡는 무한 루프가 된다.
+     * {@link RouteOptimizer}와 정의가 다르면 수리 뒤에도 검사가 위반을 계속 잡아 무한 루프가 된다.
      */
     static boolean hasMealInWindow(List<StepData> daySteps, int windowStart, int windowEnd) {
         return hasMealInWindow(daySteps, windowStart, windowEnd, InvariantChecker::isMealByName);
@@ -234,12 +222,7 @@ final class InvariantChecker {
     }
 
     /**
-     * 마지막날 저녁 식사가 필요한지 — 출발 허브 스텝 시각이 저녁 시간대를 넘기면 필요하다.
-     * candidates가 없으면 대분류로 허브 스텝을 찾는다(로그 경로에서 후보 목록 없이 호출됨).
-     */
-    /**
      * 그 day에서 연속한 두 스텝 사이의 최대 공백(분). 스텝이 1개 이하면 0.
-     * 식사 슬롯 고정(11:30/17:30) 때문에 생기는 오후 공백을 사용자 안내로 노출하는 데 쓴다.
      */
     static int maxIntraDayGap(List<StepData> steps, int dayNumber) {
         List<StepData> daySteps = steps.stream()

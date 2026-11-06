@@ -5,12 +5,6 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 벡터 검색 기반 파이프라인용 보강 입력 결과.
- * 기존 EnrichedInput 필드 + 벡터 검색용 구조화된 힌트를 포함한다.
- *
- * Haiku 1회 호출로 입력 정규화, 현실성 검증, 검색 힌트 생성을 수행한 결과를 담는다.
- */
 public record VectorEnrichedInput(
         String destination,
         List<String> themes,
@@ -32,15 +26,15 @@ public record VectorEnrichedInput(
         String enrichedContext,
         TransportationHub transportationHub,
         Map<String, String> categorySearchQueries,
-        CompanionType companionType, // 동행 유형 — enrich가 description에서 추론. 모르면 UNKNOWN
-        Integer partySize,           // 인원 — 모르면 null(비용은 1인 기준)
-        List<String> ferryOnlyAreas  // 배로만 가는 부속섬의 주소 토큰(예: "우도면") — 후보에서 기본 제외
+        CompanionType companionType, // enrich가 description에서 추론하고, 모르면 UNKNOWN
+        Integer partySize,           // 모르면 null이고 비용은 1인 기준
+        List<String> ferryOnlyAreas  // 배로만 가는 부속섬의 주소 토큰(예: "우도면"). 후보에서 기본 제외
 ) {
     /** 동행 유형. 숙소 유형(도미토리 제외)·비용 인원·선택 프롬프트에 쓴다. */
     public enum CompanionType {
         SOLO, COUPLE, FAMILY, FRIENDS, SENIOR, UNKNOWN;
 
-        /** 다인실·파티 문화가 맞지 않는 동행 — 게스트하우스·호스텔을 숙소 후보에서 뺀다. */
+        /** 다인실·파티 문화가 맞지 않는 동행이라 게스트하우스·호스텔을 숙소 후보에서 뺀다. */
         public boolean avoidsDormLodging() {
             return this == COUPLE || this == FAMILY || this == SENIOR;
         }
@@ -55,7 +49,7 @@ public record VectorEnrichedInput(
         }
     }
 
-    /** 동행·인원·도선 섬 정보 없이 생성하는 호환 생성자. 기존 동작(1인·제한 없음)과 같다. */
+    /** 동행·인원·도선 섬 정보는 1인·제한 없음으로 둔다. */
     public VectorEnrichedInput(String destination, List<String> themes, List<String> categories,
                                String pace, String transportPref, BigDecimal budget,
                                LocalDate startDate, LocalDate endDate, String description,

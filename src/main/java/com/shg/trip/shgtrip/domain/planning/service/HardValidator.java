@@ -16,30 +16,19 @@ import java.util.regex.Pattern;
 
 /**
  * 벡터 경로 전용 hard validation.
- * soft validation(Haiku 품질 평가)을 생략하고, 구조적 정합성만 검증한다.
- *
- * 검증 항목:
- * 1. 필수 필드: stepOrder, dayNumber, startTime, endTime, place (non-null), place.name (non-blank)
- * 2. 시간 형식: HH:mm + endTime > startTime (같은 날 기준)
- * 3. stepOrder 연속성: 1부터 시작, 1씩 증가, 갭 없음
- * 4. dayNumber 일관성: 단조 비감소 (monotonically non-decreasing)
- * 5. 중복 장소: 같은 날 동일 장소 중복 방문 불가 (숙소·교통허브 제외)
- * 6. 시간 겹침: 같은 날 연속 스텝 간 startTime < 이전 endTime 불가
+ * soft validation(Haiku 품질 평가) 없이 구조적 정합성만 검증한다.
  */
 @Slf4j
 @Component
 public class HardValidator {
 
     private static final Pattern TIME_PATTERN = Pattern.compile("^([01]\\d|2[0-3]):[0-5]\\d$");
-    // 한 destination 내 하루 이동으로는 비현실적인 구간거리(km). 초과 시 불량 좌표로 만들어진
-    // 일정으로 보고 검증 실패 처리 — 02:16 새벽시간/679분 같은 결과가 저장·노출되지 않게 한다.
+    // 한 destination 안에서 비현실적인 구간거리(km). 넘으면 불량 좌표로 만든 일정이라
+    // 새벽 시각·수백 분 이동 같은 결과가 저장되지 않게 실패시킨다.
     private static final java.math.BigDecimal MAX_REASONABLE_LEG_KM = java.math.BigDecimal.valueOf(200);
 
 
     /**
-     * 벡터 경로에서 생성된 ItineraryData에 대해 hard validation만 수행한다.
-     *
-     * @param data 검증 대상 일정 데이터
      * @return 검증 결과 (통과 시 valid=true, 실패 시 valid=false + failureReason)
      */
     public HardValidationResult validate(ItineraryData data) {
@@ -56,37 +45,30 @@ public class HardValidator {
         int previousDayNumber = 0;
         String previousEndTime = null;
 
-        // 날짜별 방문 장소 추적 (중복 검사용)
         Map<Integer, Set<String>> visitedPlacesByDay = new HashMap<>();
 
         for (int i = 0; i < steps.size(); i++) {
             StepData step = steps.get(i);
             String prefix = "Step " + (i + 1) + ": ";
 
-            // 1. 필수 필드 검증
             validateRequiredFields(step, prefix, errors);
 
-            // 2. 시간 형식 검증
             validateTimeFormat(step, prefix, errors);
 
-            // 3. stepOrder 연속성 (1-based, gap 없음)
             int expectedOrder = i + 1;
             if (step.stepOrder() != expectedOrder) {
                 errors.add(prefix + String.format("stepOrder가 %d이지만 %d이어야 합니다.", step.stepOrder(), expectedOrder));
             }
 
-            // 4. dayNumber 단조 비감소
             if (step.dayNumber() < previousDayNumber) {
                 errors.add(prefix + String.format("dayNumber(%d)가 이전 step의 dayNumber(%d)보다 작습니다.",
                         step.dayNumber(), previousDayNumber));
             }
 
-            // 날짜가 바뀌면 이전 endTime 리셋
             if (step.dayNumber() != previousDayNumber) {
                 previousEndTime = null;
             }
 
-            // 5. 같은 날 시간 겹침 검증
             boolean startValid = step.startTime() != null && TIME_PATTERN.matcher(step.startTime()).matches();
             if (startValid && previousEndTime != null) {
                 int prevEndMinutes = timeToMinutes(previousEndTime);
@@ -97,7 +79,7 @@ public class HardValidator {
                 }
             }
 
-            // 6. 같은 날 중복 장소 검증 (숙소·교통허브 제외 — 당일 출발·복귀 패턴은 정상)
+            // 숙소·교통허브는 당일 출발·복귀 패턴이라 같은 날 중복을 허용한다.
             if (step.place() != null && step.place().name() != null && !step.place().name().isBlank()
                     && !isAccommodationStep(step) && !isTransitHubStep(step)) {
                 String placeName = step.place().name();
@@ -108,14 +90,13 @@ public class HardValidator {
                 }
             }
 
-            // 7. 비현실적 구간거리 검증 (불량 좌표로 인한 일정 붕괴 차단)
             if (step.transportationDistance() != null
                     && step.transportationDistance().compareTo(MAX_REASONABLE_LEG_KM) > 0) {
                 errors.add(prefix + String.format("이동거리(%skm)가 비현실적입니다 (한 여행지 내 %skm 초과).",
                         step.transportationDistance().toPlainString(), MAX_REASONABLE_LEG_KM.toPlainString()));
             }
 
-            // 8. 식사 라벨(notes)과 실제 시간 불일치 모니터링 (비차단 — errors에 추가하지 않음)
+            // 모니터링 전용이라 errors에 추가하지 않는다.
             logMealLabelMismatchIfAny(step);
 
             previousDayNumber = step.dayNumber();
@@ -133,8 +114,7 @@ public class HardValidator {
     }
 
     /**
-     * 식당(DINING) 스텝의 notes 라벨이 실제 startTime과 어긋나는지 모니터링용으로만 로그.
-     * 검증 실패로 처리하지 않음 — notes는 자유 텍스트라 재시도 비용 대비 효과가 낮음.
+     * notes는 자유 텍스트라 재시도 비용 대비 효과가 낮아 라벨 불일치는 로그만 남긴다.
      */
     private void logMealLabelMismatchIfAny(StepData step) {
         if (step.place() == null || step.notes() == null || step.startTime() == null) return;
@@ -177,7 +157,7 @@ public class HardValidator {
             errors.add(prefix + "endTime 형식이 올바르지 않습니다 (HH:mm 필요, 값: " + step.endTime() + ").");
         }
 
-        // endTime > startTime 검증 (둘 다 유효한 형식일 때만)
+        // 형식이 틀린 값은 위에서 이미 오류로 남겼다.
         if (startValid && endValid) {
             int startMinutes = timeToMinutes(step.startTime());
             int endMinutes = timeToMinutes(step.endTime());

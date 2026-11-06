@@ -21,17 +21,12 @@ import java.util.Map;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-/**
- * 최적화된 Claude AI 서비스.
- * enrichInput: Haiku 1회 호출로 입력 정규화 + 현실성 검증 + 검색 힌트 생성을 수행한다.
- * 실패 시 기존 enrichInput 방식으로 fallback.
- */
 @Slf4j
 @Service
 public class OptimizedClaudeAIService {
 
     private static final int MAX_RETRIES = 2;
-    /** enrich 응답 상한. 1024에서는 동행·섬·검색쿼리까지 담은 JSON이 잘릴 수 있었다. */
+    /** 동행·섬·검색쿼리까지 담은 enrich JSON은 1024 토큰이면 잘린다. */
     private static final int ENRICH_MAX_TOKENS = 2048;
 
     private final AnthropicClient anthropicClient;
@@ -52,9 +47,8 @@ public class OptimizedClaudeAIService {
     }
 
     /**
-     * Haiku 1회 호출로 입력 정규화, 현실성 검증, 검색 힌트를 생성한다.
-     * 비현실적 입력 시 에러 코드 + 수정 제안을 반환하여 파이프라인을 중단한다.
-     * API 실패 시 최대 3회 재시도 후 기존 enrichInput fallback.
+     * 비현실적 입력이면 에러 코드와 수정 제안을 반환해 파이프라인을 중단한다.
+     * API 실패 시 최대 3회 재시도 후 legacy enrichInput으로 fallback한다.
      */
     public EnrichmentResult enrichInput(ItineraryGenerateRequest input) {
         String prompt = buildEnrichPrompt(input);
@@ -69,8 +63,7 @@ public class OptimizedClaudeAIService {
 
             Message message = executeWithRetry(
                     () -> anthropicClient.messages().create(params), MAX_RETRIES);
-            // 잘린 JSON은 파싱 실패 → legacy fallback으로 떨어져 동행·도선 섬·허브가 통째로 사라진다.
-            // 조용히 품질이 떨어지지 않게 잘림을 로그로 드러낸다.
+            // 잘린 JSON은 legacy fallback으로 떨어져 동행·도선 섬·허브가 통째로 사라지므로 잘림을 로그로 드러낸다.
             if (message.stopReason().isPresent()
                     && message.stopReason().get().equals(com.anthropic.models.messages.StopReason.MAX_TOKENS)) {
                 log.warn("enrichInput 응답이 max_tokens({})에서 잘림 — 파싱 실패 시 legacy fallback", ENRICH_MAX_TOKENS);
@@ -89,14 +82,10 @@ public class OptimizedClaudeAIService {
         }
     }
 
-    /**
-     * Haiku JSON 응답을 파싱하여 EnrichmentResult를 생성한다.
-     * package-private for testing.
-     */
     @SuppressWarnings("unchecked")
     EnrichmentResult parseEnrichResponse(String responseText, ItineraryGenerateRequest input) {
         try {
-            // JSON 추출: AI가 설명을 앞뒤로 붙이는 경우 대비
+            // AI가 JSON 앞뒤에 설명을 붙이는 경우가 있다.
             int jsonStart = responseText.indexOf('{');
             int jsonEnd = responseText.lastIndexOf('}');
             if (jsonStart < 0 || jsonEnd <= jsonStart) {
@@ -119,7 +108,6 @@ public class OptimizedClaudeAIService {
                 );
             }
 
-            // 성공: VectorEnrichedInput 구성
             String normalizedDestination = getStringOrDefault(parsed, "normalizedDestination", input.destination());
             String country = getStringOrDefault(parsed, "country", "");
             List<String> regions = getListOrDefault(parsed, "regions");
@@ -134,7 +122,6 @@ public class OptimizedClaudeAIService {
                 regionAllocation = (Map<String, List<String>>) regionAllocObj;
             }
 
-            // transportationHub 파싱
             TransportationHub transportationHub = null;
             Object hubObj = parsed.get("transportationHub");
             if (hubObj instanceof Map) {
@@ -146,7 +133,6 @@ public class OptimizedClaudeAIService {
                 );
             }
 
-            // categorySearchQueries 파싱
             Map<String, String> categorySearchQueries = null;
             Object queriesObj = parsed.get("categorySearchQueries");
             if (queriesObj instanceof Map) {
@@ -197,9 +183,6 @@ public class OptimizedClaudeAIService {
         }
     }
 
-    /**
-     * 기존 enrichInput 방식으로 fallback하여 EnrichmentResult를 구성한다.
-     */
     private EnrichmentResult fallbackToLegacyEnrich(ItineraryGenerateRequest input) {
         try {
             var legacyResult = fallbackService.enrichInput(input);
@@ -234,10 +217,8 @@ public class OptimizedClaudeAIService {
         }
     }
 
-    // ── Private helpers ──
-
     private String buildEnrichPrompt(ItineraryGenerateRequest input) {
-        // 예산은 선택 입력 — null이면 "%,.0f"가 문자열 "null"을 찍어 프롬프트에 "예산: null"이 들어간다.
+        // 예산은 선택 입력이라 null이면 "%,.0f"가 "null"을 찍어 프롬프트에 "예산: null"이 들어간다.
         String formattedBudget = input.budget() != null
                 ? String.format("%,.0f원", input.budget())
                 : "선택 없음";
@@ -254,7 +235,6 @@ public class OptimizedClaudeAIService {
     }
 
     /**
-     * 프롬프트 템플릿을 클래스패스에서 로드한다.
      * 파일이 없으면 인라인 기본 프롬프트를 반환한다.
      */
     private String loadPromptTemplateSafe(String path) {
@@ -267,9 +247,6 @@ public class OptimizedClaudeAIService {
         }
     }
 
-    /**
-     * prompts/enrich-input.txt가 없을 때 사용할 인라인 기본 프롬프트.
-     */
     private String getInlineEnrichPrompt() {
         return """
                 당신은 여행 입력 분석 전문가입니다. 사용자 입력을 정규화하고 검증합니다.
@@ -319,9 +296,6 @@ public class OptimizedClaudeAIService {
                 """;
     }
 
-    /**
-     * 예산과 기간으로 budgetRange를 추정한다 (fallback용).
-     */
     private String estimateBudgetRange(BigDecimal budget, java.time.LocalDate startDate, java.time.LocalDate endDate) {
         if (budget == null || startDate == null || endDate == null) {
             return "MEDIUM";
@@ -339,9 +313,6 @@ public class OptimizedClaudeAIService {
         return "LUXURY";
     }
 
-    /**
-     * 재시도 로직. 최대 maxRetries회까지 재시도하며 exponential backoff 적용.
-     */
     private <T> T executeWithRetry(Supplier<T> action, int maxRetries) {
         int attempt = 0;
         Exception lastException = null;

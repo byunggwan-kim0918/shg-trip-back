@@ -6,20 +6,12 @@ import com.anthropic.models.messages.Tool;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Call 1 (Sonnet): 날짜별 장소 선택 Tool Use 스키마 빌더.
- */
 public final class SelectionToolSchema {
 
     private SelectionToolSchema() {}
 
-    /**
-     * 날짜별 장소 선택 Tool을 빌드한다.
-     */
     public static Tool buildSelectionTool() {
-        // 숙소·도착/출발 허브는 스키마에서 제외한다(B3). 백엔드가 결정론적으로 채우고 덮어쓰므로
-        // (fillMissingAccommodation / repairHubs / repairNamedHubs / repairAccommodationByProximity)
-        // 모델이 채워봐야 버려지고, 그 자리를 채우느라 토큰과 주의만 낭비된다.
+        // 숙소·도착/출발 허브는 백엔드가 결정론적으로 채우고 덮어써서, 스키마에 넣으면 토큰과 주의만 낭비된다.
         Map<String, Object> dayPlanSchema = Map.ofEntries(
                 Map.entry("type", "object"),
                 Map.entry("additionalProperties", false),

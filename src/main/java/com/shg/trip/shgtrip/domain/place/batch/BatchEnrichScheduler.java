@@ -20,14 +20,8 @@ import java.time.Duration;
 import java.util.*;
 
 /**
- * Anthropic Batch API(Sonnet)를 사용하여 미보강 장소에 태그, 설명, 추천 시간대를 보강하는 작업.
- * <p>
- * 처리 흐름:
- * 1. enriched_at IS NULL이고 active=true인 장소를 조회
- * 2. 1000건 단위로 분할하여 Anthropic Batch API 호출
- * 3. 배치 제출 → 폴링 → 결과 처리
- * 4. 성공: tags, description, recommended_time_slots 갱신 + enriched_at 기록
- * 5. 실패: 로그 기록 (다음 사이클에서 enriched_at이 여전히 NULL이므로 자동 재시도)
+ * Anthropic Batch API로 미보강 장소의 태그·설명·추천 시간대를 채운다.
+ * 실패한 장소는 enriched_at이 NULL로 남아 다음 실행에서 다시 잡힌다.
  * <p>
  * 식당·카페·술집은 프롬프트와 결과 해석이 따로 있다({@link DiningEnrichment}).
  */
@@ -41,11 +35,11 @@ public class BatchEnrichScheduler {
 
     private static final String BATCH_API_URL = "https://api.anthropic.com/v1/messages/batches";
     private static final int MAX_RETRIES = 3;
-    private static final long POLL_INTERVAL_MS = 10_000; // 10초
+    private static final long POLL_INTERVAL_MS = 10_000;
 
     /** 결과 JSONL 다운로드 타임아웃(분). 청크 1000건 기준 여유 있게 잡는다. */
     private static final int RESULTS_DOWNLOAD_TIMEOUT_MINUTES = 10;
-    private static final long MAX_POLL_DURATION_MS = 3_600_000; // 1시간
+    private static final long MAX_POLL_DURATION_MS = 3_600_000;
 
     private final PlaceRepository placeRepository;
     private final ObjectMapper objectMapper;
@@ -57,12 +51,7 @@ public class BatchEnrichScheduler {
     @Value("${batch.enrich.chunk-size:1000}")
     private int chunkSize;
 
-    /**
-     * 보강용 모델. 기존엔 "claude-sonnet-4-20250514" 하드코딩 상수였는데 모델이 은퇴되면서
-     * 전건 not_found_error로 실패했고(실측 484/484), yml의 anthropic.batch.model 설정은
-     * 코드가 읽지 않는 설정 표류 상태였다. 설정으로 일원화 — 태그/설명 생성은 Haiku로 충분.
-     * Haiku 5.5는 4.5 대비 단가 1/10($0.10/$0.50 per MTok).
-     */
+    /** 태그·설명 생성은 Haiku로 충분하다. */
     @Value("${anthropic.batch.model:claude-haiku-5-5}")
     private String enrichModel;
 
@@ -75,7 +64,7 @@ public class BatchEnrichScheduler {
 
     /**
      * 지역당 보강 상한(0이면 무제한). 대상 조회 순서가 인기도 → 비식당이라 상한 안에는 유명한 곳부터 들어간다.
-     * 지역 목록(batch.enrich.regions)과 함께 써야 지역별로 센다 — 목록이 비어 있으면 전체 합계 상한이다.
+     * 지역 목록(batch.enrich.regions)과 함께 써야 지역별로 센다. 목록이 비어 있으면 전체 합계 상한이다.
      */
     @Value("${batch.enrich.max-per-region:0}")
     private int maxPerRegion;
@@ -83,14 +72,14 @@ public class BatchEnrichScheduler {
     /**
      * 이미 제출·완료된 배치의 결과를 다시 적용할 때 쓰는 batchId.
      * Anthropic이 결과를 29일간 보관하므로, 결과 처리 단계에서만 실패한 경우 재제출(재과금) 없이
-     * 복구할 수 있다(실측: 515건 배치가 다운로드 타임아웃으로 통째로 버려졌다).
+     * 복구할 수 있다.
      */
     @Value("${batch.enrich.resume-batch-id:}")
     private String resumeBatchId;
 
     /**
-     * v1: 미보강 장소의 태그·설명·역할 보강(기존 동작). v2: 속성만 분류({@link AttributeEnrichment}).
-     * 운영 배치가 켜져 있어 기본값은 v1이다 — v2는 대상·비용이 달라 명시적으로 켤 때만 돈다.
+     * v1: 미보강 장소의 태그·설명·역할 보강. v2: 속성만 분류({@link AttributeEnrichment}).
+     * 운영 배치가 켜져 있어 기본값은 v1이다. v2는 대상·비용이 달라 명시적으로 켤 때만 돈다.
      */
     @Value("${batch.enrich.mode:v1}")
     private String mode;
@@ -100,27 +89,21 @@ public class BatchEnrichScheduler {
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(30))
-                // 결과 파일 URL은 서명된 스토리지로 302 리다이렉트된다 — 따라가지 않으면 본문이 비어온다
+                // 결과 파일 URL은 서명된 스토리지로 302 리다이렉트되어, 따라가지 않으면 본문이 비어 온다
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
     }
 
-    /**
-     * processChunk 결과. failedIds는 이번 실행에서 재시도하지 않도록 제외할 place ID 목록
-     * (enriched_at이 여전히 NULL이라 다음 조회에도 다시 잡히기 때문).
-     */
+    /** failedIds는 enriched_at이 여전히 NULL이라 다음 조회에 다시 잡히므로 이번 실행에서 제외할 ID다. */
     record ChunkResult(int success, int failed, List<Long> failedIds) {
     }
 
     /**
-     * 태그/설명 배치 보강을 실행한다.
+     * 매번 첫 페이지를 다시 조회하고 이번 실행의 실패 ID는 쿼리에서 뺀다. 고정 offset은 남은 건수보다
+     * 앞서 나가 조기 종료된다. 조회 순서가 인기도 → 비식당이라 중간에 끊겨도 중요한 장소부터 끝나 있다.
      * <p>
-     * page offset을 증가시키는 방식 대신 매번 첫 페이지를 다시 조회하고, 이번 실행에서 실패한
-     * place ID는 쿼리에서 제외한다(고정 offset 증가는 실제 남은 건수보다 앞서나가 조용히 조기 종료될 수
-     * 있다). 조회 순서는 인기도 → 비식당 순이라 중간에 끊겨도 중요한 장소부터 끝나 있다.
-     * <p>
-     * 연속 {@value #MAX_CONSECUTIVE_FAILED_CHUNKS}개 청크가 전부 실패하면 멈춘다 — API 키 오류처럼
-     * 모든 요청이 실패하는 상황에서 수만 건을 헛돌지 않게 한다.
+     * 연속 {@value #MAX_CONSECUTIVE_FAILED_CHUNKS}개 청크가 전부 실패하면 멈춘다. API 키 오류처럼
+     * 모든 요청이 실패할 때 수만 건을 헛돌지 않게 한다.
      */
     public void enrich() {
         if (anthropicApiKey == null || anthropicApiKey.isBlank()) {
@@ -213,12 +196,6 @@ public class BatchEnrichScheduler {
                 .toList();
     }
 
-    /**
-     * 장소 청크를 처리하여 Anthropic Batch API로 보강한다.
-     *
-     * @param places 보강할 장소 목록 (최대 chunkSize건)
-     * @return 성공/실패 건수와 실패한 place ID 목록
-     */
     ChunkResult processChunk(List<Place> places) {
         try {
             String batchId;
@@ -227,10 +204,8 @@ public class BatchEnrichScheduler {
                 batchId = resumeBatchId.trim();
                 log.info("기존 배치 결과 재사용 - batchId={} (재제출 없음)", batchId);
             } else {
-                // 1. 배치 요청 구성
                 List<Map<String, Object>> requests = buildBatchRequests(places);
 
-                // 2. 배치 제출
                 batchId = submitBatch(requests);
                 if (batchId == null) {
                     log.error("배치 제출 실패 - {}건 모두 실패 처리", places.size());
@@ -238,14 +213,12 @@ public class BatchEnrichScheduler {
                 }
             }
 
-            // 3. 폴링으로 완료 대기
             String resultsUrl = pollForCompletion(batchId);
             if (resultsUrl == null) {
                 log.error("배치 폴링 실패 또는 타임아웃 - batchId={}", batchId);
                 return new ChunkResult(0, places.size(), allIds(places));
             }
 
-            // 4. 결과 조회 및 처리
             return processResults(resultsUrl, places);
 
         } catch (Exception e) {
@@ -258,9 +231,6 @@ public class BatchEnrichScheduler {
         return places.stream().map(Place::getId).toList();
     }
 
-    /**
-     * 장소 목록을 Anthropic Batch API 요청 형식으로 변환한다.
-     */
     List<Map<String, Object>> buildBatchRequests(List<Place> places) {
         List<Map<String, Object>> requests = new ArrayList<>();
 
@@ -290,9 +260,6 @@ public class BatchEnrichScheduler {
         return requests;
     }
 
-    /**
-     * 장소 정보를 기반으로 보강 프롬프트를 생성한다.
-     */
     String buildEnrichPrompt(Place place) {
         if (DiningEnrichment.isDining(place.getCategory())) {
             return DiningEnrichment.buildPrompt(place.getName(), place.getCategory(), place.getDescription(),
@@ -334,9 +301,7 @@ public class BatchEnrichScheduler {
     }
 
     /**
-     * Anthropic Batch API에 배치를 제출한다. 5xx/IOException은 MAX_RETRIES회까지
-     * 지수 백오프로 재시도한다(OpenAIEmbeddingService.callEmbeddingsApi와 동일한 전략 —
-     * 이전엔 MAX_RETRIES 필드만 선언돼 있고 실제 재시도가 전혀 없었음). 4xx는 재시도 불필요.
+     * 5xx/IOException은 MAX_RETRIES회까지 지수 백오프로 재시도하고, 4xx는 재시도하지 않는다.
      *
      * @return 배치 ID (실패 시 null)
      */
@@ -402,12 +367,7 @@ public class BatchEnrichScheduler {
         }
     }
 
-    /**
-     * 배치 완료를 폴링으로 대기한다.
-     *
-     * @param batchId 배치 ID
-     * @return 결과 파일 URL (실패/타임아웃 시 null)
-     */
+    /** @return 결과 파일 URL (실패/타임아웃 시 null) */
     String pollForCompletion(String batchId) {
         long startTime = System.currentTimeMillis();
 
@@ -443,7 +403,6 @@ public class BatchEnrichScheduler {
                         return null;
                     }
                     default -> {
-                        // in_progress 등 → 계속 폴링
                         log.debug("배치 진행 중 - batchId={}, status={}", batchId, status);
                     }
                 }
@@ -464,17 +423,10 @@ public class BatchEnrichScheduler {
         return null;
     }
 
-    /**
-     * 배치 결과를 조회하고 장소를 보강한다.
-     *
-     * @param resultsUrl 결과 파일 URL
-     * @param places     원본 장소 목록
-     * @return 성공/실패 건수와 실패한 place ID 목록
-     */
     ChunkResult processResults(String resultsUrl, List<Place> places) {
         try {
-            // 결과는 요청 수만큼의 JSONL이라 청크가 커질수록 길어진다. 60초로는 515건에서
-            // 이미 타임아웃이 났다(실측) — 배치 비용은 이미 지불된 뒤라 여기서 실패하면 그냥 날린다.
+            // 결과는 요청 수만큼의 JSONL이라 청크가 커질수록 길어진다.
+            // 배치 비용은 이미 지불된 뒤라 여기서 타임아웃이 나면 결과를 그냥 날린다.
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(resultsUrl))
                     .header("x-api-key", anthropicApiKey)
@@ -502,8 +454,6 @@ public class BatchEnrichScheduler {
     }
 
     /**
-     * 결과 JSONL을 장소에 반영한다.
-     * <p>
      * 실패 목록은 "청크에서 성공하지 못한 전부"로 계산한다. 행 처리 중 예외가 나거나 결과에서 빠진
      * 장소를 하나씩 챙기지 않으면 enriched_at이 NULL로 남아 다음 청크마다 다시 제출된다.
      */
@@ -552,14 +502,12 @@ public class BatchEnrichScheduler {
                     continue;
                 }
 
-                // 메시지 응답에서 텍스트 추출
                 String content = extractTextContent(resultBody.get("message"));
                 if (content == null) {
                     log.warn("응답 텍스트 추출 실패 - placeId={}", placeId);
                     continue;
                 }
 
-                // JSON 파싱 및 장소 보강
                 if (applyEnrichment(place, content)) {
                     placeRepository.save(place);
                     succeededIds.add(placeId);
@@ -591,9 +539,6 @@ public class BatchEnrichScheduler {
         usage[3] += node.path("cache_creation_input_tokens").asLong(0);
     }
 
-    /**
-     * Anthropic 메시지 응답에서 텍스트 콘텐츠를 추출한다.
-     */
     String extractTextContent(JsonNode message) {
         if (message == null) return null;
 
@@ -610,13 +555,6 @@ public class BatchEnrichScheduler {
         return text.isEmpty() ? null : text.toString();
     }
 
-    /**
-     * LLM 응답 JSON을 파싱하여 장소에 보강 데이터를 적용한다.
-     *
-     * @param place   대상 장소
-     * @param content LLM 응답 텍스트 (JSON 형식)
-     * @return 보강 성공 여부
-     */
     /** 관광지 프롬프트가 허용하는 역할 값만 받는다. 모르는 값이면 null(일정 로직이 카테고리로 추정). */
     static String parseAttractionRole(JsonNode node) {
         if (node == null || node.isNull()) return null;
@@ -629,7 +567,6 @@ public class BatchEnrichScheduler {
 
     boolean applyEnrichment(Place place, String content) {
         try {
-            // JSON 블록 추출 (코드 블록이 있을 수 있음)
             String json = extractJson(content);
             JsonNode root = objectMapper.readTree(json);
 
@@ -698,14 +635,10 @@ public class BatchEnrichScheduler {
         }
     }
 
-    /**
-     * 응답 텍스트에서 JSON 부분을 추출한다.
-     * 코드 블록(```json ... ```) 또는 순수 JSON을 지원한다.
-     */
+    /** 코드 블록(```json ... ```)과 순수 JSON을 모두 받는다. */
     String extractJson(String content) {
         String trimmed = content.trim();
 
-        // 코드 블록 제거
         if (trimmed.startsWith("```")) {
             int firstNewline = trimmed.indexOf('\n');
             int lastBackticks = trimmed.lastIndexOf("```");
@@ -714,7 +647,6 @@ public class BatchEnrichScheduler {
             }
         }
 
-        // { 로 시작하는 JSON 찾기
         int jsonStart = trimmed.indexOf('{');
         int jsonEnd = trimmed.lastIndexOf('}');
         if (jsonStart >= 0 && jsonEnd > jsonStart) {
@@ -724,9 +656,6 @@ public class BatchEnrichScheduler {
         return trimmed;
     }
 
-    /**
-     * 장소 목록을 chunkSize 단위로 분할한다.
-     */
     List<List<Place>> splitIntoChunks(List<Place> places) {
         List<List<Place>> chunks = new ArrayList<>();
         for (int i = 0; i < places.size(); i += chunkSize) {
