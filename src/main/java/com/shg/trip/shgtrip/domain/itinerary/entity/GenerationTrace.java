@@ -63,13 +63,19 @@ public class GenerationTrace {
     @Column(columnDefinition = "JSONB")
     private String score;
 
+    /** 저장 직후 스텝(일차·순서·장소 id·시각·대안 장소 id). 사용자 편집 전 상태다. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "JSONB")
+    private String generatedSteps;
+
     @Column(nullable = false, insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 
     @Builder
     private GenerationTrace(Long itineraryId, String jobId, int traceVersion, String request,
                             String enrichedInput, String selectionRaw, String selectionFinal,
-                            String candidates, String scheduleArgs, String models, Long totalMs) {
+                            String candidates, String scheduleArgs, String models, Long totalMs,
+                            String generatedSteps) {
         this.itineraryId = itineraryId;
         this.jobId = jobId;
         this.traceVersion = traceVersion;
@@ -81,6 +87,7 @@ public class GenerationTrace {
         this.scheduleArgs = scheduleArgs;
         this.models = models;
         this.totalMs = totalMs;
+        this.generatedSteps = generatedSteps;
     }
 
     public void updateScore(String scoreJson) {

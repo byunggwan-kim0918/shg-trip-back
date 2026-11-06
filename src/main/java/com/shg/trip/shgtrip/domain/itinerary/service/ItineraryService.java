@@ -3,8 +3,10 @@ package com.shg.trip.shgtrip.domain.itinerary.service;
 import com.shg.trip.shgtrip.domain.itinerary.dto.*;
 import com.shg.trip.shgtrip.domain.itinerary.entity.AlternativeOption;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
+import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryEditEvent;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
+import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
@@ -24,6 +26,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +48,7 @@ public class ItineraryService {
     private final ItineraryRepository itineraryRepository;
     private final PlaceRepository placeRepository;
     private final GenerationTraceRepository generationTraceRepository;
+    private final ItineraryEditEventRepository editEventRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -98,12 +102,17 @@ public class ItineraryService {
             throw new BusinessException(ErrorCode.ITINERARY_EMPTY);
         }
         itinerary.complete();
+        recordEdit(itinerary, userId, ItineraryEditEvent.Type.FINALIZE, null, null,
+                payload("stepCount", itinerary.getSteps().size()));
         return ItineraryResponse.from(itinerary);
     }
 
     @Transactional
     public void deleteItinerary(Long itineraryId, Long userId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+        recordEdit(itinerary, userId, ItineraryEditEvent.Type.DELETE_ITINERARY, null, null,
+                payload("stepCount", itinerary.getSteps().size(),
+                        "finalized", itinerary.getStatus() == Itinerary.ItineraryStatus.FINALIZED));
         itinerary.softDelete();
         // 요청 문장이 들어 있어 개인정보처리방침상 같이 지운다
         generationTraceRepository.deleteByItineraryId(itineraryId);
@@ -155,7 +164,10 @@ public class ItineraryService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND,
                         "대안 장소를 찾을 수 없습니다. 이미 선택된 대안이거나 유효하지 않은 요청입니다."));
 
+        Long fromPlaceId = placeIdOf(step);
         step.selectAlternative(selected);
+        recordEdit(itinerary, userId, ItineraryEditEvent.Type.SELECT_ALTERNATIVE, step.getDayNumber(), stepId,
+                payload("fromPlaceId", fromPlaceId, "toPlaceId", placeIdOf(step), "stepOrder", step.getStepOrder()));
 
         // Ensure DELETE executes before INSERT to avoid Hibernate orphanRemoval flush conflicts
         entityManager.flush();
@@ -206,6 +218,15 @@ public class ItineraryService {
                         s -> new String[]{s.getStartTime(), s.getEndTime()}));
         Map<Long, ItineraryStep> byId = daySteps.stream()
                 .collect(Collectors.toMap(ItineraryStep::getId, s -> s));
+        List<Long> placesBefore = daySteps.stream()
+                .sorted(Comparator.comparingInt(ItineraryStep::getStepOrder))
+                .map(ItineraryService::placeIdOf)
+                .toList();
+        List<Long> placesAfter = orderedStepIds.stream().map(id -> placeIdOf(byId.get(id))).toList();
+        if (!placesBefore.equals(placesAfter)) {
+            recordEdit(itinerary, userId, ItineraryEditEvent.Type.REORDER, dayNumber, null,
+                    payload("before", placesBefore, "after", placesAfter));
+        }
         for (int i = 0; i < orderedStepIds.size(); i++) {
             int slot = slots.get(i);
             String[] times = slotTimes.get(slot);
@@ -238,6 +259,8 @@ public class ItineraryService {
         if (dayStepCount <= 1) {
             throw new BusinessException(ErrorCode.INVALID_INPUT, "해당 날짜의 마지막 일정은 삭제할 수 없습니다.");
         }
+        recordEdit(itinerary, userId, ItineraryEditEvent.Type.DELETE_STEP, dayNumber, stepId,
+                payload("placeId", placeIdOf(target), "stepOrder", target.getStepOrder()));
 
         itinerary.removeStep(target);
         entityManager.flush(); // orphanRemoval DELETE를 재정렬 UPDATE보다 먼저 확정
@@ -363,5 +386,21 @@ public class ItineraryService {
             throw new BusinessException(ErrorCode.ITINERARY_ACCESS_DENIED, "일정에 접근할 권한이 없습니다.");
         }
         return itinerary;
+    }
+
+    private void recordEdit(Itinerary itinerary, Long userId, ItineraryEditEvent.Type type, Integer dayNumber,
+                            Long stepId, Map<String, Object> payload) {
+        editEventRepository.save(ItineraryEditEvent.of(itinerary.getId(), userId, type, dayNumber, stepId, payload));
+    }
+
+    /** 키·값 쌍 → payload. 값에 null이 올 수 있어 Map.of를 쓰지 않는다. */
+    private static Map<String, Object> payload(Object... keyValues) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (int i = 0; i < keyValues.length; i += 2) map.put((String) keyValues[i], keyValues[i + 1]);
+        return map;
+    }
+
+    private static Long placeIdOf(ItineraryStep step) {
+        return step.getPlace() == null ? null : step.getPlace().getId();
     }
 }

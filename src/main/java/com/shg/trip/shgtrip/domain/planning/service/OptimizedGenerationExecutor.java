@@ -254,6 +254,10 @@ public class OptimizedGenerationExecutor {
             EnrichedInput legacyInput = toLegacyEnrichedInput(enrichedInput);
             Itinerary saved = saveHelper.save(draftData, legacyInput, userId, true, destinationReference);
             stageMark = logStage("save", stageMark);
+            // 완료 전송보다 먼저 남긴다. 뒤에 남기면 그 사이 지운 일정의 기록(요청 문장 포함)이 삭제를 피해 남는다.
+            traceRecorder.record(saved, jobId, request, enrichedInput, rawSelectionOutput,
+                    selectionOutput, candidatesWithLocalStays, scheduleArgs,
+                    (System.nanoTime() - pipelineStart) / 1_000_000);
 
             // [100%] 구조 완료 — emitter는 닫지 않고 story-ready까지 유지
             resultStore.save(jobId, saved.getId(), userId);
@@ -261,9 +265,6 @@ public class OptimizedGenerationExecutor {
             generationPolicyService.recordSuccess(userId);
             sendSseEvent(emitter, "COMPLETE", 100, "일정 생성이 완료되었습니다.");
             sendCompleteKeepOpen(emitter, saved.getId());
-            traceRecorder.record(saved.getId(), jobId, request, enrichedInput, rawSelectionOutput,
-                    selectionOutput, candidatesWithLocalStays, scheduleArgs,
-                    (System.nanoTime() - pipelineStart) / 1_000_000);
 
             log.info("OptimizedGeneration 구조 완료: jobId={}, itineraryId={}, days={}",
                     jobId, saved.getId(), days);
