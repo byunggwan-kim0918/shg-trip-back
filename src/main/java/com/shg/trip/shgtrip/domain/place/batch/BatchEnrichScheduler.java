@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.place.batch;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -87,6 +88,13 @@ public class BatchEnrichScheduler {
     @Value("${batch.enrich.resume-batch-id:}")
     private String resumeBatchId;
 
+    /**
+     * v1: 미보강 장소의 태그·설명·역할 보강(기존 동작). v2: 속성만 분류({@link AttributeEnrichment}).
+     * 운영 배치가 켜져 있어 기본값은 v1이다 — v2는 대상·비용이 달라 명시적으로 켤 때만 돈다.
+     */
+    @Value("${batch.enrich.mode:v1}")
+    private String mode;
+
     public BatchEnrichScheduler(PlaceRepository placeRepository, ObjectMapper objectMapper) {
         this.placeRepository = placeRepository;
         this.objectMapper = objectMapper;
@@ -121,8 +129,19 @@ public class BatchEnrichScheduler {
         }
 
         List<String> regions = parseRegions();
-        log.info("BatchEnrichScheduler 시작 - chunkSize={}, regions={}, maxPerRegion={}",
-                chunkSize, regions.isEmpty() ? "전체" : regions, maxPerRegion > 0 ? maxPerRegion : "무제한");
+        if (mode != null && !mode.isBlank() && !attributeMode() && !"v1".equalsIgnoreCase(mode.trim())) {
+            log.warn("알 수 없는 batch.enrich.mode={} — v1로 실행합니다", mode);
+        }
+        if (attributeMode() && regions.isEmpty()) {
+            log.warn("속성 보강(v2)은 batch.enrich.regions가 필요합니다. 건너뜁니다.");
+            return;
+        }
+        log.info("BatchEnrichScheduler 시작 - mode={}, chunkSize={}, regions={}, maxPerRegion={}",
+                attributeMode() ? "v2" : "v1", chunkSize, regions.isEmpty() ? "전체" : regions,
+                maxPerRegion > 0 ? maxPerRegion : "무제한");
+        if (attributeMode()) {
+            log.info("속성 보강 대상 {}건", placeRepository.countAttributeTargetsInRegions(regions));
+        }
 
         int[] totals = new int[2];
         if (maxPerRegion > 0 && !regions.isEmpty()) {
@@ -153,7 +172,9 @@ public class BatchEnrichScheduler {
             }
             // NOT IN에 빈 컬렉션을 넘기지 않는다(존재할 수 없는 id로 대신한다).
             Collection<Long> excluded = excludedIds.isEmpty() ? List.of(-1L) : excludedIds;
-            List<Place> places = regions.isEmpty()
+            List<Place> places = attributeMode()
+                    ? placeRepository.findAttributeTargetsInRegions(regions, excluded, PageRequest.of(0, pageSize))
+                    : regions.isEmpty()
                     ? placeRepository.findEnrichTargets(excluded, PageRequest.of(0, pageSize))
                     : placeRepository.findEnrichTargetsInRegions(regions, excluded, PageRequest.of(0, pageSize));
 
@@ -178,6 +199,10 @@ public class BatchEnrichScheduler {
         }
         totals[0] += processed;
         totals[1] += failed;
+    }
+
+    boolean attributeMode() {
+        return mode != null && "v2".equalsIgnoreCase(mode.trim());
     }
 
     private List<String> parseRegions() {
@@ -240,6 +265,11 @@ public class BatchEnrichScheduler {
         List<Map<String, Object>> requests = new ArrayList<>();
 
         for (Place place : places) {
+            if (attributeMode()) {
+                requests.add(Map.of("custom_id", "place_" + place.getId(),
+                        "params", AttributeEnrichment.requestParams(place, enrichModel)));
+                continue;
+            }
             String prompt = buildEnrichPrompt(place);
             Map<String, Object> request = Map.of(
                     "custom_id", "place_" + place.getId(),
@@ -484,6 +514,8 @@ public class BatchEnrichScheduler {
         }
 
         List<Long> succeededIds = new ArrayList<>();
+        long[] usage = new long[4]; // input, output, cache read, cache write
+        int unclassifiable = 0;
 
         for (String line : jsonl.split("\n")) {
             if (line.isBlank()) continue;
@@ -502,6 +534,21 @@ public class BatchEnrichScheduler {
                 JsonNode resultBody = resultNode.get("result");
                 if (resultBody == null || !"succeeded".equals(resultBody.path("type").asText())) {
                     log.warn("장소 보강 실패 - placeId={}, result={}", placeId, resultBody);
+                    continue;
+                }
+
+                addUsage(usage, resultBody.path("message").path("usage"));
+                if (attributeMode()) {
+                    PlaceAttributes attributes =
+                            AttributeEnrichment.interpret(resultBody.get("message"), place.getCategory());
+                    if (attributes == null) {
+                        log.warn("속성 분류 응답 없음 또는 잘림 - placeId={}", placeId);
+                        continue;
+                    }
+                    if (attributes.hasNoClassification()) unclassifiable++;
+                    placeRepository.writeAttributeClassification(placeId, attributes.classificationJson(),
+                            (short) AttributeEnrichment.VERSION);
+                    succeededIds.add(placeId);
                     continue;
                 }
 
@@ -525,14 +572,23 @@ public class BatchEnrichScheduler {
 
         // 보강 성공분은 임베딩을 초기화해 다음 임베딩 단계가 새 tags/description으로
         // 재임베딩하게 한다(embedding 컬럼은 updatable=false라 save()로는 반영 불가).
-        if (!succeededIds.isEmpty()) {
+        // 속성 보강은 임베딩 텍스트에 들어가는 컬럼을 건드리지 않으므로 초기화하지 않는다.
+        if (!succeededIds.isEmpty() && !attributeMode()) {
             placeRepository.resetEmbeddings(succeededIds);
         }
 
         Set<Long> succeeded = new HashSet<>(succeededIds);
         List<Long> failedIds = places.stream().map(Place::getId).filter(id -> !succeeded.contains(id)).toList();
-        log.info("배치 결과 처리 완료 - 성공: {}건, 실패: {}건", succeededIds.size(), failedIds.size());
+        log.info("배치 결과 처리 완료 - 성공: {}건(분류 없음 {}건), 실패: {}건, 토큰 input={} output={} 캐시읽음={} 캐시쓰기={}",
+                succeededIds.size(), unclassifiable, failedIds.size(), usage[0], usage[1], usage[2], usage[3]);
         return new ChunkResult(succeededIds.size(), failedIds.size(), failedIds);
+    }
+
+    private static void addUsage(long[] usage, JsonNode node) {
+        usage[0] += node.path("input_tokens").asLong(0);
+        usage[1] += node.path("output_tokens").asLong(0);
+        usage[2] += node.path("cache_read_input_tokens").asLong(0);
+        usage[3] += node.path("cache_creation_input_tokens").asLong(0);
     }
 
     /**

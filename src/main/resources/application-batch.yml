@@ -93,6 +93,8 @@ batch:
     # LLM 보강 실행 여부 (기본 false — 초기엔 임베딩만 수행)
     # 프로덕션에서 보강이 필요할 때 BATCH_ENRICH_ENABLED=true로 설정
     enabled: ${BATCH_ENRICH_ENABLED:false}
+    # v1: 미보강 장소 태그·설명·역할 보강 / v2: 후보 등장·인기 장소 속성 분류만(임베딩 유지, regions 필수)
+    mode: ${BATCH_ENRICH_MODE:v1}
     # 지역 스코프 (쉼표 구분, 예: "Jeju,Gangneung"). 비우면 전체 —
     # 전량 보강은 LLM 비용이 크므로 관광지 데이터가 빈약한 지역부터 점진 실행 권장.
     regions: ${BATCH_ENRICH_REGIONS:}

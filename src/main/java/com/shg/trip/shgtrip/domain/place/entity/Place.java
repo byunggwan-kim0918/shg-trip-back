@@ -274,13 +274,6 @@ public class Place extends BaseTimeEntity {
         if (newCuisine != null && !newCuisine.isBlank()) this.cuisine = newCuisine;
     }
 
-    /** 속성 보강 결과를 반영한다. TourAPI 원문(official)은 유지한다. 기존 태그·설명·임베딩은 건드리지 않는다. */
-    public void applyAttributes(PlaceAttributes classified, int version) {
-        PlaceAttributes base = attributes != null ? attributes : PlaceAttributes.empty();
-        this.attributes = base.withClassification(classified.normalized());
-        this.enrichVersion = (short) version;
-    }
-
     /** TourAPI 콘텐츠와 연결했거나 찾지 못했음을 기록한다. 못 찾았으면 id·type은 null. */
     public void markTourApiMatch(String contentId, Integer contentType) {
         if (contentId != null) {

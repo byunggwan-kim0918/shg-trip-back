@@ -370,6 +370,57 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                                            Pageable pageable);
 
     /**
+     * 속성 보강(v2) 대상 — 후보로 등장했거나 인기도가 있는 장소 중 v2 속성이 없는 것.
+     * 교통 거점은 분류할 필드가 없어 뺀다.
+     * 최근 후보 등장 → 인기도 순이라 중간에 끊겨도 일정에 자주 나오는 곳부터 끝나 있다.
+     */
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.active = true
+              AND (p.placeRole IS NULL OR p.placeRole NOT IN ('NOT_VISITABLE', 'TRANSIT'))
+              AND p.region IN :regions
+              AND (p.lastCandidateAt IS NOT NULL OR p.wikidataSitelinks > 0)
+              AND (p.enrichVersion IS NULL OR p.enrichVersion < 2)
+              AND p.id NOT IN :excludedIds
+            ORDER BY CASE WHEN p.lastCandidateAt IS NULL THEN 1 ELSE 0 END,
+                     p.lastCandidateAt DESC,
+                     COALESCE(p.wikidataSitelinks, 0) DESC,
+                     p.id
+            """)
+    List<Place> findAttributeTargetsInRegions(@Param("regions") List<String> regions,
+                                              @Param("excludedIds") Collection<Long> excludedIds,
+                                              Pageable pageable);
+
+    @Query("""
+            SELECT COUNT(p) FROM Place p
+            WHERE p.active = true
+              AND (p.placeRole IS NULL OR p.placeRole NOT IN ('NOT_VISITABLE', 'TRANSIT'))
+              AND p.region IN :regions
+              AND (p.lastCandidateAt IS NOT NULL OR p.wikidataSitelinks > 0)
+              AND (p.enrichVersion IS NULL OR p.enrichVersion < 2)
+            """)
+    long countAttributeTargetsInRegions(@Param("regions") List<String> regions);
+
+    /**
+     * 속성 분류만 교체한다. 엔티티 save는 배치 대기(수 시간) 전에 읽은 값으로 행 전체를 덮어써
+     * 그사이 갱신된 last_candidate_at·TourAPI 원문(official)을 되돌린다.
+     *
+     * @param classifiedJson official을 뺀 {@link com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes} JSON
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places
+            SET attributes = (COALESCE(attributes, CAST('{}' AS jsonb))
+                              - ARRAY['venue', 'subType', 'visitStyle', 'hikeLevel', 'lodgingType', 'breakfast'])
+                             || CAST(:classifiedJson AS jsonb),
+                enrich_version = :version
+            WHERE id = :id
+            """, nativeQuery = true)
+    int writeAttributeClassification(@Param("id") Long id, @Param("classifiedJson") String classifiedJson,
+                                     @Param("version") short version);
+
+    /**
      * 보강 성공 장소의 임베딩을 초기화한다 — 임베딩 텍스트가 tags/description을 포함하므로
      * 보강 내용이 벡터 검색에 반영되려면 재임베딩이 필요하다(embedding 컬럼은 updatable=false라
      * 엔티티 flush로는 못 바꿈). NULL이 되면 다음 임베딩 배치가 자동으로 다시 잡는다.
