@@ -3,8 +3,10 @@ package com.shg.trip.shgtrip.domain.itinerary.service;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryResponse;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryStepResponse;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
+import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryEditEvent;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
+import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
@@ -15,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -30,6 +33,9 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -43,6 +49,7 @@ class ItineraryServiceTest {
     @Mock private ItineraryRepository itineraryRepository;
     @Mock private PlaceRepository placeRepository;
     @Mock private GenerationTraceRepository generationTraceRepository;
+    @Mock private ItineraryEditEventRepository editEventRepository;
     @Mock private EntityManager entityManager;
 
     @InjectMocks private ItineraryService itineraryService;
@@ -97,6 +104,12 @@ class ItineraryServiceTest {
 
     private void mockFind() {
         when(itineraryRepository.findByIdWithDetails(ITINERARY_ID)).thenReturn(Optional.of(itinerary));
+    }
+
+    private ItineraryEditEvent onlyEvent() {
+        ArgumentCaptor<ItineraryEditEvent> captor = ArgumentCaptor.forClass(ItineraryEditEvent.class);
+        verify(editEventRepository).save(captor.capture());
+        return captor.getValue();
     }
 
     private Map<Long, ItineraryStepResponse> byId(ItineraryResponse res) {
@@ -323,5 +336,83 @@ class ItineraryServiceTest {
 
         assertThat(link.shareToken()).isNotEqualTo("expired");
         assertThat(link.expiresAt()).isAfter(java.time.OffsetDateTime.now());
+    }
+
+    // ── 편집 신호 ──
+
+    @Test
+    @DisplayName("일정 삭제는 지운 뒤에도 남는 편집 기록을 쓴다(장소 수·확정 여부)")
+    void recordsItineraryDeletion() {
+        mockFind();
+
+        itineraryService.deleteItinerary(ITINERARY_ID, USER_ID);
+
+        ItineraryEditEvent e = onlyEvent();
+        assertThat(e.getType()).isEqualTo(ItineraryEditEvent.Type.DELETE_ITINERARY);
+        assertThat(e.getItineraryId()).isEqualTo(ITINERARY_ID);
+        assertThat(e.getUserId()).isEqualTo(USER_ID);
+        assertThat(e.getPayload()).containsEntry("stepCount", 6).containsEntry("finalized", false);
+    }
+
+    @Test
+    @DisplayName("재정렬은 장소 id 순서 전후를 남기고, 순서가 그대로면 남기지 않는다")
+    void recordsReorderOnlyWhenChanged() {
+        mockFind();
+
+        itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 1, List.of(10L, 11L, 12L));
+        verify(editEventRepository, never()).save(any());
+
+        itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 1, List.of(12L, 10L, 11L));
+        ItineraryEditEvent e = onlyEvent();
+        assertThat(e.getType()).isEqualTo(ItineraryEditEvent.Type.REORDER);
+        assertThat(e.getDayNumber()).isEqualTo(1);
+        assertThat(e.getPayload()).containsEntry("before", List.of(100L, 110L, 120L))
+                .containsEntry("after", List.of(120L, 100L, 110L));
+    }
+
+    @Test
+    @DisplayName("스텝 삭제는 지운 장소 id·순서를 남기고, 거부된 삭제는 남기지 않는다")
+    void recordsStepDeletion() {
+        mockFind();
+
+        assertThatThrownBy(() -> itineraryService.deleteStep(ITINERARY_ID, USER_ID, 30L))
+                .isInstanceOf(BusinessException.class);
+        verify(editEventRepository, never()).save(any());
+
+        itineraryService.deleteStep(ITINERARY_ID, USER_ID, 11L);
+        ItineraryEditEvent e = onlyEvent();
+        assertThat(e.getType()).isEqualTo(ItineraryEditEvent.Type.DELETE_STEP);
+        assertThat(e.getStepId()).isEqualTo(11L);
+        assertThat(e.getPayload()).containsEntry("placeId", 110L).containsEntry("stepOrder", 1);
+    }
+
+    @Test
+    @DisplayName("확정은 처음 한 번만 남긴다")
+    void recordsFinalizeOnce() {
+        mockFind();
+
+        itineraryService.finalizeItinerary(ITINERARY_ID, USER_ID);
+        itineraryService.finalizeItinerary(ITINERARY_ID, USER_ID);
+
+        verify(editEventRepository, times(1)).save(any());
+        assertThat(onlyEvent().getType()).isEqualTo(ItineraryEditEvent.Type.FINALIZE);
+    }
+
+    @Test
+    @DisplayName("대안 선택은 바뀌기 전·후 장소 id를 남긴다")
+    void recordsAlternativeSelection() {
+        mockFind();
+        ItineraryStep cafe = itinerary.getSteps().stream().filter(st -> st.getId().equals(11L)).findFirst().orElseThrow();
+        Place other = Place.builder().id(999L).name("다른 카페").address("주소")
+                .latitude(BigDecimal.valueOf(33.46)).longitude(BigDecimal.valueOf(126.55))
+                .category("관광").region("제주").country("Korea").build();
+        cafe.addAlternative(com.shg.trip.shgtrip.domain.itinerary.entity.AlternativeOption.builder()
+                .id(5L).place(other).optionOrder(1).build());
+
+        itineraryService.selectAlternative(ITINERARY_ID, 11L, 5L, USER_ID);
+
+        ItineraryEditEvent e = onlyEvent();
+        assertThat(e.getType()).isEqualTo(ItineraryEditEvent.Type.SELECT_ALTERNATIVE);
+        assertThat(e.getPayload()).containsEntry("fromPlaceId", 110L).containsEntry("toPlaceId", 999L);
     }
 }
