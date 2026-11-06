@@ -957,8 +957,9 @@ public class RouteOptimizer {
                                     InvariantMemo memo, ScheduleConfig cfg,
                                     java.util.function.Predicate<PlaceCandidate> underTypeCap) {
         boolean changed = false;
+        java.util.function.Predicate<StepData> isMeal = InvariantChecker.mealJudge(day, candidates);
 
-        if (day.lunchInWindow() && !hasMealInWindow(daySteps, LUNCH_START, day.lunchWindowEnd())) {
+        if (day.lunchInWindow() && !hasMealInWindow(daySteps, LUNCH_START, day.lunchWindowEnd(), isMeal)) {
             // Collections.singletonList — centroid는 좌표 불명 day에서 null일 수 있고 List.of는 null을 거부한다
             changed |= insertMealWithRelaxation(day, candidates, spare, usedIndices, maxPerDay,
                     Collections.singletonList(centroidOf(day.placeIndices, candidates)),
@@ -967,7 +968,7 @@ public class RouteOptimizer {
 
         // 마지막날 저녁은 귀가 시각이 늦을 때만 필요하다(출발 허브 도착이 19:30 전이면 저녁을 먹지 않음)
         boolean dinnerRequired = (!lastDay || departsAfterDinner(daySteps, candidates, day)) && day.dinnerInWindow();
-        if (dinnerRequired && !hasMealInWindow(daySteps, DINNER_START, day.dinnerWindowEnd())) {
+        if (dinnerRequired && !hasMealInWindow(daySteps, DINNER_START, day.dinnerWindowEnd(), isMeal)) {
             // 앵커 우선순위: 숙소 → 출발 허브 → 방문지 중심.
             // 마지막날은 숙소가 없어 centroid로만 찾았는데, 그러면 공항 가는 길목 식당이 후보에
             // 들어오지 않는다(실측 67 day3: 저녁 보충 실패).

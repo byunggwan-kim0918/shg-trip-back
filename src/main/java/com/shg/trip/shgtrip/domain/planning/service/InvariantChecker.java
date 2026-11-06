@@ -10,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTimes.byIndex;
@@ -68,9 +69,10 @@ final class InvariantChecker {
             }
 
             // 도착·출발 시각 때문에 끼니 시간대를 못 쓰는 날은 그 끼니를 충족으로 본다
+            Predicate<StepData> isMeal = mealJudge(day, candidates);
             result.put(day.dayNumber, new DayStatus(
-                    !day.lunchInWindow() || hasMealInWindow(daySteps, LUNCH_START, day.lunchWindowEnd()),
-                    hasMealInWindow(daySteps, DINNER_START, day.dinnerWindowEnd()),
+                    !day.lunchInWindow() || hasMealInWindow(daySteps, LUNCH_START, day.lunchWindowEnd(), isMeal),
+                    hasMealInWindow(daySteps, DINNER_START, day.dinnerWindowEnd(), isMeal),
                     (!lastDay || departsAfterDinner(daySteps, candidates, day)) && day.dinnerInWindow(),
                     day.tooShortForSightseeing() || daySteps.stream().anyMatch(st -> st.place() != null
                             && "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(st.place().category()))),
@@ -199,12 +201,36 @@ final class InvariantChecker {
      * 다르게 정의하면 수리가 끝난 뒤에도 검사가 계속 위반을 잡는 무한 루프가 된다.
      */
     static boolean hasMealInWindow(List<StepData> daySteps, int windowStart, int windowEnd) {
+        return hasMealInWindow(daySteps, windowStart, windowEnd, InvariantChecker::isMealByName);
+    }
+
+    /** @param isMeal 끼니 장소 판정. 끼니를 고른 쪽({@link PlaceCandidate#mealEligible})과 같아야 한다 */
+    static boolean hasMealInWindow(List<StepData> daySteps, int windowStart, int windowEnd,
+                                   Predicate<StepData> isMeal) {
         return daySteps.stream().anyMatch(s -> {
-            if (s.place() == null) return false;
-            if (!PlaceCategoryConstants.isMealPlace(s.place().name(), s.place().category())) return false;
+            if (s.place() == null || !isMeal.test(s)) return false;
             int start = toMinutesOrZero(s.startTime());
             return start >= windowStart - 60 && start <= windowEnd;
         });
+    }
+
+    /** 그날 방문 목록에서만 찾는다. 전체 후보에서 찾으면 같은 이름의 다른 행이 잡힌다. */
+    static Predicate<StepData> mealJudge(DayState day, List<PlaceCandidate> candidates) {
+        Map<String, PlaceCandidate> byName = new LinkedHashMap<>();
+        if (candidates != null) {
+            for (Integer idx : day.placeIndices) {
+                PlaceCandidate c = byIndex(candidates, idx);
+                if (c != null && c.name() != null) byName.putIfAbsent(c.name(), c);
+            }
+        }
+        return s -> {
+            PlaceCandidate c = byName.get(s.place().name());
+            return c != null ? c.mealEligible() : isMealByName(s);
+        };
+    }
+
+    private static boolean isMealByName(StepData s) {
+        return PlaceCategoryConstants.isMealPlace(s.place().name(), s.place().category());
     }
 
     /**

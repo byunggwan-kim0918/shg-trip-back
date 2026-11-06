@@ -155,12 +155,17 @@ public final class ItineraryScorer {
         int dayEnd = toMinutesOrZero(endsAtHub ? lastStep.startTime() : lastStep.endTime());
 
         // 오후 도착·오전 출발인 날은 그 끼니를 요구하지 않는다
+        java.util.function.Predicate<StepData> isMeal = s -> {
+            PlaceCandidate c = byName.get(name(s));
+            return c != null ? c.mealEligible()
+                    : PlaceCategoryConstants.isMealPlace(name(s), category(s));
+        };
         if (dayStart <= LUNCH_START && dayEnd >= LUNCH_END
-                && !InvariantChecker.hasMealInWindow(daySteps, LUNCH_START, LUNCH_END)) {
+                && !InvariantChecker.hasMealInWindow(daySteps, LUNCH_START, LUNCH_END, isMeal)) {
             violations.add("day" + day + " 점심 없음");
         }
         if (dayStart <= DINNER_START && dayEnd >= DINNER_END
-                && !InvariantChecker.hasMealInWindow(daySteps, DINNER_START, DINNER_END)) {
+                && !InvariantChecker.hasMealInWindow(daySteps, DINNER_START, DINNER_END, isMeal)) {
             violations.add("day" + day + " 저녁 없음");
         }
         if (!last && roleOf(daySteps.get(daySteps.size() - 1), byName) != CandidatePolicy.Role.LODGING) {

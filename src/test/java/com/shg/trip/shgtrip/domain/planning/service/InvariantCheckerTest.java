@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
@@ -194,6 +195,43 @@ class InvariantCheckerTest {
                     .noneMatch(n -> n.contains("관광지"));
             assertThat(checker.summarize(days, steps, "normal", "car", List.of(), null))
                     .anyMatch(n -> n.contains("관광지"));
+        }
+    }
+
+    @Nested
+    @DisplayName("끼니 판정 기준")
+    class MealJudge {
+
+        private static final String GASTROPUB = "Dining and Drinking > Restaurant > Gastropub";
+
+        private PlaceCandidate candidate(int index, String name, String category, String role) {
+            return new PlaceCandidate(index, (long) index, name, "주소", category, List.of(), "Kyoto", "JP",
+                    BigDecimal.ONE, BigDecimal.ONE, null, null, 0.9, null, null, null, null, false, null, null,
+                    null, null, role, null);
+        }
+
+        @Test
+        @DisplayName("그날 후보의 역할이 MEAL이면 이름·카테고리가 술집처럼 보여도 끼니로 본다")
+        void usesCandidateRole() {
+            DayState day = new DayState(new SelectionOutput.DayPlan(1, null, List.of(1), null, null));
+            List<PlaceCandidate> candidates = List.of(candidate(1, "高木与三右衛門商店", GASTROPUB, "MEAL"));
+            List<StepData> steps = List.of(step(1, "11:30", "12:40", "高木与三右衛門商店", GASTROPUB));
+
+            assertThat(InvariantChecker.hasMealInWindow(steps, ScheduleTuning.LUNCH_START, ScheduleTuning.LUNCH_END))
+                    .isFalse();
+            assertThat(InvariantChecker.hasMealInWindow(steps, ScheduleTuning.LUNCH_START, ScheduleTuning.LUNCH_END,
+                    InvariantChecker.mealJudge(day, candidates))).isTrue();
+        }
+
+        @Test
+        @DisplayName("그날 방문 목록에 없는 스텝은 이름·카테고리로 판정한다")
+        void fallsBackOutsideDay() {
+            DayState day = new DayState(new SelectionOutput.DayPlan(1, null, List.of(), null, null));
+            List<PlaceCandidate> candidates = List.of(candidate(1, "高木与三右衛門商店", GASTROPUB, "MEAL"));
+            List<StepData> steps = List.of(step(1, "11:30", "12:40", "高木与三右衛門商店", GASTROPUB));
+
+            assertThat(InvariantChecker.hasMealInWindow(steps, ScheduleTuning.LUNCH_START, ScheduleTuning.LUNCH_END,
+                    InvariantChecker.mealJudge(day, candidates))).isFalse();
         }
     }
 
