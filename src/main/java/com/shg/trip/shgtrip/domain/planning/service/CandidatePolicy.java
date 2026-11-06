@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 
 import java.util.List;
@@ -48,7 +49,25 @@ public final class CandidatePolicy {
         if (c == null) return Role.NOT_VISITABLE;
         Role enriched = Role.parse(c.placeRole());
         if (enriched != null) return enriched;
+        Role byAttributes = roleOf(c.attributes());
+        if (byAttributes != null) return byAttributes;
         return estimateRole(c.name(), c.category(), c.tags());
+    }
+
+    /**
+     * 업종 대응은 v1 보강(DiningEnrichment.roleOf)과 같아야 한다. 숙소 유형은 카테고리보다 우선한다.
+     *
+     * @return 판정할 속성이 없으면 null
+     */
+    static Role roleOf(PlaceAttributes attributes) {
+        if (attributes == null) return null;
+        if (attributes.lodgingType() != null) return Role.LODGING;
+        if (attributes.venue() == null) return null;
+        return switch (attributes.venue()) {
+            case "MEAL" -> Role.MEAL;
+            case "BAR" -> Role.BAR;
+            default -> Role.CAFE;
+        };
     }
 
     /** 보강 전 추정. 카테고리·이름·태그만 본다. */
