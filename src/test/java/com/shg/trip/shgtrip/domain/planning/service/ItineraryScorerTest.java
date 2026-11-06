@@ -31,7 +31,7 @@ class ItineraryScorerTest {
         SelectionOutput selection = Itinerary115Fixture.selection();
         ScheduleArgs args = new ScheduleArgs("normal", "car", LocalDate.of(2026, 11, 1),
                 List.of("food", "romance"), new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"),
-                false, List.of("restaurant"), false);
+                false, List.of("restaurant"), false, null, null, null);
         List<StepData> steps = new RouteOptimizer().schedule(selection, candidates, args).steps();
 
         ScoreReport report = scorer.score(new ItineraryScorer.Input(

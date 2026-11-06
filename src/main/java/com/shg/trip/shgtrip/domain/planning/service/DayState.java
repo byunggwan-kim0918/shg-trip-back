@@ -34,6 +34,10 @@ class DayState {
      * (실측 115 day4: 수애기베이커리·미쁜제과가 거리 트림으로 빠졌다).
      */
     Integer cafeStopIndex;
+    /** 첫날 도착 시각(분). 이보다 일찍 시작하지 않는다. 모르면 null. */
+    Integer startNotBefore;
+    /** 마지막 날 출발 허브에 닿아야 하는 시각(분). 모르면 null(기본 21:00). */
+    Integer departureDeadline;
 
     DayState(SelectionOutput.DayPlan plan) {
         this.dayNumber = plan.dayNumber();
@@ -41,5 +45,50 @@ class DayState {
         this.placeIndices = new ArrayList<>(plan.placeIndices() != null ? plan.placeIndices() : List.of());
         this.accommodationIndex = plan.accommodationIndex();
         this.departureHubIndex = plan.departureHubIndex();
+    }
+
+    /** 점심 시간대가 끝난 뒤 도착하거나 끝나기 전에 떠나는 날이면 false. 그날 점심을 요구하지 않는다. */
+    boolean lunchInWindow() {
+        return (startNotBefore == null || startNotBefore <= ScheduleTuning.LUNCH_END)
+                && (departureDeadline == null || departureDeadline >= ScheduleTuning.LUNCH_END);
+    }
+
+    /** 점심 무렵 도착이면 내려서 먹는 늦은 점심도 점심으로 본다. */
+    int lunchWindowEnd() {
+        return lateMealEnd(ScheduleTuning.LUNCH_END);
+    }
+
+    int dinnerWindowEnd() {
+        return lateMealEnd(ScheduleTuning.DINNER_END);
+    }
+
+    private int lateMealEnd(int windowEnd) {
+        return startNotBefore == null ? windowEnd
+                : Math.max(windowEnd, startNotBefore + ScheduleTuning.LATE_MEAL_WINDOW_MINUTES);
+    }
+
+    /** 사용자가 준 도착·출발 시각이 있는 날. 이런 날만 시간창 보정이 적용된다. */
+    boolean hasUserWindow() {
+        return startNotBefore != null || departureDeadline != null;
+    }
+
+    /** 출발 시각 때문에 일찍 끝나는 날. 사용자가 정한 일정이라 조기 종료로 보지 않는다. */
+    boolean endsEarlyByDeparture() {
+        return departureDeadline != null && departureDeadline < ScheduleTuning.EARLY_FINISH_MINUTES;
+    }
+
+    /** 도착부터 출발까지가 그날 끼니를 빼면 관광 하나 넣기에도 짧은 날. */
+    boolean tooShortForSightseeing() {
+        if (!hasUserWindow()) return false;
+        int start = startNotBefore != null ? startNotBefore : ScheduleTuning.DEFAULT_DAY_START_MINUTES;
+        int end = departureDeadline != null ? departureDeadline : ScheduleTuning.DEPARTURE_HUB_LATEST_MINUTES;
+        int meals = (lunchInWindow() ? ScheduleTuning.DINING_VISIT_MINUTES : 0)
+                + (dinnerInWindow() ? ScheduleTuning.DINING_VISIT_MINUTES : 0);
+        return end - start - meals < ScheduleTuning.MIN_SIGHTSEEING_WINDOW_MINUTES;
+    }
+
+    boolean dinnerInWindow() {
+        return (startNotBefore == null || startNotBefore <= ScheduleTuning.DINNER_END)
+                && (departureDeadline == null || departureDeadline >= ScheduleTuning.DINNER_END);
     }
 }

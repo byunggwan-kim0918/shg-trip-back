@@ -411,7 +411,17 @@ public class RouteOptimizer {
 
     public ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args) {
         return schedule(selection, candidates, args.pace(), args.transportPref(), args.startDate(),
-                args.themes(), args.hub(), args.compact(), args.categories(), args.couple());
+                args.themes(), args.hub(), args.compact(), args.categories(), args.couple(),
+                ScheduleTimes.toMinutesOrNull(args.arrivalTime()), departureHubDeadline(args));
+    }
+
+    /** 마지막 날 출발 허브에 닿아야 하는 시각(분). 출발 시각이 없으면 null. 해외는 국제선 기준으로 더 일찍. */
+    public static Integer departureHubDeadline(ScheduleArgs args) {
+        Integer departure = ScheduleTimes.toMinutesOrNull(args.departureTime());
+        if (departure == null) return null;
+        boolean overseas = args.country() != null && !"KR".equalsIgnoreCase(args.country());
+        int buffer = overseas ? OVERSEAS_DEPARTURE_CHECKIN_BUFFER_MINUTES : DEPARTURE_CHECKIN_BUFFER_MINUTES;
+        return Math.max(0, departure - buffer);
     }
 
     /**
@@ -422,9 +432,18 @@ public class RouteOptimizer {
                                    String pace, String transportPref, java.time.LocalDate startDate,
                                    List<String> themes, TransportationHub hub,
                                    boolean compactMode, List<String> userCategories, boolean couple) {
+        return schedule(selection, candidates, pace, transportPref, startDate, themes, hub, compactMode,
+                userCategories, couple, null, null);
+    }
+
+    private ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates,
+                                    String pace, String transportPref, java.time.LocalDate startDate,
+                                    List<String> themes, TransportationHub hub,
+                                    boolean compactMode, List<String> userCategories, boolean couple,
+                                    Integer firstDayStart, Integer lastDayDeadline) {
         List<PlaceCandidate> withIntent = applyIntentHints(selection, candidates);
         ScheduleResult result = scheduleCandidates(selection, withIntent, pace, transportPref, startDate,
-                themes, hub, compactMode, userCategories, couple);
+                themes, hub, compactMode, userCategories, couple, firstDayStart, lastDayDeadline);
         logIntentOutcome(withIntent, result.steps());
         return result;
     }
@@ -513,7 +532,8 @@ public class RouteOptimizer {
     private ScheduleResult scheduleCandidates(SelectionOutput selection, List<PlaceCandidate> candidates,
                                               String pace, String transportPref, java.time.LocalDate startDate,
                                               List<String> themes, TransportationHub hub,
-                                              boolean compactMode, List<String> userCategories, boolean couple) {
+                                              boolean compactMode, List<String> userCategories, boolean couple,
+                                              Integer firstDayStart, Integer lastDayDeadline) {
         int[] range = PACE_RANGE.getOrDefault(pace, PACE_RANGE.get("normal"));
         int minPerDay = compactMode ? Math.min(range[0], 3) : range[0];
         int maxPerDay = range[1];
@@ -526,6 +546,10 @@ public class RouteOptimizer {
         // day가 자기 요일을 알게 한다. startDate가 없으면 null로 남고 판정은 건너뛴다.
         if (startDate != null) {
             days.forEach(d -> d.dayOfWeek = startDate.plusDays(d.dayNumber - 1L).getDayOfWeek());
+        }
+        if (!days.isEmpty()) {
+            days.get(0).startNotBefore = firstDayStart;
+            days.get(days.size() - 1).departureDeadline = lastDayDeadline;
         }
         List<List<Integer>> pairs = selection.pairs() != null ? selection.pairs() : List.of();
         Deque<Integer> spare = new ArrayDeque<>(selection.spareIndices() != null ? selection.spareIndices() : List.of());
@@ -934,7 +958,7 @@ public class RouteOptimizer {
                                     java.util.function.Predicate<PlaceCandidate> underTypeCap) {
         boolean changed = false;
 
-        if (!hasMealInWindow(daySteps, LUNCH_START, LUNCH_END)) {
+        if (day.lunchInWindow() && !hasMealInWindow(daySteps, LUNCH_START, day.lunchWindowEnd())) {
             // Collections.singletonList — centroid는 좌표 불명 day에서 null일 수 있고 List.of는 null을 거부한다
             changed |= insertMealWithRelaxation(day, candidates, spare, usedIndices, maxPerDay,
                     Collections.singletonList(centroidOf(day.placeIndices, candidates)),
@@ -942,8 +966,8 @@ public class RouteOptimizer {
         }
 
         // 마지막날 저녁은 귀가 시각이 늦을 때만 필요하다(출발 허브 도착이 19:30 전이면 저녁을 먹지 않음)
-        boolean dinnerRequired = !lastDay || departsAfterDinner(daySteps, candidates, day);
-        if (dinnerRequired && !hasMealInWindow(daySteps, DINNER_START, DINNER_END)) {
+        boolean dinnerRequired = (!lastDay || departsAfterDinner(daySteps, candidates, day)) && day.dinnerInWindow();
+        if (dinnerRequired && !hasMealInWindow(daySteps, DINNER_START, day.dinnerWindowEnd())) {
             // 앵커 우선순위: 숙소 → 출발 허브 → 방문지 중심.
             // 마지막날은 숙소가 없어 centroid로만 찾았는데, 그러면 공항 가는 길목 식당이 후보에
             // 들어오지 않는다(실측 67 day3: 저녁 보충 실패).
@@ -1011,10 +1035,12 @@ public class RouteOptimizer {
                                               Integer breakfastIdx, Integer lunchIdx, Integer dinnerIdx) {
         if (day.departureHubIndex == null) return;
 
-        for (int guard = 0; guard < 3; guard++) {
+        boolean userDeadline = day.departureDeadline != null;
+        int attempts = userDeadline ? seq.size() : 3;
+        for (int guard = 0; guard < attempts; guard++) {
             int arrival = estimateDepartureHubArrival(day, seq, candidates, cfg, origin, transportPref,
                     breakfastIdx, lunchIdx, dinnerIdx);
-            if (arrival <= DEPARTURE_HUB_LATEST_MINUTES) return;
+            if (arrival <= departureDeadline(day)) return;
 
             Integer victim = null;
             for (int i = seq.size() - 1; i >= 0; i--) {
@@ -1024,6 +1050,17 @@ public class RouteOptimizer {
                 if (c == null || c.userSelected()) continue;
                 victim = idx;
                 break;
+            }
+            // 사용자가 준 출발 시각(비행기·기차)은 넘길 수 없어 대표 명소·식사 보호보다 앞선다
+            if (victim == null && userDeadline) {
+                for (int i = seq.size() - 1; i >= 0; i--) {
+                    Integer idx = seq.get(i);
+                    if (isSameIndex(day.departureHubIndex, idx) || isSameIndex(day.arrivalHubIndex, idx)) continue;
+                    PlaceCandidate c = byIndex(candidates, idx);
+                    if (c == null || c.userSelected()) continue;
+                    victim = idx;
+                    break;
+                }
             }
             if (victim == null) {
                 log.info("귀가 시각 초과({}) — 트림 가능한 활동 없음: day={}",
@@ -1035,7 +1072,7 @@ public class RouteOptimizer {
             spareIndices.addLast(victim);
             log.info("귀가 시각 초과({} > {}) — 트림: day={} {}",
                     formatMinutes(Math.min(arrival, END_OF_DAY_MINUTES)),
-                    formatMinutes(DEPARTURE_HUB_LATEST_MINUTES), day.dayNumber, nameOf(candidates, victim));
+                    formatMinutes(departureDeadline(day)), day.dayNumber, nameOf(candidates, victim));
         }
     }
 
@@ -1202,7 +1239,7 @@ public class RouteOptimizer {
                                      Deque<Integer> spare, Set<Integer> usedIndices, int maxPerDay,
                                      String pace, java.util.function.Predicate<PlaceCandidate> openOnDay,
                                      InvariantMemo memo) {
-        if ("relaxed".equals(pace)) return false;
+        if ("relaxed".equals(pace) || day.tooShortForSightseeing()) return false;
         boolean has = daySteps.stream().anyMatch(s -> s.place() != null
                 && "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(s.place().category())));
         if (has) return false;
@@ -1257,7 +1294,7 @@ public class RouteOptimizer {
                 .filter(RouteOptimizer::isActivityStep)
                 .mapToInt(s -> toMinutesOrZero(s.endTime()))
                 .max().orElse(0);
-        if (end == 0 || end >= EARLY_FINISH_MINUTES) return false;
+        if (end == 0 || end >= EARLY_FINISH_MINUTES || day.endsEarlyByDeparture()) return false;
         if (day.placeIndices.size() >= maxPerDay) return false;
 
         Integer pick = pickNearbyCandidate(candidates, spare, usedIndices,
@@ -3654,6 +3691,7 @@ public class RouteOptimizer {
                                         ScheduleConfig cfg, double[] dayCentroid,
                                         Set<Integer> usedIndices, String transportPref,
                                         PlaceCandidate startFrom, int maxPerDay) {
+        cfg = cfgFor(day, cfg);
         // 식사 식별(순서 유지). Bar 계열은 식사가 아닌 저녁 활동으로 취급한다(점심 슬롯에 맥주바가
         // 배정되는 사고 방지). 4번째+ DINING은 트림 → spare.
         List<Integer> diningAll = orderedMain.stream()
@@ -3672,7 +3710,8 @@ public class RouteOptimizer {
         }
         // 아침 슬롯은 "숙소에서 출발하는 날"에만 성립한다. 도착일(허브로 시작)이나 전날 숙소가
         // 없는 날에 아침을 두면 공항 옆 식당이 10시 아침이 된다(실측 64 day1 10:03).
-        boolean allowBreakfast = day.arrivalHubIndex == null && startFrom != null;
+        boolean allowBreakfast = day.arrivalHubIndex == null && startFrom != null
+                && cfg.morningStart <= BREAKFAST_LATEST_START;
         meals = dropBreakfastIfNotAllowed(meals, day, candidates, spareIndices, allowBreakfast);
         // 숙소에서 먼 아침은 그 다음에 버린다(아침부터 원정 방지) — 남은 개수가 버킷 용량을 결정한다.
         meals = dropDistantBreakfast(meals, day, candidates, spareIndices);
@@ -3683,7 +3722,7 @@ public class RouteOptimizer {
         List<Integer> activities = orderedMain.stream()
                 .filter(idx -> !mealSet.contains(idx))
                 .collect(Collectors.toList());
-        int[] budgets = bucketBudgets(cfg, meals.size() >= 1, meals.size() >= 2, meals.size() >= 3);
+        int[] budgets = dayBudgets(day, cfg, meals.size(), arrivalLeadMinutes(day, orderedMain, candidates, transportPref));
         // 도착 허브(공항 도착·수속)는 활동 목록에 없지만 오전 시간을 실제로 먹는다. 빼주지 않으면
         // 오전 예산이 부풀어 활동이 하나 더 들어가고 점심이 창 밖으로 밀린다
         // (실측 71/72 day1: 허브 08:30~10:00 뒤 120분 오름 → 점심 14:03).
@@ -3700,6 +3739,14 @@ public class RouteOptimizer {
             PlaceCandidate actCand = byIndex(candidates, idx);
             // 카페 스톱은 점심과 저녁 사이(오후)에 둔다. 오전 버킷부터 채우면 아침 9시 카페가 된다.
             if (cfg.cafeStop && isSameIndex(day.cafeStopIndex, idx)) {
+                // 늦게 도착한 날은 오후가 짧아 카페까지 넣으면 저녁이 시간대 밖으로 밀린다
+                if (day.hasUserWindow() && !afternoon.isEmpty()
+                        && usedA[0] + resolveVisitMinutes(actCand) + INTRA_BUCKET_TRAVEL_MINUTES > budgets[1]) {
+                    day.placeIndices.remove(idx);
+                    spareIndices.addLast(idx);
+                    log.info("시간대 예산 초과로 카페 생략: day={} {}", day.dayNumber, nameOf(candidates, idx));
+                    continue;
+                }
                 afternoon.add(idx);
                 usedA[0] += resolveVisitMinutes(actCand) + INTRA_BUCKET_TRAVEL_MINUTES;
                 continue;
@@ -4756,6 +4803,24 @@ public class RouteOptimizer {
         return !"LODGING".equals(major) && !"TRANSIT_HUB".equals(major);
     }
 
+    /** 첫날 도착·마지막 날 출발을 반영한 그날의 시작 시각과 저녁 상한. */
+    private static ScheduleConfig cfgFor(DayState day, ScheduleConfig cfg) {
+        int start = day.startNotBefore != null
+                ? Math.max(EARLIEST_DAY_START_MINUTES, day.startNotBefore) : cfg.morningStart;
+        // 새벽 출발이면 기본 시작 시각으로는 마감을 지킬 수 없다
+        if (day.startNotBefore == null && day.departureDeadline != null
+                && day.departureDeadline - EARLY_DEPARTURE_LEAD_MINUTES < start) {
+            start = Math.max(EARLIEST_DAY_START_MINUTES, day.departureDeadline - EARLY_DEPARTURE_LEAD_MINUTES);
+        }
+        int cap = day.departureDeadline != null ? Math.min(cfg.eveningCap, day.departureDeadline) : cfg.eveningCap;
+        return cfg.withWindow(start, Math.max(start, cap));
+    }
+
+    private static int departureDeadline(DayState day) {
+        return day.departureDeadline != null
+                ? Math.min(day.departureDeadline, DEPARTURE_HUB_LATEST_MINUTES) : DEPARTURE_HUB_LATEST_MINUTES;
+    }
+
     private boolean isDiningCand(PlaceCandidate c) {
         return c != null && "DINING".equals(PlaceCategoryConstants.majorCategory(c.category()));
     }
@@ -4883,7 +4948,7 @@ public class RouteOptimizer {
 
         // ── 저녁: 숙소에 가장 가까운 식당(식후 장거리 귀가를 구조적으로 차단) ──
         Integer dinner = null;
-        if (remaining.size() > 1 && !dinnerPool.isEmpty()) {
+        if (day.dinnerInWindow() && remaining.size() > 1 && !dinnerPool.isEmpty()) {
             double[] hotel = accommodationCoords(day, candidates);
             dinner = hotel != null
                     ? nearestMeal(dinnerPool, candidates, hotel)
@@ -4893,7 +4958,7 @@ public class RouteOptimizer {
 
         // ── 점심: 오전 마지막 활동 → 식당 → 오후 첫 활동 우회가 가장 작은 식당 ──
         Integer lunch = null;
-        List<Integer> lunchPool = openAtSlot(remaining, candidates, dow, LUNCH_START);
+        List<Integer> lunchPool = day.lunchInWindow() ? openAtSlot(remaining, candidates, dow, LUNCH_START) : List.of();
         if (!lunchPool.isEmpty()) {
             double[] from = lastCoord(morning, candidates);
             if (from == null) from = coordsOf(startFrom);
@@ -4909,7 +4974,7 @@ public class RouteOptimizer {
         }
 
         // 한 끼뿐이라 위에서 저녁을 건너뛰었는데 그 한 끼가 점심에 닫혀 있으면, 저녁으로 돌린다.
-        if (dinner == null && !remaining.isEmpty()) {
+        if (dinner == null && day.dinnerInWindow() && !remaining.isEmpty()) {
             List<Integer> late = openAtSlot(remaining, candidates, dow, DINNER_START);
             if (!late.isEmpty()) {
                 double[] hotel = accommodationCoords(day, candidates);
@@ -5073,21 +5138,65 @@ public class RouteOptimizer {
     private int[] bucketBudgets(ScheduleConfig cfg, boolean hasLunch, boolean hasDinner, boolean hasBreakfast) {
         int densityMinutes = cfg.densityDelta * ACTIVITY_SLOT_MINUTES;
         int morningStart = cfg.morningStart + (hasBreakfast ? DINING_VISIT_MINUTES : 0);
+        // 점심·저녁은 시간대 시작에 고정되지만, 그보다 늦게 하루가 시작하면 그 뒤로 밀린다
+        int lunchEnd = Math.max(LUNCH_START, morningStart) + DINING_VISIT_MINUTES;
+        int dinnerEnd = Math.max(DINNER_START, morningStart) + DINING_VISIT_MINUTES;
         if (hasLunch && hasDinner) {
             int budgetM = Math.max(0, LUNCH_START - morningStart);
-            int budgetA = Math.max(ACTIVITY_SLOT_MINUTES,
-                    DINNER_START - (LUNCH_START + DINING_VISIT_MINUTES) + densityMinutes);
-            int budgetE = Math.max(0, cfg.eveningCap - (DINNER_START + DINING_VISIT_MINUTES));
+            int budgetA = Math.max(ACTIVITY_SLOT_MINUTES, DINNER_START - lunchEnd + densityMinutes);
+            int budgetE = Math.max(0, cfg.eveningCap - dinnerEnd);
             return new int[]{budgetM, budgetA, budgetE};
         } else if (hasLunch) { // 저녁 없음 → 오후가 상한까지 확장
             int budgetM = Math.max(0, LUNCH_START - morningStart);
-            int budgetA = Math.max(ACTIVITY_SLOT_MINUTES,
-                    cfg.eveningCap - (LUNCH_START + DINING_VISIT_MINUTES) + densityMinutes);
+            int budgetA = Math.max(ACTIVITY_SLOT_MINUTES, cfg.eveningCap - lunchEnd + densityMinutes);
             return new int[]{budgetM, budgetA, 0};
+        } else if (hasDinner) { // 점심 없이 저녁만(오후 도착) → 저녁 전까지가 오후
+            int budgetA = Math.max(0, DINNER_START - morningStart + densityMinutes);
+            int budgetE = Math.max(0, cfg.eveningCap - dinnerEnd);
+            return new int[]{0, budgetA, budgetE};
         } else { // 식사 없음 → 하루 전체를 한 버킷으로
             int budgetAll = Math.max(ACTIVITY_SLOT_MINUTES, cfg.eveningCap - morningStart + densityMinutes);
             return new int[]{budgetAll, 0, 0};
         }
+    }
+
+    /**
+     * 도착 허브 체류 + 허브에서 그날 첫 장소까지 이동. 도착이 늦은 날은 이 시간이 예산에서 바로 빠진다
+     * (제주공항 → 서귀포처럼 한 시간 이동이면 오후 예산의 절반이 사라진다).
+     */
+    private int arrivalLeadMinutes(DayState day, List<Integer> orderedMain, List<PlaceCandidate> candidates,
+                                   String transportPref) {
+        if (day.startNotBefore == null || day.arrivalHubIndex == null) return 0;
+        PlaceCandidate hub = byIndex(candidates, day.arrivalHubIndex);
+        PlaceCandidate first = orderedMain.stream()
+                .filter(idx -> !isSameIndex(day.arrivalHubIndex, idx))
+                .map(idx -> byIndex(candidates, idx))
+                .filter(Objects::nonNull)
+                .findFirst().orElse(null);
+        TransportLeg leg = hub != null && first != null ? computeLeg(hub, first, transportPref, day.dayNumber) : null;
+        return ARRIVAL_HUB_MINUTES + (leg != null ? leg.durationMin() : 0);
+    }
+
+    /**
+     * 그날 쓸 수 있는 끼니로 예산을 잡는다. 사용자 시간창이 없는 날은 기존 계산 그대로다.
+     * 시간창이 있으면 범위 밖 끼니를 세지 않고, 도착 허브에서 빠져나오는 시간을 앞쪽 버킷에서 뺀다.
+     */
+    private int[] dayBudgets(DayState day, ScheduleConfig cfg, int mealCount, int arrivalLeadMinutes) {
+        if (!day.hasUserWindow()) {
+            return bucketBudgets(cfg, mealCount >= 1, mealCount >= 2, mealCount >= 3);
+        }
+        boolean lunch = day.lunchInWindow() && mealCount >= 1;
+        boolean dinner = day.dinnerInWindow() && mealCount >= (lunch ? 2 : 1);
+        int[] budgets = bucketBudgets(cfg, lunch, dinner, mealCount >= 3);
+        if (day.startNotBefore != null && day.arrivalHubIndex != null) {
+            int left = arrivalLeadMinutes;
+            for (int i = 0; i < budgets.length && left > 0; i++) {
+                int used = Math.min(budgets[i], left);
+                budgets[i] -= used;
+                left -= used;
+            }
+        }
+        return budgets;
     }
 
     /**
@@ -5365,8 +5474,9 @@ public class RouteOptimizer {
      * 체류시간으로 나눠, 장시간 체류 장소가 많은 day를 과대평가하지 않는다.
      */
     private int totalActivityCapacity(DayState day, List<PlaceCandidate> candidates, ScheduleConfig cfg) {
+        cfg = cfgFor(day, cfg);
         long dining = day.placeIndices.stream().filter(idx -> isDiningCand(byIndex(candidates, idx))).count();
-        int[] budgets = bucketBudgets(cfg, dining >= 1, dining >= 2, dining >= 3);
+        int[] budgets = dayBudgets(day, cfg, (int) dining, ARRIVAL_HUB_MINUTES);
         int totalBudget = budgets[0] + budgets[1] + budgets[2];
 
         double avgNeed = day.placeIndices.stream()

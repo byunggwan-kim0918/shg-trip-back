@@ -17,7 +17,9 @@
    - 시작일만 알고 기간을 모르면 endDate는 null. 둘 다 모르면 둘 다 null.
    - 연도 없이 월·일만 말한 경우에만 미래로 옮깁니다. **"작년", "지난달", "어제", 지난 연도처럼 과거를 직접 가리키면 startDate·endDate 모두 null**입니다. 내년으로 옮기지 마세요.
    - 여행 기간이 10일을 넘으면("한 달 살기", "3주", "보름") startDate·endDate 모두 null입니다.
-3. party: 동행/인원 (자유 텍스트, 예: "가족", "친구 3명", "혼자", "커플"). 표시 전용이므로 자유롭게.
+3. party: 동행/인원 원문 (자유 텍스트, 예: "아이 둘이랑 가족", "친구 3명", "혼자"). 화면 표시용.
+   companion: solo(혼자) | couple(커플·연인·부부 둘이) | friends(친구·동료) | family(아이와 함께하는 가족) | parents(부모님·어르신 동반) 중 하나. 단서 없으면 null.
+   partySize: 총 인원(본인 포함, 정수). "커플"은 2, "혼자"는 1, "아이 둘이랑 부부"는 4. 숫자를 알 수 없으면 null.
 4. themes: 아래 ID 목록에서만 선택 (여러 개 가능, 문장과 무관하면 []):
    healing(힐링), activity(액티비티), food(맛집), culture(문화/역사), shopping(쇼핑), nature(자연/풍경),
    adventure(모험), romance(로맨틱), family(가족여행), budget(알뜰), luxury(럭셔리), photo(사진/인스타),
@@ -29,7 +31,9 @@
    nature(자연/공원), museum(박물관/미술관), theme_park(테마파크), spa(스파), temple(사찰/성당), street_food(길거리음식)
 6. pace: tight(알차게/빡빡하게) | normal(보통) | relaxed(여유롭게/느긋하게) 중 하나. 문장에 단서가 없으면 null.
 7. transportPref: walk(도보/뚜벅이) | car(자동차/렌터카) | any(상관없음) 중 하나. 단서 없으면 null.
-8. budget: 총 예산 (원화 숫자만, 예: "50만원" → 500000). 단서 없으면 null.
+8. budget: 일행 전체 총 예산, 숙박 포함 (원화 숫자만, 예: "50만원" → 500000). 단서 없으면 null.
+9. arrivalTime / departureTime: 첫날 도착 시각 / 마지막 날 출발 시각 ("HH:mm", 24시간). "오후 3시 도착" → "15:00",
+   "마지막 날 11시 비행기" → "11:00". "오전/오후" 같은 대략적 표현이면 오전 "10:00", 점심 "12:30", 오후 "15:00", 저녁 "18:00". 단서 없으면 null.
 
 ## 규칙
 - **themes/categories/pace/transportPref는 반드시 위에 나열된 영어 ID만** 사용합니다. 한국어 라벨이나 목록에 없는 값은 쓰지 마세요.
@@ -47,7 +51,11 @@
   "categories": ["cafe", "attraction"],
   "pace": "relaxed",
   "transportPref": null,
-  "budget": null
+  "budget": null,
+  "companion": "family",
+  "partySize": null,
+  "arrivalTime": null,
+  "departureTime": null
 }
 
 ## 예시
@@ -62,7 +70,11 @@
   "categories": ["cafe"],
   "pace": "relaxed",
   "transportPref": null,
-  "budget": null
+  "budget": null,
+  "companion": "family",
+  "partySize": null,
+  "arrivalTime": null,
+  "departureTime": null
 }
 
 입력: "오늘 점심 뭐 먹지"
@@ -76,5 +88,9 @@
   "categories": [],
   "pace": null,
   "transportPref": null,
-  "budget": null
+  "budget": null,
+  "companion": null,
+  "partySize": null,
+  "arrivalTime": null,
+  "departureTime": null
 }

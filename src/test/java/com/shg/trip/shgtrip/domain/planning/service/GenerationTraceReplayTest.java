@@ -32,7 +32,7 @@ class GenerationTraceReplayTest {
 
     private final ScheduleArgs args = new ScheduleArgs("normal", "car", LocalDate.of(2026, 11, 1),
             List.of("food", "romance"), new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"),
-            false, List.of("restaurant"), true);
+            false, List.of("restaurant"), true, null, null, null);
 
     @Test
     @DisplayName("JSON으로 저장했다 읽은 입력으로 돌려도 스텝이 바이트 단위로 같다")

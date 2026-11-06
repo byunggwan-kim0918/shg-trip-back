@@ -36,14 +36,21 @@ public final class ItineraryScorer {
             "prominence", 0.10,
             "intent", 0.10);
 
+    /** @param lastDayHubDeadline 사용자 출발 시각에서 정한 허브 도착 마감(분). 없으면 null(21:00 기준) */
     public record Input(
             List<StepData> steps,
             String pace,
             String transportPref,
             LocalDate startDate,
             List<PlaceCandidate> candidates,
-            SelectionOutput selection
-    ) {}
+            SelectionOutput selection,
+            Integer lastDayHubDeadline
+    ) {
+        public Input(List<StepData> steps, String pace, String transportPref, LocalDate startDate,
+                     List<PlaceCandidate> candidates, SelectionOutput selection) {
+            this(steps, pace, transportPref, startDate, candidates, selection, null);
+        }
+    }
 
     public ScoreReport score(Input in) {
         List<StepData> steps = in.steps() == null ? List.of() : in.steps();
@@ -77,7 +84,7 @@ public final class ItineraryScorer {
             boolean first = day == byDay.firstKey();
             boolean last = day == byDay.lastKey();
 
-            checkHard(day, daySteps, first, last, limits, in.startDate(), byName, violations);
+            checkHard(day, daySteps, first, last, limits, in.startDate(), byName, violations, in.lastDayHubDeadline());
 
             double dayKm = 0;
             for (StepData s : daySteps) {
@@ -136,7 +143,7 @@ public final class ItineraryScorer {
     }
 
     private void checkHard(int day, List<StepData> daySteps, boolean first, boolean last, double[] limits,
-                           LocalDate startDate, Map<String, PlaceCandidate> byName, List<String> violations) {
+                           LocalDate startDate, Map<String, PlaceCandidate> byName, List<String> violations, Integer hubDeadline) {
         int dayStart = toMinutesOrZero(daySteps.get(0).startTime());
         int dayEnd = toMinutesOrZero(daySteps.get(daySteps.size() - 1).endTime());
 
@@ -154,6 +161,13 @@ public final class ItineraryScorer {
         }
         if (last && dayEnd > DEPARTURE_HUB_LATEST_MINUTES) {
             violations.add("day" + day + " 출발 마감 초과");
+        }
+        if (last && hubDeadline != null) {
+            StepData lastStep = daySteps.get(daySteps.size() - 1);
+            if (roleOf(lastStep, byName) == CandidatePolicy.Role.TRANSIT
+                    && toMinutesOrZero(lastStep.startTime()) > hubDeadline) {
+                violations.add("day" + day + " 사용자 출발 시각 초과");
+            }
         }
         for (StepData s : daySteps) {
             if (s.transportationDistance() != null

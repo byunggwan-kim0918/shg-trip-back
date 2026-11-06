@@ -87,7 +87,9 @@ public class OptimizedGenerationExecutor {
                 return;
             }
 
-            VectorEnrichedInput enrichedInput = enrichResult.enrichedInput();
+            VectorEnrichedInput.CompanionType chosen = VectorEnrichedInput.companionOf(request.companion());
+            VectorEnrichedInput enrichedInput = enrichResult.enrichedInput().withCompanion(chosen,
+                    request.partySize() != null ? request.partySize() : VectorEnrichedInput.defaultPartySize(chosen));
             long days = ChronoUnit.DAYS.between(enrichedInput.startDate(), enrichedInput.endDate()) + 1;
             stageMark = logStage("enrich", stageMark);
 
@@ -127,7 +129,8 @@ public class OptimizedGenerationExecutor {
             if (poolQuality == FallbackDecider.PoolQuality.FALLBACK) {
                 sendSseEvent(emitter, "FALLBACK", 30, "Fallback 경로로 일정을 생성합니다...");
                 log.info("OptimizedGeneration → Fallback (jobId={}, reason=insufficient_candidates)", jobId);
-                fallbackExecutor.execute(jobId, request, userId, emitter);
+                // fallback은 새 입력 필드를 쓰지 않고 문장만 읽으므로 사용자가 고른 값을 문장에 붙여 넘긴다
+                fallbackExecutor.execute(jobId, request.withTripFactsInDescription(), userId, emitter);
                 return;
             }
             // 유효 관광지 빈약 → 억지로 채우지 않고 컴팩트 일정으로(quota 하한 완화) + 사용자 안내
@@ -205,7 +208,8 @@ public class OptimizedGenerationExecutor {
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "OPTIMIZING", 65, "동선과 시간을 확정하고 있습니다...");
 
-            final ScheduleArgs scheduleArgs = ScheduleArgs.of(enrichedInput, compactMode);
+            final ScheduleArgs scheduleArgs = ScheduleArgs.of(enrichedInput, compactMode,
+                    request.arrivalTime(), request.departureTime());
             RouteOptimizer.ScheduleResult scheduleResult = executeWithHeartbeat(emitter,
                     () -> routeOptimizer.schedule(selectionOutput, candidatesWithLocalStays, scheduleArgs));
             List<StepData> fixedSteps = scaleCostsForParty(scheduleResult.steps(), enrichedInput.partySize());

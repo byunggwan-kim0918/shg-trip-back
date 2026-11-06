@@ -45,6 +45,9 @@ public class SentenceParseService {
     private static final int MAX_TRIP_DAYS = 10;         // ItineraryGenerateRequest @ValidDateRange(maxDays=10)
     private static final int MAX_DESTINATION_LEN = 50;     // ItineraryGenerateRequest @Size(max=50)
     private static final int MAX_PARTY_LEN = 40;
+    private static final int MAX_PARTY_SIZE = 20;                       // ItineraryGenerateRequest @Max
+    private static final Set<String> VALID_COMPANIONS = Set.of("solo", "couple", "friends", "family", "parents");
+    private static final java.util.regex.Pattern TIME = java.util.regex.Pattern.compile("([01]\\d|2[0-3]):[0-5]\\d");
     private static final BigDecimal MAX_BUDGET = new BigDecimal("100000000"); // 마법사/@DecimalMax 1억원
 
     private static final Set<String> VALID_THEMES = WizardOptionIds.THEMES;
@@ -114,7 +117,7 @@ public class SentenceParseService {
 
     private static SentenceParseResponse withoutDates(SentenceParseResponse r) {
         return new SentenceParseResponse(r.destination(), null, null, r.party(), r.themes(), r.categories(),
-                r.pace(), r.transportPref(), r.budget());
+                r.pace(), r.transportPref(), r.budget(), r.companion(), r.partySize(), r.arrivalTime(), r.departureTime());
     }
 
     /**
@@ -180,8 +183,14 @@ public class SentenceParseService {
             budget = null;
         }
 
-        return new SentenceParseResponse(
-                destination, startDate, endDate, party, themes, categories, pace, transportPref, budget);
+        String companion = inWhitelist(getString(map, "companion"), VALID_COMPANIONS);
+        Integer partySize = getInteger(map, "partySize");
+        if (partySize != null && (partySize < 1 || partySize > MAX_PARTY_SIZE)) partySize = null;
+        String arrivalTime = validTime(getString(map, "arrivalTime"));
+        String departureTime = validTime(getString(map, "departureTime"));
+
+        return new SentenceParseResponse(destination, startDate, endDate, party, themes, categories, pace,
+                transportPref, budget, companion, partySize, arrivalTime, departureTime);
     }
 
     // ── helpers ──
@@ -206,6 +215,27 @@ public class SentenceParseService {
     private String getString(Map<String, Object> map, String key) {
         Object value = map.get(key);
         return value instanceof String s ? s : null;
+    }
+
+    private Integer getInteger(Map<String, Object> map, String key) {
+        Object value = map.get(key);
+        if (value instanceof Number n) return n.intValue();
+        if (value instanceof String str) {
+            try {
+                return Integer.valueOf(str.trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** "9:00"처럼 한 자리 시도 받아 "09:00"으로 맞춘다. */
+    private String validTime(String value) {
+        if (value == null) return null;
+        String v = value.trim();
+        if (v.matches("\\d:\\d{2}")) v = "0" + v;
+        return TIME.matcher(v).matches() ? v : null;
     }
 
     /** budget을 방어적으로 추출 — Number이면 그대로, 숫자 문자열이면 파싱, "50만원" 등은 null. */

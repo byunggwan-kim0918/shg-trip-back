@@ -102,8 +102,9 @@ public class EvalRunner implements CommandLineRunner {
         SelectionOutput selection = objectMapper.readValue(trace.getSelectionFinal(), SelectionOutput.class);
         ScheduleArgs args = objectMapper.readValue(trace.getScheduleArgs(), ScheduleArgs.class);
 
+        Integer hubDeadline = RouteOptimizer.departureHubDeadline(args);
         ScoreReport saved = scorer.score(new ItineraryScorer.Input(savedSteps, args.pace(), args.transportPref(),
-                args.startDate(), candidates, selection));
+                args.startDate(), candidates, selection, hubDeadline));
         if (!replay) return new Row(itinerary.getId(), itinerary.getDestination(), true, saved, null, null);
 
         List<StepData> replayedSteps = routeOptimizer.schedule(selection, candidates, args).steps();
@@ -114,7 +115,7 @@ public class EvalRunner implements CommandLineRunner {
                     "== 저장본\n" + renderSteps(savedSteps) + "\n== 재실행\n" + renderSteps(replayedSteps));
         }
         ScoreReport replayed = scorer.score(new ItineraryScorer.Input(replayedSteps, args.pace(),
-                args.transportPref(), args.startDate(), candidates, selection));
+                args.transportPref(), args.startDate(), candidates, selection, hubDeadline));
         return new Row(itinerary.getId(), itinerary.getDestination(), true, saved, replayed,
                 sameRoute(savedSteps, replayedSteps));
     }
