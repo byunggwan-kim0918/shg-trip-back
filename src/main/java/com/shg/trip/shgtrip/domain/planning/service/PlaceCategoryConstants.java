@@ -185,6 +185,14 @@ public final class PlaceCategoryConstants {
             "waterfall", 120,
             "viewpoint", 120);
 
+    /** 보강 속성의 숙소 유형이 있으면 게스트하우스·호스텔만 다인실로 본다. 없으면 이름·카테고리·태그 판정. */
+    public static boolean isDormLodging(PlaceAttributes attributes, String name, String category, List<String> tags) {
+        if (attributes != null && attributes.lodgingType() != null) {
+            return "HOSTEL".equals(attributes.lodgingType()) || "GUESTHOUSE".equals(attributes.lodgingType());
+        }
+        return isDormLodging(name, category, tags);
+    }
+
     /**
      * 다인실·공용공간 중심 숙소(게스트하우스·호스텔)인지. 커플·가족 여행에서 숙소 후보로 쓰지 않는다
      * (실측 115: 커플 여행에 "소낭게스트하우스"가 2박).

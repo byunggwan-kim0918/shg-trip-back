@@ -333,7 +333,7 @@ public class OptimizedGenerationExecutor {
         List<PlaceCandidate> kept = candidates.stream()
                 .filter(c -> c.userSelected()
                         || !"LODGING".equals(PlaceCategoryConstants.majorCategory(c.category()))
-                        || !PlaceCategoryConstants.isDormLodging(c.name(), c.category(), c.tags()))
+                        || !PlaceCategoryConstants.isDormLodging(c.attributes(), c.name(), c.category(), c.tags()))
                 .toList();
         if (kept.size() < candidates.size()) {
             log.info("다인실 숙소 제외({}): {}개 → {}개", input.companion(), candidates.size(), kept.size());
@@ -922,7 +922,7 @@ public class OptimizedGenerationExecutor {
         List<Place> hotels = placeRepository.findTopAccommodationsByRegions(
                 regions, PageRequest.of(0, avoidDorm ? 8 : 2)).stream()
                 .filter(h -> !avoidDorm || !PlaceCategoryConstants.isDormLodging(
-                        h.getName(), h.getCategory(), h.getTags()))
+                        h.getAttributes(), h.getName(), h.getCategory(), h.getTags()))
                 .limit(2)
                 .toList();
 
