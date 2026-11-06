@@ -278,7 +278,7 @@ public class SelectionCallGenerator {
             }
             // 경유형(해안도로·드라이브코스·둘레길 등)은 "머무는 방문지"가 아니라 지나가는 구간이다.
             // 코드가 마킹해두고, 프롬프트가 전체 일정 최대 1개로 제한한다(B2).
-            boolean via = PlaceCategoryConstants.isViaRoute(
+            boolean via = PlaceCategoryConstants.isViaRoute(candidate.attributes(),
                     candidate.name(), candidate.category(), candidate.tags());
             if (via) {
                 sb.append("[경유]");
