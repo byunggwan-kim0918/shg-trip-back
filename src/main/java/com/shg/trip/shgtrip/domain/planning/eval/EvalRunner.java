@@ -8,6 +8,7 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
 import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
@@ -35,6 +36,10 @@ import java.util.*;
  * java -jar app.jar --spring.profiles.active=local,eval --eval.mode=replay --eval.ids=181,182
  * </pre>
  * score: 저장본만 채점 / replay: 현재 코드로 다시 돌려 비교 / corpus: 기록 있는 일정 전부 replay
+ *
+ * <p>{@code --eval.refresh-attributes}: 기록의 후보에 DB의 현재 속성·영업시간을 덮어쓴다.
+ * off(기본) 그대로 / score 채점에만 / all 재실행 입력과 채점 모두. 속성 연결의 효과는 score(기준선)와
+ * all을 비교한다 — 채점 기준이 같아야 휴무·영업시간 위반 수를 비교할 수 있다.
  */
 @Slf4j
 @Component
@@ -45,6 +50,7 @@ public class EvalRunner implements CommandLineRunner {
     private final ItineraryRepository itineraryRepository;
     private final GenerationTraceRepository traceRepository;
     private final RouteOptimizer routeOptimizer;
+    private final PlaceRepository placeRepository;
     private final ObjectMapper objectMapper;
     private final ApplicationContext context;
 
@@ -63,9 +69,15 @@ public class EvalRunner implements CommandLineRunner {
     @Value("${eval.dump-steps:false}")
     private boolean dumpSteps;
 
+    @Value("${eval.refresh-attributes:off}")
+    private String refreshAttributes;
+
     @Override
     @Transactional(readOnly = true)
     public void run(String... args) throws Exception {
+        if (!Set.of("off", "score", "all").contains(refreshAttributes)) {
+            throw new IllegalArgumentException("eval.refresh-attributes는 off|score|all: " + refreshAttributes);
+        }
         List<Long> targets = "corpus".equals(mode)
                 ? traceRepository.findAll().stream().map(GenerationTrace::getItineraryId).sorted().toList()
                 : parseIds(ids);
@@ -83,9 +95,11 @@ public class EvalRunner implements CommandLineRunner {
 
         Path dir = Path.of(outDir);
         Files.createDirectories(dir);
-        Files.writeString(dir.resolve("report.md"), EvalReport.markdown(mode, rows));
+        String label = "off".equals(refreshAttributes) ? mode : mode + ", refresh=" + refreshAttributes;
+        Files.writeString(dir.resolve("report.md"), EvalReport.markdown(label, rows));
         Files.writeString(dir.resolve("report.csv"), EvalReport.csv(rows));
-        log.info("평가 완료: mode={}, 일정 {}건 → {}", mode, rows.size(), dir.toAbsolutePath());
+        log.info("평가 완료: mode={}, refresh={}, 일정 {}건 → {}", mode, refreshAttributes, rows.size(),
+                dir.toAbsolutePath());
 
         System.exit(SpringApplication.exit(context, () -> 0));
     }
@@ -98,16 +112,18 @@ public class EvalRunner implements CommandLineRunner {
             return new Row(itinerary.getId(), itinerary.getDestination(), false, saved, null, null);
         }
 
-        List<PlaceCandidate> candidates = objectMapper.readValue(trace.getCandidates(), new TypeReference<>() {});
+        List<PlaceCandidate> traced = objectMapper.readValue(trace.getCandidates(), new TypeReference<>() {});
         SelectionOutput selection = objectMapper.readValue(trace.getSelectionFinal(), SelectionOutput.class);
         ScheduleArgs args = objectMapper.readValue(trace.getScheduleArgs(), ScheduleArgs.class);
+        List<PlaceCandidate> candidates = "off".equals(refreshAttributes) ? traced : refreshFacts(traced);
+        List<PlaceCandidate> scheduleInput = "all".equals(refreshAttributes) ? candidates : traced;
 
         Integer hubDeadline = RouteOptimizer.departureHubDeadline(args);
         ScoreReport saved = scorer.score(new ItineraryScorer.Input(savedSteps, args.pace(), args.transportPref(),
                 args.startDate(), candidates, selection, hubDeadline));
         if (!replay) return new Row(itinerary.getId(), itinerary.getDestination(), true, saved, null, null);
 
-        List<StepData> replayedSteps = routeOptimizer.schedule(selection, candidates, args).steps();
+        List<StepData> replayedSteps = routeOptimizer.schedule(selection, scheduleInput, args).steps();
         if (dumpSteps) {
             Path dir = Path.of(outDir);
             Files.createDirectories(dir);
@@ -160,6 +176,19 @@ public class EvalRunner implements CommandLineRunner {
                             s.getEstimatedCost());
                 })
                 .toList();
+    }
+
+    /** DB에 값이 있는 것만 덮어쓴다. 없으면 기록의 값을 그대로 둔다. */
+    private List<PlaceCandidate> refreshFacts(List<PlaceCandidate> candidates) {
+        Map<Long, Place> places = new HashMap<>();
+        placeRepository.findAllById(candidates.stream().map(PlaceCandidate::placeId).filter(Objects::nonNull)
+                .distinct().toList()).forEach(p -> places.put(p.getId(), p));
+        return candidates.stream().map(c -> {
+            Place p = c.placeId() == null ? null : places.get(c.placeId());
+            if (p == null) return c;
+            return c.withRefreshedFacts(p.getAttributes() != null ? p.getAttributes() : c.attributes(),
+                    p.getOpeningHours() != null ? p.getOpeningHours() : c.openingHours());
+        }).toList();
     }
 
     /** 생성 기록이 없는 옛 일정용. */
