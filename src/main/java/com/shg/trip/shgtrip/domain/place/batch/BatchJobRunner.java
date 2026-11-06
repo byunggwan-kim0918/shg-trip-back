@@ -122,10 +122,10 @@ public class BatchJobRunner implements CommandLineRunner {
         // 보강(enrich)을 임베딩보다 먼저 실행한다 — 보강이 tags/description을 채우고 임베딩을
         // 초기화(resetEmbeddings)하므로, 이 순서여야 같은 실행 안에서 보강 내용이 임베딩에 반영된다.
         if (enrichEnabled) {
-            log.info("[3/4] 태그/설명 배치 보강 시작");
+            log.info("[3/4] {} 배치 보강 시작", batchEnrichScheduler.attributeMode() ? "속성(v2)" : "태그/설명");
             try {
                 batchEnrichScheduler.enrich();
-                log.info("[3/4] 태그/설명 배치 보강 완료");
+                log.info("[3/4] 배치 보강 완료");
             } catch (Exception e) {
                 log.error("[3/4] 태그/설명 배치 보강 실패, 이후 단계 계속 진행: {}", e.getMessage(), e);
             }

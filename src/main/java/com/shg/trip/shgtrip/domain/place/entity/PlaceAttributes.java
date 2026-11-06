@@ -51,11 +51,6 @@ public record PlaceAttributes(
                 && lodgingType == null && breakfast == null;
     }
 
-    public PlaceAttributes withClassification(PlaceAttributes c) {
-        return new PlaceAttributes(c.venue, c.subType, c.visitStyle, c.hikeLevel, c.lodgingType, c.breakfast,
-                official);
-    }
-
     public PlaceAttributes withOfficial(Map<String, String> newOfficial) {
         return new PlaceAttributes(venue, subType, visitStyle, hikeLevel, lodgingType, breakfast,
                 newOfficial == null || newOfficial.isEmpty() ? null : Map.copyOf(newOfficial));
@@ -63,6 +58,15 @@ public record PlaceAttributes(
 
     public static PlaceAttributes empty() {
         return new PlaceAttributes(null, null, null, null, null, null, null);
+    }
+
+    /** official을 뺀 분류 JSON. 엔티티 매핑과 같은 키(필드명)를 쓴다. */
+    public String classificationJson() {
+        try {
+            return JSON.writeValueAsString(withOfficial(null));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** JSONB 문자열 → 레코드. 비었거나 읽을 수 없으면 null(속성 없음으로 취급). */
