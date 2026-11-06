@@ -315,7 +315,7 @@ public class VectorSearchQueryService {
                     r.region(), r.country(), r.latitude(), r.longitude(), r.description(),
                     r.rating(), r.similarityScore(), null, null, null, null, false, null,
                     PlaceCategoryConstants.extractSubRegion(r.address()), r.userRatingCount(),
-                    r.wikidataSitelinks(), r.placeRole(), r.cuisine());
+                    r.wikidataSitelinks(), r.placeRole(), r.cuisine(), false, null, r.attributes());
             if (CandidatePolicy.roleOf(c) == CandidatePolicy.Role.NOT_VISITABLE) continue;
             result.add(c);
             index++;
@@ -817,11 +817,7 @@ public class VectorSearchQueryService {
         List<PlaceCandidate> out = new ArrayList<>(candidates.size());
         for (int i = 0; i < candidates.size(); i++) {
             PlaceCandidate c = candidates.get(i);
-            out.add(c.index() == i + 1 ? c : new PlaceCandidate(i + 1, c.placeId(), c.name(), c.address(),
-                    c.category(), c.tags(), c.region(), c.country(), c.latitude(), c.longitude(), c.description(),
-                    c.rating(), c.similarityScore(), c.priceLevel(), c.openingHours(), c.recommendedTimeSlots(),
-                    c.recommendedDurationMinutes(), c.userSelected(), c.admissionFee(), c.subRegion(),
-                    c.userRatingCount(), c.wikidataSitelinks(), c.placeRole(), c.cuisine()));
+            out.add(c.index() == i + 1 ? c : c.reindexed(i + 1));
         }
         return out;
     }
@@ -862,7 +858,10 @@ public class VectorSearchQueryService {
                     r.userRatingCount(),
                     r.wikidataSitelinks(),
                     r.placeRole(),
-                    r.cuisine()
+                    r.cuisine(),
+                    false,
+                    null,
+                    r.attributes()
             ));
         }
         if (!results.isEmpty()) {

@@ -561,7 +561,9 @@ public class OptimizedGenerationExecutor {
                     place.getWikidataSitelinks() != null
                             ? place.getWikidataSitelinks() : c.wikidataSitelinks(),
                     place.getPlaceRole() != null ? place.getPlaceRole() : c.placeRole(),
-                    place.getCuisine() != null ? place.getCuisine() : c.cuisine()
+                    place.getCuisine() != null ? place.getCuisine() : c.cuisine(),
+                    false, null,
+                    place.getAttributes() != null ? place.getAttributes() : c.attributes()
             );
         }).collect(Collectors.toList());
     }
@@ -722,11 +724,7 @@ public class OptimizedGenerationExecutor {
     }
 
     private PlaceCandidate reindexCandidate(PlaceCandidate c, int index) {
-        return new PlaceCandidate(index, c.placeId(), c.name(), c.address(), c.category(),
-                c.tags(), c.region(), c.country(), c.latitude(), c.longitude(),
-                c.description(), c.rating(), c.similarityScore(), c.priceLevel(), c.openingHours(),
-                c.recommendedTimeSlots(), c.recommendedDurationMinutes(), c.userSelected(), c.admissionFee(),
-                c.subRegion(), c.userRatingCount(), c.wikidataSitelinks(), c.placeRole(), c.cuisine());
+        return c.reindexed(index);
     }
 
     /** 주소에서 세부지역을 재추출하되, 추출 실패 시 기존 값을 유지한다. */
@@ -895,7 +893,7 @@ public class OptimizedGenerationExecutor {
                     p.getDescription(), p.getRating(), 1.0, p.getPriceLevel(), p.getOpeningHours(),
                     p.getRecommendedTimeSlots(), p.getRecommendedDurationMinutes(), true, p.getAdmissionFee(),
                     PlaceCategoryConstants.extractSubRegion(p.getAddress()), p.getUserRatingCount(),
-                    p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine()));
+                    p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine(), false, null, p.getAttributes()));
         }
         for (PlaceCandidate c : candidates) {
             PlaceCandidate reindexed = reindexCandidate(c, index++);
@@ -954,7 +952,7 @@ public class OptimizedGenerationExecutor {
                     false, hotel.getAdmissionFee(),
                     PlaceCategoryConstants.extractSubRegion(hotel.getAddress()),
                     hotel.getUserRatingCount(), hotel.getWikidataSitelinks(),
-                    hotel.getPlaceRole(), hotel.getCuisine()
+                    hotel.getPlaceRole(), hotel.getCuisine(), false, null, hotel.getAttributes()
             ));
         }
         return result;

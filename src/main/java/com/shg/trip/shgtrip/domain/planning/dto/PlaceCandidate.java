@@ -1,5 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.dto;
 
+import com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes;
+
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -33,8 +35,26 @@ public record PlaceCandidate(
         String placeRole,       // 일정 속 역할(보강 산출: MEAL/CAFE/SIGHT/…/NOT_VISITABLE) — null=미보강
         String cuisine,         // 음식 종류(보강 산출, MEAL만) — null=미상
         boolean intentProtected,// 요청 의도의 핵심 장소 — 거리·교체·유형 트림에서 제외(영업시간·휴무 가드는 그대로)
-        String intentTime       // 요청 의도의 시간대(morning/evening) — null=의도 없음
+        String intentTime,      // 요청 의도의 시간대(morning/evening) — null=의도 없음
+        PlaceAttributes attributes // 보강 속성 — null이면 판정 함수가 카테고리·이름으로 추정
 ) {
+    /** 속성 없이 생성하는 호환 생성자. */
+    public PlaceCandidate(int index, Long placeId, String name, String address,
+                          String category, List<String> tags, String region, String country,
+                          BigDecimal latitude, BigDecimal longitude, String description,
+                          BigDecimal rating, double similarityScore,
+                          Integer priceLevel, String openingHours,
+                          List<String> recommendedTimeSlots, Integer recommendedDurationMinutes,
+                          boolean userSelected, Integer admissionFee, String subRegion,
+                          Integer userRatingCount, Integer wikidataSitelinks, String placeRole, String cuisine,
+                          boolean intentProtected, String intentTime) {
+        this(index, placeId, name, address, category, tags, region, country,
+                latitude, longitude, description, rating, similarityScore,
+                priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
+                userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
+                intentProtected, intentTime, null);
+    }
+
     /** 의도 필드 없이 생성하는 호환 생성자. 의도는 스케줄 직전(RouteOptimizer)에만 실린다. */
     public PlaceCandidate(int index, Long placeId, String name, String address,
                           String category, List<String> tags, String region, String country,
@@ -154,7 +174,7 @@ public record PlaceCandidate(
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes, true,
                 admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                intentProtected, intentTime);
+                intentProtected, intentTime, attributes);
     }
 
     /** 요청 의도를 실은 사본. */
@@ -163,7 +183,25 @@ public record PlaceCandidate(
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
                 userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                protect, time);
+                protect, time, attributes);
+    }
+
+    /** 인덱스만 바꾼 사본. 의도 필드는 싣지 않는다(의도는 스케줄 직전에만 실린다). */
+    public PlaceCandidate reindexed(int newIndex) {
+        return new PlaceCandidate(newIndex, placeId, name, address, category, tags, region, country,
+                latitude, longitude, description, rating, similarityScore,
+                priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
+                userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
+                false, null, attributes);
+    }
+
+    /** DB에서 다시 읽은 속성·영업시간만 바꾼 사본(평가 재채점용). */
+    public PlaceCandidate withRefreshedFacts(PlaceAttributes newAttributes, String newOpeningHours) {
+        return new PlaceCandidate(index, placeId, name, address, category, tags, region, country,
+                latitude, longitude, description, rating, similarityScore,
+                priceLevel, newOpeningHours, recommendedTimeSlots, recommendedDurationMinutes,
+                userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
+                intentProtected, intentTime, newAttributes);
     }
 
     /** 트림·교체·이월에서 빼지 않는 장소인지 — 사용자 필수이거나 요청 의도의 핵심. */
@@ -178,7 +216,7 @@ public record PlaceCandidate(
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
                 userSelected, admissionFee, newSubRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                intentProtected, intentTime);
+                intentProtected, intentTime, attributes);
     }
 
     /**
