@@ -4122,7 +4122,7 @@ public class RouteOptimizer {
     }
 
     private boolean isHikeOfAtLeast(PlaceCandidate c, int minMinutes) {
-        if (c == null || !PlaceCategoryConstants.isHikingPlace(c.name(), c.tags())) return false;
+        if (c == null || !PlaceCategoryConstants.isHikingPlace(c.attributes(), c.name(), c.tags())) return false;
         Integer recommended = c.recommendedDurationMinutes();
         int minutes = recommended != null && recommended > 0
                 ? recommended

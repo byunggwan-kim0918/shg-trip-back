@@ -210,6 +210,15 @@ public final class PlaceCategoryConstants {
             "backpacker", "dormitory");
 
     /**
+     * 보강 속성의 등산 강도가 있으면 LONG만 등산으로 본다. 키워드는 태그의 "등산"만으로 30분이면 오르는
+     * 성산일출봉까지 잡고, 이름에 키워드가 없는 관악산·북악산은 놓친다.
+     */
+    public static boolean isHikingPlace(PlaceAttributes attributes, String name, List<String> tags) {
+        if (attributes != null && attributes.hikeLevel() != null) return "LONG".equals(attributes.hikeLevel());
+        return isHikingPlace(name, tags);
+    }
+
+    /**
      * 등산·트레킹 성격의 장소인지(이름·태그). 체류시간과 함께 "긴 등산" 판정에 쓴다 —
      * 이 판정만으로는 성산일출봉처럼 30분이면 오르는 곳도 걸리므로 단독으로 쓰지 않는다.
      */
