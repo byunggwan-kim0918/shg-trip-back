@@ -196,6 +196,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                 SELECT p.id, p.name, p.address, p.category, p.tags, p.region, p.country,
                        p.latitude, p.longitude, p.description, p.rating, p.user_rating_count,
                        p.wikidata_sitelinks, p.place_role, p.cuisine, p.wikidata_id,
+                       p.attributes::text AS attributes,
                        1 - (p.embedding <=> ?::vector) AS similarity_score
                 FROM places p
                 """;
@@ -324,7 +325,8 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                 rs.getDouble("similarity_score"),
                 rs.getString("place_role"),
                 rs.getString("cuisine"),
-                rs.getString("wikidata_id")
+                rs.getString("wikidata_id"),
+                com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes.fromJson(rs.getString("attributes"))
         );
     }
 

@@ -148,6 +148,33 @@ public class Place extends BaseTimeEntity {
     @Column(name = "enriched_at")
     private OffsetDateTime enrichedAt;
 
+    /** 속성 보강(v2) 결과와 TourAPI 공식 원문. null이면 일정 로직이 카테고리·이름으로 추정한다. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private PlaceAttributes attributes;
+
+    /** 속성 보강 버전. 2 미만이면 v2 보강 대상이다. */
+    @Column(name = "enrich_version")
+    private Short enrichVersion;
+
+    @Column(name = "tourapi_content_id", length = 20)
+    private String tourapiContentId;
+
+    @Column(name = "tourapi_content_type")
+    private Short tourapiContentType;
+
+    /** TourAPI 매칭을 시도한 시각 — 못 찾은 장소를 매 실행 다시 조회하지 않게 한다. */
+    @Column(name = "tourapi_checked_at")
+    private OffsetDateTime tourapiCheckedAt;
+
+    /** detailIntro2를 조회한 시각. */
+    @Column(name = "tourapi_detail_at")
+    private OffsetDateTime tourapiDetailAt;
+
+    /** opening_hours 출처. 'official'이면 TourAPI 이용시간·쉬는날에서 변환한 값이다. */
+    @Column(name = "opening_hours_source", length = 10)
+    private String openingHoursSource;
+
     /** Google Places API 마지막 동기화 시각 */
     @Column(name = "google_synced_at")
     private OffsetDateTime googleSyncedAt;
@@ -245,6 +272,39 @@ public class Place extends BaseTimeEntity {
     public void assignRole(String newRole, String newCuisine) {
         if (newRole != null && !newRole.isBlank()) this.placeRole = newRole;
         if (newCuisine != null && !newCuisine.isBlank()) this.cuisine = newCuisine;
+    }
+
+    /** 속성 보강 결과를 반영한다. TourAPI 원문(official)은 유지한다. 기존 태그·설명·임베딩은 건드리지 않는다. */
+    public void applyAttributes(PlaceAttributes classified, int version) {
+        PlaceAttributes base = attributes != null ? attributes : PlaceAttributes.empty();
+        this.attributes = base.withClassification(classified.normalized());
+        this.enrichVersion = (short) version;
+    }
+
+    /** TourAPI 콘텐츠와 연결했거나 찾지 못했음을 기록한다. 못 찾았으면 id·type은 null. */
+    public void markTourApiMatch(String contentId, Integer contentType) {
+        if (contentId != null) {
+            this.tourapiContentId = contentId;
+            this.tourapiContentType = contentType == null ? null : contentType.shortValue();
+        }
+        this.tourapiCheckedAt = OffsetDateTime.now();
+    }
+
+    /**
+     * detailIntro2 결과를 반영한다. 원문은 항상 남기고, 영업시간·입장료는 판독에 성공한 경우에만 덮어쓴다.
+     *
+     * @param officialHours "월요일: 09:00 ~ 18:00, 화요일: 휴무" 형식. null이면 기존 값 유지
+     * @param feeWon        확신할 수 있는 성인 입장료(원, 0=무료). null이면 기존 값 유지
+     */
+    public void applyTourApiDetail(java.util.Map<String, String> official, String officialHours, Integer feeWon) {
+        PlaceAttributes base = attributes != null ? attributes : PlaceAttributes.empty();
+        this.attributes = base.withOfficial(official);
+        if (officialHours != null) {
+            this.openingHours = officialHours;
+            this.openingHoursSource = "official";
+        }
+        if (feeWon != null && feeWon >= 0) this.admissionFee = feeWon;
+        this.tourapiDetailAt = OffsetDateTime.now();
     }
 
     /**
