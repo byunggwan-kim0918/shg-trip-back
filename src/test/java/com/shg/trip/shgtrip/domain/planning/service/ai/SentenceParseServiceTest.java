@@ -281,4 +281,22 @@ class SentenceParseServiceTest {
         assertThat(r.destination()).isNull();
         assertThat(r.party()).isNull();
     }
+
+    @Test
+    @DisplayName("동행·인원·도착·출발 시각은 허용값과 형식만 통과시킨다")
+    void sanitizeCompanionPartyAndTimes() {
+        var ok = service.sanitize(java.util.Map.of("companion", "parents", "partySize", 3,
+                "arrivalTime", "15:00", "departureTime", "11:00"), today);
+        var bad = service.sanitize(java.util.Map.of("companion", "elderly", "partySize", 40,
+                "arrivalTime", "오후 3시", "departureTime", "25:00"), today);
+
+        assertThat(ok.companion()).isEqualTo("parents");
+        assertThat(ok.partySize()).isEqualTo(3);
+        assertThat(ok.arrivalTime()).isEqualTo("15:00");
+        assertThat(ok.departureTime()).isEqualTo("11:00");
+        assertThat(bad.companion()).isNull();
+        assertThat(bad.partySize()).isNull();
+        assertThat(bad.arrivalTime()).isNull();
+        assertThat(bad.departureTime()).isNull();
+    }
 }

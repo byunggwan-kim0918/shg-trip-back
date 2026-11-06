@@ -73,6 +73,23 @@ final class ScheduleTuning {
      * 없으면 "23:25 공항 도착" 같은 일정이 만들어진다(실측 itinerary 67 day3).
      */
     static final int DEPARTURE_HUB_LATEST_MINUTES = 21 * 60;
+    /** 사용자가 준 출발 시각(비행기·기차)보다 이만큼 먼저 허브에 닿게 한다. 해외(국제선)는 더 일찍. */
+    static final int DEPARTURE_CHECKIN_BUFFER_MINUTES = 60;
+    static final int OVERSEAS_DEPARTURE_CHECKIN_BUFFER_MINUTES = 120;
+    /** 출발이 이른 날은 마감 이만큼 전에 하루를 시작한다. */
+    static final int EARLY_DEPARTURE_LEAD_MINUTES = 60;
+    /** 이른 도착·이른 출발로 하루를 당길 수 있는 하한. */
+    static final int EARLIEST_DAY_START_MINUTES = 5 * 60;
+    /** 끼니 무렵 도착이면 도착 후 이 시간 안의 식사를 그 끼니로 본다. */
+    static final int LATE_MEAL_WINDOW_MINUTES = 150;
+    /** 도착 허브에서 빠져나오는 데 드는 시간. 일정에 찍히는 허브 체류와 같다. */
+    static final int ARRIVAL_HUB_MINUTES = 60;
+    /** 도착 시각을 모를 때 가정하는 하루 시작. */
+    static final int DEFAULT_DAY_START_MINUTES = 9 * 60;
+    /** 하루 쓸 수 있는 시간이 이보다 짧으면 관광을 요구하지 않는다(허브 이동 + 관광 1곳). */
+    static final int MIN_SIGHTSEEING_WINDOW_MINUTES = 180;
+    /** 하루가 이보다 늦게 시작하면 아침 식사를 두지 않는다. */
+    static final int BREAKFAST_LATEST_START = 10 * 60;
 
     // ── 시간창 용량 · 공백 ──────────────────────────────────────────────────
 

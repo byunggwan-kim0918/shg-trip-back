@@ -52,6 +52,9 @@ def generate(base, auth, case, timeout_sec):
     body["startDate"] = start.isoformat()
     body["endDate"] = (start + datetime.timedelta(days=case["nights"])).isoformat()
     body["mode"] = "AUTO"
+    for optional in ("companion", "partySize", "arrivalTime", "departureTime"):
+        if optional in case:
+            body[optional] = case[optional]
     req = urllib.request.Request(f"{base}/api/itineraries/generate", data=json.dumps(body).encode(),
                                  headers={"Authorization": f"Bearer {auth}",
                                           "Content-Type": "application/json"})

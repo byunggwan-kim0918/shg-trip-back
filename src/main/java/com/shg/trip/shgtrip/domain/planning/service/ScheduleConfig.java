@@ -36,4 +36,9 @@ final class ScheduleConfig {
     ScheduleConfig withCafeStop(boolean enabled) {
         return new ScheduleConfig(morningStart, eveningCap, densityDelta, indoorPreferred, pace, enabled);
     }
+
+    ScheduleConfig withWindow(int start, int cap) {
+        if (start == morningStart && cap == eveningCap) return this;
+        return new ScheduleConfig(start, cap, densityDelta, indoorPreferred, pace, cafeStop);
+    }
 }

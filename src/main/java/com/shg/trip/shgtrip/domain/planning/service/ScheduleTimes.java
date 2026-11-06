@@ -29,6 +29,13 @@ final class ScheduleTimes {
         }
     }
 
+    /** "HH:mm" → 분. 비었거나 형식이 틀리면 null(= 제약 없음). */
+    static Integer toMinutesOrNull(String hhmm) {
+        if (hhmm == null || !hhmm.matches("\\d{1,2}:\\d{2}")) return null;
+        String[] p = hhmm.split(":");
+        return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
+    }
+
     /**
      * 분 → "HH:mm".
      *

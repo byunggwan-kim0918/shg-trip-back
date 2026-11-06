@@ -8,4 +8,5 @@ package com.shg.trip.shgtrip.domain.planning.service;
  */
 record DayStatus(boolean lunch, boolean dinner, boolean dinnerRequired, boolean attraction,
                  boolean lodging, boolean lodgingRequired,
-                 double totalKm, double maxLegKm, boolean withinBudget, int endMinutes) {}
+                 double totalKm, double maxLegKm, boolean withinBudget, int endMinutes,
+                 boolean endsEarlyByDeparture, boolean lateByArrival, boolean missedDeparture) {}

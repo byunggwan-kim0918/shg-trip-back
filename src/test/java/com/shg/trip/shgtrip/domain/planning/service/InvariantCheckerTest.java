@@ -210,7 +210,7 @@ class InvariantCheckerTest {
     }
 
     private static DayStatus status(boolean lunch, boolean dinner, boolean lodging) {
-        return new DayStatus(lunch, dinner, true, true, lodging, true, 10, 5, true, 20 * 60);
+        return new DayStatus(lunch, dinner, true, true, lodging, true, 10, 5, true, 20 * 60, false, false, false);
     }
 
     private static StepData step(int day, String start, String end, String name, String category) {

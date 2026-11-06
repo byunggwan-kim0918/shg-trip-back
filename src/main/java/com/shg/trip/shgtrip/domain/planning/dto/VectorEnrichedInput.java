@@ -38,11 +38,11 @@ public record VectorEnrichedInput(
 ) {
     /** 동행 유형. 숙소 유형(도미토리 제외)·비용 인원·선택 프롬프트에 쓴다. */
     public enum CompanionType {
-        SOLO, COUPLE, FAMILY, FRIENDS, UNKNOWN;
+        SOLO, COUPLE, FAMILY, FRIENDS, SENIOR, UNKNOWN;
 
         /** 다인실·파티 문화가 맞지 않는 동행 — 게스트하우스·호스텔을 숙소 후보에서 뺀다. */
         public boolean avoidsDormLodging() {
-            return this == COUPLE || this == FAMILY;
+            return this == COUPLE || this == FAMILY || this == SENIOR;
         }
 
         public static CompanionType parse(Object raw) {
@@ -69,6 +69,39 @@ public record VectorEnrichedInput(
                 description, selectedPlaceIds, normalizedDestination, country, regions, searchTags,
                 regionAllocation, budgetRange, seasonContext, enrichedContext, transportationHub,
                 categorySearchQueries, CompanionType.UNKNOWN, null, List.of());
+    }
+
+    /** 요청 화면 값("solo"·"parents" 등) → 동행 유형. 모르면 null. */
+    public static CompanionType companionOf(String requestValue) {
+        if (requestValue == null) return null;
+        return switch (requestValue) {
+            case "solo" -> CompanionType.SOLO;
+            case "couple" -> CompanionType.COUPLE;
+            case "friends" -> CompanionType.FRIENDS;
+            case "family" -> CompanionType.FAMILY;
+            case "parents" -> CompanionType.SENIOR;
+            default -> null;
+        };
+    }
+
+    /** 인원이 동행에서 정해지는 경우만. 나머지는 null(문장 추론 값 유지). */
+    public static Integer defaultPartySize(CompanionType companion) {
+        if (companion == CompanionType.SOLO) return 1;
+        if (companion == CompanionType.COUPLE) return 2;
+        return null;
+    }
+
+    /**
+     * 사용자가 고른 동행·인원으로 덮어쓴다. 인원을 안 줬는데 동행이 문장 추론과 다르면, 추론 인원은 다른 동행을
+     * 전제로 한 값이라 버린다(혼자로 추론된 1명이 가족 비용에 남지 않게).
+     */
+    public VectorEnrichedInput withCompanion(CompanionType companion, Integer party) {
+        Integer resolvedParty = party != null ? party
+                : (companion != null && companion != companion() ? null : partySize);
+        return new VectorEnrichedInput(destination, themes, categories, pace, transportPref, budget, startDate, endDate,
+                description, selectedPlaceIds, normalizedDestination, country, regions, searchTags, regionAllocation,
+                budgetRange, seasonContext, enrichedContext, transportationHub, categorySearchQueries,
+                companion != null ? companion : companionType, resolvedParty, ferryOnlyAreas);
     }
 
     /** null-safe 동행 유형. */

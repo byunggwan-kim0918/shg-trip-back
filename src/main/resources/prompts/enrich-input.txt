@@ -130,7 +130,7 @@
 
 ### 4-B. 동행·인원 (companionType, partySize)
 description(요청 문장)에서 누구와 가는지 추론합니다. 문장에 단서가 없으면 추측하지 말고 UNKNOWN / null로 둡니다.
-- companionType: SOLO(혼자) | COUPLE(커플·연인·신혼·부부 둘이) | FAMILY(가족·아이·부모님) | FRIENDS(친구·동료) | UNKNOWN
+- companionType: SOLO(혼자) | COUPLE(커플·연인·신혼·부부 둘이) | FAMILY(아이와 함께하는 가족) | SENIOR(부모님·어르신 동반) | FRIENDS(친구·동료) | UNKNOWN
 - partySize: 인원 수(정수). "커플"·"부부"는 2, "혼자"는 1, "친구 3명"은 3. 숫자를 알 수 없으면 null
 - 숙소 질의(categorySearchQueries.accommodation)에도 반영합니다. 커플·가족이면 게스트하우스·호스텔을 넣지 말고
   "펜션 호텔 리조트 오션뷰"처럼 독립 객실 위주로 씁니다.

@@ -127,4 +127,33 @@ class ItineraryGenerateRequestValidationTest {
         assertThat(messages(withOptions("제주도", List.of("healing"), List.of("cafe"), null, null, "나".repeat(501))))
                 .anyMatch(m -> m.contains("500자"));
     }
+
+    @Test
+    @DisplayName("동행·인원·시각은 허용값만 통과한다")
+    void companionPartyAndTimes() {
+        LocalDate start = base;
+        var ok = new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "제주도", List.of("healing"),
+                List.of("attraction"), null, null, null, start, start.plusDays(2), null, null, null,
+                "parents", 3, "15:00", "11:00");
+        var bad = new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "제주도", List.of("healing"),
+                List.of("attraction"), null, null, null, start, start.plusDays(2), null, null, null,
+                "elderly", 0, "3pm", "24:00");
+
+        assertThat(messages(ok)).isEmpty();
+        assertThat(messages(bad)).contains("지원하지 않는 동행입니다.", "인원은 1명 이상이어야 합니다.",
+                "도착 시각 형식이 올바르지 않습니다.", "출발 시각 형식이 올바르지 않습니다.");
+    }
+
+    @Test
+    @DisplayName("문장만 읽는 경로용 사본에 동행·인원·도착·출발이 문장으로 붙는다")
+    void tripFactsAppendedToDescription() {
+        var req = new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "제주도", List.of("healing"),
+                List.of("attraction"), null, null, null, base, base.plusDays(2), "바다 보고 싶어요", null, null,
+                "parents", 3, "15:00", "11:00");
+
+        assertThat(req.withTripFactsInDescription().description())
+                .isEqualTo("바다 보고 싶어요 (동행 부모님 동반 3명, 첫날 15:00 도착, 마지막 날 11:00 출발)");
+        var plain = request(ItineraryGenerateRequest.PlanningMode.AUTO, null, base, base.plusDays(2), null, null);
+        assertThat(plain.withTripFactsInDescription()).isSameAs(plain);
+    }
 }

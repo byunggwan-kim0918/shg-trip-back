@@ -157,6 +157,7 @@ public class AssemblyCallGenerator {
                 case SOLO -> "혼자";
                 case COUPLE -> "커플";
                 case FAMILY -> "가족";
+                case SENIOR -> "부모님";
                 case FRIENDS -> "친구";
                 case UNKNOWN -> "";
             }).append("\n");

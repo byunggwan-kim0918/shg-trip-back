@@ -67,17 +67,21 @@ final class InvariantChecker {
                 maxLeg = Math.max(maxLeg, straight);
             }
 
+            // 도착·출발 시각 때문에 끼니 시간대를 못 쓰는 날은 그 끼니를 충족으로 본다
             result.put(day.dayNumber, new DayStatus(
-                    hasMealInWindow(daySteps, LUNCH_START, LUNCH_END),
-                    hasMealInWindow(daySteps, DINNER_START, DINNER_END),
-                    !lastDay || departsAfterDinner(daySteps, candidates, day),
-                    daySteps.stream().anyMatch(st -> st.place() != null
+                    !day.lunchInWindow() || hasMealInWindow(daySteps, LUNCH_START, day.lunchWindowEnd()),
+                    hasMealInWindow(daySteps, DINNER_START, day.dinnerWindowEnd()),
+                    (!lastDay || departsAfterDinner(daySteps, candidates, day)) && day.dinnerInWindow(),
+                    day.tooShortForSightseeing() || daySteps.stream().anyMatch(st -> st.place() != null
                             && "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(st.place().category()))),
                     day.accommodationIndex != null,
                     !lastDay,
                     total, maxLeg,
                     total <= limits[1] && maxLeg <= limits[0],
-                    daySteps.stream().mapToInt(st -> toMinutesOrZero(st.endTime())).max().orElse(0)));
+                    daySteps.stream().mapToInt(st -> toMinutesOrZero(st.endTime())).max().orElse(0),
+                    day.endsEarlyByDeparture(),
+                    day.startNotBefore != null && day.startNotBefore >= DINNER_END,
+                    missesDeparture(daySteps, candidates, day)));
         }
         return result;
     }
@@ -143,11 +147,15 @@ final class InvariantChecker {
                         + String.format("%.0f", st.totalKm() * GeoUtils.ROAD_DISTANCE_FACTOR)
                         + "km로 다소 깁니다.");
             }
-            if (st.endMinutes() > 0 && st.endMinutes() < EARLY_FINISH_MINUTES) {
+            if (st.endMinutes() > 0 && st.endMinutes() < EARLY_FINISH_MINUTES && !st.endsEarlyByDeparture()) {
                 violations.add("조기 종료(" + formatMinutes(st.endMinutes()) + ")");
                 notices.add(dayNumber + "일차 일정이 " + formatMinutes(st.endMinutes()) + "에 일찍 끝납니다.");
             }
-            if (st.endMinutes() > eveningCap) {
+            if (st.missedDeparture()) {
+                violations.add("출발 시각 초과");
+                notices.add(dayNumber + "일차 출발 시각에 맞추기 어려워요. 출발 시간을 다시 확인해 주세요.");
+            }
+            if (st.endMinutes() > eveningCap && !st.lateByArrival()) {
                 violations.add("늦은 종료(" + formatMinutes(st.endMinutes()) + ")");
                 notices.add(dayNumber + "일차 일정이 " + formatMinutes(st.endMinutes()) + "까지 이어집니다.");
             }
@@ -219,6 +227,16 @@ final class InvariantChecker {
             if (gap > max) max = gap;
         }
         return max;
+    }
+
+    /** 사용자가 준 출발 시각에 맞춰 허브에 닿지 못하는 날. */
+    static boolean missesDeparture(List<StepData> daySteps, List<PlaceCandidate> candidates, DayState day) {
+        if (day.departureDeadline == null || day.departureHubIndex == null) return false;
+        String hubName = candidates != null && byIndex(candidates, day.departureHubIndex) != null
+                ? byIndex(candidates, day.departureHubIndex).name() : null;
+        return daySteps.stream()
+                .filter(s -> s.place() != null && hubName != null && Objects.equals(s.place().name(), hubName))
+                .anyMatch(s -> toMinutesOrZero(s.startTime()) > day.departureDeadline);
     }
 
     static boolean departsAfterDinner(List<StepData> daySteps, List<PlaceCandidate> candidates, DayState day) {
