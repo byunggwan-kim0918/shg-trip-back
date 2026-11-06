@@ -534,7 +534,7 @@ public class RouteOptimizer {
                                               List<String> themes, TransportationHub hub,
                                               boolean compactMode, List<String> userCategories, boolean couple,
                                               Integer firstDayStart, Integer lastDayDeadline) {
-        int[] range = PACE_RANGE.getOrDefault(pace, PACE_RANGE.get("normal"));
+        int[] range = paceRange(pace);
         int minPerDay = compactMode ? Math.min(range[0], 3) : range[0];
         int maxPerDay = range[1];
         double distanceMultiplier = TRANSPORT_DISTANCE_MULTIPLIER.getOrDefault(transportPref,
@@ -1051,11 +1051,14 @@ public class RouteOptimizer {
                 victim = idx;
                 break;
             }
-            // 사용자가 준 출발 시각(비행기·기차)은 넘길 수 없어 대표 명소·식사 보호보다 앞선다
-            if (victim == null && userDeadline) {
+            // 사용자가 준 출발 시각(비행기·기차)은 넘길 수 없어 대표 명소·식사 보호보다 앞선다.
+            // 기본 마감(21:00)일 때도 보호 장소는 자르고 끼니만 남긴다. 저녁 뒤 활동을 지키면 공항에 23시에 닿는다.
+            if (victim == null) {
                 for (int i = seq.size() - 1; i >= 0; i--) {
                     Integer idx = seq.get(i);
                     if (isSameIndex(day.departureHubIndex, idx) || isSameIndex(day.arrivalHubIndex, idx)) continue;
+                    if (!userDeadline && (isSameIndex(breakfastIdx, idx) || isSameIndex(lunchIdx, idx)
+                            || isSameIndex(dinnerIdx, idx))) continue;
                     PlaceCandidate c = byIndex(candidates, idx);
                     if (c == null || c.userSelected()) continue;
                     victim = idx;
@@ -2785,15 +2788,20 @@ public class RouteOptimizer {
 
             for (Integer idx : new ArrayList<>(day.placeIndices)) {
                 if (pairedIndices.contains(idx)) continue;
-                double[] coord = coordsOf(byIndex(candidates, idx));
+                PlaceCandidate cand = byIndex(candidates, idx);
+                double[] coord = coordsOf(cand);
                 if (coord == null) continue;
                 double myDist = haversine(coord, myCentroid);
+                // 끼니가 모자라질 날에서 이미 다 찬 날로 식당을 옮기면 한쪽은 저녁이 없고 한쪽은 네 끼가 된다
+                boolean mealNeededHere = cand != null && cand.mealEligible()
+                        && mealCount(day, candidates) <= MEALS_PER_DAY;
 
                 int bestDay = -1;
                 double bestDist = myDist - REBALANCE_MIN_GAIN_KM; // 이만큼 가까워져야 이동
                 for (int j = 0; j < days.size(); j++) {
                     if (j == i) continue;
                     if (days.get(j).placeIndices.size() >= maxPerDay) continue;
+                    if (mealNeededHere && mealCount(days.get(j), candidates) >= MEALS_PER_DAY) continue;
                     double[] other = centroids.get(j);
                     if (other == null) continue;
                     double d = haversine(coord, other);
@@ -2814,6 +2822,11 @@ public class RouteOptimizer {
         // 양쪽 모두 centroid에 가까워지는 1:1 교환을 추가로 시도한다(C5).
         changed |= swapAcrossDays(days, candidates, centroids, pairedIndices);
         return changed;
+    }
+
+    private static long mealCount(DayState day, List<PlaceCandidate> candidates) {
+        return day.placeIndices.stream().map(i -> byIndex(candidates, i))
+                .filter(c -> c != null && c.mealEligible()).count();
     }
 
     /**

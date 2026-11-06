@@ -12,6 +12,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.EnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.ItineraryData;
 import com.shg.trip.shgtrip.domain.planning.dto.SoftEvaluationResult;
 import com.shg.trip.shgtrip.domain.planning.dto.ValidationResult;
+import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import com.shg.trip.shgtrip.global.config.PlanningProperties;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
@@ -426,10 +427,14 @@ public class ClaudeAIService implements AIService {
     }
 
     private String buildPaceRule(String pace) {
-        return switch (pace != null ? pace : "normal") {
-            case "tight" -> "하루 활동 단계(숙소·교통 허브 제외)를 반드시 4~5개로 엄격히 제한하세요. 이 범위를 절대 초과하지 마세요. 이동 최소화, 장소 간 시간 촘촘히 배분.";
-            case "relaxed" -> "하루 활동 단계(숙소·교통 허브 제외)를 반드시 2~3개로 엄격히 제한하세요. 이 범위를 절대 초과하지 마세요. 각 장소에서 충분히 머물고, 카페·휴식 시간을 포함하세요.";
-            default -> "하루 활동 단계(숙소·교통 허브 제외)를 반드시 3~4개로 엄격히 제한하세요. 이 범위를 절대 초과하지 마세요.";
+        String key = pace != null ? pace : "normal";
+        int[] sights = ScheduleTuning.sightsPerDay(key);
+        String base = String.format("하루 관광·체험(숙소·교통 허브·식사 제외)을 %d~%d개로 하고, 점심·저녁 식사는 따로 넣으세요. "
+                + "카페·간식은 관광 자리 하나로 칩니다. 이 범위를 넘기지 마세요.", sights[0], sights[1]);
+        return switch (key) {
+            case "tight" -> base + " 이동 최소화, 장소 간 시간 촘촘히 배분.";
+            case "relaxed" -> base + " 각 장소에서 충분히 머물고, 카페·휴식 시간을 포함하세요.";
+            default -> base;
         };
     }
 

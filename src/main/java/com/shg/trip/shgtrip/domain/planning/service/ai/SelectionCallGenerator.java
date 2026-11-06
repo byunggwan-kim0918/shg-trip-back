@@ -7,6 +7,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.service.GeoCluster;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
+import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
@@ -241,7 +242,9 @@ public class SelectionCallGenerator {
             }
             sb.append("\n");
         }
-        sb.append("- 페이스: ").append(input.pace()).append("\n");
+        int[] sights = ScheduleTuning.sightsPerDay(input.pace());
+        sb.append("- 페이스: ").append(input.pace()).append(" (하루 관광·체험 ").append(sights[0]).append('~')
+                .append(sights[1]).append("곳 + 점심·저녁, 카페·간식은 관광 자리 하나로 침)\n");
         sb.append("- 이동수단 선호: ").append(input.transportPref())
                 .append(" (walk=도보/버스로 갈 만한 가까운 동선, car=차량 이동 전제로 넉넉한 동선, any=상관없음)\n");
         if (input.description() != null && !input.description().isBlank()) {
