@@ -12,17 +12,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 /**
- * Fallback 경로에서 생성된 장소의 임베딩을 비동기로 생성하는 서비스.
- * <p>
- * Fallback 경로(기존 LLM 직접 생성)에서 새로 저장된 장소에 대해
- * 임베딩을 비동기적으로 생성하여 Place_Pool에 저장한다.
- * 이를 통해 다음 요청 시 해당 장소가 벡터 검색 후보로 활용될 수 있다.
- * <p>
- * 동작 방식:
- * - @Async로 호출자를 블로킹하지 않음
- * - 이미 임베딩이 있는 장소는 건너뜀
- * - 개별 장소 실패 시 로그만 남기고 나머지 계속 처리 (best-effort)
- *
+ * Fallback 경로에서 새로 저장된 장소를 다음 요청부터 벡터 검색 후보로 쓰려고 임베딩한다.
  */
 @Slf4j
 @Service
@@ -33,10 +23,7 @@ public class FallbackPlaceEmbeddingService {
     private final PlaceVectorSearchService placeVectorSearchService;
 
     /**
-     * Fallback 경로에서 저장된 장소 목록에 대해 비동기로 임베딩을 생성한다.
-     * <p>
-     * - 이미 임베딩이 있는 장소(embedding != null)는 건너뜀
-     * - 각 장소의 임베딩 생성/저장 실패는 로그만 남기고 계속 진행
+     * 장소별 실패는 로그만 남기고 나머지를 계속 처리한다(best-effort).
      *
      * @param places Fallback 경로에서 생성되어 DB에 저장된 장소 목록
      */

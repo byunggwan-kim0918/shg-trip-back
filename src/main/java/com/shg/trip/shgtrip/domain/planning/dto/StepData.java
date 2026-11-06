@@ -6,7 +6,7 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * AI Tool Use 응답 - 일정 단계 스키마.
+ * AI Tool Use 응답의 일정 단계 스키마.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record StepData(

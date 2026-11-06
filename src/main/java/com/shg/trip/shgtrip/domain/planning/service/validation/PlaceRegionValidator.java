@@ -13,19 +13,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Manual 모드에서 사용자가 선택한 장소가 여행지 지역과 일치하는지 검증한다.
- *
- * 검증 기준은 enrich(Haiku)가 산출한 {@link VectorEnrichedInput#regions()}이며,
- * 여기서 별도의 여행지→지역 매핑을 두지 않는다(단일 소스 오브 트루스).
- *
- * 방어적으로 다음 경우는 검증을 건너뛴다(오탐 방지):
- * <ul>
- *   <li>선택 장소가 없음(AUTO 모드)</li>
- *   <li>enrich regions가 비어있음(정규화 실패/불확실)</li>
- *   <li>country가 KR이 아님(해외 place.region 포맷 미정의)</li>
- *   <li>개별 장소의 region이 null</li>
- * </ul>
- * 다지역 여행(regionAllocation)은 그 안의 모든 지역을 허용 집합에 포함해 오탐을 막는다.
+ * 검증 기준은 enrich가 산출한 {@link VectorEnrichedInput#regions()} 하나뿐이라 여기서 별도 지역 매핑을 두지 않는다.
+ * 오탐을 막으려고 regions가 비었거나 KR이 아니거나 장소 region이 null이면 건너뛰고, regionAllocation 지역은 모두 허용한다.
  */
 @Slf4j
 @Component
@@ -42,7 +31,7 @@ public class PlaceRegionValidator {
             return;
         }
 
-        // 해외는 place.region 포맷이 미정의 → 검증 스킵
+        // 해외는 place.region 포맷이 정의되지 않아 검증하지 않는다.
         String country = enrichedInput.country();
         if (country != null && !"KR".equalsIgnoreCase(country)) {
             log.debug("지역 검증 스킵(해외): country={}", country);
@@ -51,7 +40,7 @@ public class PlaceRegionValidator {
 
         Set<String> allowedRegions = buildAllowedRegions(enrichedInput);
         if (allowedRegions.isEmpty()) {
-            // enrich가 지역을 확정하지 못함 → false-reject 방지 위해 스킵
+            // enrich가 지역을 확정하지 못하면 false-reject를 막으려고 건너뛴다.
             log.debug("지역 검증 스킵(regions 비어있음): destination={}", enrichedInput.destination());
             return;
         }

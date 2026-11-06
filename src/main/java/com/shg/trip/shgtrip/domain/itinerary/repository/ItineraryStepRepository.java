@@ -10,13 +10,8 @@ import org.springframework.transaction.annotation.Transactional;
 public interface ItineraryStepRepository extends JpaRepository<ItineraryStep, Long> {
 
     /**
-     * story(notes) 컬럼만 직접 UPDATE한다. Itinerary 엔티티를 로드/저장하지 않으므로
-     * 부모 Itinerary의 @Version을 건드리지 않는다 — 비동기 story 채움과 동시 편집(PUT) 간
-     * 낙관적 락 충돌을 피하기 위함.
-     *
-     * @Transactional 필수: @Modifying JPQL은 SimpleJpaRepository의 표준 메서드와 달리
-     * 자동으로 트랜잭션이 걸리지 않아, 호출부(StoryGenerationService, @Async)에 트랜잭션이
-     * 없으면 TransactionRequiredException이 발생한다.
+     * 부모 Itinerary를 로드하지 않아 @Version이 안 올라가므로 비동기 story 채움이 동시 편집(PUT)과 충돌하지 않는다.
+     * {@code @Modifying} JPQL은 트랜잭션이 자동으로 걸리지 않아 빼면 @Async 호출부에서 TransactionRequiredException이 난다.
      */
     @Transactional
     @Modifying

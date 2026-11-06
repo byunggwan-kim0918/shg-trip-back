@@ -21,10 +21,7 @@ public class PlaceService {
     private final PlaceRepository placeRepository;
 
     /**
-     * 장소 단건 조회.
-     *
-     * <p>예전에는 7일이 지난 장소를 Google Places로 비동기 갱신했다. 그 경로는 제거됐다 —
-     * Maps 약관 3.2.3(a)가 세부정보·좌표·평점의 로컬 캐싱을 금지하므로 갱신해 둘 수가 없다.
+     * Maps 약관 3.2.3(a)가 세부정보·좌표·평점의 로컬 캐싱을 금지해 조회 시 외부 갱신을 하지 않는다.
      * 장소 데이터는 적재 배치(TourAPI·Foursquare·Wikidata)가 책임진다.
      */
     public PlaceResponse getPlace(Long placeId) {
@@ -33,9 +30,6 @@ public class PlaceService {
         return PlaceResponse.from(place);
     }
 
-    /**
-     * 키워드 기반 장소 검색
-     */
     public Page<PlaceResponse> searchPlaces(String keyword, Pageable pageable) {
         return placeRepository.searchByKeyword(keyword, pageable)
                 .map(PlaceResponse::from);

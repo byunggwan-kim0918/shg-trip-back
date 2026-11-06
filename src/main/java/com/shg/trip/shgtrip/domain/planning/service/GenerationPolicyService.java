@@ -14,18 +14,17 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
- * 생성 정책(rate-limit·쿼터) — Redis 카운터로 전역(다중 인스턴스) 관리.
+ * 생성 정책(rate-limit·쿼터)을 다중 인스턴스 전역에서 Redis 카운터로 관리한다.
  *
  * <p>두 정책은 세는 대상이 달라 중복이 아니다:
  * <ul>
- *   <li><b>R1 실패 rate-limit</b>: enrich valid:false(비현실 입력)만 카운트 → 5회 도달 시 24h 차단.
- *       봇/무의미 반복 방어. 서버 오류·AI 출력 문제는 카운트하지 않는다(사용자 책임 아님).</li>
- *   <li><b>R2 생성 쿼터</b>: 30일 창 성공 5회(수익성). 성공 시에만 소모(서버 실패로 소모 방지).</li>
+ *   <li><b>실패 rate-limit</b>: enrich valid:false(비현실 입력)만 세고 5회면 24h 차단한다.
+ *       서버 오류·AI 출력 문제는 사용자 책임이 아니라 세지 않는다.</li>
+ *   <li><b>생성 쿼터</b>: 30일 창 성공 5회. 서버 실패로 소모되지 않게 성공 시에만 센다.</li>
  * </ul>
  *
- * <p>@Async 경계 대응: 차단 체크는 startGeneration 진입부(동기)에서, 카운트 변경(INCR/DEL)은
- * executor 스레드에서 일어난다. Redis INCR/DEL은 원자적이라 카운트 자체는 안전하고,
- * 진입부 체크는 "현재 used>=5면 차단"만 하므로 동시 초과는 유저당 활성 job 1개 제약이 대부분 막는다.
+ * <p>차단 체크는 진입부(동기)에서, INCR/DEL은 executor 스레드에서 일어난다.
+ * 진입부 체크와 카운트 사이의 동시 초과는 유저당 활성 job 1개 제약이 대부분 막는다.
  */
 @Slf4j
 @Service
@@ -39,7 +38,7 @@ public class GenerationPolicyService {
     private static final Duration FAIL_TTL = Duration.ofHours(24);
     private static final Duration QUOTA_TTL = Duration.ofDays(30);
 
-    // 문장 파싱(Haiku)은 디바운스 입력마다 불려 생성보다 훨씬 잦다 — 정상 타이핑은 분당 수 회 수준
+    // 문장 파싱(Haiku)은 디바운스 입력마다 불려 생성보다 훨씬 잦다. 정상 타이핑은 분당 수 회 수준이다.
     private static final String PARSE_MINUTE_KEY_PREFIX = "parse:rate:min:";
     private static final String PARSE_DAY_KEY_PREFIX = "parse:rate:day:";
     static final int MAX_PARSE_PER_MINUTE = 20;
@@ -48,9 +47,8 @@ public class GenerationPolicyService {
     private static final Duration PARSE_DAY_TTL = Duration.ofDays(1);
 
     /**
-     * 실패 카운트 대상 errorCode 화이트리스트 — <b>사용자 입력</b> 문제만 집계한다.
-     * AI 포맷 오류·{@code valid} 키 누락(→ "INVALID_INPUT" 폴백)·미상 코드는 사용자 책임이 아니므로
-     * 카운트하지 않는다(정상 사용자가 AI 변덕으로 24h 차단되는 것을 방지 — 클래스 주석의 철학 준수).
+     * 사용자 입력 문제만 실패로 센다. AI 포맷 오류·{@code valid} 키 누락("INVALID_INPUT" 폴백)·미상 코드를
+     * 세면 정상 사용자가 AI 변덕으로 24h 차단된다.
      */
     private static final Set<String> COUNTABLE_ERROR_CODES = Set.of(
             "UNREALISTIC_BUDGET", "CONFLICTING_THEMES", "INVALID_DESTINATION", "INVALID_DATE_RANGE");
@@ -58,7 +56,7 @@ public class GenerationPolicyService {
     private final StringRedisTemplate redisTemplate;
 
     /**
-     * 생성 시작 진입부 체크(동기). 차단이면 BusinessException(TOO_MANY_REQUESTS) — SSE 시작 전 즉시 반환.
+     * 차단이면 SSE 시작 전에 BusinessException(TOO_MANY_REQUESTS)을 던진다.
      */
     public void checkAllowed(Long userId) {
         long fails = getCount(FAIL_KEY_PREFIX + userId);
@@ -74,39 +72,36 @@ public class GenerationPolicyService {
     }
 
     /**
-     * enrich valid:false(입력 검증 실패) — 실패 카운트 INCR + 24h 창 갱신.
-     * 단 사용자 입력 문제({@link #COUNTABLE_ERROR_CODES})일 때만 집계한다.
-     * AI 포맷 오류·미상 코드는 카운트하지 않는다(정상 사용자 오차단 방지).
+     * {@link #COUNTABLE_ERROR_CODES}에 해당할 때만 실패를 센다.
      */
     public void recordValidationFailure(Long userId, String errorCode) {
-        // 대소문자/공백 정규화 — AI가 케이싱을 흔들어도 화이트리스트 집계가 새지 않게.
+        // AI가 케이싱을 흔들어도 화이트리스트 집계가 새지 않게 정규화한다.
         String normalized = errorCode == null ? null : errorCode.trim().toUpperCase();
         if (normalized == null || !COUNTABLE_ERROR_CODES.contains(normalized)) {
             log.info("enrich valid:false but errorCode '{}' not countable — rate-limit 집계 제외 (user {})",
                     errorCode, userId);
             return;
         }
-        // 정책 부기(bookkeeping)는 best-effort — Redis 블립이 생성 critical path(SSE/story)를 깨지 않게 삼킨다.
+        // Redis 블립이 생성 critical path(SSE/story)를 깨지 않게 정책 부기 예외는 삼킨다.
         try {
             String key = FAIL_KEY_PREFIX + userId;
-            // 신규 키를 TTL과 함께 원자적으로 시드(NX) 후 INCR/EXPIRE — INCR/EXPIRE 분리로 인한
-            // TTL 누락(임계 도달 시 영구 차단)을 quota 경로와 동일하게 방지한다.
+            // INCR/EXPIRE만 쓰면 TTL이 빠져 임계 도달 시 영구 차단될 수 있어 TTL과 함께 NX로 먼저 시드한다.
             redisTemplate.opsForValue().setIfAbsent(key, "0", FAIL_TTL);
             Long count = redisTemplate.opsForValue().increment(key);
-            redisTemplate.expire(key, FAIL_TTL); // 마지막 실패로부터 24h 슬라이딩 갱신(best-effort)
+            redisTemplate.expire(key, FAIL_TTL); // 마지막 실패로부터 24h 슬라이딩
             log.info("Generation validation failure for user {} — code={}, count={}", userId, normalized, count);
         } catch (Exception e) {
             log.warn("recordValidationFailure best-effort 실패 (user {}): {}", userId, e.getMessage());
         }
     }
 
-    /** 생성 성공 — 실패 카운트 리셋 + 30일 쿼터 INCR. (best-effort — critical path 비파괴) */
+    /** best-effort라 Redis 오류가 critical path를 깨지 않는다. */
     public void recordSuccess(Long userId) {
         try {
             redisTemplate.delete(FAIL_KEY_PREFIX + userId);
             String key = QUOTA_KEY_PREFIX + userId;
-            // 창을 원자적으로 시드(SET key 0 EX 30d NX) 후 INCR — INCR/EXPIRE 분리로 인한
-            // TTL 누락(크래시 시 영구 잠금)을 방지한다. 이미 존재하면 NX로 no-op(고정 창 유지).
+            // INCR/EXPIRE를 나누면 크래시 때 TTL이 빠져 영구 잠금되므로 창을 NX로 먼저 시드한다.
+            // 키가 이미 있으면 NX가 no-op이라 고정 창이 유지된다.
             redisTemplate.opsForValue().setIfAbsent(key, "0", QUOTA_TTL);
             Long count = redisTemplate.opsForValue().increment(key);
             restoreTtlIfMissing(key, QUOTA_TTL);
@@ -118,7 +113,7 @@ public class GenerationPolicyService {
 
     /**
      * 문장 파싱 호출 제한(고정 창). 초과면 BusinessException(TOO_MANY_REQUESTS).
-     * Redis 장애 시에는 통과시킨다 — 파싱은 생성 전 보조 기능이라 막는 쪽 피해가 더 크다.
+     * Redis 장애 시에는 통과시킨다. 파싱은 생성 전 보조 기능이라 막는 쪽 피해가 더 크다.
      */
     public void checkParseAllowed(Long userId) {
         long perMinute;
@@ -148,8 +143,8 @@ public class GenerationPolicyService {
     }
 
     /**
-     * 시드(NX)와 INCR 사이에 키가 만료되면 INCR이 TTL 없는 새 키를 만든다 — 그대로 두면 창이 끝나지 않아
-     * 사용자가 영구 차단된다. -1(TTL 없음)일 때만 다시 건다.
+     * 시드(NX)와 INCR 사이에 키가 만료되면 INCR이 TTL 없는 키를 만들어 사용자가 영구 차단된다.
+     * -1(TTL 없음)일 때만 다시 건다.
      */
     private void restoreTtlIfMissing(String key, Duration ttl) {
         Long remaining = redisTemplate.getExpire(key);
@@ -158,7 +153,7 @@ public class GenerationPolicyService {
         }
     }
 
-    /** 잔여 조회(배지·차단 안내 겸용). Redis 장애 시 fail-open — 배지가 UI를 500으로 깨지 않게 기본값 반환. */
+    /** Redis 장애 시 배지가 UI를 500으로 깨지 않게 기본값을 돌려준다(fail-open). */
     public GenerationQuotaResponse getStatus(Long userId) {
         try {
             long used = getCount(QUOTA_KEY_PREFIX + userId);
@@ -174,8 +169,6 @@ public class GenerationPolicyService {
             return new GenerationQuotaResponse(0, MAX_QUOTA, null, null);
         }
     }
-
-    // ── helpers ──
 
     private long getCount(String key) {
         String v = redisTemplate.opsForValue().get(key);

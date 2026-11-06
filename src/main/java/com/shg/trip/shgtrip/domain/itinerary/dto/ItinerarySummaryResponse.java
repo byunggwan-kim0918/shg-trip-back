@@ -21,7 +21,7 @@ public record ItinerarySummaryResponse(
 ) {
     /**
      * @param coverImage 조회 시점에 coverPlaceId로 해소한 현재 imageUrl(presigned). 없으면 null.
-     *                   저장된 coverImage 컬럼(과거의 깨진 프록시 URL)은 사용하지 않는다.
+     *                   저장된 coverImage 컬럼은 깨진 프록시 URL이라 사용하지 않는다.
      */
     public static ItinerarySummaryResponse from(Itinerary itinerary, String coverImage) {
         return new ItinerarySummaryResponse(

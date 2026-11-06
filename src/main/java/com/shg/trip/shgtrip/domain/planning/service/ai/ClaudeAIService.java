@@ -29,9 +29,6 @@ import java.util.Map;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-/**
- * Claude LLM 기반 AI 서비스 구현체. prod 프로파일에서만 활성화.
- */
 @Slf4j
 @Service
 public class ClaudeAIService implements AIService {
@@ -124,7 +121,6 @@ public class ClaudeAIService implements AIService {
             Message message = executeWithRetry(
                     () -> anthropicClient.messages().create(params), 2);
 
-            // 디버깅: AI 응답 raw 내용 + 사용 토큰 확인
             log.info("generateItinerary response: stopReason={}, inputTokens={}, outputTokens={}",
                     message.stopReason(),
                     message.usage().inputTokens(),
@@ -150,7 +146,7 @@ public class ClaudeAIService implements AIService {
                     .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
                             "AI 응답에서 일정 데이터를 추출할 수 없습니다."));
 
-            // 장소 이름이 빈 스텝만 있는 응답은 일정이 아니다 — 그대로 넘기면 빈 일정이 저장된다.
+            // 장소 이름이 빈 스텝만 있는 응답을 그대로 넘기면 빈 일정이 저장된다.
             boolean placeholderOnly = result.steps() == null || result.steps().stream().allMatch(
                     st -> st.place() == null || st.place().name() == null || st.place().name().isBlank());
             if (placeholderOnly) {
@@ -159,7 +155,7 @@ public class ClaudeAIService implements AIService {
                 throw new BusinessException(ErrorCode.AI_SERVICE_ERROR, "AI 응답에 일정 장소가 없습니다.");
             }
 
-            // max_tokens 도달로 JSON이 잘린 경우 — stopReason이 max_tokens이면 데이터 불완전
+            // stopReason이 max_tokens면 JSON이 잘려 데이터가 불완전하다.
             boolean truncated = message.stopReason().isPresent()
                     && String.valueOf(message.stopReason().get()).contains("max_tokens");
             if (truncated) {
@@ -189,7 +185,7 @@ public class ClaudeAIService implements AIService {
     public ItineraryData enhanceItinerary(ItineraryData itinerary, ValidationResult feedback, EnrichedInput input) {
         String prompt = buildEnhancePrompt(itinerary, feedback, input);
         Tool tool = buildItineraryTool();
-        // enhance는 기존 일정 전체를 다시 출력해야 하므로 generate보다 넉넉하게
+        // enhance는 기존 일정 전체를 다시 출력해야 해서 generate보다 넉넉하게 잡는다.
         long estimatedDays = itinerary.steps() != null && !itinerary.steps().isEmpty()
                 ? itinerary.steps().stream().mapToInt(s -> s.dayNumber()).max().orElse(3)
                 : 3;
@@ -263,14 +259,9 @@ public class ClaudeAIService implements AIService {
         }
     }
 
-    /**
-     * Haiku 4.5로 일정 품질을 평가합니다.
-     * 문맥 일관성(30점), 동선 효율성(40점), 정보 완전성(30점) 기준으로 0~100 점수 반환.
-     * AI 호출 실패 시 기본값(75점)으로 fallback 처리.
-     */
     @Override
     public SoftEvaluationResult evaluateSoftQuality(ItineraryData data, EnrichedInput input) {
-        // alternatives는 평가 불필요 — 제거하여 입력 토큰 절감
+        // alternatives는 평가에 필요 없어 빼고 입력 토큰을 줄인다.
         String itineraryJson;
         try {
             List<Map<String, Object>> lightSteps = data.steps() == null ? List.of() :
@@ -323,7 +314,7 @@ public class ClaudeAIService implements AIService {
                     .map(block -> block.asText().text())
                     .collect(Collectors.joining());
 
-            // JSON 추출: AI가 설명을 앞뒤로 붙이는 경우 대비
+            // AI가 JSON 앞뒤에 설명을 붙이는 경우가 있다.
             int jsonStart = responseText.indexOf('{');
             int jsonEnd = responseText.lastIndexOf('}');
             if (jsonStart >= 0 && jsonEnd > jsonStart) {
@@ -347,22 +338,14 @@ public class ClaudeAIService implements AIService {
             log.warn("Soft quality evaluation failed: {}", e.getMessage());
         }
 
-        // fallback 점수는 softThreshold - 1로 설정 (ItineraryValidationService catch 블록과 일관성 유지)
+        // ItineraryValidationService catch 블록과 같은 fallback 점수를 써야 판정이 일관된다.
         int fallbackScore = Math.max(0, planningProperties.validation().softThreshold() - 1);
         return new SoftEvaluationResult(fallbackScore, List.of("AI 품질 평가 실패, 기본값 적용"));
     }
 
-    // ── Private helpers ──
-
     /**
-     * 여행 일수에 따라 maxTokens를 동적으로 계산.
-     *
-     * 실측 기준:
-     *   step당 place(~70tok) + alternatives 4개(~540tok) + 교통/메타(~85tok) + notes(~50tok) ≈ 745토큰
-     *   하루 평균 5~6 steps × 745 = 3,700~4,500토큰
-     *   안전 여유(+30%): 하루 5,500토큰 + 메타데이터 버퍼 2,000
-     *
-     * 최소 12,000 (단기 여행도 충분), 최대는 max-output-tokens 설정값.
+     * step당 약 745토큰(장소·대안 4개·교통·notes) × 하루 5~6 step에 30% 여유를 둔 값이다.
+     * 최소 12,000, 최대는 max-output-tokens 설정값.
      */
     private int calculateMaxTokens(long days) {
         int limit = anthropicProperties.maxOutputTokens();
@@ -449,7 +432,7 @@ public class ClaudeAIService implements AIService {
     private String buildEnhancePrompt(ItineraryData itinerary, ValidationResult feedback, EnrichedInput input) {
         String existingItinerary;
         try {
-            // alternatives 제거 — enhance 프롬프트에 불필요하며 입력 토큰 절감
+            // alternatives는 enhance 프롬프트에 필요 없어 빼고 입력 토큰을 줄인다.
             List<Map<String, Object>> lightSteps = itinerary.steps() == null ? List.of() :
                     itinerary.steps().stream().map(s -> {
                         Map<String, Object> m = new java.util.LinkedHashMap<>();
@@ -532,8 +515,7 @@ public class ClaudeAIService implements AIService {
     }
 
     /**
-     * Tool Use 스키마 정의: generate_itinerary 도구.
-     * ItineraryData 구조에 맞는 JSON Schema를 구성합니다.
+     * ItineraryData 구조와 일치해야 하는 generate_itinerary 도구 스키마.
      */
     private Tool buildItineraryTool() {
         Map<String, Object> placeSchema = Map.ofEntries(
@@ -611,7 +593,7 @@ public class ClaudeAIService implements AIService {
                 .name("generate_itinerary")
                 .description("여행 일정을 생성합니다. 각 단계별 장소, 대안, 교통 정보를 포함한 구조화된 일정을 반환합니다.")
                 .inputSchema(inputSchema)
-                // strict(제약 디코딩)를 쓰지 않는다 — 이 큰 스키마에서는 steps가 빈 자리표시자로 채워졌다.
+                // strict(제약 디코딩)를 켜면 이 큰 스키마에서 steps가 빈 자리표시자로 채워진다.
                 // 형식은 HardValidator가 검증한다.
                 .build();
     }
@@ -626,8 +608,7 @@ public class ClaudeAIService implements AIService {
     }
 
     /**
-     * 재시도 가능한 에러(529 overloaded, 500 등)에 대해 최대 maxRetries회 재시도.
-     * Exponential backoff 적용 (1초, 2초).
+     * 재시도 가능한 에러(529 overloaded, 500 등)만 exponential backoff(1초, 2초)로 최대 maxRetries회 재시도한다.
      */
     private <T> T executeWithRetry(Supplier<T> action, int maxRetries) {
         int attempt = 0;

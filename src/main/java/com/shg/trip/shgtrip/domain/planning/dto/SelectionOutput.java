@@ -4,7 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 import java.util.List;
 
-/** 모델이 스키마 밖 필드(실측: "placeIndices_comment")를 덧붙여도 일정 생성 전체가 실패하지 않게 무시한다. */
+/** 모델이 스키마 밖 필드(예: "placeIndices_comment")를 덧붙여도 일정 생성 전체가 실패하지 않게 무시한다. */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record SelectionOutput(
     String concept,
@@ -15,13 +15,12 @@ public record SelectionOutput(
     List<Integer> restIndices,
     List<TimingHint> timing
 ) {
-    /** 하위 호환 생성자 — highlight/rest 미지정 시 빈 리스트(서사 흐름 가중치 비활성). */
+    /** highlight/rest는 빈 리스트로 두어 서사 흐름 가중치를 끈다. */
     public SelectionOutput(String concept, List<DayPlan> days, List<List<Integer>> pairs,
                             List<Integer> spareIndices) {
         this(concept, days, pairs, spareIndices, List.of(), List.of());
     }
 
-    /** 하위 호환 생성자 — 시간대 의도 없음. */
     public SelectionOutput(String concept, List<DayPlan> days, List<List<Integer>> pairs,
                             List<Integer> spareIndices, List<Integer> highlightIndices,
                             List<Integer> restIndices) {
@@ -29,14 +28,12 @@ public record SelectionOutput(
     }
 
     /**
-     * days만 바꾼 사본. 필드를 나열해 다시 만들면 새 필드가 추가될 때 그 경로에서 조용히 유실된다
-     * (highlight/rest가 4-인자 생성자로 사라졌던 것과 같은 부류).
+     * days만 바꾼 사본. 필드를 나열해 다시 만들면 새 필드가 추가될 때 그 경로에서 조용히 유실된다.
      */
     public SelectionOutput withDays(List<DayPlan> newDays) {
         return new SelectionOutput(concept, newDays, pairs, spareIndices, highlightIndices, restIndices, timing);
     }
 
-    /** days와 spare를 바꾼 사본. */
     public SelectionOutput withDaysAndSpare(List<DayPlan> newDays, List<Integer> newSpare) {
         return new SelectionOutput(concept, newDays, pairs, newSpare, highlightIndices, restIndices, timing);
     }

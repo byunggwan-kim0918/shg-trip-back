@@ -20,16 +20,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * embedding IS NULL인 장소를 조회하여 배치 임베딩을 생성하고 저장하는 작업.
- * <p>
- * 처리 흐름:
- * 1. embedding IS NULL이고 active=true인 장소를 페이징으로 조회
- * 2. 배치 사이즈(기본 100)씩 EmbeddingTextBuilder로 텍스트 생성
- * 3. EmbeddingService.embedBatch로 벡터 생성
- * 4. PlaceVectorSearchService.storeBatch로 DB에 저장
- * 5. 실패한 장소는 건너뛰고 계속 처리
- */
 @Slf4j
 @Component
 @Profile("batch")
@@ -44,27 +34,19 @@ public class EmbeddingBatchJob {
     private int batchSize;
 
     /**
-     * 임베딩 대상 지역(쉼표 구분). 비우면 전 지역. 로컬에서 대량 적재 뒤 확인할 지역만 임베딩해
-     * OpenAI 호출을 줄이는 용도다(예: Jeju,Seoul,Busan).
+     * 임베딩 대상 지역(쉼표 구분, 예: Jeju,Seoul,Busan). 비우면 전 지역.
+     * 대량 적재 뒤 확인할 지역만 임베딩해 OpenAI 호출을 줄인다.
      */
     @Value("${batch.embedding.regions:}")
     private List<String> regions;
 
-    /**
-     * processBatch 결과. failedIds는 이번 실행에서 재시도하지 않도록 제외할 place ID 목록
-     * (embedding이 여전히 NULL이라 다음 조회에도 다시 잡히기 때문).
-     */
+    /** failedIds는 embedding이 여전히 NULL이라 다음 조회에 다시 잡히므로 이번 실행에서 제외할 ID다. */
     record BatchResult(int success, int failed, List<Long> failedIds) {
     }
 
     /**
-     * 임베딩 배치 생성을 실행한다.
-     * <p>
-     * page offset을 증가시키는 방식 대신, 이번 실행에서 실패한 place ID를 메모리에 누적해
-     * 매번 첫 페이지를 다시 조회하면서 그 ID들을 걸러낸다. embedding IS NULL 조건의 총
-     * 건수는 같은 실행 중에도 성공한 만큼 계속 줄어들기 때문에, 고정 offset 증가는 실제
-     * 남은 건수보다 앞서나가 Page.isEmpty()로 조용히 조기 종료될 수 있다(시도조차 안 된
-     * 레코드가 남아있는데도 "완료"로 로그가 찍히는 버그) — 그 경로를 원천적으로 없앤다.
+     * 매번 첫 페이지를 다시 조회하며 이번 실행의 실패 ID를 거른다. 성공한 만큼 남은 건수가 줄어
+     * 고정 offset을 늘리면 앞서 나가 처리 안 된 레코드를 남긴 채 조기 종료된다.
      */
     public void execute() {
         log.info("EmbeddingBatchJob 시작 - batchSize={}", batchSize);
@@ -89,7 +71,7 @@ public class EmbeddingBatchJob {
                     .toList();
 
             if (places.isEmpty()) {
-                // 남은 건 이번 실행에서 이미 실패 처리된 장소뿐 — 다음 실행에서 재시도
+                // 남은 건 이번 실행에서 실패한 장소뿐이며 다음 실행에서 재시도한다
                 break;
             }
 
@@ -104,18 +86,11 @@ public class EmbeddingBatchJob {
         log.info("EmbeddingBatchJob 완료 - 처리: {}건, 실패: {}건", totalProcessed, totalFailed);
     }
 
-    /**
-     * 장소 배치를 처리하여 임베딩을 생성하고 저장한다.
-     *
-     * @param places 임베딩을 생성할 장소 목록
-     * @return 성공/실패 건수와 실패한 place ID 목록
-     */
     BatchResult processBatch(List<Place> places) {
         List<String> texts = new ArrayList<>();
         List<Place> validPlaces = new ArrayList<>();
         List<Long> textBuildFailedIds = new ArrayList<>();
 
-        // 1. 텍스트 생성 (실패 시 해당 장소 건너뛰기)
         for (Place place : places) {
             try {
                 String text = EmbeddingTextBuilder.buildText(place);
@@ -132,7 +107,6 @@ public class EmbeddingBatchJob {
             return new BatchResult(0, places.size(), allIds(places));
         }
 
-        // 2. 배치 임베딩 생성
         List<float[]> embeddings;
         try {
             embeddings = embeddingService.embedBatch(texts);
@@ -147,7 +121,6 @@ public class EmbeddingBatchJob {
             return new BatchResult(0, places.size(), allIds(places));
         }
 
-        // 3. 일괄 저장
         Map<Long, float[]> embeddingMap = new HashMap<>();
         for (int i = 0; i < validPlaces.size(); i++) {
             embeddingMap.put(validPlaces.get(i).getId(), embeddings.get(i));

@@ -11,17 +11,13 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 생성 작업 하나의 SSE 출력 통로. executor는 이 객체에만 쓰고, 실제 HTTP 응답(SseEmitter)은
- * 클라이언트가 붙을 때마다 갈아 끼운다.
- *
- * <p>SseEmitter는 첫 GET 응답에 묶여 있어 새로고침으로 연결이 끊기면 같은 객체로는 다시 보낼 수
- * 없다. 그래서 보낸 이벤트를 기록해 두고, 새 연결이 붙으면 기록을 다시 흘려 진행 상태
- * (진행률·step-stream·complete)를 복원한다.
+ * SseEmitter는 첫 GET 응답에 묶여 새로고침 뒤 재사용할 수 없다.
+ * 그래서 보낸 이벤트를 기록해 두고 새 연결이 붙으면 다시 흘려 진행 상태를 복원한다.
  */
 @Slf4j
 public class GenerationStream {
 
-    /** 한 작업의 이벤트는 수십 개(진행률·day별 step-stream·heartbeat)라 넘칠 일이 없지만 상한은 둔다. */
+    /** 한 작업의 이벤트는 수십 개라 넘칠 일이 없지만 상한은 둔다. */
     private static final int MAX_HISTORY = 200;
 
     private final String jobId;
@@ -66,7 +62,7 @@ public class GenerationStream {
     }
 
     /**
-     * 이벤트를 기록하고 연결이 있으면 보낸다. 연결이 없거나 끊겨 있어도 예외를 던지지 않는다 —
+     * 연결이 없거나 끊겨 있어도 예외를 던지지 않는다.
      * 클라이언트가 나가도 작업은 끝까지 돌고, 다시 붙으면 기록으로 따라잡는다.
      */
     public synchronized void send(SseEmitter.SseEventBuilder event) throws IOException {

@@ -12,44 +12,31 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 벡터 검색용 검색 쿼리 텍스트를 생성하는 유틸리티.
+ * 슬롯은 RouteOptimizer가 식사·숙소·허브를 채우는 데 필요한 고정 5개 역할(교통/식당/카페/숙소/관광)이다.
+ * 관광 슬롯만 카테고리·테마별로 쪼갠다. 한 문장에 뭉치면 임베딩이 평균화돼 사용자 입력이 검색에 안 잡힌다.
  *
- * <p>슬롯 구조는 고정 5개 역할(교통/식당/카페/숙소/관광)을 유지한다 — RouteOptimizer가 식사·숙소·
- * 허브를 채우는 데 필요한 의도적 구조다. 다만 <b>관광 슬롯만</b> 사용자가 고른 카테고리·테마별로
- * 쿼리를 쪼갠다: 여러 카테고리를 한 문장에 뭉치면 임베딩이 평균화돼(전망대+시장+둘레길 → 아무것도
- * 아닌 벡터) 사용자 입력이 검색에 반영되지 않기 때문이다.
- *
- * <p>쿼리 문구는 코드 템플릿(여행지 + 카테고리/테마 라벨)으로 만들고, Haiku의
- * categorySearchQueries는 보조 문구로만 덧붙인다(LLM이 빠뜨려도 사용자 입력은 반드시 반영되도록).
+ * <p>LLM이 빠뜨려도 사용자 입력이 반영되도록 쿼리는 코드 템플릿으로 만들고,
+ * Haiku의 categorySearchQueries는 보조 문구로만 덧붙인다.
  */
 public final class SearchQueryBuilder {
 
-    /** 커플·가족 여행의 숙소 슬롯 기본 질의 — 다인실 숙소 대신 독립 객실 숙소로 향하게 한다. */
+    /** 커플·가족 여행의 숙소 슬롯 기본 질의. 다인실 대신 독립 객실 숙소로 향하게 한다. */
     static final String COUPLE_FAMILY_LODGING_QUERY = "펜션 호텔 리조트 독채 숙소";
 
     private SearchQueryBuilder() {
-        // Utility class — no instantiation
     }
 
     /**
-     * 검색 슬롯 하나.
-     *
      * @param key         로그·limit 배분용 식별자("attraction:beach", "cafe" 등)
      * @param role        고정 5개 역할 중 하나 (RouteOptimizer가 요구하는 구조)
      * @param queryText   임베딩 대상 쿼리 문장
-     * @param labelTokens 이 슬롯의 의미 라벨 토큰 — 이름/태그가 여기 걸리면 랭킹 가점(A4)
-     * @param excludedCategoryPatterns 이 슬롯에서 배제할 "명백히 틀린 대분류" 패턴(A2)
+     * @param labelTokens 이 슬롯의 의미 라벨 토큰. 이름·태그가 여기 걸리면 랭킹 가점
+     * @param excludedCategoryPatterns 이 슬롯에서 배제할 "명백히 틀린 대분류" 패턴
      */
     public record SearchSlot(String key, SearchRole role, String queryText, List<String> labelTokens,
                              List<String> excludedCategoryPatterns) {}
 
     /**
-     * VectorEnrichedInput에서 벡터 검색용 쿼리 텍스트를 생성한다.
-     *
-     * 결합 규칙:
-     * 1. normalizedDestination을 가장 앞에 배치 (지역 중심 검색)
-     * 2. searchTags를 공백으로 연결하여 뒤에 추가 (의미 보강)
-     *
      * @param input enrichInput 결과 (normalizedDestination, searchTags 필수)
      * @return 비어있지 않은 검색 쿼리 텍스트
      * @throws IllegalArgumentException normalizedDestination이 blank이고 searchTags가 모두 blank인 경우
@@ -61,13 +48,11 @@ public final class SearchQueryBuilder {
 
         List<String> parts = new ArrayList<>();
 
-        // normalizedDestination 추가
         String destination = input.normalizedDestination();
         if (destination != null && !destination.isBlank()) {
             parts.add(destination.trim());
         }
 
-        // searchTags 추가
         List<String> tags = input.searchTags();
         if (tags != null) {
             for (String tag : tags) {
@@ -117,19 +102,17 @@ public final class SearchQueryBuilder {
                 PlaceCategoryConstants.userCategoryQuery("restaurant"), aiQueries.get("restaurant")));
         slots.add(slot("cafe", SearchRole.CAFE, destination,
                 PlaceCategoryConstants.userCategoryQuery("cafe"), aiQueries.get("cafe")));
-        // 커플·가족은 게스트하우스를 결국 걸러내므로, 질의부터 독립 객실 숙소로 향하게 한다 —
+        // 커플·가족은 게스트하우스를 결국 걸러낸다.
         // 기본 질의("호텔 리조트 게스트하우스")로 찾으면 슬롯 자리를 게스트하우스가 먹는다.
         String lodgingQuery = input.companion().avoidsDormLodging()
                 ? COUPLE_FAMILY_LODGING_QUERY : PlaceCategoryConstants.userCategoryQuery("accommodation");
         slots.add(slot("accommodation", SearchRole.ACCOMMODATION, destination,
                 lodgingQuery, aiQueries.get("accommodation")));
 
-        // 관광 슬롯: 사용자 카테고리별 → 테마별 → 기본 순. 같은 의미가 두 번 들어가지 않도록 key로 dedupe.
+        // 같은 의미가 두 번 들어가지 않도록 key로 dedupe한다.
         Set<String> attractionKeys = new LinkedHashSet<>();
-        // 맛집 여행이면 사용자가 "시장"을 따로 고르지 않아도 시장 후보를 띄운다 — 로컬 시장은 미식 여행의
-        // 기본 코스인데, 시장 슬롯이 사용자 카테고리로만 생겨서 맛집 테마만 고른 일정엔 후보로도 안 나왔다
-        // (실측 115). 후보로 보이게만 하고 넣을지는 선택 단계가 정한다 — 영업일 데이터가 없는 오일장을
-        // 강제로 넣으면 장이 안 서는 날 보내게 된다.
+        // 로컬 시장은 미식 여행의 기본 코스라 "시장"을 고르지 않아도 후보로 띄운다.
+        // 넣을지는 선택 단계가 정한다. 영업일 데이터가 없는 오일장을 강제로 넣으면 장이 안 서는 날 보내게 된다.
         if (userThemes.contains("food") && !userCategories.contains("market")) {
             attractionKeys.add("attraction:market");
             slots.add(slot("attraction:market", SearchRole.ATTRACTION, destination,
@@ -148,7 +131,7 @@ public final class SearchQueryBuilder {
             slots.add(slot("attraction:theme:" + themeId, SearchRole.ATTRACTION, destination,
                     themeQuery, null));
         }
-        // 기본 관광 쿼리는 항상 1개 — 사용자가 카테고리/테마를 안 골라도 대표 명소는 나와야 한다.
+        // 사용자가 카테고리·테마를 안 골라도 대표 명소는 나와야 한다.
         if (attractionKeys.add("attraction")) {
             slots.add(slot("attraction", SearchRole.ATTRACTION, destination,
                     PlaceCategoryConstants.userCategoryQuery("attraction"), aiQueries.get("attraction")));
@@ -158,12 +141,7 @@ public final class SearchQueryBuilder {
     }
 
     /**
-     * VectorEnrichedInput에서 카테고리별 벡터 검색용 쿼리 맵을 생성한다.
-     *
-     * 규칙:
-     * - categorySearchQueries가 있으면 그대로 사용
-     * - 없으면 기존 searchTags 기반 단일 쿼리를 "attraction" 키로 래핑 (하위 호환)
-     * - transportation 키가 없으면 해당 슬롯 생략
+     * categorySearchQueries가 없으면 searchTags 단일 쿼리를 "attraction" 키로 감싼다(하위 호환).
      *
      * @param input enrichInput 결과 (categorySearchQueries 사용)
      * @return 카테고리별 쿼리 맵 (key: category, value: query text)
@@ -175,21 +153,19 @@ public final class SearchQueryBuilder {
 
         Map<String, String> queries = new HashMap<>();
 
-        // Haiku에서 생성한 categorySearchQueries가 있으면 사용
         Map<String, String> categoryQueries = input.categorySearchQueries();
         if (categoryQueries != null && !categoryQueries.isEmpty()) {
             queries.putAll(categoryQueries);
             return queries;
         }
 
-        // 폴백: 기존 searchTags 기반 단일 쿼리를 "attraction"으로 래핑
         String fallbackQuery = buildSearchQuery(input);
         queries.put("attraction", fallbackQuery);
 
         return queries;
     }
 
-    /** 슬롯 생성 — 쿼리 문장은 여행지+템플릿+AI 힌트, 라벨 토큰은 템플릿(의미 라벨)만. */
+    /** 라벨 토큰은 AI 힌트 없이 템플릿(의미 라벨)에서만 뽑는다. */
     private static SearchSlot slot(String key, SearchRole role, String destination,
                                    String template, String aiHint) {
         return slot(key, role, destination, template, aiHint, null);
@@ -202,7 +178,7 @@ public final class SearchQueryBuilder {
                 PlaceCategoryConstants.excludedCategoryPatterns(role, categoryId));
     }
 
-    /** 랭킹 가점용 라벨 토큰 — 2글자 이상만(불용 토큰 제거). */
+    /** 1글자 토큰은 불용어로 보고 버린다. */
     private static List<String> labelTokens(String template) {
         if (template == null || template.isBlank()) return List.of();
         List<String> tokens = new ArrayList<>();
@@ -213,7 +189,6 @@ public final class SearchQueryBuilder {
         return List.copyOf(tokens);
     }
 
-    /** 여행지 접두어 — normalizedDestination 우선, 없으면 원본 destination. */
     private static String destinationPrefix(VectorEnrichedInput input) {
         if (input.normalizedDestination() != null && !input.normalizedDestination().isBlank()) {
             return input.normalizedDestination().trim();
@@ -221,7 +196,6 @@ public final class SearchQueryBuilder {
         return input.destination() != null ? input.destination().trim() : "";
     }
 
-    /** "여행지 + 코드 템플릿 문구 + (있으면) Haiku 보조 문구"를 공백으로 잇는다. */
     private static String compose(String destination, String template, String aiHint) {
         Map<String, Boolean> seen = new LinkedHashMap<>();
         StringBuilder sb = new StringBuilder();

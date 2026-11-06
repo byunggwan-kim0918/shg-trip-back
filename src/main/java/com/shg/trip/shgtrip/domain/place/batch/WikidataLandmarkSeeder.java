@@ -28,14 +28,12 @@ import java.util.Set;
 /**
  * Wikidata에서 지역의 <b>대표 명소</b>를 가져와 없는 것만 적재한다.
  *
- * <p>왜 필요한가: 기존 소스(Foursquare·TourAPI)에 대표 명소가 통째로 빠져 있었다(2026-10 감사).
- * 경복궁은 러시아어 행만 있었고, 교토의 청수사·금각사·후시미이나리, 도쿄타워·센소지, 제주의 만장굴·비자림이
- * 없었다. 평가 세트 대표 명소 포함률이 0~40%였던 직접 원인이다. Wikidata는 무료·무인증이고 국가를
+ * <p>기존 소스(Foursquare·TourAPI)에는 대표 명소가 빠진 지역이 있다. Wikidata는 무료·무인증이고 국가를
  * 가리지 않으며, 언어판 수(sitelinks)가 "그 지역에서 실제로 가는 곳"을 잘 가려낸다.
  *
  * <p>대상: 지역 경계 상자 안에서 관광 성격 클래스({@link #CLASS_CATEGORY})의 인스턴스이면서 언어판이
  * {@code minSitelinks} 이상인 항목. 기존 활성 장소와 이름이 겹치고 2km 안이면 같은 장소로 보고 넣지
- * 않는다 — 인기도 연결은 {@link WikidataSitelinksJob}이 따로 한다(이 시더 다음에 돈다).
+ * 않는다. 인기도 연결은 이 시더 다음에 도는 {@link WikidataSitelinksJob}이 한다.
  *
  * <p>클래스는 확실한 것만 둔다. 상위 클래스로 넓게 잡으면(예: 건축물) 아파트·관공서가 같이 들어온다.
  */
@@ -46,11 +44,11 @@ public class WikidataLandmarkSeeder {
 
     private static final String SPARQL_ENDPOINT = "https://query.wikidata.org/sparql";
 
-    /** 지역 경계 상자 산출 최소 장소 수 — {@link WikidataSitelinksJob}과 같은 기준. */
+    /** 지역 경계 상자 산출 최소 장소 수. {@link WikidataSitelinksJob}과 같은 기준. */
     private static final int MIN_PLACES_PER_REGION = 50;
     /**
-     * bbox 여유(도, 약 5km). bbox가 장소 좌표의 2~98 백분위라 지역 끝 명소가 잘린다 — 제주 동쪽 경계가
-     * 경도 126.934라 성산일출봉·우도가 빠졌다. {@link WikidataSitelinksJob}과 같은 값.
+     * bbox 여유(도, 약 5km). bbox가 장소 좌표의 2~98 백분위라 여유가 없으면 지역 끝 명소가 잘린다.
+     * {@link WikidataSitelinksJob}과 같은 값.
      */
     private static final double BOX_MARGIN_DEG = 0.05;
     /** 기존 장소와 같은 곳으로 볼 반경(m). 큰 명소는 출처마다 중심점이 수백 m 다르다. */
@@ -58,7 +56,7 @@ public class WikidataLandmarkSeeder {
 
     /**
      * Wikidata 클래스(QID) → 내부 카테고리 경로. majorCategory가 ATTRACTION으로 판정하는 형식을 쓴다.
-     * 순서가 우선순위다 — 한 항목이 여러 클래스에 걸리면 앞의 것을 쓴다(구체적인 것 먼저).
+     * 순서가 우선순위다. 한 항목이 여러 클래스에 걸리면 앞의 것을 쓴다(구체적인 것 먼저).
      */
     static final Map<String, String> CLASS_CATEGORY = orderedMap(
             "Q845945", "Community and Government > Spiritual Center > Shrine",          // 신사
@@ -117,7 +115,7 @@ public class WikidataLandmarkSeeder {
             double maxLon = ((Number) row[4]).doubleValue() + BOX_MARGIN_DEG;
             try {
                 totalInserted += seedRegion(region, minLat, minLon, maxLat, maxLon);
-                Thread.sleep(2_000); // SPARQL 서비스 예의 — 연속 호출 시 429가 난다
+                Thread.sleep(2_000); // SPARQL 서비스는 연속 호출하면 429를 낸다
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
@@ -142,7 +140,7 @@ public class WikidataLandmarkSeeder {
                 .toList();
 
         // 항목 id가 이미 있으면 이름과 무관하게 같은 장소다. 이름 비교만으로는 2자 이름(종묘·우도)이
-        // 자기 자신과도 겹치지 않아 실행할 때마다 다시 들어갔다.
+        // 자기 자신과도 겹치지 않아 실행할 때마다 다시 들어간다.
         Set<String> knownQids = new HashSet<>(placeRepository.findAllWikidataIds());
         int inserted = 0;
         int known = 0;
@@ -167,7 +165,7 @@ public class WikidataLandmarkSeeder {
 
     /**
      * 이름이 겹치고 2km 안에 <b>같은 대분류</b>의 활성 장소가 있으면 같은 장소다. 대분류를 안 보면
-     * "경복궁역"(역)·"경복궁"(고깃집)에 걸려 궁궐이 들어오지 못했다(실측).
+     * "경복궁역"(역)·"경복궁"(고깃집)에 걸려 궁궐이 들어오지 못한다.
      */
     static boolean alreadyKnown(Landmark lm, List<WikidataSitelinksJob.Candidate> existing) {
         String major = com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants.majorCategory(lm.category());
@@ -184,7 +182,7 @@ public class WikidataLandmarkSeeder {
 
     private Place toPlace(Landmark lm, String region) {
         // Wikidata에는 도로명 주소가 거의 없다. 주소가 비면 방문 가능 판정(isVisitableEntity)에서
-        // 빠지므로 "지역 이름"을 주소로 둔다 — 좌표가 정확해 길 찾기는 좌표로 한다.
+        // 빠지므로 "지역 이름"을 주소로 둔다. 좌표가 정확해 길 찾기는 좌표로 한다.
         String address = lm.address() != null && !lm.address().isBlank() ? lm.address() : lm.label() + ", " + region;
         return Place.builder()
                 .name(lm.label())
@@ -246,7 +244,7 @@ public class WikidataLandmarkSeeder {
     /**
      * SPARQL 응답 → 명소. 한 항목이 여러 클래스·주소로 여러 줄이 되므로 QID로 합치고, 클래스는
      * {@link #CLASS_CATEGORY} 순서상 가장 구체적인 것을 쓴다. 라벨이 없거나(QID 그대로) 국가 코드가
-     * 없는 항목은 버린다 — 국가는 검색 필터에 쓰인다.
+     * 없는 항목은 버린다. 국가는 검색 필터에 쓰인다.
      */
     List<Landmark> parse(String json) throws Exception {
         List<String> priority = new ArrayList<>(CLASS_CATEGORY.keySet());

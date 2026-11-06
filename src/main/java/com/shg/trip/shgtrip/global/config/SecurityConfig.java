@@ -37,18 +37,17 @@ public class SecurityConfig {
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // SSE의 async dispatch는 JWT 필터(OncePerRequestFilter)를 다시 타지 않아 인증 정보가 없다.
-                        // 최초 요청에서 이미 인가됐으므로 통과시킨다 — 막으면 스트림 종료 시 Access Denied가 난다.
+                        // SSE의 async dispatch는 JWT 필터를 다시 타지 않아 인증 정보가 없지만, 최초 요청에서 이미 인가된 요청이다.
+                        // 막으면 스트림 종료 시 Access Denied가 난다.
                         .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/shared/**").permitAll()
-                        // 이미지 프록시: <img src> 태그는 Authorization 헤더 전달 불가
+                        // <img src> 태그는 Authorization 헤더를 전달할 수 없다.
                         .requestMatchers("/api/places/*/photo").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .anyRequest().authenticated()
                 )
-                // 기본 entry point는 403이다. BFF는 401을 받아야 refresh 후 재시도하므로 미인증은 401로 돌려준다
-                // (권한 부족은 그대로 403).
+                // BFF는 401을 받아야 refresh 후 재시도하므로 미인증은 기본 403 대신 401로 돌려준다.
                 .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .addFilterBefore(jwtAuthenticationFilter,
                         UsernamePasswordAuthenticationFilter.class)
@@ -60,7 +59,7 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(allowedOrigins);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH"));
-        // Accept 헤더 포함: SSE(text/event-stream) preflight 통과에 필요
+        // Accept가 없으면 SSE(text/event-stream) preflight가 통과하지 못한다.
         config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With", "Accept"));
         config.setAllowCredentials(true);
         config.setMaxAge(3600L);

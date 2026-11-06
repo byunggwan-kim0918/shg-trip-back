@@ -4,9 +4,6 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
-/**
- * Haiku가 보강한 사용자 입력.
- */
 public record EnrichedInput(
         String destination,
         List<String> themes,

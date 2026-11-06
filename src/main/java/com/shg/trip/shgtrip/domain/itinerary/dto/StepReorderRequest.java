@@ -6,9 +6,8 @@ import jakarta.validation.constraints.NotNull;
 import java.util.List;
 
 /**
- * 같은 day 내 스텝 드래그 재정렬 요청.
- * orderedStepIds는 해당 day에 속한 모든 스텝 id를 새 순서대로 나열한 것이어야 한다
- * (누락·중복·타 day/타 일정 stepId 주입은 서버에서 거부).
+ * orderedStepIds는 해당 day의 모든 스텝 id를 새 순서로 나열해야 한다.
+ * 누락·중복·다른 day나 다른 일정의 stepId는 서버가 거부한다.
  */
 public record StepReorderRequest(
 

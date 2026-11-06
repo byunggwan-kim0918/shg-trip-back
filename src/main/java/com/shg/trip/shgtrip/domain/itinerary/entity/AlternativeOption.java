@@ -36,7 +36,7 @@ public class AlternativeOption extends BaseTimeEntity {
     @Column(columnDefinition = "TEXT")
     private String notes;
 
-    /** 이 대안 장소의 예상 비용(원) */
+    /** 예상 비용(원) */
     @Column(precision = 10, scale = 2)
     private BigDecimal estimatedCost;
 

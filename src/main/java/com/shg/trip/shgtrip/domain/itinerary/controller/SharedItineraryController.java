@@ -9,9 +9,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * 공유 일정 조회 (비인증).
- */
 @RestController
 @RequestMapping("/api/shared")
 @RequiredArgsConstructor

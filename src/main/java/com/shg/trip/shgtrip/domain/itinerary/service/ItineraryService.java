@@ -35,9 +35,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-/**
- * 일정 관리 서비스.
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -64,9 +61,8 @@ public class ItineraryService {
         Page<Itinerary> page = itineraryRepository
                 .findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable);
 
-        // 커버 place들의 imageUrl을 한 번에 해소한다. 이미지 출처는 TourAPI(firstimage) 하나뿐이고
-        // 적재 시점에 확정되므로, 조회 시점에 채워 넣을 경로는 없다 — Google 사진 비동기 업로드는
-        // 제거됐다(Maps 약관 3.2.3(a): 사진·세부정보 캐싱 금지).
+        // 이미지 출처는 적재 시점에 확정되는 TourAPI firstimage뿐이라 조회 시점에 채울 경로가 없다.
+        // Google 사진은 Maps 약관 3.2.3(a)가 캐싱을 금지해 쓰지 않는다.
         List<Long> coverPlaceIds = page.getContent().stream()
                 .map(Itinerary::getCoverPlaceId)
                 .filter(Objects::nonNull)
@@ -121,7 +117,7 @@ public class ItineraryService {
     @Transactional
     public ShareLinkResponse generateShareLink(Long itineraryId, Long userId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
-        // 다시 누를 때마다 새로 발급하면 이미 보낸 링크가 바로 죽는다 — 유효한 토큰은 그대로 돌려준다
+        // 다시 누를 때마다 새로 발급하면 이미 보낸 링크가 죽으므로 유효한 토큰은 그대로 돌려준다.
         if (itinerary.getShareToken() != null
                 && (itinerary.getShareExpiresAt() == null || itinerary.getShareExpiresAt().isAfter(OffsetDateTime.now()))) {
             return new ShareLinkResponse(itinerary.getShareToken(), itinerary.getShareExpiresAt());
@@ -145,7 +141,6 @@ public class ItineraryService {
     }
 
     /**
-     * 일정 단계의 대안 장소 선택.
      * 선택 후 해당 step과 다음 step의 교통 거리를 좌표 기반으로 재계산한다.
      */
     @Transactional
@@ -169,21 +164,17 @@ public class ItineraryService {
         recordEdit(itinerary, userId, ItineraryEditEvent.Type.SELECT_ALTERNATIVE, step.getDayNumber(), stepId,
                 payload("fromPlaceId", fromPlaceId, "toPlaceId", placeIdOf(step), "stepOrder", step.getStepOrder()));
 
-        // Ensure DELETE executes before INSERT to avoid Hibernate orphanRemoval flush conflicts
+        // DELETE가 INSERT보다 먼저 나가야 Hibernate orphanRemoval flush가 충돌하지 않는다.
         entityManager.flush();
 
-        // 교통 거리 재계산
         recalculateTransportation(itinerary.getSteps(), step);
 
         return ItineraryResponse.from(itinerary);
     }
 
     /**
-     * 같은 day 내 스텝 드래그 재정렬 (F3).
-     * 시간 슬롯 고정 — 시간(startTime/endTime)은 위치(슬롯)에 고정되고 장소만 슬롯에 재배치된다.
-     * (시간을 스텝에 붙여 옮기면 타임라인이 비단조로 보이므로, 이동한 스텝이 그 위치의 시간을 물려받는다.)
-     * 이동(교통) 정보는 새 순서 기준으로 재계산한다.
-     * orderedStepIds는 해당 day의 전체 스텝 집합과 정확히 일치해야 한다(누락·중복·타 day/타 일정 주입 거부).
+     * 시간(startTime/endTime)은 슬롯에 고정되고 장소만 재배치되며, 교통 정보는 새 순서로 재계산한다.
+     * orderedStepIds가 해당 day의 전체 스텝 집합과 정확히 일치하지 않으면 거부한다.
      */
     @Transactional
     public ItineraryResponse reorderSteps(Long itineraryId, Long userId, Integer dayNumber, List<Long> orderedStepIds) {
@@ -197,7 +188,6 @@ public class ItineraryService {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "해당 날짜의 일정 단계를 찾을 수 없습니다.");
         }
 
-        // 요청 순서가 해당 day 스텝 집합과 정확히 일치하는지 검증
         Set<Long> dayStepIds = daySteps.stream().map(ItineraryStep::getId).collect(Collectors.toSet());
         Set<Long> requestedIds = new LinkedHashSet<>(orderedStepIds);
         if (requestedIds.size() != orderedStepIds.size() || !requestedIds.equals(dayStepIds)) {
@@ -205,9 +195,7 @@ public class ItineraryService {
                     "재정렬 요청이 해당 날짜의 단계 목록과 일치하지 않습니다.");
         }
 
-        // 이 day가 점유한 (stepOrder, 시간) 슬롯을 그대로 새 순서에 재배정 → 다른 day의 위치는 불변.
-        // 시간은 슬롯(위치)에 고정 → 이동한 스텝이 그 위치의 startTime/endTime을 물려받는다.
-        // 슬롯 시간을 스텝 변경 전에 먼저 캡처(stepOrder→시간)해 뮤테이션 중 값이 섞이지 않게 한다.
+        // 슬롯 시간을 스텝 변경 전에 먼저 캡처해야 뮤테이션 중 값이 섞이지 않는다.
         List<Integer> slots = daySteps.stream()
                 .map(ItineraryStep::getStepOrder)
                 .sorted()
@@ -239,8 +227,7 @@ public class ItineraryService {
     }
 
     /**
-     * 스텝(스톱) 삭제 (F3). 남은 스텝의 순서를 재정렬하고 해당 day의 이동 정보를 재계산한다.
-     * day 최소 1스텝을 보장(마지막 1개는 삭제 불가).
+     * day의 마지막 1스텝은 삭제할 수 없다. 남은 스텝 순서와 해당 day의 이동 정보는 재계산한다.
      */
     @Transactional
     public ItineraryResponse deleteStep(Long itineraryId, Long userId, Long stepId) {
@@ -263,9 +250,8 @@ public class ItineraryService {
                 payload("placeId", placeIdOf(target), "stepOrder", target.getStepOrder()));
 
         itinerary.removeStep(target);
-        entityManager.flush(); // orphanRemoval DELETE를 재정렬 UPDATE보다 먼저 확정
+        entityManager.flush(); // orphanRemoval DELETE가 재정렬 UPDATE보다 먼저 나가야 한다
 
-        // 남은 스텝 stepOrder를 (day, order) 기준 0..N-1로 재정렬해 빈 슬롯 제거
         List<ItineraryStep> remaining = itinerary.getSteps().stream()
                 .sorted(Comparator.comparingInt(ItineraryStep::getDayNumber)
                         .thenComparingInt(ItineraryStep::getStepOrder))
@@ -280,9 +266,8 @@ public class ItineraryService {
     }
 
     /**
-     * 한 day 전체의 이동(교통) 정보를 순서대로 재계산한다(F3 reorder/delete 공용).
-     * day 첫 스텝은 인바운드 leg가 없으므로 교통정보를 비우고(생성 파이프라인과 동일 시맨틱),
-     * 이후 스텝은 직전 스텝과의 좌표 거리로 재계산한다. 좌표가 없어 계산 불가하면 비운다(스테일 leg 방지).
+     * day 첫 스텝은 인바운드 leg가 없어 교통정보를 비운다. 생성 파이프라인과 같은 시맨틱이다.
+     * 좌표가 없어 계산할 수 없는 구간도 낡은 leg가 남지 않게 비운다.
      */
     private void recalculateDayTransportation(List<ItineraryStep> allSteps, Integer dayNumber) {
         List<ItineraryStep> daySteps = allSteps.stream()
@@ -305,7 +290,7 @@ public class ItineraryService {
     }
 
     /**
-     * 대안 선택 후 인접 step의 교통 거리를 재계산. 일차 경계를 넘는 경우 skip.
+     * 일차 경계를 넘는 구간은 재계산하지 않는다.
      */
     private void recalculateTransportation(List<ItineraryStep> allSteps, ItineraryStep changedStep) {
         List<ItineraryStep> sorted = allSteps.stream()
@@ -336,26 +321,23 @@ public class ItineraryService {
         }
     }
 
-    // 한 destination 내 하루 이동으로는 비현실적인 구간거리 임계값(RouteOptimizer와 동일).
+    // 한 destination 안 하루 이동으로는 비현실적인 구간거리. RouteOptimizer와 같은 값이다.
     private static final double MAX_REASONABLE_LEG_KM = 200.0;
 
     /**
-     * 대안 선택으로 장소가 바뀐 스텝의 교통 정보를 재계산한다. 거리뿐 아니라 시간·비용·모드를
-     * RouteOptimizer 생성 경로와 동일한 공식({@link GeoUtils#estimateLeg})으로 함께 갱신해야
-     * 프론트 예산 합산(장소비+이동비)이 어긋나지 않는다(대안 선택 후 거리는 새 장소·비용은 옛
-     * 장소로 어긋나던 버그). transportPref는 저장돼 있지 않아 기본 "any"(혼합 단가)로 재계산한다.
+     * 시간·비용·모드도 거리와 함께 {@link GeoUtils#estimateLeg}로 갱신해야 프론트 예산 합산(장소비+이동비)이 맞는다.
+     * transportPref는 저장돼 있지 않아 "any"(혼합 단가)로 계산한다.
      */
     private void updateDistance(ItineraryStep from, ItineraryStep to) {
         GeoUtils.TransportLeg leg = computeLeg(from, to);
-        if (leg == null) return; // 좌표 없음·비현실 구간 — 기존 교통정보 유지
+        if (leg == null) return; // 좌표 없음·비현실 구간이면 기존 교통정보를 유지한다
         to.updateTransportation(leg.mode(), leg.durationMin(), leg.distanceKm(), leg.cost());
         log.debug("Recalculated transport: {} → {} = {}km, {}원",
                 from.getPlace().getName(), to.getPlace().getName(), leg.distanceKm(), leg.cost());
     }
 
     /**
-     * 두 스텝 간 이동 leg를 좌표 기반으로 계산한다. 좌표가 없거나(0,0 포함) 비현실 구간이면 null.
-     * transportPref는 저장돼 있지 않아 기본 "any"(혼합 단가)로 계산(RouteOptimizer 생성 경로와 동일 공식).
+     * 좌표가 없거나(0,0 포함) 비현실 구간이면 null.
      */
     private GeoUtils.TransportLeg computeLeg(ItineraryStep from, ItineraryStep to) {
         Place fromPlace = from.getPlace();

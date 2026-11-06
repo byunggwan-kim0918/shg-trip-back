@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Call 2 (Haiku): 확정된 일정 위에 concept을 반영한 story만 생성하는 Tool Use 스키마 빌더.
  * day·순서·시간·교통·대안은 백엔드가 이미 확정했으므로 이 스키마에는 구조 필드가 없다.
  */
 public final class AssemblyToolSchema {
