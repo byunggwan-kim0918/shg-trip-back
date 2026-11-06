@@ -686,7 +686,9 @@ public class BatchEnrichScheduler {
                 if (parsed >= 0) admissionFee = parsed; // 0(무료)도 유효값
             }
 
-            place.enrichWith(tags, description, timeSlots, durationMinutes, admissionFee);
+            // 공식 상세를 반영한 행은 모델 추정 입장료로 덮지 않는다
+            place.enrichWith(tags, description, timeSlots, durationMinutes,
+                    place.getTourapiDetailAt() != null ? null : admissionFee);
             place.assignRole(parseAttractionRole(root.get("place_role")), null);
             return true;
 

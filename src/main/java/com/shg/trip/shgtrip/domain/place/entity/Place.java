@@ -274,32 +274,6 @@ public class Place extends BaseTimeEntity {
         if (newCuisine != null && !newCuisine.isBlank()) this.cuisine = newCuisine;
     }
 
-    /** TourAPI 콘텐츠와 연결했거나 찾지 못했음을 기록한다. 못 찾았으면 id·type은 null. */
-    public void markTourApiMatch(String contentId, Integer contentType) {
-        if (contentId != null) {
-            this.tourapiContentId = contentId;
-            this.tourapiContentType = contentType == null ? null : contentType.shortValue();
-        }
-        this.tourapiCheckedAt = OffsetDateTime.now();
-    }
-
-    /**
-     * detailIntro2 결과를 반영한다. 원문은 항상 남기고, 영업시간·입장료는 판독에 성공한 경우에만 덮어쓴다.
-     *
-     * @param officialHours "월요일: 09:00 ~ 18:00, 화요일: 휴무" 형식. null이면 기존 값 유지
-     * @param feeWon        확신할 수 있는 성인 입장료(원, 0=무료). null이면 기존 값 유지
-     */
-    public void applyTourApiDetail(java.util.Map<String, String> official, String officialHours, Integer feeWon) {
-        PlaceAttributes base = attributes != null ? attributes : PlaceAttributes.empty();
-        this.attributes = base.withOfficial(official);
-        if (officialHours != null) {
-            this.openingHours = officialHours;
-            this.openingHoursSource = "official";
-        }
-        if (feeWon != null && feeWon >= 0) this.admissionFee = feeWon;
-        this.tourapiDetailAt = OffsetDateTime.now();
-    }
-
     /**
      * Anthropic Batch API 보강 결과를 반영한다.
      */

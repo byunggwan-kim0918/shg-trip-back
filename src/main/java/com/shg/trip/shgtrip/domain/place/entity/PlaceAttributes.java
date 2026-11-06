@@ -56,10 +56,6 @@ public record PlaceAttributes(
                 newOfficial == null || newOfficial.isEmpty() ? null : Map.copyOf(newOfficial));
     }
 
-    public static PlaceAttributes empty() {
-        return new PlaceAttributes(null, null, null, null, null, null, null);
-    }
-
     /** official을 뺀 분류 JSON. 엔티티 매핑과 같은 키(필드명)를 쓴다. */
     public String classificationJson() {
         try {

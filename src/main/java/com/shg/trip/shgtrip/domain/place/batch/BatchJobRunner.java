@@ -25,6 +25,7 @@ public class BatchJobRunner implements CommandLineRunner {
     private final WikidataSitelinksJob wikidataSitelinksJob;
     private final WikidataLandmarkSeeder wikidataLandmarkSeeder;
     private final PlaceRoleBackfillJob placeRoleBackfillJob;
+    private final TourApiDetailJob tourApiDetailJob;
 
     @Value("${batch.enrich.enabled:false}")
     private boolean enrichEnabled;
@@ -35,6 +36,10 @@ public class BatchJobRunner implements CommandLineRunner {
 
     @Value("${batch.tourapi.enabled:false}")
     private boolean tourApiEnabled;
+
+    /** TourAPI 공식 영업시간 연결. 기본 false — 하루 호출 한도(개발 계정 1,000건)를 쓴다. */
+    @Value("${batch.tourapi.detail.enabled:false}")
+    private boolean tourApiDetailEnabled;
 
     /** Wikidata 대표 명소 적재. 기본 false — 켜야만 SPARQL 호출이 나간다. */
     @Value("${batch.wikidata.landmarks.enabled:false}")
@@ -78,6 +83,15 @@ public class BatchJobRunner implements CommandLineRunner {
             }
         } else {
             log.info("[1/4-보완] TourAPI 관광지 시딩 건너뜀 (batch.tourapi.enabled=false)");
+        }
+
+        if (tourApiDetailEnabled) {
+            log.info("[1/4-공식] TourAPI 공식 영업시간 연결 시작");
+            try {
+                tourApiDetailJob.run();
+            } catch (Exception e) {
+                log.error("[1/4-공식] TourAPI 공식 영업시간 연결 실패, 이후 단계 계속 진행: {}", e.getMessage(), e);
+            }
         }
 
         // 대표 명소(경복궁·청수사·도쿄타워 등)가 기존 소스에 없는 경우를 Wikidata로 채운다.

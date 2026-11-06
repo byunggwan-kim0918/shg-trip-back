@@ -515,6 +515,8 @@ public class TourApiSeeder {
                 .country("KR")
                 .imageUrl(imageUrl != null && !imageUrl.isBlank() ? imageUrl : null)
                 .source("tourapi")
+                .tourapiContentId(item.path("contentid").asText(null))
+                .tourapiContentType((short) contentTypeId)
                 .active(true)
                 .savedAt(java.time.OffsetDateTime.now())
                 .build();
