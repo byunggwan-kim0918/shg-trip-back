@@ -1,5 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -881,6 +883,21 @@ public final class PlaceCategoryConstants {
     public static String mealKind(String name, String category, List<String> tags, String description, String cuisine) {
         String key = cuisineKey(cuisine);
         return key != null ? key : subType(name, category, tags, description);
+    }
+
+    /**
+     * 보강 속성의 세부 유형 → 유형 키. 기존 키로 옮겨 같은 오름이 리프에 따라 "mountain"·"hill"로 갈려
+     * 상한을 따로 세는 일을 막는다. 판정에 쓸 수 없는 값(landmark·other)은 null — 호출부가 추론으로 돌아간다.
+     */
+    public static String attributeSubTypeKey(PlaceAttributes attributes) {
+        if (attributes == null || attributes.subType() == null) return null;
+        return switch (attributes.subType()) {
+            case "mountain" -> "hill";
+            case "garden" -> "park";
+            case "gallery" -> "museum";
+            case "landmark", "other" -> null;
+            default -> attributes.subType();
+        };
     }
 
     /** 이 세부 유형이 야외·주간 성격인지(야간 버킷 배치 금지). */
