@@ -12,9 +12,8 @@ import java.util.regex.Pattern;
 /**
  * 장소 행 ↔ TourAPI 콘텐츠 매칭 규칙(searchKeyword2 결과 중 하나를 고른다).
  *
- * <p>좌표 반경 조회(locationBasedList2)는 쓰지 않는다. 성산일출봉·한라산·불국사·국립중앙박물관이 300m 안에서
- * 한 건도 안 나왔다(2026-11 샘플 80건). 반대로 대형 명소는 TourAPI 좌표가 300~500m 떨어져 있어
- * 거리 기준을 넉넉히 둔다(성산일출봉 390m, 중문색달해수욕장 511m).
+ * <p>좌표 반경 조회(locationBasedList2)는 대형 명소가 300m 안에서 나오지 않아 쓰지 않는다.
+ * 대형 명소는 TourAPI 좌표가 300~500m 떨어져 있어 거리 기준을 넉넉히 둔다.
  */
 final class TourApiMatcher {
 

@@ -29,42 +29,29 @@ import java.util.Set;
 /**
  * 장소에 Wikidata 인기도 신호(언어판 수)를 채우는 배치.
  *
- * <p>Google 리뷰 수를 약관상 보관할 수 없게 되면서 들여온 대체 신호다(Maps 약관 3.2.3(a) —
- * 평점·리뷰·좌표·사진의 로컬 캐싱 금지, 예외는 Place ID). Wikidata는 CC0라 저장 제약이 없고,
- * SPARQL이 무인증·무료이며, TourAPI와 달리 해외를 덮는다.
+ * <p>Maps 약관 3.2.3(a)가 평점·리뷰·좌표·사진의 로컬 캐싱을 금지해(예외는 Place ID) 대신 쓰는 신호다.
+ * Wikidata는 CC0라 저장 제약이 없고, SPARQL이 무인증·무료이며, TourAPI와 달리 해외를 덮는다.
  *
  * <h2>왜 장소별로 묻지 않는가</h2>
- * 장소마다 API를 부르면 5만 건이 넘고 레이트 리밋에 걸린다(Wikipedia Pageviews로 시도했을 때
- * 429가 즉시 났다). {@code SERVICE wikibase:box}로 지역 경계 상자 안의 항목을 한 번에 받고,
- * 별칭·분류는 항목 id로 묶어 몇 번 더 묻는다(서울 약 4,300항목 → 15회). 한 쿼리에 다 넣으면
- * 서울에서 54~88초가 걸려 WDQS 60초 제한에 걸린다(2026-10 실측).
+ * 장소마다 API를 부르면 5만 건이 넘고 레이트 리밋에 걸린다. {@code SERVICE wikibase:box}로 지역 경계 상자 안의
+ * 항목을 한 번에 받고, 별칭·분류는 항목 id로 묶어 몇 번 더 묻는다. 한 쿼리에 다 넣으면 큰 지역에서
+ * WDQS 60초 제한에 걸린다.
  *
  * <h2>좌표와 이름을 모두 본다</h2>
- * 표제가 서로 다르다 — Wikidata "성산일출봉 천연보호구역"(33.4581, 126.9425) ↔
- * 우리 DB "성산일출봉 [유네스코 세계자연유산]"(33.4591, 126.9396), 약 290m 차이. 그래서
- * 좌표가 필요하다.
- *
- * <p>처음에는 좌표만 썼는데 실측 결과가 쓰레기였다 — 제주월드컵경기장 옆 국수집이 경기장
- * 점수(28)를 가져갔고 정방폭포 하나가 주변 식당 7곳에 뿌려졌다. 명소 주변에는 식당이
- * 밀집하기 때문이다. 이름 포함 여부를 게이트로 추가하고, 한 항목은 한 장소만 차지하게 했다.
+ * 표제가 출처마다 달라("성산일출봉 천연보호구역" ↔ "성산일출봉 [유네스코 세계자연유산]") 좌표가 필요하다.
+ * 좌표만 쓰면 명소 주변에 밀집한 식당이 명소 점수를 가져가므로 이름 포함 여부를 게이트로 둔다.
  *
  * <h2>항목이 장소를 고른다 (장소가 항목을 고르는 게 아니라)</h2>
- * 예전에는 장소를 id 순으로 돌며 각자 맞는 항목을 가져갔다. 한 항목은 한 장소만 차지하므로
- * <b>먼저 온 장소가 이겼다</b> — Foursquare가 TourAPI보다 먼저 적재되니 "경복궁 한식당"이 진짜
- * 경복궁보다 먼저 "경복궁" 항목을 가져갈 수 있었다. 게다가 지역당 5,000곳 상한이 있어 서울(약 11만 곳)은
- * 한 번에 4.5%만 처리됐다.
- *
- * <p>지금은 반대다. 항목을 유명한 순으로 돌며, 반경 안에서 <b>이름이 항목 이름의 앞부분과 같은</b>
- * 장소 중 카테고리 등급이 가장 좋은 행에 붙인다(규칙은 {@link #assign}). 지역 전체를 매번 다시 계산해
- * 한 트랜잭션으로 덮어쓰므로 상한도, 순서 의존도 없다.
+ * 장소가 항목을 고르면 먼저 적재된 장소가 이긴다("경복궁 한식당"이 진짜 경복궁보다 먼저 항목을 가져간다).
+ * 항목을 유명한 순으로 돌며, 반경 안에서 <b>이름이 항목 이름의 앞부분과 같은</b> 장소 중 카테고리 등급이
+ * 가장 좋은 행에 붙인다(규칙은 {@link #assign}). 지역 전체를 매번 다시 계산해 한 트랜잭션으로 덮어쓰므로
+ * 상한도, 순서 의존도 없다.
  * 장소 목록은 id·이름·좌표·카테고리만 읽는다(엔티티째 읽으면 임베딩 컬럼 때문에 서울만 수백 MB다).
  *
  * <h2>매칭 실패도 기록한다</h2>
- * {@code wikidata_matched_at}을 반드시 찍는다. 이게 없으면 "Wikidata에 없는 장소"를 배치가
- * 돌 때마다 다시 조회한다 — 2026-10-08 Google 과금 사고(₩36만)가 정확히 그 구조였다.
+ * {@code wikidata_matched_at}이 없으면 "Wikidata에 없는 장소"를 배치가 돌 때마다 다시 조회한다.
  *
- * <p>{@code BatchEnrichScheduler}와 같은 {@code @Profile("batch")} + {@code BatchJobRunner}
- * 패턴. HTTP 호출과 응답 매핑을 분리해 후자만 단위 테스트한다.
+ * <p>HTTP 호출과 응답 매핑을 분리해 후자만 단위 테스트한다.
  */
 @Slf4j
 @Component
@@ -81,14 +68,8 @@ public class WikidataSitelinksJob {
             "shg-trip/1.0 (travel itinerary planner; +https://github.com/byunggwan-kim0918/shg-trip-back)";
 
     /**
-     * 좌표 매칭 반경(m).
-     *
-     * <p>처음에 300m로 뒀다가 실측에서 명소를 놓쳤다 — 천지연폭포가 우리 DB와 Wikidata 좌표가
-     * 약 550m 차이다. 큰 자연물은 "중심점"을 어디로 잡느냐가 출처마다 다르다.
-     *
-     * <p>이름 게이트가 있으므로 넓혀도 안전하다. 반경의 역할은 "같은 이름의 다른 지역 항목"을
-     * 거르는 것뿐인데 그건 보통 수 km 떨어져 있다. 2km면 큰 명소의 좌표 편차는 받아내면서
-     * 동명이소는 여전히 걸러낸다.
+     * 좌표 매칭 반경(m). 큰 자연물은 출처마다 중심점이 수백 m 다르다.
+     * 이름 게이트가 있어 넓혀도 되고, 같은 이름의 다른 지역 항목은 보통 수 km 떨어져 있어 2km로도 걸러진다.
      */
     private static final double MATCH_RADIUS_M = 2_000.0;
 
@@ -96,10 +77,8 @@ public class WikidataSitelinksJob {
     private static final int MIN_PLACES_PER_REGION = 50;
 
     /**
-     * bbox 여유(도, 약 5km). bbox는 오염 좌표를 걷어내려고 장소 좌표의 2~98 백분위로 잡는데,
-     * 그러면 지역 끝의 명소가 잘린다 — 제주 동쪽 경계가 경도 126.934라 성산일출봉(126.9425)과
-     * 우도(126.955) 항목을 아예 받지 못했다(2026-10 실측). 매칭은 어차피 장소 반경 2km 안에서만
-     * 일어나므로 상자를 넓혀도 오매칭은 늘지 않는다. 지역별 98→99.5 백분위 차이는 대부분 0.01~0.06도.
+     * bbox 여유(도, 약 5km). bbox를 오염 좌표 제거용 2~98 백분위로 잡아 여유가 없으면 지역 끝 명소가 잘린다.
+     * 매칭은 장소 반경 2km 안에서만 일어나므로 상자를 넓혀도 오매칭은 늘지 않는다.
      */
     private static final double BOX_MARGIN_DEG = 0.05;
 
@@ -107,8 +86,8 @@ public class WikidataSitelinksJob {
     private static final int DETAIL_BATCH_SIZE = 300;
 
     /**
-     * 식음료 업장 상위 분류 — 음식점(Q11707)·카페(Q30022)·바(Q187456)·제과점(Q274393).
-     * 이 분류의 하위 분류 전체(약 3,600개, 한식당·피자집·펍 등)에 속한 항목만 식당 행에 붙는다.
+     * 식음료 업장 상위 분류: 음식점(Q11707)·카페(Q30022)·바(Q187456)·제과점(Q274393).
+     * 이 분류의 하위 분류 전체(한식당·피자집·펍 등)에 속한 항목만 식당 행에 붙는다.
      */
     private static final List<String> FOOD_ROOT_CLASSES = List.of("Q11707", "Q30022", "Q187456", "Q274393");
 
@@ -180,7 +159,7 @@ public class WikidataSitelinksJob {
             return new int[]{0, 0};
         }
 
-        // 별칭·분류 조회가 하나라도 실패하면 예외로 지역 전체를 건너뛴다(지난 값 유지) —
+        // 별칭·분류 조회가 하나라도 실패하면 지역 전체를 건너뛰고 지난 값을 둔다.
         // 별칭·분류 없이 쓰면 식당이 명소 점수를 받거나 별칭으로만 맞는 명소가 0이 된다.
         List<WikidataItem> items = fetchItems(box, foodClasses);
         List<Assignment> assignments = assign(places, items);
@@ -199,42 +178,30 @@ public class WikidataSitelinksJob {
     }
 
     /**
-     * 항목마다 맞는 장소를 고른다. <b>좌표와 이름을 모두</b> 요구한다.
-     *
-     * <p>좌표만 쓰면 쓰레기가 나온다 — 제주월드컵경기장(sitelinks 28) 옆 국수집이 경기장 점수를
-     * 가져갔고, 정방폭포 하나가 반경 안 식당 7곳에 뿌려졌다. 명소 주변에는 식당이 밀집한다.
+     * 항목마다 맞는 장소를 고른다. <b>좌표와 이름을 모두</b> 요구한다. 좌표만 쓰면 명소 주변 식당이 명소 점수를 가져간다.
      *
      * <h3>이름 규칙: 장소 이름 = 항목 이름의 앞부분</h3>
      * 장소 이름을 정규화({@link #nameKey})한 값이 항목 이름의 <b>첫 단어부터 이어지는 단어 묶음</b>과
      * 같아야 한다(띄어쓰기는 무시). "성산일출봉"은 "성산일출봉 천연보호구역"에, "북촌한옥마을"은
-     * "북촌 한옥마을"에 붙는다.
-     *
-     * <p>예전 규칙("3자 이상 단어 하나 공유")은 장소 쪽 군더더기를 보지 않았다. 그래서 하위 시설이
-     * 본체 항목을 가져갔다(2026-10 로컬 실측): "창덕궁 후원"이 창덕궁(50)을, "제주국제공항 고인돌"이
-     * 공항(30)을, "연세대학교 정문"이 대학(39)을, "제주시 수협종합어시장"이 제주시(51)를 가져갔다.
-     * 두 글자 단어(후원·정문·본관)는 토큰에서 빠져 차이로 잡히지도 않았다. 반대로 "종묘"는 두 글자라
-     * 아예 매칭되지 않았다. 지금은 장소 이름에 항목에 없는 단어가 하나라도 있으면 붙지 않는다.
+     * "북촌 한옥마을"에 붙는다. 장소 이름에 항목에 없는 단어가 하나라도 있으면 붙지 않는다.
+     * 그래야 "창덕궁 후원"·"연세대학교 정문" 같은 하위 시설이 본체 항목을 가져가지 않는다.
      *
      * <h3>행정구역 행은 받지 않는다</h3>
-     * "서울특별시"(260)·"종로구"·"제주특별자치도"(71) 같은 Foursquare "States and Municipalities" 행은
-     * 이름이 정확히 같아 매칭 자체는 맞지만 찾아가는 장소가 아니다. 인기도 순 대표 명소 슬롯을 차지했다.
+     * "서울특별시"·"종로구"·"제주특별자치도" 같은 Foursquare "States and Municipalities" 행은
+     * 이름이 정확히 같아도 찾아가는 장소가 아니라 인기도 순 대표 명소 슬롯만 차지한다.
      *
      * <h3>이름은 라벨과 한국어 별칭을 모두 본다</h3>
-     * 라벨이 옛 이름이거나 묶음 이름인 항목이 있다 — N서울타워 항목의 라벨은 "YTN서울타워"(별칭에
-     * "N서울타워"·"남산서울타워"), 만장굴은 "김녕굴·만장굴"(별칭 "만장굴"), 롯데월드는 별칭이
-     * "롯데월드 어드벤처"다. 라벨만 보면 이 명소들의 실제 행이 0으로 남는다.
+     * 라벨이 옛 이름이거나 묶음 이름인 항목이 있다. N서울타워 항목의 라벨은 "YTN서울타워", 만장굴은
+     * "김녕굴·만장굴"이라 라벨만 보면 이 명소들의 실제 행이 0으로 남는다.
      *
      * <h3>식음료 항목은 식당 행에만, 나머지는 식당이 아닌 행에만</h3>
-     * TourAPI의 창덕궁 행은 이름이 "창덕궁과 후원"이라 창덕궁 항목에 맞지 않는데, 상호가 "창덕궁"인
-     * 한식당이 정확히 맞아 궁궐 점수(50)를 가져갔다(실측). 항목의 Wikidata 분류
-     * ({@link #FOOD_ROOT_CLASSES} 하위)로 식음료 업장인지 가려, 명소 항목은 식당 행에 붙지 않고
-     * 하동관·우래옥 같은 식당 항목은 식당 행에만 붙게 한다.
+     * 상호가 명소 이름과 같은 식당("창덕궁" 한식당)이 명소 점수를 가져가지 않도록, 항목의 Wikidata 분류
+     * ({@link #FOOD_ROOT_CLASSES} 하위)로 식음료 업장인지 가른다.
      *
      * <h3>항목 하나 → 같은 이름의 행 여러 개</h3>
-     * 같은 명소가 소스별(google·tourapi·foursquare·wikidata)로 여러 행일 수 있다. 예전엔 한 행만
-     * 가져가서 나머지는 0으로 남았고, 검색이 0인 행을 고르면 대표 명소가 빠졌다(실측: 창덕궁·비자림).
-     * 이제 조건을 만족하는 행 중 <b>카테고리 등급이 가장 좋은 행 전부</b>에 붙인다. 등급을 보므로
-     * 명소 이름을 그대로 쓴 식당이 명소와 같이 점수를 받지는 않는다.
+     * 같은 명소가 소스별(google·tourapi·foursquare·wikidata)로 여러 행일 수 있어, 한 행만 붙이면 검색이
+     * 0인 행을 골라 대표 명소가 빠진다. 조건을 만족하는 행 중 <b>카테고리 등급이 가장 좋은 행 전부</b>에
+     * 붙인다. 등급을 보므로 명소 이름을 그대로 쓴 식당이 명소와 같이 점수를 받지는 않는다.
      *
      * <p>항목은 유명한 순으로 처리하고, 장소 하나엔 항목 하나만 붙는다. "한라산" 장소에는
      * "한라산"(46)과 "한라산 국립공원"(30)이 모두 맞지만 더 유명한 46이 남는다.
@@ -253,8 +220,8 @@ public class WikidataSitelinksJob {
         Set<Long> taken = new HashSet<>();
         List<Assignment> result = new ArrayList<>();
         for (WikidataItem item : famousFirst) {
-            // 라벨은 앞부분 묶음까지, 별칭은 이름 전체만 본다. 별칭의 앞부분은 엉뚱한 곳에 걸린다 —
-            // "여의도 순복음교회"(여의도순복음교회의 별칭)의 "여의도"가 여의도 섬 행에 붙었다(실측).
+            // 라벨은 앞부분 묶음까지, 별칭은 이름 전체만 본다. 별칭의 앞부분은 엉뚱한 곳에 걸린다
+            // ("여의도 순복음교회"의 "여의도"가 여의도 섬 행에 붙는다).
             Set<String> keys = new java.util.LinkedHashSet<>(leadingNames(nameKey(item.label())));
             for (String alias : item.aliases()) {
                 String whole = String.join("", nameKey(alias));
@@ -285,7 +252,7 @@ public class WikidataSitelinksJob {
     /**
      * 항목 이름의 앞부분 단어 묶음(띄어쓰기 제거). ["성산일출봉", "천연보호구역"] →
      * {"성산일출봉", "성산일출봉천연보호구역"}. 이름 전체가 아니면 {@value #MIN_NAME_TOKEN_LENGTH}자
-     * 이상만 쓴다 — "해동 용궁사"의 "해동"처럼 짧은 앞부분은 다른 장소에 걸린다.
+     * 이상만 쓴다. "해동 용궁사"의 "해동"처럼 짧은 앞부분은 다른 장소에 걸린다.
      *
      * <p>뒤쪽 단어만으로는 붙이지 않는다. 뒤쪽은 대개 분류어라("천연보호구역", "국립공원", "해수욕장")
      * 그 이름만 단 엉뚱한 행에 걸린다.
@@ -307,9 +274,8 @@ public class WikidataSitelinksJob {
 
     /**
      * 장소 쪽 비교 키. 이름 전체(띄어쓰기 제거)에 더해, "A과 B"·"A와 B" 꼴이면 A도 키로 쓴다.
-     * TourAPI는 창덕궁을 "창덕궁과 후원 [유네스코 세계유산]"으로 올린다 — 이 행이 창덕궁 항목(50)을
-     * 받지 못하면 서울 대표 궁궐의 인기도가 0이 된다. "오목대와 이목대", "국립민속박물관과 … 어린이박물관"도
-     * 같은 꼴이다. A가 {@value #MIN_NAME_TOKEN_LENGTH}자 이상일 때만 쓴다.
+     * TourAPI는 창덕궁을 "창덕궁과 후원 [유네스코 세계유산]"으로 올려, A를 쓰지 않으면 대표 궁궐의 인기도가 0이 된다.
+     * A가 {@value #MIN_NAME_TOKEN_LENGTH}자 이상일 때만 쓴다.
      */
     static List<String> placeKeys(String name) {
         List<String> tokens = nameKey(name);
@@ -328,8 +294,7 @@ public class WikidataSitelinksJob {
 
     /**
      * 앞부분 묶음은 한글일 때만 쓴다. 영문 라벨은 첫 단어가 일반명사인 경우가 많아
-     * "Tower Palace 2 Tower E"·"Club Evans"·"World Youth Day 2027"의 앞부분이 "S Tower"·"S Club"·
-     * "T World" 행에 붙었다(실측).
+     * "S Tower"·"S Club"·"T World" 같은 행에 걸린다.
      */
     private static boolean hasHangul(CharSequence s) {
         return s.codePoints().anyMatch(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HANGUL);
@@ -338,13 +303,11 @@ public class WikidataSitelinksJob {
     /**
      * 비교용 이름 단어 목록(순서 유지). 다음만 걷어낸다.
      * <ul>
-     *   <li>괄호 안 — 지정명·영문 병기("[유네스코 세계자연유산]", "(Seoul Olympic Stadium)", "(제주)")</li>
-     *   <li>도시 이름 단어 — "제주 삼성혈", "롯데호텔 서울"의 "제주"·"서울"</li>
+     *   <li>괄호 안: 지정명·영문 병기("[유네스코 세계자연유산]", "(Seoul Olympic Stadium)", "(제주)")</li>
+     *   <li>도시 이름 단어: "제주 삼성혈", "롯데호텔 서울"의 "제주"·"서울"</li>
      * </ul>
-     * 그 밖의 단어는 한 글자·영문이라도 남긴다. "CGV 명동"·"명동 Dog Run"·"한양대학교 rtB"·
-     * "제주국제공항 Gate 13"·"국립중앙도서관 앞 뜰"·"남산 길"이 각각 명동·한양대·공항·도서관·남산 항목을
-     * 가져갔고, 한 글자 영문을 버렸더니 "T World"가 "world"가 됐다(2026-10 실측). 하위 시설·다른 업장을
-     * 가르는 단어가 바로 그런 것들이다.
+     * 그 밖의 단어는 한 글자·영문이라도 남긴다. "CGV 명동"·"제주국제공항 Gate 13"·"T World"처럼
+     * 하위 시설·다른 업장을 가르는 단어가 바로 그런 것들이다.
      */
     static List<String> nameKey(String name) {
         if (name == null || name.isBlank()) return List.of();
@@ -368,10 +331,10 @@ public class WikidataSitelinksJob {
     /**
      * 장소가 받을 수 있는 키({@link #placeKeys}). 찾아가는 장소가 아닌 행은 빈 목록이다.
      * <ul>
-     *   <li>Foursquare "States and Municipalities" 카테고리 — "서울특별시 (Seoul)"(260), "종로구", "제주특별자치도"(71)</li>
-     *   <li>버스 정류장·노선 — "디지털미디어시티 (ID: 80-019)"가 랜드마크 빌딩 항목(8)을 받았다</li>
-     *   <li>Foursquare 행의 키 중 동·구·군·시·읍·면으로 끝나는 것 — 엉뚱한 카테고리로 등록된 행정구역이다.
-     *       "서울특별시 종로구"(Other Great Outdoors, 36), "청담동"(Boutique), "아현동", "서교동과 동교동 사이"의 "서교동".
+     *   <li>Foursquare "States and Municipalities" 카테고리("서울특별시 (Seoul)", "종로구", "제주특별자치도")</li>
+     *   <li>버스 정류장·노선("디지털미디어시티 (ID: 80-019)")</li>
+     *   <li>Foursquare 행의 키 중 동·구·군·시·읍·면으로 끝나는 것. 엉뚱한 카테고리로 등록된 행정구역이다
+     *       ("청담동"(Boutique), "서교동과 동교동 사이"의 "서교동").
      *       TourAPI의 "명동"·"인사동"·"부암동"은 관광공사가 관광지로 올린 행이라 받는다.</li>
      * </ul>
      */
@@ -403,7 +366,7 @@ public class WikidataSitelinksJob {
     }
 
     /**
-     * 이름을 비교용 토큰으로 쪼갠다 — 공백·괄호·구두점이 경계다.
+     * 이름을 비교용 토큰으로 쪼갠다. 공백·괄호·구두점이 경계다.
      *
      * <p>TourAPI 제목은 "성산일출봉 [유네스코 세계자연유산]"처럼 지정명이 대괄호로 붙고,
      * Wikidata는 "성산일출봉 천연보호구역"처럼 분류어가 붙는다. 두 문자열은 서로를 포함하지
@@ -420,17 +383,10 @@ public class WikidataSitelinksJob {
     }
 
     /**
-     * 두 이름이 {@value #MIN_NAME_TOKEN_LENGTH}자 이상 토큰을 <b>공유</b>하는가.
+     * 두 이름이 {@value #MIN_NAME_TOKEN_LENGTH}자 이상 토큰을 <b>공유</b>하는가. "제주"·"산" 같은 짧은 조각은 아무 데나 걸린다.
      *
-     * <p>토큰 최소 길이를 두는 이유는 "제주"·"산" 같은 짧은 조각이 아무 데나 걸리기 때문이다.
-     *
-     * <p>처음에는 "한쪽이 다른 쪽을 통째로 포함" 규칙을 함께 뒀다가 뺐다. 행정구역 이름이
-     * 상호 안쪽에 박혀 있어 엉뚱하게 걸렸다 — "육도담 제주시청본점"이 "제주시"(sitelinks 51)에,
-     * "서귀포시립기당미술관"이 "서귀포시"(41)에 매칭됐다. 토큰 비교만으로도 필요한 경우는
-     * 잡힌다("한라산 백록담" ↔ "백록담"은 토큰 "백록담"을 공유한다).
-     *
-     * <p>이 규칙이 거르는 실측 사례: "앙끄레국수 서귀포본점" ↔ "제주월드컵경기장"(공유 토큰
-     * 없음), "서귀포유람선" ↔ "서귀포해양도립공원"(토큰이 각각 하나뿐이고 서로 다름).
+     * <p>"한쪽이 다른 쪽을 통째로 포함" 규칙은 쓰지 않는다. 행정구역 이름이 상호 안쪽에 박혀 있어
+     * "육도담 제주시청본점"이 "제주시"에 걸린다. 필요한 경우는 토큰 비교로 잡힌다("한라산 백록담" ↔ "백록담").
      */
     static boolean namesOverlap(String a, String b) {
         if (a == null || b == null || a.isBlank() || b.isBlank()) return false;
@@ -479,7 +435,7 @@ public class WikidataSitelinksJob {
         return detailed;
     }
 
-    /** 식음료 상위 분류의 하위 분류 전체(QID). 실행당 1회, 약 3초. */
+    /** 식음료 상위 분류의 하위 분류 전체(QID). 실행당 1회 조회한다. */
     private Set<String> fetchFoodClasses() throws Exception {
         String roots = FOOD_ROOT_CLASSES.stream().map(q -> "wd:" + q).collect(java.util.stream.Collectors.joining(" "));
         JsonNode bindings = objectMapper.readTree(sparql(
@@ -497,10 +453,10 @@ public class WikidataSitelinksJob {
     }
 
     /**
-     * POST로 보낸다 — 항목 id 300개를 VALUES에 넣으면 GET URL이 길어진다.
+     * POST로 보낸다. 항목 id 300개를 VALUES에 넣으면 GET URL이 길어진다.
      *
      * <p>지역 하나에 쿼리가 십수 번 나가므로 일시 오류(연결 끊김·429·5xx)는 재시도한다.
-     * 한 번 끊긴 걸로 지역 전체를 건너뛰면 그 지역 인기도가 한 달 묵는다(실측: "RST_STREAM: Stream cancelled").
+     * 한 번 끊긴 걸로 지역 전체를 건너뛰면 그 지역 인기도가 한 달 묵는다.
      */
     private String sparql(String query) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
@@ -536,7 +492,7 @@ public class WikidataSitelinksJob {
 
     /**
      * bbox 안에서 좌표와 언어판 수를 가진 항목을 가져온다. 언어판이 0인 항목은 매칭돼도
-     * 인기도가 0이라 "항목 없음"과 같으니 받지 않는다(서울 범위 실측 5,413 → 4,400건, 8초).
+     * 인기도가 0이라 "항목 없음"과 같으니 받지 않는다.
      */
     static String buildSparql(RegionBox box) {
         return String.format(Locale.ROOT, """
@@ -567,10 +523,7 @@ public class WikidataSitelinksJob {
                 """.formatted(values);
     }
 
-    /**
-     * SPARQL JSON 응답 → 항목 목록. 좌표가 여러 개인 항목은 행이 여러 번 오므로 id로 합친다
-     * (예전엔 같은 항목이 따로따로 매칭을 시도했다). HTTP와 분리해 단위 테스트가 가능하게 둔다.
-     */
+    /** SPARQL JSON 응답 → 항목 목록. 좌표가 여러 개인 항목은 행이 여러 번 오므로 id로 합친다. */
     List<WikidataItem> parseItems(String json) throws Exception {
         JsonNode bindings = objectMapper.readTree(json).path("results").path("bindings");
         Map<String, WikidataItem> byId = new java.util.LinkedHashMap<>();
@@ -635,20 +588,17 @@ public class WikidataSitelinksJob {
     }
 
     /**
-     * Wikidata 항목 한 건.
-     *
      * @param points 좌표(여러 개일 수 있다)
      * @param food   식음료 업장 분류인가({@link #FOOD_ROOT_CLASSES} 하위)
      */
     record WikidataItem(String id, String label, List<String> aliases, int sitelinks, List<Point> points,
                         boolean food) {
 
-        /** 좌표 하나, 별칭 없음, 식음료 아님 — 테스트·간단한 생성용. */
+        /** 좌표 하나, 별칭 없음, 식음료 아님. 테스트·간단한 생성용. */
         WikidataItem(String id, String label, int sitelinks, double lat, double lon) {
             this(id, label, List.of(), sitelinks, List.of(new Point(lat, lon)), false);
         }
 
-        /** 라벨 + 별칭. */
         List<String> names() {
             List<String> names = new ArrayList<>();
             names.add(label);
@@ -668,7 +618,7 @@ public class WikidataSitelinksJob {
         }
     }
 
-    /** 매칭 후보 장소 — 엔티티 대신 필요한 컬럼만. */
+    /** 매칭 후보 장소. 엔티티 대신 필요한 컬럼만 읽는다. */
     record Candidate(long id, String name, double lat, double lon, String category, String source) {
 
         Candidate(long id, String name, double lat, double lon, String category) {

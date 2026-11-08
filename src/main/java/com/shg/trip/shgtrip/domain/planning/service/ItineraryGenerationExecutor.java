@@ -84,7 +84,6 @@ public class ItineraryGenerationExecutor {
 
             validateSelectedPlacesIncluded(validated, selectedPlaces);
 
-            // [F4] 확정된 뼈대를 day별 step-stream으로 전송 (optimized 경로와 동일 계약)
             sendStepStream(emitter, validated.steps());
 
             if (cancellationRegistry.isCancelled(jobId)) return;
@@ -92,7 +91,7 @@ public class ItineraryGenerationExecutor {
             Itinerary saved = saveHelper.save(validated, enrichedInput, userId);
 
             resultStore.save(jobId, saved.getId(), userId);
-            // R1/R2: 성공 시 실패 카운트 리셋 + 30일 쿼터 소모(optimized 성공 지점과 상호배타 → 정확히 1회)
+            // optimized 성공 지점과 상호배타라 쿼터는 정확히 1회 소모된다.
             generationPolicyService.recordSuccess(userId);
             sendProgress(emitter, 100, "일정 생성이 완료되었습니다.", "COMPLETE");
             sendComplete(emitter);
@@ -180,7 +179,7 @@ public class ItineraryGenerationExecutor {
     }
 
     /**
-     * [F4] 확정된 뼈대를 day별 step-stream 이벤트로 전송 (OptimizedGenerationExecutor와 동일 계약).
+     * OptimizedGenerationExecutor와 같은 step-stream 계약을 지킨다.
      * payload: {@code { dayNumber, steps: [{name, startTime, category}] }}.
      */
     private void sendStepStream(GenerationStream emitter, List<StepData> steps) {

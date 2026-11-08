@@ -16,13 +16,6 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 
 import java.net.URI;
 
-/**
- * AWS S3Client 빈 설정.
- * <ul>
- *   <li>{@code @Profile("local")} — Access Key / Secret Key 기반 StaticCredentialsProvider</li>
- *   <li>{@code @Profile("!local")} — ECS Task Role 자동 인증 DefaultCredentialsProvider</li>
- * </ul>
- */
 @Slf4j
 @Configuration
 @EnableConfigurationProperties(S3Properties.class)
@@ -31,11 +24,6 @@ public class S3Config {
     @Value("${cloud.aws.s3.endpoint:}")
     private String s3Endpoint;
 
-    /**
-     * 로컬 개발 환경용 S3Client.
-     * LocalStack 지원: cloud.aws.s3.endpoint가 설정되면 해당 엔드포인트 사용.
-     * application-local.yml의 cloud.aws.s3.access-key / secret-key를 사용합니다.
-     */
     @Bean
     @Profile("local")
     public S3Client s3ClientLocal(S3Properties props) {
@@ -47,7 +35,7 @@ public class S3Config {
                     .credentialsProvider(StaticCredentialsProvider.create(
                             AwsBasicCredentials.create(props.accessKey(), props.secretKey())));
 
-            // LocalStack 지원: 엔드포인트 오버라이드 + Path Style Access
+            // LocalStack은 엔드포인트 오버라이드와 Path Style Access가 있어야 붙는다.
             if (StringUtils.hasText(s3Endpoint)) {
                 builder.endpointOverride(URI.create(s3Endpoint));
                 builder.serviceConfiguration(S3Configuration.builder()
@@ -65,10 +53,7 @@ public class S3Config {
         }
     }
 
-    /**
-     * 프로덕션/배치 환경용 S3Client.
-     * ECS Task Role(IAM Role)을 통해 DefaultCredentialsProvider로 자동 인증합니다.
-     */
+    /** ECS Task Role로 자동 인증하므로 키를 설정하지 않는다. */
     @Bean
     @Profile("!local")
     public S3Client s3ClientProd(S3Properties props) {

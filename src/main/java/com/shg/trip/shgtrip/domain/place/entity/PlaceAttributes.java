@@ -9,7 +9,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 보강 배치가 정한 장소 속성. 모든 필드는 null 허용이며 null은 "모름"이다 — 읽는 쪽은 기존 추정으로 돌아간다.
+ * 보강 배치가 정한 장소 속성. 모든 필드는 null 허용이며 null은 "모름"이다. 읽는 쪽은 기존 추정으로 돌아간다.
  *
  * <p>{@code official}은 TourAPI detailIntro2 원문(필드명 → 텍스트, HTML 제거)이다. 영업시간·휴무·요금은
  * 모델이 아니라 이 원문에서만 가져온다.

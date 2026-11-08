@@ -7,21 +7,15 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * 후보 장소의 <b>일정 속 역할</b>을 정하는 단일 소스.
+ * 후보 장소의 일정 속 역할을 정하는 단일 소스.
+ * 장소를 넣거나 바꾸는 경로가 28개라 경로마다 따로 판정하면 저가치 시설·대체 기준이 어긋난다.
  *
- * <p>일정에 장소를 넣거나 바꾸는 경로가 28개인데, 경로마다 "방문 가능한가·같은 역할인가"를 따로
- * 판정해 왔다(2026-10 가드 매트릭스). 그 결과 저가치 시설 목록은 한 곳에만 있어 나머지 경로로 자동차
- * 대리점이 관광 스텝이 됐고, 같은 대분류(DINING)라는 이유로 점심 식당이 베이커리로 바뀌었다.
- * 판정은 여기 한 곳에서만 하고, 경로들은 이 결과만 본다.
- *
- * <p>보강 배치가 채운 {@code place_role}이 있으면 그것을 쓴다(LLM이 이름·설명까지 보고 정한 값).
- * 없으면 카테고리·이름·태그로 추정한다 — 추정 규칙은 기존 판정({@link PlaceCategoryConstants}) 그대로다.
+ * <p>보강 배치가 채운 {@code place_role}이 없으면 {@link PlaceCategoryConstants} 규칙으로 추정한다.
  */
 public final class CandidatePolicy {
 
     private CandidatePolicy() {}
 
-    /** 일정 속 역할. */
     public enum Role {
         MEAL, CAFE, BAR, SIGHT, ACTIVITY, SHOPPING, MARKET, LODGING, TRANSIT, NOT_VISITABLE;
 
@@ -99,9 +93,8 @@ public final class CandidatePolicy {
     }
 
     /**
-     * 카테고리·이름만으로 비방문이 <b>확실한</b> 장소 — 관광 대분류 안의 명시 목록(골프장·주차장·행정구역 등).
-     * DB에 영구 기록해도 되는 범위다. 그 밖의 추정(기타 대분류 기본값, 식사도 카페도 아닌 식당)은 틀릴 수 있어
-     * 실행 시 추정과 보강에 맡긴다 — 기록하면 보강 대상에서 빠져 고쳐질 길이 없다.
+     * 관광 대분류 안의 명시 목록처럼 비방문이 확실해 DB에 영구 기록해도 되는 범위.
+     * 그 밖의 추정은 기록하면 보강 대상에서 빠져 고쳐질 길이 없다.
      */
     public static boolean isCertainlyNotVisitable(String name, String category) {
         String lower = category == null ? "" : category.toLowerCase(Locale.ROOT);
@@ -109,8 +102,8 @@ public final class CandidatePolicy {
     }
 
     /**
-     * 관광 대분류 안의 저가치 시설. 카테고리로 판정하고, 이름은 카테고리가 총칭일 때만 본다
-     * ("Well"을 이름 부분일치로 보면 웰니스·웰컴센터까지 걸린다).
+     * 관광 대분류 안의 저가치 시설. 이름은 카테고리가 총칭일 때만 본다.
+     * "Well"을 이름 부분일치로 보면 웰니스·웰컴센터까지 걸린다.
      */
     private static boolean isLowValue(String name, String lowerCategory) {
         if (LOW_VALUE_CATEGORY.stream().anyMatch(lowerCategory::contains)) return true;
@@ -122,8 +115,8 @@ public final class CandidatePolicy {
     private static final List<String> LOW_VALUE_CATEGORY = List.of(
             "golf course", "golf driving range", "stable", "car dealership", "automotive",
             "parking", "car wash", "fuel station", "> well", "gym and studio", "playground",
-            // 시·구·동 같은 행정 단위 레코드(FSQ "States and Municipalities")는 방문지가 아니라 지역 이름이다.
-            // Wikidata 인기도가 도시 항목(서울특별시 260)으로 붙어 대표 명소 1위가 되는 사고가 있었다.
+            // 행정 단위 레코드(FSQ "States and Municipalities")는 지역 이름이다.
+            // 방문지로 두면 도시 항목에 붙은 Wikidata 인기도로 대표 명소 1위가 된다.
             "states and municipalities", "rest area");
 
     private static final List<String> LOW_VALUE_NAME = List.of(

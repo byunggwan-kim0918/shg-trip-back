@@ -12,13 +12,10 @@ import java.util.regex.Pattern;
  * Google Places weekdayDescriptions 텍스트("월요일: 오전 11:00 ~ 오후 3:00, 오후 4:30~10:00, 화요일: ...")를
  * 요일별 영업 구간(분 단위)으로 읽는다.
  *
- * <p>기존에는 요일별로 "휴무"라는 단어가 있는지만 봤다. 그래서 <b>16시에 문 여는 식당이 11:30
- * 점심</b>에 배정되는 일을 아무도 막지 못했다(실측: itinerary 76 제주돗, 78 부산가든·아웃닭,
- * 74 와규호르몬, 73 단골집). 여는 시각·닫는 시각까지 읽어야 그걸 막을 수 있다.
+ * <p>"휴무" 단어만 보면 16시에 여는 식당이 11:30 점심에 배정돼 여는·닫는 시각까지 읽는다.
  *
- * <p><b>안전 규약</b>: 읽을 수 없으면 "열림"으로 간주한다({@code null} 반환 → 호출부 통과).
- * 형식이 조금 다른 멀쩡한 장소를 통째로 배제하면 지금보다 나빠지기 때문에, 고신뢰로 읽힌
- * 경우에만 판단한다. 이 방침은 기존 {@code isClosedOnDay}와 동일하다.
+ * <p><b>안전 규약</b>: 읽을 수 없으면 "열림"으로 간주한다({@code null} 반환).
+ * 형식이 조금 다른 멀쩡한 장소를 통째로 배제하지 않도록 고신뢰로 읽힌 경우에만 판단한다.
  *
  * <p><b>단위 규약</b>: 분. 자정을 넘기는 영업(예: 15:00~익일 02:00)은 종료가 1440을 넘는
  * 값(26:00 = 1560)으로 표현한다.
@@ -57,7 +54,7 @@ final class OpeningHoursText {
 
     /**
      * {@code [startMin, endMin]} 구간 전체가 그 요일 영업시간 안에 들어가는지.
-     * 판독할 수 없으면 true(열림 가정) — 안전 규약 참고.
+     * 판독할 수 없으면 true(열림 가정).
      */
     static boolean isOpenDuring(String openingHours, DayOfWeek dow, int startMin, int endMin) {
         List<int[]> ranges = rangesFor(openingHours, dow);
@@ -73,8 +70,7 @@ final class OpeningHoursText {
     /**
      * {@code notBefore} 이후로 {@code duration}분을 통째로 담을 수 있는 가장 이른 시작 시각.
      *
-     * <p>"닫혀 있으니 버린다"보다 "열 때까지 기다린다"가 맞는 경우가 많다 — 09:00 개장인 곳이
-     * 08:36에 배정됐다면 24분만 늦추면 된다(실측 77 용연, 74 다이소·ATC뮤지엄).
+     * <p>개장 직전에 배정된 곳은 버리기보다 열 때까지 늦추는 편이 맞는 경우가 많다.
      *
      * @return {@code null} = 판독 불가(제약 없음), {@code -1} = 그 요일엔 불가능,
      *         그 외 = 시작 시각(분)
@@ -115,8 +111,8 @@ final class OpeningHoursText {
             int[] range = parseRange(part);
             if (range != null) ranges.add(range);
         }
-        // 구간을 하나도 못 읽었으면 "휴무"가 아니라 "판독 불가"다 — 빈 리스트로 돌려주면
-        // 멀쩡한 장소가 휴무로 오인돼 전부 배제된다.
+        // 구간을 하나도 못 읽었으면 "휴무"가 아니라 "판독 불가"다.
+        // 빈 리스트로 돌려주면 멀쩡한 장소가 휴무로 오인돼 전부 배제된다.
         return ranges.isEmpty() ? null : ranges;
     }
 
@@ -157,8 +153,8 @@ final class OpeningHoursText {
 
         Token start = tokens.get(0);
         Token end = tokens.get(1);
-        // 한쪽에만 오전/오후(AM/PM)가 붙는 표기가 흔하다 — "오후 12:00~10:00"(뒤쪽 생략),
-        // "4:00 ~ 7:30 PM"(앞쪽 생략). 없는 쪽은 있는 쪽을 물려받는다.
+        // 한쪽에만 오전/오후(AM/PM)가 붙는 표기("오후 12:00~10:00", "4:00 ~ 7:30 PM")가 흔하다.
+        // 없는 쪽은 있는 쪽을 물려받는다.
         Boolean startPm = start.pm != null ? start.pm : end.pm;
         Boolean endPm = end.pm != null ? end.pm : start.pm;
 

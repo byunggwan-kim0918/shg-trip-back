@@ -19,10 +19,6 @@ import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * Foursquare CSV 데이터를 Place 테이블에 시딩하는 배치 컴포넌트.
- * 데이터 소스는 {@link FoursquareCsvSource}를 통해 추상화 (local/s3 전환 가능).
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -47,9 +43,8 @@ public class FoursquareSeeder {
             "Sendai", "Nagasaki", "Kagoshima", "Beppu", "Takayama");
 
     /**
-     * 여행 일정 스텝이 될 수 없는 "비여행" 카테고리 분기 키워드(Foursquare 계층 경로의 소문자 부분 문자열).
-     * 원본 Foursquare 덤프에는 은행·병원·아파트·관공서·학교·자동차서비스 등 일정과 무관한 POI가 섞여 있어
-     * 적재 단계에서 배제한다. 시장/쇼핑몰/사찰/서점/기념품점 등 관광 가치가 있는 Retail·Spiritual은 보존한다.
+     * 일정 스텝이 될 수 없는 카테고리 분기 키워드(Foursquare 계층 경로의 소문자 부분 문자열).
+     * 관광 가치가 있는 Retail·Spiritual(시장·쇼핑몰·사찰·서점·기념품점)은 막지 않는다.
      */
     static final Set<String> BLOCKED_CATEGORY_KEYWORDS = Set.of(
             "business and professional services", // 은행, 오피스, 자동차 서비스, 미용실, 스파, 사진관, 장례
@@ -59,22 +54,20 @@ public class FoursquareSeeder {
             "education",                           // 학교, 대학
             "convenience store",
             "pharmacy",
-            // 2026-10 실측(12개 도시 약 20만 행)에서 일정 스텝이 될 수 없는데 남아 있던 분기.
-            // 교회(명동성당 등)·공항·역·마트는 명소이거나 동선 기점이라 남긴다.
-            "transport hub > bus stop",            // 버스정류장 3,317
-            "travel and transportation > road",    // 도로·교차로 1,858
-            "fuel station",                        // 주유소 961
-            "travel and transportation > parking", // 주차장 906
-            "gym and studio",                      // 헬스장·필라테스·요가 약 2,100
-            "golf driving range",                  // 골프연습장 336
-            "park > playground",                   // 단지 놀이터 512
-            "eyecare store",                       // 안경점 479
-            "computers and electronics retail",    // 전자제품점 502
+            // 교회(명동성당 등)·공항·역·마트는 명소이거나 동선 기점이라 막지 않는다.
+            "transport hub > bus stop",            // 버스정류장
+            "travel and transportation > road",    // 도로·교차로
+            "fuel station",                        // 주유소
+            "travel and transportation > parking", // 주차장
+            "gym and studio",                      // 헬스장·필라테스·요가
+            "golf driving range",                  // 골프연습장
+            "park > playground",                   // 단지 놀이터
+            "eyecare store",                       // 안경점
+            "computers and electronics retail",    // 전자제품점
             "housing development",
             "polling place",
             "assisted living");
 
-    /** 카테고리가 비여행 분기(BLOCKED_CATEGORY_KEYWORDS)에 해당하면 true. */
     static boolean isNonTravelCategory(String category) {
         if (category == null) return false;
         String lower = category.toLowerCase();
@@ -88,7 +81,7 @@ public class FoursquareSeeder {
     ) {}
 
     public void seed() {
-        // 배치 시작 시점에 RUNNING 상태로 이력 row 생성 (컨테이너 crash 시도 추적 가능)
+        // 먼저 RUNNING으로 남겨야 컨테이너가 죽어도 시도가 추적된다
         PlaceSeedingHistory history = historyRepository.save(
                 PlaceSeedingHistory.builder()
                         .startedAt(OffsetDateTime.now())
@@ -150,7 +143,7 @@ public class FoursquareSeeder {
                 }
             }
 
-            // 배치 완료 후 DB에서 직접 카운트 — upsert 반환값보다 정확
+            // upsert 반환값은 insert/update를 구분하지 않아 DB에서 직접 센다
             int inserted = placeRepository.countInsertedSince(history.getStartedAt());
             int updated = placeRepository.countUpdatedSince(history.getStartedAt());
             history.complete(totalProcessed, inserted, updated, failedRows, failedChunks);
@@ -177,7 +170,7 @@ public class FoursquareSeeder {
 
         if (records.isEmpty()) return new int[]{0, 0};
 
-        // CSV 내부 중복 제거 (fsq_place_id 기준, 먼저 나온 것 유지)
+        // CSV 내부 중복은 fsq_place_id 기준으로 먼저 나온 행을 남긴다
         Map<String, FoursquareRecord> dedupMap = new LinkedHashMap<>();
         for (FoursquareRecord r : records) {
             dedupMap.putIfAbsent(r.fsqPlaceId(), r);
@@ -185,7 +178,7 @@ public class FoursquareSeeder {
 
         int processed = 0;
         for (FoursquareRecord record : dedupMap.values()) {
-            // DB 레벨 upsert로 청크 간/동시성 중복을 안전하게 처리
+            // 청크 간·동시 실행 중복은 DB upsert가 처리한다
             placeRepository.upsertFoursquarePlace(
                     record.fsqPlaceId(),
                     record.name(),
@@ -202,19 +195,18 @@ public class FoursquareSeeder {
             processed++;
         }
 
-        // upsert는 insert/update를 구분하지 않으므로 처리 건수만 반환
+        // upsert는 insert/update를 구분하지 않아 처리 건수만 돌려준다
         return new int[]{processed, 0};
     }
 
     /**
-     * 문자열 리스트를 PostgreSQL 배열 리터럴 형식으로 변환한다. 예: {"tag1","tag2"}
+     * PostgreSQL 배열 리터럴 형식. 예: {"tag1","tag2"}
      */
     private String toPostgresArray(List<String> values) {
         if (values == null || values.isEmpty()) return "{}";
         StringBuilder sb = new StringBuilder("{");
         for (int i = 0; i < values.size(); i++) {
             if (i > 0) sb.append(",");
-            // 큰따옴표와 백슬래시 이스케이프
             String escaped = values.get(i).replace("\\", "\\\\").replace("\"", "\\\"");
             sb.append("\"").append(escaped).append("\"");
         }
@@ -238,7 +230,6 @@ public class FoursquareSeeder {
             return null;
         }
 
-        // 여행 부적합 카테고리(은행·병원·아파트·관공서·학교 등)는 적재 제외
         if (isNonTravelCategory(category)) {
             return null;
         }
@@ -259,10 +250,8 @@ public class FoursquareSeeder {
         String description = getField(fields, columnIndex, "description");
         List<String> tags = parseTags(tagsRaw, category);
 
-        // CSV의 description 필드에는 실제 설명이 아니라 웹사이트 URL이 들어있는 경우가 흔하다
-        // (실측 1.7만 건). URL은 임베딩 텍스트에 노이즈이므로 source_url로 분리 저장한다.
-        // "https:/www…"(슬래시 하나)·"www…"(스킴 없음)도 URL이다 — 놓치면 보강 프롬프트와 임베딩에
-        // 설명으로 들어간다. 링크로 쓰일 수 있으므로 https://로 맞춰 저장한다.
+        // CSV description에는 설명 대신 웹사이트 URL이 흔히 들어 있어 임베딩 노이즈가 되므로 source_url로 뗀다.
+        // "https:/www…"·"www…"도 URL로 보고, 링크로 쓰이도록 https://로 맞춘다.
         String sourceUrl = null;
         if (description != null) {
             String trimmed = description.trim();
@@ -287,13 +276,8 @@ public class FoursquareSeeder {
     }
 
     /**
-     * CSV tags 필드에서 유의미한 태그만 추출한다.
-     *
-     * <p>기존 구현은 ① category 경로를 태그로 통째 복사하고(임베딩 텍스트에 같은 내용이 2번
-     * 들어감) ② 경로명 안의 쉼표("Cafe, Coffee, and Tea House")를 구분자로 오인해 "Coffee",
-     * "and Tea House" 같은 파편 태그를 만들었다(실측 3,311행 — 유의미한 태그는 0건).
-     * category는 별도 컬럼에 이미 있으므로 복사하지 않고, '>'가 포함된 tagsRaw는 카테고리
-     * 경로의 나열이므로 통째로 버린다. 한국어 의미 태그는 enrich 배치가 채운다.
+     * category는 별도 컬럼이라 태그로 복사하지 않고, '>'가 있는 tagsRaw는 경로 나열이라 통째로 버린다.
+     * 경로명 안의 쉼표("Cafe, Coffee, and Tea House")를 구분자로 읽으면 파편 태그가 생긴다.
      */
     public List<String> parseTags(String tagsRaw, String category) {
         List<String> result = new ArrayList<>();

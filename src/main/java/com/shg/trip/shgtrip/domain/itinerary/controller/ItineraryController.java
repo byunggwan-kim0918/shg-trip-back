@@ -16,9 +16,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-/**
- * 일정 관리 API 엔드포인트.
- */
 @RestController
 @RequestMapping("/api/itineraries")
 @RequiredArgsConstructor

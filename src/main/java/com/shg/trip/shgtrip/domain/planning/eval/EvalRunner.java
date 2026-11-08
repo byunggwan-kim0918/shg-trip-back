@@ -38,8 +38,8 @@ import java.util.*;
  * score: 저장본만 채점 / replay: 현재 코드로 다시 돌려 비교 / corpus: 기록 있는 일정 전부 replay
  *
  * <p>{@code --eval.refresh-attributes}: 기록의 후보에 DB의 현재 속성·영업시간을 덮어쓴다.
- * off(기본) 그대로 / score 채점에만 / all 재실행 입력과 채점 모두. 속성 연결의 효과는 score(기준선)와
- * all을 비교한다 — 채점 기준이 같아야 휴무·영업시간 위반 수를 비교할 수 있다.
+ * off(기본) 그대로 / score 채점에만 / all 재실행 입력과 채점 모두.
+ * 채점 기준이 같아야 휴무·영업시간 위반 수를 비교할 수 있어 속성 연결 효과는 score와 all을 비교한다.
  */
 @Slf4j
 @Component

@@ -106,17 +106,8 @@ public class Itinerary extends BaseTimeEntity {
     }
 
     /**
-     * 커버로 쓸 place 참조(coverPlaceId)를 지정한다. 이미지가 **실제로 있는** 스텝 중 커버에
-     * 가장 어울리는 하나를 고른다. URL 자체는 저장하지 않고 조회 시점에 이 id로 해소한다.
-     * (과거엔 미구현된 /api/places/{id}/photo 프록시 URL을 coverImage에 넣어 커버가 항상 깨졌음.)
-     *
-     * 판정 기준이 photoReference → imageUrl로 바뀌었다. Google 사진 경로를 제거하면서
-     * photoReference가 전 행 null이 됐고, 그 조건으로는 커버가 하나도 안 잡혔다. 지금 남은
-     * 이미지는 TourAPI firstimage 1,870건이고 그건 imageUrl에 직접 들어 있다.
-     *
-     * 과거엔 findFirst()로 "첫 스텝"을 썼는데, 여행의 첫 스텝은 구조적으로 거의 항상 공항/역이다.
-     * 그 결과 제주 일정 5건의 커버가 전부 "제주국제공항" 사진으로 동일했다(대시보드가 같은 사진의 벽).
-     * 공항 사진은 목적지를 전혀 설명하지 못하므로 카테고리 우선순위로 고른다.
+     * imageUrl이 있는 스텝 중 카테고리 우선순위가 가장 높은 장소를 커버로 지정한다.
+     * 첫 스텝은 거의 항상 공항·역이라 목적지를 설명하지 못한다.
      */
     public void assignCoverFromSteps() {
         if (this.coverPlaceId != null) return;
@@ -124,19 +115,19 @@ public class Itinerary extends BaseTimeEntity {
                 .filter(s -> s.getPlace() != null && s.getPlace().getImageUrl() != null)
                 .max(java.util.Comparator
                         .comparingInt((ItineraryStep s) -> coverScore(s.getPlace().getCategory()))
-                        // 같은 등급이면 평점이 높은 쪽 — 대체로 사진 품질도 낫다
+                        // 같은 등급이면 평점이 높은 쪽이 대체로 사진 품질도 낫다.
                         .thenComparing(s -> s.getPlace().getRating() != null
                                 ? s.getPlace().getRating()
                                 : java.math.BigDecimal.ZERO)
-                        // 그래도 같으면 원래 동작(앞 스텝)을 유지해 결과를 결정적으로 만든다
+                        // 그래도 같으면 앞 스텝을 골라 결과를 결정적으로 만든다.
                         .thenComparing(java.util.Comparator.comparingInt(
                                 (ItineraryStep s) -> s.getStepOrder() != null ? s.getStepOrder() : 0).reversed()))
                 .ifPresent(s -> this.coverPlaceId = s.getPlace().getId());
     }
 
     /**
-     * 커버 적합도. 높을수록 우선. category는 Foursquare 분류 문자열("A > B > C").
-     * 교통 허브(공항·역·버스정류장)는 여행지를 설명하지 못하므로 최하위 — 다만 그것밖에 없으면 쓰인다.
+     * 높을수록 커버로 우선한다. category는 Foursquare 분류 문자열("A > B > C")이다.
+     * 교통 허브는 여행지를 설명하지 못해 최하위지만, 그것밖에 없으면 쓰인다.
      */
     private static int coverScore(String category) {
         if (category == null) return 1;

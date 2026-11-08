@@ -78,7 +78,7 @@ public class AuthService {
         String refreshToken = jwtTokenProvider.createRefreshToken();
         long refreshExpirationMs = jwtTokenProvider.getRefreshExpiration();
 
-        // Redis TTL(7일)로 자연 만료되므로 JPA 커밋 실패 시에도 허용 가능
+        // Redis 저장은 JPA 트랜잭션 밖이라 커밋이 실패해도 남은 토큰은 TTL(7일)로 만료된다.
         try {
             refreshTokenRepository.save(RefreshToken.builder()
                     .token(refreshToken)
@@ -102,7 +102,7 @@ public class AuthService {
         if (refreshToken.isRevoked()) {
             Optional<OAuthLoginResult> concurrent = reuseWithinGrace(refreshToken);
             if (concurrent.isPresent()) return concurrent.get();
-            // 유예 밖의 재사용 → 탈취로 보고 해당 유저의 전체 세션 무효화
+            // 유예 밖의 재사용은 탈취로 보고 해당 유저의 전체 세션을 무효화한다.
             log.warn("Refresh Token 재사용 감지 (탈취 의심). userId={}", refreshToken.getUserId());
             refreshTokenRepository.deleteByUserId(refreshToken.getUserId());
             throw new BusinessException(ErrorCode.REFRESH_TOKEN_REUSE_DETECTED);
@@ -111,7 +111,6 @@ public class AuthService {
         User user = userRepository.findById(refreshToken.getUserId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
 
-        // Rotation: 새 토큰 저장 후 기존 토큰 revoke
         String newAccessToken = jwtTokenProvider.createAccessToken(user.getId(), user.getRole().name());
         String newRefreshToken = jwtTokenProvider.createRefreshToken();
         long refreshExpirationMs = jwtTokenProvider.getRefreshExpiration();
@@ -135,9 +134,8 @@ public class AuthService {
     }
 
     /**
-     * 회전 직후 같은 토큰으로 들어온 요청. 탭 하나가 동시에 보낸 API 호출들이 각자 refresh하면
-     * 첫 요청만 회전에 성공하고 나머지는 revoked 토큰을 들고 온다 — 이를 탈취로 보면 정상 사용자가
-     * 로그아웃된다. 유예 안이면 이미 발급된 새 refresh 토큰을 그대로 돌려준다(새로 회전하지 않는다).
+     * 동시에 보낸 refresh 중 첫 요청만 회전에 성공하므로, 나머지를 탈취로 보면 정상 사용자가 로그아웃된다.
+     * 유예 안이면 이미 발급된 새 refresh 토큰을 새로 회전하지 않고 돌려준다.
      */
     private Optional<OAuthLoginResult> reuseWithinGrace(RefreshToken revoked) {
         if (revoked.getReplacedBy() == null

@@ -6,8 +6,7 @@ import jakarta.validation.Payload;
 import java.lang.annotation.*;
 
 /**
- * startDate < endDate 검증 어노테이션.
- * 클래스 레벨에 적용하며, startDateField / endDateField로 필드명을 지정합니다.
+ * startDate < endDate를 검증한다. 클래스 레벨에 붙이고 startDateField / endDateField로 필드명을 지정한다.
  */
 @Documented
 @Constraint(validatedBy = DateRangeValidator.class)
@@ -22,7 +21,7 @@ public @interface ValidDateRange {
 
     /**
      * 허용 최대 여행 일수(당일 포함). 0이면 무제한.
-     * 후보 풀 상한(MAX_TOTAL=80) 대비 과도한 기간은 후반부 일정 품질이 붕괴하므로 상한을 둔다.
+     * 후보 풀 상한(MAX_TOTAL=80)에 비해 기간이 길면 후반부 일정 품질이 무너진다.
      */
     int maxDays() default 0;
 }

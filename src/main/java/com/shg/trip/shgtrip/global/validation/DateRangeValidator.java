@@ -27,7 +27,7 @@ public class DateRangeValidator implements ConstraintValidator<ValidDateRange, O
         Object start = wrapper.getPropertyValue(startDateField);
         Object end = wrapper.getPropertyValue(endDateField);
 
-        if (start == null || end == null) return true; // @NotNull이 별도 처리
+        if (start == null || end == null) return true; // null은 @NotNull이 처리한다
 
         if (start instanceof LocalDate startDate && end instanceof LocalDate endDate) {
             if (!endDate.isAfter(startDate)) {

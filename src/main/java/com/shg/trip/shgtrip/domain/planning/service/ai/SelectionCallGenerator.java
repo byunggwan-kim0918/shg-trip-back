@@ -21,11 +21,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.function.Supplier;
 
-/**
- * Call 1 Sonnet: 날짜별 장소 선택 전문 생성기.
- * Sonnet 1회 호출로 후보 장소 인덱스를 사용한 날짜별 선택을 수행한다.
- * 시간/교통/비용은 출력하지 않음 (가벼운 호출).
- */
+/** Sonnet은 후보 인덱스로 날짜별 장소만 고르고, 시간·교통·비용은 출력하지 않는다. */
 @Slf4j
 @Service
 public class SelectionCallGenerator {
@@ -44,11 +40,6 @@ public class SelectionCallGenerator {
     }
 
     /**
-     * Call 1: Sonnet이 날짜별 장소를 선택한다.
-     * 장소 선택만 수행하고, 시간/교통/비용은 계산하지 않는다.
-     * maxTokens = days × 150 + 300 (매우 가벼움).
-     *
-     * @param input 확장된 enrichInput 결과
      * @param candidates 벡터 검색 후보 장소 목록 (1-based 인덱스)
      * @return 날짜별 선택 출력 (DayPlan 목록 + spare 인덱스)
      */
@@ -60,14 +51,11 @@ public class SelectionCallGenerator {
 
         String userMessage = buildUserMessage(input, candidates, days);
 
-        // Tool Use 생성
         Tool selectionTool = SelectionToolSchema.buildSelectionTool();
 
-        // 첫 시도
         Message message = callSonnet(userMessage, selectionTool, maxTokens);
         int usedMaxTokens = maxTokens;
 
-        // max_tokens 초과 시 50% 증가하여 1회 재시도
         if (isTruncated(message)) {
             int retryMaxTokens = (int) (maxTokens * 1.5);
             retryMaxTokens = Math.min(retryMaxTokens, anthropicProperties.maxOutputTokens());
@@ -136,8 +124,7 @@ public class SelectionCallGenerator {
     }
 
     /**
-     * Sonnet이 실제로 고른 결과를 이름으로 남긴다. 이게 없으면 나쁜 일정이 선택 단계에서 왔는지
-     * RouteOptimizer의 보정에서 왔는지 가릴 수 없다(최종 일정과 비교해야 보정량이 보인다).
+     * 이 로그가 없으면 나쁜 일정이 선택 단계에서 왔는지 RouteOptimizer 보정에서 왔는지 가릴 수 없다.
      */
     private void logSelection(SelectionOutput result, List<PlaceCandidate> candidates) {
         log.info("Sonnet 선택 concept: {}", result.concept());
@@ -161,19 +148,11 @@ public class SelectionCallGenerator {
                 .collect(java.util.stream.Collectors.joining(", ", "[", "]"));
     }
 
-    /**
-     * maxTokens를 동적으로 계산한다.
-     * 선택만 수행하므로 매우 가벼움: days × 150 + 300.
-     */
     int calculateMaxTokens(long days) {
         int estimated = (int) (days * 150) + 300;
         return Math.min(estimated, anthropicProperties.maxOutputTokens());
     }
 
-    /**
-     * Sonnet을 호출하여 Message를 반환한다.
-     * system 메시지에 CacheControlEphemeral 적용.
-     */
     private Message callSonnet(String userMessage, Tool tool, int maxTokens) {
         TextBlockParam systemBlock = TextBlockParam.builder()
                 .text(systemPrompt)
@@ -193,18 +172,11 @@ public class SelectionCallGenerator {
         return executeWithRetry(() -> anthropicClient.messages().create(params), MAX_RETRIES);
     }
 
-    /**
-     * 응답이 max_tokens로 잘렸는지 확인한다.
-     */
     private boolean isTruncated(Message message) {
         return message.stopReason().isPresent()
                 && String.valueOf(message.stopReason().get()).contains("max_tokens");
     }
 
-    /**
-     * 사용자 메시지를 빌드한다.
-     * 여행 정보 + 번호 매긴 후보 장소 목록 + 도구 호출 지시.
-     */
     String buildUserMessage(VectorEnrichedInput input, List<PlaceCandidate> candidates, long days) {
         StringBuilder sb = new StringBuilder();
 
@@ -214,14 +186,14 @@ public class SelectionCallGenerator {
         if (input.categories() != null && !input.categories().isEmpty()) {
             sb.append("- 카테고리: ").append(String.join(", ", input.categories())).append("\n");
         }
-        // 예산은 선택 입력 — null이면 프롬프트에서 생략 (categories·description과 동일 패턴)
+        // 예산은 선택 입력이라 null이면 프롬프트에서 생략한다.
         if (input.budget() != null) {
             sb.append("- 예산: ").append(input.budget().toPlainString()).append("원\n");
         }
         sb.append("- 기간: ").append(input.startDate()).append(" ~ ").append(input.endDate())
                 .append(" (").append(days - 1).append("박").append(days).append("일)\n");
         sb.append("- 여행 일수: ").append(days).append("일 (마지막날 dayNumber=").append(days).append(")\n");
-        // 요일을 준다 — 장이 서는 날·휴무 같은 판단은 요일을 알아야 한다.
+        // 장이 서는 날·휴무 같은 판단은 요일을 알아야 한다.
         if (input.startDate() != null) {
             StringBuilder dows = new StringBuilder();
             for (int d = 0; d < days; d++) {
@@ -233,7 +205,7 @@ public class SelectionCallGenerator {
             }
             sb.append("- 날짜별 요일: ").append(dows).append("\n");
         }
-        // 도착·출발 허브 — 첫날은 도착지 근처에서, 마지막날은 출발지 쪽으로 끝나게 고를 수 있다.
+        // 허브를 알아야 첫날은 도착지 근처에서, 마지막날은 출발지 쪽으로 끝나게 고를 수 있다.
         if (input.transportationHub() != null && input.transportationHub().arrivalHub() != null) {
             sb.append("- 도착/출발: ").append(input.transportationHub().arrivalHub());
             if (input.transportationHub().departureHub() != null
@@ -255,8 +227,7 @@ public class SelectionCallGenerator {
             sb.append("- 동행: ").append(companion).append("\n");
         }
 
-        // 좌표 기반 지리 구역. 주소에서 뽑은 세부지역은 제주에서 "제주시/서귀포시" 둘뿐이라
-        // (각각 섬의 절반) "같은 지역으로 묶어라"가 사실상 아무 제약이 아니었다. GeoCluster 주석 참고.
+        // 주소 세부지역은 제주에서 "제주시/서귀포시" 둘뿐이라 지역 묶기 제약이 되지 않아 좌표 구역을 쓴다.
         GeoCluster.Result geo = GeoCluster.of(candidates);
         if (geo.isEmpty()) {
             log.info("지리 구역 미적용 — 후보가 적거나 여행지가 좁다 (candidates={})", candidates.size());
@@ -276,8 +247,8 @@ public class SelectionCallGenerator {
                 sb.append("★");
                 hasUserSelected = true;
             }
-            // 경유형(해안도로·드라이브코스·둘레길 등)은 "머무는 방문지"가 아니라 지나가는 구간이다.
-            // 코드가 마킹해두고, 프롬프트가 전체 일정 최대 1개로 제한한다(B2).
+            // 경유형(해안도로·드라이브코스·둘레길 등)은 머무는 방문지가 아니라 지나가는 구간이다.
+            // 코드가 마킹하고 프롬프트가 전체 일정 최대 1개로 제한한다.
             boolean via = PlaceCategoryConstants.isViaRoute(candidate.attributes(),
                     candidate.name(), candidate.category(), candidate.tags());
             if (via) {
@@ -286,8 +257,7 @@ public class SelectionCallGenerator {
             }
             sb.append(candidate.index()).append(" | ")
                     .append(candidate.name()).append(" | ")
-                    // 역할(식사·카페·관광…)과 음식 종류를 앞에 붙인다 — 이름과 태그 4개만으로는 흑돼지집인지,
-                    // 카페인지 알 수 없어 같은 종류 끼니가 반복됐다(실측 115~118).
+                    // 이름과 태그만으로는 흑돼지집인지 카페인지 알 수 없어 같은 종류 끼니가 반복된다.
                     .append(roleLabel(candidate)).append(summarizeCategory(candidate.category())).append(" | ")
                     .append(formatRating(candidate.rating(), candidate.wikidataSitelinks())).append(" | ")
                     .append(formatTags(candidate.tags())).append(" | ");
@@ -300,8 +270,7 @@ public class SelectionCallGenerator {
             sb.append("\n");
         }
 
-        // 구역 간 실제 거리를 함께 준다. 라벨만 주면 "동부와 서부가 얼마나 먼지"를 모르는 채
-        // 묶게 되고, 실측에서 그게 하루 155km로 나타났다.
+        // 라벨만 주면 모델이 "동부와 서부가 얼마나 먼지"를 모르는 채 묶어 구역 간 거리를 함께 준다.
         if (!geo.isEmpty()) {
             sb.append("\n### 지리 구역 (좌표 기준)\n");
             for (GeoCluster.Zone z : geo.zones()) {
@@ -388,7 +357,7 @@ public class SelectionCallGenerator {
         return input.partySize() != null ? base + "(" + input.partySize() + "인)" : base;
     }
 
-    /** 값이 있을 때만 " | 값"으로 덧붙인다(없는 항목은 생략 — 토큰 절감). */
+    /** 토큰을 아끼려고 값이 있을 때만 " | 값"으로 덧붙인다. */
     private void appendIfPresent(StringBuilder sb, String value) {
         if (value != null && !value.isBlank()) sb.append(" | ").append(value);
     }
@@ -398,7 +367,7 @@ public class SelectionCallGenerator {
         return minutes != null && minutes > 0 ? minutes + "분" : null;
     }
 
-    /** 추천 시간대 — 영어 어휘를 한국어 한 단어로. 없으면 null. */
+    /** 추천 시간대의 영어 어휘를 한국어 한 단어로 바꾼다. 없으면 null. */
     private String formatTimeSlots(List<String> slots) {
         if (slots == null || slots.isEmpty()) return null;
         return slots.stream()
@@ -417,8 +386,8 @@ public class SelectionCallGenerator {
     }
 
     /**
-     * 영업시간 문자열에서 정기휴무 요일을 뽑아 "목휴무" 형태로. 고신뢰 신호(휴무/closed)가 있는
-     * 줄에서 요일을 찾고, 없으면 null(RouteOptimizer.repairClosedDayPlaces와 같은 보수적 기준).
+     * 고신뢰 신호(휴무/closed)가 있는 줄에서만 정기휴무 요일을 "목휴무" 형태로 뽑고, 없으면 null.
+     * RouteOptimizer.repairClosedDayPlaces와 같은 보수적 기준이다.
      */
     private String formatClosedDay(String openingHours) {
         if (openingHours == null || openingHours.isBlank()) return null;
@@ -441,19 +410,8 @@ public class SelectionCallGenerator {
     }
 
     /**
-     * Foursquare 풀 경로에서 리프 노드만 추출하여 토큰을 절감한다.
-     * "Dining and Drinking > Restaurant > Korean Restaurant" → "Korean Restaurant"
-     */
-    /**
-     * 평점과 인기도를 "⭐4.4 · 인기도 높음" 형태로.
-     *
-     * <p>인기도 신호가 없으면 모델이 평점만 보고 무명 장소를 명소보다 위에 둔다(실측: 바늘오름
-     * ⭐4.6이 용담해안도로 ⭐4.3을 이겨 일정에 들어갔다). 신호는 Wikidata 언어판 수인데,
-     * 숫자를 그대로 주면 모델이 척도를 모른다 — 46과 16 중 뭐가 큰지는 알아도 "16이 명소인가"는
-     * 판단하지 못한다. 그래서 등급 문구로 바꿔 준다.
-     *
-     * <p>실측 분포(제주 750건): 중간값 1, 83%가 1~2, p95가 5, p99가 28. 그래서 경계를
-     * 10/3/1에 둔다 — 한라산 46·성산일출봉 16이 "매우 높음", 만장굴 11이 "높음"이다.
+     * 인기도 신호가 없으면 모델이 평점만 보고 무명 장소를 명소보다 위에 둔다.
+     * Wikidata 언어판 수는 숫자 그대로면 모델이 척도를 몰라 등급 문구로 바꿔 준다.
      */
     private String formatRating(java.math.BigDecimal rating, Integer sitelinks) {
         String base = rating != null ? "⭐" + rating.toPlainString() : "평점없음";
@@ -461,7 +419,7 @@ public class SelectionCallGenerator {
         return fame == null ? base : base + " · " + fame;
     }
 
-    /** sitelinks를 모델이 읽을 수 있는 등급으로. null(미매칭)이면 아무 말도 하지 않는다. */
+    /** null(미매칭)이면 아무 말도 하지 않는다. 경계 10/3/1은 제주 sitelinks 분포(중앙값 1, p95 5, p99 28) 기준이다. */
     private String formatFame(Integer sitelinks) {
         if (sitelinks == null) return null;
         if (sitelinks >= 10) return "인기도 매우 높음";
@@ -517,11 +475,7 @@ public class SelectionCallGenerator {
     }
 
     /**
-     * 프롬프트 캐시 적중 현황을 "읽음/쓰기" 형태로 포맷한다.
-     *
-     * <p>적중 없는 캐시는 쓰기 프리미엄(1.25배)만 내고 이득이 없다. 생성이 희박해서 기본 TTL
-     * 안에 재사용되지 않으면 캐시가 순손실인데, 지금은 적중률 로그가 없어 이득인지 손실인지
-     * 판단할 수 없었다. 읽음이 계속 0이면 캐시를 떼는 게 맞다.
+     * 적중 없는 캐시는 쓰기 프리미엄(1.25배)만 낸다. 읽음이 계속 0이면 캐시를 떼야 한다.
      */
     private String cacheInfo(Message message) {
         long read = message.usage().cacheReadInputTokens().orElse(0L);

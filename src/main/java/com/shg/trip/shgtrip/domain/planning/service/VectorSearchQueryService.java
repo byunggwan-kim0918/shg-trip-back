@@ -24,17 +24,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 벡터 검색 쿼리 오케스트레이션 서비스.
- *
- * VectorEnrichedInput를 입력으로 받아 전체 벡터 검색 파이프라인을 수행한다:
- * 1. SearchQueryBuilder로 슬롯별(역할 5종, 관광은 사용자 카테고리·테마별) 쿼리 생성
- * 2. EmbeddingService.embedBatch로 전 슬롯 쿼리 벡터를 1회 호출로 생성
- * 3. VectorSearchRequest 구성 (슬롯별 "명백히 틀린 대분류" 배제 포함)
- * 4. PlaceVectorSearchService로 검색 실행 (오버페치)
- * 5. 슬롯별 최소 유사도 임계값 적용 + 하이브리드 랭킹 후 슬롯 limit만큼 채택
- * 6. VectorSearchResult → PlaceCandidate 변환 (1-based indexing, 세부지역 부여)
- *
- * 5일+ 여행 시 regionAllocation 기반 지역별 분리 검색을 수행한다.
+ * 슬롯별 벡터 검색 → 최소 유사도 임계값 → 하이브리드 랭킹 → 1-based PlaceCandidate 변환.
+ * 5일 이상 여행은 regionAllocation 기반 지역별 분리 검색을 한다.
  */
 @Service
 public class VectorSearchQueryService {
@@ -42,20 +33,19 @@ public class VectorSearchQueryService {
     private static final Logger log = LoggerFactory.getLogger(VectorSearchQueryService.class);
 
     private static final int MAX_PER_CATEGORY = 20;
-    /** 전체 반환 하한 (days×10의 하한값). */
+    /** 전체 반환 하한(days×10의 하한값). */
     private static final int MIN_TOTAL = 30;
     private static final int MAX_TOTAL = 80;
 
     /**
-     * 관광 슬롯 하나당 최소 반환 수 — 쿼리를 잘게 쪼개도 각 유형이 최소 몇 개는 나오도록.
-     * 3이면 도시에 따라 FallbackDecider의 관광지 최소치(days) 경계에 걸린다(실측: 오사카가
-     * 관광 후보 3개로 fallback). ANN 리콜이 실행마다 조금씩 달라지므로 여유를 둔다.
+     * 관광 슬롯 하나당 최소 반환 수. 3이면 도시에 따라 FallbackDecider의 관광지 최소치 경계에 걸리고,
+     * ANN 리콜이 실행마다 달라지므로 여유를 둔다.
      */
     private static final int MIN_PER_ATTRACTION_SLOT = 4;
 
     /**
-     * 식사·카페 슬롯에서 한 세부 유형이 가질 수 있는 최소 자리 수. limit/4가 이보다 작아도
-     * 2는 보장한다 — 유형이 둘뿐인 소도시에서 다양화가 오히려 후보를 말려버리면 안 된다.
+     * 식사·카페 슬롯에서 한 세부 유형이 가질 수 있는 최소 자리 수. 유형이 둘뿐인 소도시에서
+     * 다양화가 후보를 말리지 않게 limit/4보다 작아도 보장한다.
      */
     private static final int MIN_PER_SUB_TYPE = 2;
 
@@ -67,31 +57,24 @@ public class VectorSearchQueryService {
     private static final int MAX_OVERFETCH = 60;
 
     /**
-     * 식사·카페 슬롯의 오버페치. 유사도 상위 N×3은 한 종류로 쏠린다 — 교토 "커플 맛집" 질의의 상위 56곳이
-     * 거의 와규·스테이크였고(DB 교토 식당은 일식 365·고기 193·면 144), 다양화는 창 안에서만 고를 수 있어
-     * 고기 9 : 기타 2인 풀이 나왔다(실측 153: 고기 4끼). 창을 넓혀야 다양화가 실제로 작동한다.
+     * 식사·카페 슬롯의 오버페치. 유사도 상위 N×3은 한 종류로 쏠리고 다양화는 창 안에서만 고를 수 있어,
+     * 창을 넓혀야 다양화가 작동한다.
      */
     private static final int DIVERSITY_OVERFETCH_FACTOR = 10;
     private static final int DIVERSITY_MAX_OVERFETCH = 200;
 
     /**
-     * 하이브리드 랭킹의 인기도 가중치.
-     *
-     * <p>실측으로 정한 값이다(제주 관광지 364곳, 인기도 시딩 적용 후): 0.15면 리뷰 없는
-     * 열안지오름이 채택권(슬롯당 상위 4) 밖으로 밀리고 채택되는 4곳이 모두 실제 리뷰를 가진
-     * 장소가 된다. 0.35까지 올리면 유사도 0.52짜리가 0.59짜리를 이겨 주제 적합성이 깨진다
-     * (자연 테마 일정에 수족관이 해안 경관지보다 위로 올라왔다).
+     * 하이브리드 랭킹의 인기도 가중치. 제주 관광지 기준으로 리뷰 없는 장소가 채택권 밖으로 밀리는 값이다.
+     * 0.35 이상이면 유사도 차이를 뒤집어 주제 적합성이 깨진다.
      */
     private static final double RATING_WEIGHT = 0.15;
     /** 리뷰 데이터 커버리지가 0일 때, 즉 인기도를 전혀 판단할 수 없을 때의 중립값. */
     private static final double NEUTRAL_RATING_RATIO = 0.7;
-    /** 커버리지가 100%일 때 "리뷰 수 미상"에 매기는 값 — 사실상 "리뷰가 없는 곳"으로 본다. */
+    /** 커버리지가 100%일 때 "리뷰 수 미상"에 매기는 값. 사실상 리뷰가 없는 곳으로 본다. */
     private static final double UNKNOWN_FLOOR_RATIO = 0.15;
     /**
      * 리뷰 수 포화 기준. 이 수를 넘으면 인기도 가점이 더 늘지 않는다.
-     *
-     * <p>로그를 쓰는 이유: 리뷰 20,000개가 2,000개보다 10배 좋은 장소는 아니다. 선형으로 쓰면
-     * 초대형 명소 하나가 다른 모든 후보를 눌러 일정이 단조로워진다.
+     * 선형으로 쓰면 초대형 명소 하나가 다른 모든 후보를 눌러 일정이 단조로워져 로그를 쓴다.
      */
     private static final int REVIEW_SATURATION_COUNT = 10_000;
     private static final double MAJOR_CATEGORY_BONUS = 0.05;
@@ -99,11 +82,11 @@ public class VectorSearchQueryService {
 
     /**
      * 지역 중심점(median)에서 이 거리(km)를 초과하는 후보는 오염 좌표로 보고 제거한다.
-     * city/island 규모 region 기준. 제주 실제 반경 ~40km라 정상 장소는 통과, 타지역 오태깅(수백 km)은 제거.
+     * city/island 규모 region 기준. 제주 반경이 ~40km라 정상 장소는 통과하고 타지역 오태깅(수백 km)은 걸린다.
      */
     private static final double MAX_REGION_RADIUS_KM = 100.0;
 
-    /** 안정적 median 산출을 위한 region 그룹 최소 표본 수. 미만이면 과도 필터링 방지로 필터 skip. */
+    /** region 그룹 최소 표본 수. 미만이면 median을 믿을 수 없어 필터를 건너뛴다. */
     private static final int MIN_GROUP_FOR_OUTLIER_FILTER = 4;
 
     private final EmbeddingService embeddingService;
@@ -115,13 +98,7 @@ public class VectorSearchQueryService {
         this.placeVectorSearchService = placeVectorSearchService;
     }
 
-    /**
-     * VectorEnrichedInput 기반으로 벡터 검색을 수행하여 PlaceCandidate 목록을 반환한다.
-     * 슬롯별 분리 검색으로 사용자가 고른 카테고리·테마가 후보 풀에 그대로 반영되도록 한다.
-     *
-     * @param input enrichInput 결과
-     * @return 1-based 인덱스가 부여된 후보 장소 목록
-     */
+    /** @return 1-based 인덱스가 부여된 후보 장소 목록 */
     public List<PlaceCandidate> search(VectorEnrichedInput input) {
         int totalLimit = calculateTotalLimit(input);
         List<SearchSlot> slots = SearchQueryBuilder.buildSearchSlots(input);
@@ -132,7 +109,7 @@ public class VectorSearchQueryService {
 
         log.info("검색 슬롯 {}개, 실행 단위 {}개, 슬롯별 limit={}", slots.size(), units.size(), slotLimits);
 
-        // A5: 슬롯 수만큼 순차 호출하던 임베딩을 1회 배치 호출로 (슬롯이 늘어도 지연이 늘지 않게)
+        // 슬롯이 늘어도 지연이 늘지 않게 임베딩은 1회 배치 호출로 한다.
         long embedStart = System.nanoTime();
         List<float[]> queryVectors = embeddingService.embedBatch(
                 units.stream().map(SearchUnit::queryText).toList());
@@ -143,7 +120,7 @@ public class VectorSearchQueryService {
                     units.size(), queryVectors.size());
         }
 
-        // 임계값·랭킹은 슬롯 단위로 적용한다 — 지역별로 나눠 조회해도 채택 기준은 슬롯 하나로 본다
+        // 지역별로 나눠 조회해도 임계값·랭킹은 슬롯 단위로 적용한다.
         Map<String, List<VectorSearchResult>> rawBySlot = new LinkedHashMap<>();
 
         for (int i = 0; i < units.size() && i < queryVectors.size(); i++) {
@@ -163,8 +140,7 @@ public class VectorSearchQueryService {
             List<VectorSearchResult> raw = placeVectorSearchService.search(
                     buildRequest(input, queryVector, unit.filterRegions(), slot, unitLimit));
 
-            // fail-open: 지역 필터가 0건을 만들면 그 필터를 떨어뜨리고 상위 지역으로 재조회한다.
-            // 필터 하나가 어긋나 후보 풀이 통째로 비는 것(→ fallback)보다 범위가 넓은 편이 낫다.
+            // fail-open: 지역 필터가 0건이면 필터를 떨어뜨리고 상위 지역으로 재조회한다. 후보 풀이 비는 것보다 낫다.
             if (raw.isEmpty() && unit.filterRegions() != null) {
                 raw = placeVectorSearchService.search(
                         buildRequest(input, queryVector, null, slot, unitLimit));
@@ -178,7 +154,7 @@ public class VectorSearchQueryService {
         log.info("검색 시간: 임베딩 {}ms, DB 합계 {}ms, 슬롯별 {}", embedMs,
                 dbMsBySlot.values().stream().mapToLong(Long::longValue).sum(), dbMsBySlot);
 
-        // 같은 장소가 여러 슬롯에 걸릴 수 있으므로(관광 하위유형끼리 겹침) placeId 기준으로 최고 점수만 유지
+        // 관광 하위유형끼리 같은 장소가 걸리므로 placeId 기준으로 최고 점수만 유지한다.
         Map<Long, ScoredResult> bestByPlace = new LinkedHashMap<>();
         List<ScoredResult> withoutId = new ArrayList<>();
 
@@ -208,8 +184,7 @@ public class VectorSearchQueryService {
 
         List<VectorSearchResult> cleaned = filterGeographicOutliers(allResults);
 
-        // 일정 자리에 들어갈 수 없는 장소(편의시설·저가치 시설·식사도 카페도 아닌 식당류)는 후보 풀에서 뺀다.
-        // 풀에 두면 Sonnet이 고르거나 보충 경로가 집어 들 수 있다 — 판정은 CandidatePolicy 한 곳.
+        // 일정 자리에 들어갈 수 없는 장소는 풀에 두면 Sonnet이나 보충 경로가 집어 든다. 판정은 CandidatePolicy 한 곳이다.
         List<PlaceCandidate> candidates = convertToCandidates(cleaned);
         List<PlaceCandidate> visitable = candidates.stream()
                 .filter(c -> CandidatePolicy.roleOf(c) != CandidatePolicy.Role.NOT_VISITABLE)
@@ -223,14 +198,9 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 특정 좌표 주변의 숙소를 추가로 검색한다(3차 4번).
+     * 숙소 슬롯은 여행지 전체에서 한 번만 검색해 후보가 한쪽에 쏠릴 수 있어, day centroid 주변을 다시 찾는다.
      *
-     * <p>숙소 슬롯은 여행지 전체를 대상으로 한 번만 검색하므로, 후보가 한쪽에 쏠리면 반대편 day도
-     * 그쪽 숙소로 돌아가야 한다(실측: 제주 숙소 후보 4곳이 전부 북부라 서남부 day도 35km 복귀).
-     * day 구성이 확정된 뒤 그 day의 centroid를 중심으로 반경 검색을 한 번 더 돌려 보완한다.
-     *
-     * @param startIndex 이미 부여된 인덱스 다음 번호 — 기존 후보의 인덱스를 건드리지 않도록
-     *                   <b>이어서</b> 매긴다(선택 결과가 인덱스를 참조하고 있다).
+     * @param startIndex 이미 부여된 인덱스 다음 번호. 선택 결과가 기존 인덱스를 참조하므로 이어서 매긴다.
      * @return 추가 후보(비어 있을 수 있음)
      */
     public List<PlaceCandidate> searchAccommodationsNear(VectorEnrichedInput input, double[] center,
@@ -239,13 +209,10 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 특정 좌표 주변에서 역할(관광·카페·식당·숙소)별로 후보를 추가 검색한다.
+     * 검색 풀은 여행지 전체를 한 번 훑은 결과라 하루 동선 근처에 빈 시간을 채울 장소가 부족하다.
+     * day 구성이 정해진 뒤 그날 중심 근처에서 역할별 예비 후보를 붙인다.
      *
-     * <p>숙소 보완(3차 4번)을 일반화했다. 검색 풀은 여행지 전체를 한 번 훑은 결과라, 하루 동선 근처에는
-     * 빈 시간을 채우거나 교체할 장소가 남아 있지 않은 경우가 많았다(실측 116~118: 3~5시간 공백 미충전).
-     * day 구성이 정해진 뒤 그날 중심 근처를 다시 훑어 예비 후보를 붙인다.
-     *
-     * @param startIndex 이미 부여된 인덱스 다음 번호 — 기존 인덱스를 건드리지 않도록 이어서 매긴다
+     * @param startIndex 이미 부여된 인덱스 다음 번호. 기존 인덱스를 건드리지 않도록 이어서 매긴다.
      */
     public List<PlaceCandidate> searchNear(VectorEnrichedInput input, SearchRole role, double[] center,
                                            double radiusKm, int limit, int startIndex) {
@@ -257,8 +224,8 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 여러 중심점에서 같은 역할로 주변 검색 — 질의 임베딩은 한 번만 한다(날짜 수만큼 임베딩을 부르면
-     * 생성 시간이 그만큼 늘어난다). 결과 인덱스는 호출부가 다시 매긴다.
+     * 날짜 수만큼 임베딩을 부르면 생성 시간이 늘어나므로 질의 임베딩은 한 번만 한다.
+     * 결과 인덱스는 호출부가 다시 매긴다.
      */
     public List<List<PlaceCandidate>> searchNearEach(VectorEnrichedInput input, SearchRole role,
                                                      List<double[]> centers, double radiusKm, int limit) {
@@ -305,7 +272,7 @@ public class VectorSearchQueryService {
         int index = startIndex;
         for (ScoredResult scored : accepted) {
             VectorSearchResult r = scored.result();
-            // bounding box 근사라 정확한 거리로 한 번 더 거른다
+            // bounding box 근사라 정확한 거리로 한 번 더 거른다.
             if (r.latitude() == null || r.longitude() == null) continue;
             double dist = GeoUtils.haversine(center,
                     new double[]{r.latitude().doubleValue(), r.longitude().doubleValue()});
@@ -326,8 +293,8 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 슬롯 최소 유사도 미만을 버리고(A3), 남은 결과를 하이브리드 점수로 재랭킹해(A4) 상위 limit만 채택한다.
-     * 반환/탈락 수를 슬롯별로 로그에 남긴다 — 후보가 줄어드는 이유를 사후에 추적할 수 있어야 한다.
+     * 슬롯 최소 유사도 미만을 버리고 하이브리드 점수로 재랭킹해 상위 limit만 채택한다.
+     * 후보가 줄어든 이유를 사후에 추적하도록 반환/탈락 수를 슬롯별로 로그에 남긴다.
      */
     List<ScoredResult> applyThresholdAndRank(SearchSlot slot, List<VectorSearchResult> raw, int limit) {
         double minSimilarity = PlaceCategoryConstants.minSimilarity(slot.role());
@@ -349,10 +316,8 @@ public class VectorSearchQueryService {
             kept.add(new ScoredResult(r, hybridScore(r, slotMajor, slot.labelTokens(), neutral)));
         }
         kept.sort(Comparator.comparingDouble(ScoredResult::score).reversed());
-        // "대표 관광지" 슬롯은 이름 그대로 그 지역의 대표 명소를 뽑는 자리다 — 인기도 순으로 고른다.
-        // 유사도 순이면 일반어 질의("대표 관광지 명소")와 이름이 겹치는 무명 장소가 이긴다(실측: 제주 가족
-        // 일정 후보에 성산일출봉·비자림이 없고 열안지오름·알작지왓·"제주도"가 들어왔다). 테마별 슬롯은
-        // 주제 적합성이 우선이라 유사도 중심 점수를 그대로 쓴다.
+        // 대표 관광지 슬롯은 유사도 순이면 일반어 질의와 이름이 겹치는 무명 장소가 이겨 인기도 순으로 고른다.
+        // 테마별 슬롯은 주제 적합성이 우선이라 유사도 중심 점수를 쓴다.
         if (REPRESENTATIVE_SLOT_KEY.equals(slot.key())) {
             double n0 = neutral;
             kept.sort(Comparator.<ScoredResult>comparingDouble(sr -> prominence(sr.result(), n0)).reversed()
@@ -372,7 +337,7 @@ public class VectorSearchQueryService {
     /** 지역 대표 명소를 뽑는 기본 관광 슬롯 키(SearchQueryBuilder가 항상 1개 만든다). */
     static final String REPRESENTATIVE_SLOT_KEY = "attraction";
 
-    /** 인기 명소로 보는 Wikidata 언어판 수 하한 — 이 이상이면 유사도 임계값에서 면제한다. */
+    /** 인기 명소로 보는 Wikidata 언어판 수 하한. 이 이상이면 유사도 임계값에서 면제한다. */
     static final int ICONIC_SITELINKS = 3;
     /** 대분류가 슬롯과 같을 때 낮춰 주는 임계값 폭. */
     static final double SAME_MAJOR_THRESHOLD_RELIEF = 0.10;
@@ -380,12 +345,10 @@ public class VectorSearchQueryService {
     /**
      * 후보별 최소 유사도. 슬롯 임계값을 기본으로 하되 두 경우를 완화한다.
      * <ul>
-     *   <li>대분류가 슬롯과 같은 <b>인기 명소</b>(언어판 {@value #ICONIC_SITELINKS}개 이상)는 면제한다. 인기도 갈래로
-     *       뽑아 온 명소를 유사도로 다시 자르면 갈래를 둔 의미가 없다 — 교토 사찰 슬롯은 24곳 중 21곳이 탈락해
-     *       금각사(57)·후시미 이나리(41)가 후보에 없었다. 일반어 질의와 고유 명소의 유사도는 원래 낮다.</li>
-     *   <li>대분류가 슬롯과 같은 후보는 {@value #SAME_MAJOR_THRESHOLD_RELIEF}만큼 낮춘다. 보강 전 행은
-     *       임베딩 텍스트가 이름+카테고리뿐이고 이름이 외국어라, 카테고리가 카페인 곳도 한국어 질의와의
-     *       유사도가 낮아 전부 탈락했다(교토 카페 36곳 중 36곳).</li>
+     *   <li>대분류가 슬롯과 같은 인기 명소(언어판 {@value #ICONIC_SITELINKS}개 이상)는 면제한다. 일반어 질의와
+     *       고유 명소의 유사도는 원래 낮아서 유사도로 자르면 대표 명소가 빠진다.</li>
+     *   <li>대분류가 슬롯과 같은 후보는 {@value #SAME_MAJOR_THRESHOLD_RELIEF}만큼 낮춘다. 보강 전 외국어 이름 행은
+     *       한국어 질의와의 유사도가 낮아 전부 탈락한다.</li>
      * </ul>
      */
     private static double thresholdFor(VectorSearchResult r, String slotMajor, double minSimilarity,
@@ -399,8 +362,8 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 인기 명소 면제를 적용할 슬롯 — 대표 명소 슬롯과 사용자 카테고리 슬롯(사찰·해변 등)만. 테마 슬롯
-     * ("attraction:theme:*")은 주제 적합성이 핵심이라 유명해도 주제와 무관하면 뺀다.
+     * 인기 명소 면제를 적용할 슬롯. 테마 슬롯("attraction:theme:*")은 주제 적합성이 핵심이라
+     * 유명해도 주제와 무관하면 뺀다.
      */
     private static boolean exemptsIconic(SearchSlot slot) {
         if (slot.role() != SearchRole.ATTRACTION) return false;
@@ -409,8 +372,8 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 같은 Wikidata 항목에 붙은 여러 행(출처별 중복: "제주러브랜드"·영문 병기 행)을 하나로 줄인다 — 순위가 높은 행만
-     * 남긴다. 줄이지 않으면 인기도 순 대표 슬롯을 한 장소가 여러 자리 차지한다.
+     * 같은 Wikidata 항목에 붙은 출처별 중복 행 중 순위가 높은 행만 남긴다.
+     * 줄이지 않으면 인기도 순 대표 슬롯을 한 장소가 여러 자리 차지한다.
      */
     private static List<ScoredResult> dropSameWikidataItem(List<ScoredResult> ranked) {
         Set<String> seen = new HashSet<>();
@@ -451,28 +414,19 @@ public class VectorSearchQueryService {
                 : Math.min(MAX_OVERFETCH, limit * OVERFETCH_FACTOR);
     }
 
-    /** 다양화에서 세는 종류 — 보강된 음식 종류가 있으면 그것(RouteOptimizer 유형 상한과 같은 키). */
+    /** RouteOptimizer 유형 상한과 같은 키를 쓴다. */
     private static String mealTypeKey(VectorSearchResult r) {
         return PlaceCategoryConstants.mealKind(r.name(), r.category(), r.tags(), r.description(), r.cuisine());
     }
 
-    /** 세부 유형(cuisine) 쏠림이 일정 품질을 직접 깨는 슬롯 — 끼니·카페는 종류가 반복되면 티가 난다. */
+    /** 끼니·카페는 종류가 반복되면 티가 나서 세부 유형 쏠림을 막는 슬롯. */
     private boolean isDiversitySlot(SearchRole role) {
         return role == SearchRole.RESTAURANT || role == SearchRole.CAFE;
     }
 
     /**
-     * 상위 limit을 그대로 자르지 않고 세부 유형 상한을 걸어 뽑는다(식사·카페 슬롯 전용).
-     *
-     * <p>실측: 제주 restaurant 슬롯은 임계 통과 48곳 중 상위 16곳이
-     * {@code pork(12), seafood(2), noodle(1), 미분류(1)}이었다 — DB의 제주 식당 중 돼지고기
-     * 비중은 3.5%인데 코사인 유사도 상위가 전부 흑돼지로 채워진다. 3박4일이면 8끼인데
-     * 비(非)돼지 식사 후보가 4곳뿐이라, 조립 단계의 유형 상한(3회)은 <b>수학적으로 만족할 수
-     * 없었다</b> — {@code RouteOptimizer}의 "해소 실패(같은 대분류 대체 후보 없음)" 로그가 그
-     * 결과다. 상한을 올리거나 프롬프트에 금지 문구를 더 넣는 대신 윈도를 고친다.
-     *
-     * <p>상한을 채운 유형은 건너뛰고 다음 순위로 내려가며 채우고, 한 바퀴 돌고도 limit이 남으면
-     * 밀어둔 후보를 점수 순으로 되돌린다 — 한 유형뿐인 지역에서 후보 수가 줄면 안 된다.
+     * 식사·카페 슬롯에서 세부 유형 상한을 걸어 뽑는다. 유사도 상위가 한 종류로 쏠리면 조립 단계 유형 상한은
+     * 대체 후보가 없어 만족할 수 없으므로 윈도에서 고친다. limit이 남으면 밀어둔 후보를 점수 순으로 되돌려 후보 수는 줄이지 않는다.
      */
     private List<ScoredResult> selectWithSubTypeDiversity(List<ScoredResult> ranked, int limit) {
         if (ranked.size() <= limit) return ranked;
@@ -500,16 +454,9 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * "인기도 미상"에 매길 값 — 이 슬롯 후보 중 <b>Wikidata 매칭이 끝난 비율</b>로 정한다.
-     *
-     * <p>고정값은 어느 쪽으로 두어도 틀린다. 0.7(관대)로 두면 백필을 끝낸 지역에서 무명 장소가
-     * 주상절리대(0.88)와 사실상 동점이 되어, 확보한 인기도 신호가 묻힌다. 낮게 두면 아직
-     * 동기화되지 않은 지역(서울 관광지 리뷰 보유율 1%)의 명소가 전부 바닥으로 깔린다.
-     *
-     * <p>그래서 데이터에서 추론한다 — 후보 다수가 매칭을 끝냈다면 비어 있는 값은 "아직 못 본
-     * 소수"라는 뜻이라 낮게 깔아도 되고, 대부분이 미매칭이면 그냥 판단 근거가 없다는 뜻이다.
+     * "인기도 미상"에 매길 값을 이 슬롯 후보의 Wikidata 매칭 비율로 정한다. 고정값은 높으면 백필된 지역에서
+     * 인기도 신호가 묻히고, 낮으면 미매칭 지역 명소가 바닥에 깔린다.
      * 커버리지 0% → {@value #NEUTRAL_RATING_RATIO}, 100% → 0.15로 선형 보간한다.
-     * 미동기화 지역은 커버리지가 낮아 모두 같은 값을 받으므로 순위가 바뀌지 않는다(무해).
      */
     private double neutralProminence(List<VectorSearchResult> candidates) {
         if (candidates.isEmpty()) return NEUTRAL_RATING_RATIO;
@@ -519,8 +466,8 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 하이브리드 점수 = 유사도 + <b>인기도</b> 가중 + 대분류 일치 가점 + 라벨(테마·카테고리) 매칭 가점.
-     * 임베딩만으로는 대표 명소가 위로 올라오지 못하는 문제를 완화한다.
+     * 하이브리드 점수 = 유사도 + 인기도 가중 + 대분류 일치 가점 + 라벨(테마·카테고리) 매칭 가점.
+     * 임베딩만으로는 대표 명소가 위로 올라오지 못한다.
      */
     private double hybridScore(VectorSearchResult r, String slotMajorCategory,
                                List<String> labelTokens, double neutralProminence) {
@@ -540,15 +487,8 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 장소의 인기도(0.0~1.0). <b>평점 × 리뷰 수</b>로 본다.
-     *
-     * <p>평점 단독으로는 인기도를 가릴 수 없다. 실측(제주 관광지를 평점순 정렬): 용두암 5.0,
-     * 쉼한모금 5.0, 사라봉공원 5.0, 논짓물 4.8 ... 협재해수욕장(4.7)이 11위다. 리뷰 두세 개짜리
-     * 5.0이 수만 리뷰의 명소를 이기기 때문이다.
-     *
-     * <p>신호 우선순위는 <b>Wikidata sitelinks → 리뷰 수 → 평점</b>이다. 계산 자체는
-     * {@link PlaceProminence}에 있고 여기서는 "미매칭"만 슬롯 커버리지 기반 중립값으로 바꾼다.
-     * 충전 경로와 검색 랭킹이 같은 기준을 쓰게 하려면 계산이 한 곳에 있어야 한다.
+     * 장소의 인기도(0.0~1.0). 충전 경로와 같은 기준을 쓰도록 계산은 {@link PlaceProminence}에 두고,
+     * 여기서는 미매칭만 슬롯 커버리지 기반 중립값으로 바꾼다.
      */
     private double prominence(VectorSearchResult r, double neutralProminence) {
         if (r.wikidataSitelinks() == null && r.userRatingCount() == null) {
@@ -557,7 +497,6 @@ public class VectorSearchQueryService {
         return PlaceProminence.of(r.rating(), r.userRatingCount(), r.wikidataSitelinks());
     }
 
-    /** 이름·태그에 슬롯 라벨 토큰이 들어 있는지(테마/카테고리 의미 직접 매칭). */
     private boolean matchesLabel(VectorSearchResult r, List<String> labelTokens) {
         if (labelTokens == null || labelTokens.isEmpty()) return false;
         StringBuilder sb = new StringBuilder();
@@ -568,16 +507,11 @@ public class VectorSearchQueryService {
         return labelTokens.stream().anyMatch(haystack::contains);
     }
 
-    /** 검색 결과 + 하이브리드 점수. */
     record ScoredResult(VectorSearchResult result, double score) {}
 
     /**
-     * region 그룹별로 좌표 median 중심점을 구하고, 중심점에서 {@link #MAX_REGION_RADIUS_KM}를 초과하는
-     * 후보(예: region='Jeju'로 오태깅됐지만 좌표는 춘천/명동인 오염 레코드)를 제거한다.
-     *
-     * <p>평균이 아닌 median을 중심점으로 쓰므로 오염 좌표가 소수 섞여도 중심점이 흔들리지 않는다.
-     * 그룹 표본이 {@link #MIN_GROUP_FOR_OUTLIER_FILTER} 미만이면 중심점 신뢰도가 낮아 필터를 건너뛴다.
-     * 좌표가 없는 후보는 판단을 보류하고 보존한다.
+     * region 그룹별 좌표 median에서 {@link #MAX_REGION_RADIUS_KM}를 넘는 오태깅 후보를 제거한다.
+     * 오염 좌표가 소수 섞여도 중심점이 흔들리지 않게 평균이 아닌 median을 쓴다. 좌표가 없는 후보는 보존한다.
      */
     List<VectorSearchResult> filterGeographicOutliers(List<VectorSearchResult> results) {
         if (results == null || results.isEmpty()) {
@@ -599,7 +533,7 @@ public class VectorSearchQueryService {
                     .toList();
 
             if (withCoord.size() < MIN_GROUP_FOR_OUTLIER_FILTER) {
-                kept.addAll(group); // 표본 부족 → 필터 skip
+                kept.addAll(group);
                 continue;
             }
 
@@ -608,7 +542,7 @@ public class VectorSearchQueryService {
 
             for (VectorSearchResult r : group) {
                 if (r.latitude() == null || r.longitude() == null) {
-                    kept.add(r); // 좌표 없으면 판단 보류
+                    kept.add(r);
                     continue;
                 }
                 double dist = GeoUtils.haversine(
@@ -624,10 +558,6 @@ public class VectorSearchQueryService {
         return kept;
     }
 
-    /**
-     * 여행 일수에 따른 총 반환 수를 계산한다.
-     * Formula: days * 10, capped at MAX_TOTAL(80), min MIN_TOTAL(30).
-     */
     int calculateTotalLimit(VectorEnrichedInput input) {
         long days = calculateTripDays(input);
         int calculated = (int) (days * 10);
@@ -635,9 +565,8 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 슬롯별 벡터 검색 limit을 배분한다.
-     * 역할별 총량 규칙은 기존과 동일하고(식당 25% / 숙소 10% / 카페 15% / 교통 10% / 관광 나머지),
-     * <b>관광 총량만</b> 관광 슬롯 수로 나눠 배분한다(슬롯당 최소 {@link #MIN_PER_ATTRACTION_SLOT}).
+     * 슬롯별 벡터 검색 limit을 배분한다(식당 25% / 숙소 10% / 카페 15% / 교통 10% / 관광 나머지).
+     * 관광 총량만 관광 슬롯 수로 나눈다(슬롯당 최소 {@link #MIN_PER_ATTRACTION_SLOT}).
      */
     Map<String, Integer> buildSlotLimits(List<SearchSlot> slots, int totalLimit, long days) {
         Map<String, Integer> limits = new HashMap<>();
@@ -646,13 +575,11 @@ public class VectorSearchQueryService {
         List<SearchSlot> attractionSlots = slots.stream()
                 .filter(s -> s.role() == SearchRole.ATTRACTION)
                 .toList();
-        // 교통이 없으면 그 10%를 관광에 추가 (기존 규칙 유지)
+        // 교통이 없으면 그 10%를 관광에 더한다.
         double attractionRatio = hasTransportation ? 0.40 : 0.50;
-        // 관광은 하루 2곳 + 빈 시간 채우기·교체 여유로 최소 days×4. days×2였을 때 4일 일정의 관광 후보가
-        // 14~15곳(슬롯당 5곳)뿐이라 3시간 공백을 채울 장소가 없었다(실측 116~118).
+        // 관광은 하루 2곳 + 빈 시간 채우기·교체 여유로 최소 days×4다. 더 적으면 긴 공백을 채울 장소가 없다.
         int attractionTotal = Math.max((int) (days * 4), (int) (totalLimit * attractionRatio));
-        // 시장 슬롯은 작게 둔다 — 시장은 지역에 몇 곳뿐이라 큰 몫을 주면 유사도 낮은 상점으로 채워지고
-        // 그만큼 다른 관광 슬롯 몫이 줄었다(실측: 시장 슬롯 5곳 중 시장 1곳).
+        // 시장은 지역에 몇 곳뿐이라 큰 몫을 주면 유사도 낮은 상점으로 채워지고 다른 관광 슬롯 몫이 준다.
         boolean hasMarketSlot = attractionSlots.stream().anyMatch(sl -> sl.key().equals("attraction:market"));
         int marketLimit = (int) Math.max(2, days);
         int sharedSlots = attractionSlots.size() - (hasMarketSlot ? 1 : 0);
@@ -663,16 +590,14 @@ public class VectorSearchQueryService {
         for (SearchSlot slot : slots) {
             int limit = switch (slot.role()) {
                 case TRANSPORTATION -> Math.max(2, (int) (totalLimit * 0.1));
-                // 하루 2식 + 대안·갭필 여유. 바/베이커리를 슬롯에서 뺀 만큼(A2) 실제 식사 후보로만
-                // 채워지므로 days×4를 하한으로 둔다 — 3일 여행 기준 12곳.
+                // 하루 2식 + 대안·갭필 여유로 days×4를 하한으로 둔다.
                 case RESTAURANT -> Math.max((int) (days * 4), (int) (totalLimit * 0.25));
-                // 하한 6 — 숙소는 day별로 방문지 중심 최근접을 고르므로 후보가 넓게 퍼져 있어야 한다.
-                // 3~4곳이면 전부 한쪽에 몰려 매일 장거리 귀가가 된다(실측 115: 제주 숙소 78곳 중 4곳).
+                // 숙소는 day별 방문지 중심 최근접을 고르므로 후보가 적으면 한쪽에 몰려 매일 장거리 귀가가 된다.
                 case ACCOMMODATION -> Math.max(6, (int) (totalLimit * 0.1));
                 // 카페 스톱(하루 1곳) + 대안·빈 시간 채우기 여유.
                 case CAFE -> Math.max((int) (days * 2), (int) (totalLimit * 0.15));
                 case ATTRACTION -> slot.key().equals("attraction:market") ? marketLimit
-                        // 대표 명소 슬롯은 하루 2곳 몫을 보장한다(나머지 테마 슬롯과 균등 분할하면 4곳뿐이었다).
+                        // 대표 명소 슬롯은 테마 슬롯과 균등 분할하면 너무 적어 하루 2곳 몫을 보장한다.
                         : slot.key().equals(REPRESENTATIVE_SLOT_KEY) ? Math.max(perAttraction, (int) (days * 2))
                         : perAttraction;
             };
@@ -681,9 +606,6 @@ public class VectorSearchQueryService {
         return limits;
     }
 
-    /**
-     * regionAllocation이 존재하고 여행이 5일 이상인 경우 지역별 분리 검색을 수행해야 하는지 확인.
-     */
     boolean shouldSplitByRegion(VectorEnrichedInput input) {
         return input.regionAllocation() != null
                 && !input.regionAllocation().isEmpty()
@@ -691,12 +613,8 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * 한 슬롯이 여러 실행 단위로 나뉘어 조회한 결과에서 같은 장소를 하나로 합친다(최고 유사도 유지).
-     *
-     * <p>세부 지명은 필터가 아니라 쿼리 힌트로만 쓰이므로, 한 도시 안에서 구역을 나눈 여행은
-     * 모든 단위가 <b>같은 지역 필터</b>로 조회한다 — 인기 장소가 단위 수만큼 중복으로 돌아온다.
-     * 그대로 두면 랭킹 상위 N을 같은 장소가 차지해 후보 풀이 실제보다 얕아지고, 그 얕은 풀이
-     * "그날 반경 안에 식당이 없음"으로 이어진다.
+     * 한 슬롯을 여러 실행 단위로 나눠 조회한 결과에서 같은 장소를 하나로 합친다(최고 유사도 유지).
+     * 한 도시 안에서 구역을 나누면 모든 단위가 같은 지역 필터로 조회해, 합치지 않으면 상위 N을 같은 장소가 차지한다.
      */
     private static List<VectorSearchResult> dedupeByPlace(List<VectorSearchResult> results) {
         if (results == null || results.isEmpty()) return List.of();
@@ -721,24 +639,16 @@ public class VectorSearchQueryService {
     /**
      * 검색 실행 단위. 지역 분리가 없으면 슬롯당 1개, 있으면 (슬롯 × regionAllocation 엔트리)마다 1개다.
      *
-     * @param slot          결과를 묶을 슬롯 — 임계값·랭킹은 이 단위로 적용한다
+     * @param slot          결과를 묶을 슬롯. 임계값·랭킹은 이 단위로 적용한다
      * @param queryText     임베딩할 쿼리. 지역 분리 시 필터로 못 쓰는 세부 지명이 뒤에 붙는다
      * @param filterRegions DB {@code place.region} 하드 필터로 쓸 값. null이면 {@code input.regions()}
      */
     private record SearchUnit(SearchSlot slot, String queryText, List<String> filterRegions) {}
 
     /**
-     * 슬롯 목록을 실제 검색 실행 단위로 펼친다.
-     *
-     * <p>지역 분리(5일+)일 때 regionAllocation 값을 <b>필터 축</b>과 <b>랭킹 축</b>으로 가르는 것이
-     * 이 메서드의 핵심이다. DB의 {@code place.region}은 enrich가 주는 영어 상위 도시명(Seoul·Jeju…)
-     * 한 축뿐인데, regionAllocation에는 행정동(용담동)·지형(한라산)·경로(올레길)·랜드마크(성산일출봉)가
-     * 섞여 온다. 이 값들을 그대로 {@code p.region = ?}에 넣으면 전 슬롯이 0건이 되고, 예외 하나 없이
-     * 빈 후보 풀이 만들어진다(실측: 제주 5일 여행이 전 슬롯 조회=0 → fallback → 생성 실패).
-     *
-     * <p>그래서 {@link VectorEnrichedInput#regions()} 어휘에 실재하는 값만 필터로 승격하고, 나머지는
-     * 쿼리 텍스트에 얹어 벡터 유사도로만 반영한다. 서울+부산처럼 값이 그대로 상위 도시명인 진짜
-     * 다지역 여행은 종전과 똑같이 지역별 분리 검색이 유지된다.
+     * 슬롯 목록을 실제 검색 실행 단위로 펼친다. {@code place.region}은 영어 상위 도시명뿐인데 regionAllocation에는
+     * 행정동·지형·랜드마크가 섞여 와서, 그대로 필터에 넣으면 전 슬롯이 조용히 0건이 된다.
+     * {@link VectorEnrichedInput#regions()}에 실재하는 값만 필터로 쓰고 나머지는 쿼리 텍스트에 얹는다.
      */
     private List<SearchUnit> buildSearchUnits(VectorEnrichedInput input, List<SearchSlot> slots) {
         if (!shouldSplitByRegion(input)) {
@@ -781,11 +691,8 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * VectorSearchRequest를 구성한다.
-     * enrichInput 프롬프트에서 country=ISO코드, regions=영어 도시명으로 반환하도록 지정되어 있음.
-     * categories 필터는 넘기지 않는다 — 마법사 카테고리 id와 DB category(Foursquare 계층 경로)의
-     * 형식이 다르고 오적재도 흔해 하드 필터가 정상 장소를 지운다. 대신 슬롯별 "명백히 틀린
-     * 대분류"만 배제하고(소프트), 의미 판별은 벡터 유사도 + 하이브리드 랭킹에 맡긴다.
+     * enrichInput 프롬프트가 country=ISO코드, regions=영어 도시명으로 반환하도록 지정한다.
+     * 마법사 카테고리 id와 DB category는 형식이 다르고 오적재가 흔해 categories 하드 필터는 넘기지 않는다.
      */
     private VectorSearchRequest buildRequest(VectorEnrichedInput input,
                                               float[] queryVector,
@@ -812,7 +719,7 @@ public class VectorSearchQueryService {
         );
     }
 
-    /** 1-based 연속 인덱스로 다시 매긴다(중간 후보를 뺀 뒤). */
+    /** 중간 후보를 뺀 뒤 1-based 연속 인덱스로 다시 매긴다. */
     private static List<PlaceCandidate> reindex(List<PlaceCandidate> candidates) {
         List<PlaceCandidate> out = new ArrayList<>(candidates.size());
         for (int i = 0; i < candidates.size(); i++) {
@@ -823,9 +730,8 @@ public class VectorSearchQueryService {
     }
 
     /**
-     * VectorSearchResult 목록을 PlaceCandidate 목록으로 변환한다.
-     * 1-based 연속 인덱싱을 유지하고, 주소에서 세부지역(시/군/구)을 추출해 부여한다(A6).
-     * priceLevel, openingHours는 DB에서 별도로 enrichment 단계에서 채운다.
+     * 1-based 연속 인덱싱을 유지하고 주소에서 세부지역(시/군/구)을 추출해 부여한다.
+     * priceLevel, openingHours는 이후 enrichment 단계에서 채운다.
      */
     List<PlaceCandidate> convertToCandidates(List<VectorSearchResult> results) {
         List<PlaceCandidate> candidates = new ArrayList<>(results.size());
@@ -870,9 +776,6 @@ public class VectorSearchQueryService {
         return candidates;
     }
 
-    /**
-     * 여행 일수를 계산한다.
-     */
     private long calculateTripDays(VectorEnrichedInput input) {
         if (input.startDate() == null || input.endDate() == null) {
             return 3; // 기본값

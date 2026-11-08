@@ -11,9 +11,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 일정 저장 전용 빈.
- * ItineraryGenerationExecutor(@Async)에서 자기 호출 없이 @Transactional을 적용하기 위해 분리.
- * toEntity() + save()를 단일 트랜잭션으로 묶어 cascade 안전성 보장.
+ * @Async 실행기에서 자기 호출 없이 @Transactional을 적용하려고 분리한 빈이다.
+ * toEntity()와 save()가 한 트랜잭션에 있어야 cascade가 깨지지 않는다.
  */
 @Component
 @RequiredArgsConstructor
@@ -33,9 +32,8 @@ public class ItinerarySaveHelper {
     }
 
     /**
-     * @param referenceCoord 후보 좌표 median 중심점 — 여행지 기준 좌표(Redis 캐시/Google)가
-     *                       이 중심점과 어긋나면 매퍼가 기준 좌표를 폐기하고 median을 쓴다.
-     *                       fallback 경로처럼 후보 풀이 없으면 null(기존 동작).
+     * @param referenceCoord 후보 좌표 median 중심점. 여행지 기준 좌표가 이와 어긋나면 매퍼가 median을 쓴다.
+     *                       후보 풀이 없는 fallback 경로는 null.
      */
     @Transactional
     public Itinerary save(ItineraryData data, EnrichedInput input, Long userId,

@@ -37,12 +37,11 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidationException(MethodArgumentNotValidException e) {
-        // 필드 에러: "fieldName: message" 형식으로 수집
         String message = e.getBindingResult().getFieldErrors().stream()
                 .map(error -> error.getField() + ": " + error.getDefaultMessage())
                 .collect(Collectors.joining(", "));
 
-        // 클래스 레벨 에러 (예: @ValidDateRange) 추가
+        // @ValidDateRange 같은 클래스 레벨 에러는 필드 에러에 없다.
         String globalErrors = e.getBindingResult().getGlobalErrors().stream()
                 .map(error -> error.getDefaultMessage())
                 .collect(Collectors.joining(", "));

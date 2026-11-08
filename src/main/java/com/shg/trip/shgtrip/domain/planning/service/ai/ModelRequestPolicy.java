@@ -12,8 +12,8 @@ final class ModelRequestPolicy {
     private ModelRequestPolicy() {}
 
     /**
-     * Sonnet 5.5는 강제 tool_choice(any/tool)를 400으로 거부한다. auto로 두고 프롬프트의 "도구를 호출하라"
-     * 지시로 유도한다 — 호출부는 tool_use 블록이 없으면 형식 오류로 보고 재시도한다.
+     * Sonnet 5.5는 강제 tool_choice(any/tool)를 400으로 거부해 auto로 두고 프롬프트 지시로 유도한다.
+     * 호출부는 tool_use 블록이 없으면 형식 오류로 보고 재시도한다.
      */
     static final ToolChoiceAuto SONNET_TOOL_CHOICE = ToolChoiceAuto.builder().build();
 

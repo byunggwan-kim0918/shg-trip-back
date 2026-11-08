@@ -31,8 +31,7 @@ public class PlanningController {
     private final GenerationPolicyService generationPolicyService;
 
     /**
-     * 자연어 문장 → 구조화 필드 파싱 (NewTripShell 실시간 패널·마법사 프리필).
-     * 콘텐츠 실패는 200 + empty()로 반환(디바운스 루프 4xx 스팸 방지).
+     * 콘텐츠 실패는 디바운스 루프의 4xx 스팸을 막으려고 200 + empty()로 반환한다.
      */
     @PostMapping("/parse")
     public ApiResponse<SentenceParseResponse> parseSentence(
@@ -77,9 +76,6 @@ public class PlanningController {
         return travelPlannerService.openStream(jobId, principal.id());
     }
 
-    /**
-     * 생성 쿼터/차단 잔여 조회 (NewTripShell·ConfirmStep 배지). R1 차단 정보(blockedUntil) 겸용.
-     */
     @GetMapping("/generation-quota")
     public ApiResponse<GenerationQuotaResponse> getGenerationQuota(
             @AuthenticationPrincipal UserPrincipal principal) {
