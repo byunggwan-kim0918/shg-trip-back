@@ -31,11 +31,14 @@ class AttributeEnrichmentTest {
     @Mock
     private PlaceRepository placeRepository;
 
+    @Mock
+    private EmbeddingBatchJob embeddingBatchJob;
+
     private BatchEnrichScheduler scheduler;
 
     @BeforeEach
     void setUp() {
-        scheduler = new BatchEnrichScheduler(placeRepository, objectMapper);
+        scheduler = new BatchEnrichScheduler(placeRepository, objectMapper, embeddingBatchJob);
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
         ReflectionTestUtils.setField(scheduler, "anthropicApiKey", "test-api-key");
         ReflectionTestUtils.setField(scheduler, "enrichModel", "claude-haiku-5-5");

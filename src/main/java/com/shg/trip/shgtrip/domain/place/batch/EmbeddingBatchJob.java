@@ -103,6 +103,16 @@ public class EmbeddingBatchJob {
         if (apiFailures > 0) throw new BatchStageFailed("임베딩 API·저장 실패 " + apiFailures + "회");
     }
 
+    /** 반환값은 임베딩을 저장하지 못한 장소 ID다. 기존 임베딩은 그대로 남는다. */
+    public List<Long> reembed(List<Place> places) {
+        int size = Math.max(1, batchSize);
+        List<Long> failedIds = new ArrayList<>();
+        for (int from = 0; from < places.size(); from += size) {
+            failedIds.addAll(processBatch(places.subList(from, Math.min(from + size, places.size()))).failedIds());
+        }
+        return failedIds;
+    }
+
     BatchResult processBatch(List<Place> places) {
         List<String> texts = new ArrayList<>();
         List<Place> validPlaces = new ArrayList<>();

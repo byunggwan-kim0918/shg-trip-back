@@ -28,13 +28,16 @@ class BatchEnrichSchedulerTest {
     @Mock
     private PlaceRepository placeRepository;
 
+    @Mock
+    private EmbeddingBatchJob embeddingBatchJob;
+
     private BatchEnrichScheduler scheduler;
     private ObjectMapper objectMapper;
 
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        scheduler = new BatchEnrichScheduler(placeRepository, objectMapper);
+        scheduler = new BatchEnrichScheduler(placeRepository, objectMapper, embeddingBatchJob);
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
         ReflectionTestUtils.setField(scheduler, "anthropicApiKey", "test-api-key");
         ReflectionTestUtils.setField(scheduler, "enrichModel", "claude-haiku-4-5-20251001");
@@ -290,6 +293,21 @@ class BatchEnrichSchedulerTest {
         assertThat(result.failed()).isEqualTo(2);
         assertThat(result.failedIds()).containsExactly(2L, 3L);
         verify(placeRepository).save(ok);
+        verify(embeddingBatchJob).reembed(List.of(ok));
+        verify(placeRepository, never()).resetEmbeddings(anyList());
+    }
+
+    @Test
+    @DisplayName("결과 반영: 재임베딩에 실패한 장소만 임베딩을 비워 임베딩 단계가 다시 잡게 한다")
+    void applyResults_reembedFailure_resetsOnlyFailed() {
+        Place place = createPlace(1L, "센소지", "관광", "아사쿠사", "일본");
+        when(embeddingBatchJob.reembed(List.of(place))).thenReturn(List.of(1L));
+        String line = """
+                {"custom_id":"place_1","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"{\\"tags\\":[\\"사찰\\"]}"}]}}}""";
+
+        BatchEnrichScheduler.ChunkResult result = scheduler.applyResults(line, List.of(place));
+
+        assertThat(result.success()).isEqualTo(1);
         verify(placeRepository).resetEmbeddings(List.of(1L));
     }
 

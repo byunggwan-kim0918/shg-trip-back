@@ -62,6 +62,23 @@ class EmbeddingBatchJobTest {
     }
 
     @Test
+    @DisplayName("재임베딩: 저장에 성공하면 실패 목록이 비고, API가 실패하면 그 묶음 전부를 돌려준다")
+    void reembed_returnsOnlyUnstoredIds() {
+        ReflectionTestUtils.setField(embeddingBatchJob, "batchSize", 1);
+        Place ok = createPlace(1L, "센소지", "관광");
+        Place fail = createPlace(2L, "아사쿠사", "관광");
+        when(embeddingService.embedBatch(anyList()))
+                .thenReturn(List.of(new float[]{0.1f}))
+                .thenThrow(new RuntimeException("OpenAI down"));
+
+        List<Long> failed = embeddingBatchJob.reembed(List.of(ok, fail));
+
+        assertThat(failed).containsExactly(2L);
+        verify(placeVectorSearchService).storeBatch(any());
+        verifyNoInteractions(placeRepository);
+    }
+
+    @Test
     @DisplayName("미임베딩이 많으면 근사 검색 인덱스를 내렸다가 적재 후 다시 만들고, 적으면 건드리지 않는다")
     void rebuildsAnnIndexOnlyForBulkLoad() {
         Place place = createPlace(1L, "센소지", "관광");

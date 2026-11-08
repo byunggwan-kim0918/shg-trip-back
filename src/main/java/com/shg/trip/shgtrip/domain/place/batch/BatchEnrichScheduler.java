@@ -45,6 +45,7 @@ public class BatchEnrichScheduler {
     private final PlaceRepository placeRepository;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final EmbeddingBatchJob embeddingBatchJob;
 
     @Value("${anthropic.api-key:${ANTHROPIC_API_KEY:}}")
     private String anthropicApiKey;
@@ -85,9 +86,11 @@ public class BatchEnrichScheduler {
     @Value("${batch.enrich.mode:v1}")
     private String mode;
 
-    public BatchEnrichScheduler(PlaceRepository placeRepository, ObjectMapper objectMapper) {
+    public BatchEnrichScheduler(PlaceRepository placeRepository, ObjectMapper objectMapper,
+                                EmbeddingBatchJob embeddingBatchJob) {
         this.placeRepository = placeRepository;
         this.objectMapper = objectMapper;
+        this.embeddingBatchJob = embeddingBatchJob;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(30))
                 // 결과 파일 URL은 서명된 스토리지로 302 리다이렉트되어, 따라가지 않으면 본문이 비어 온다
@@ -525,11 +528,14 @@ public class BatchEnrichScheduler {
             }
         }
 
-        // 보강 성공분은 임베딩을 초기화해 다음 임베딩 단계가 새 tags/description으로
-        // 재임베딩하게 한다(embedding 컬럼은 updatable=false라 save()로는 반영 불가).
-        // 속성 보강은 임베딩 텍스트에 들어가는 컬럼을 건드리지 않으므로 초기화하지 않는다.
+        // 보강분을 비워 두고 마지막 임베딩 단계에서 채우면 보강이 도는 내내 벡터 검색에서 빠진다.
+        // 재임베딩에 실패한 것만 비워 임베딩 단계가 다시 잡게 한다. 속성 보강은 임베딩 텍스트를 바꾸지 않는다.
         if (!succeededIds.isEmpty() && !attributeMode()) {
-            placeRepository.resetEmbeddings(succeededIds);
+            List<Place> enriched = succeededIds.stream().map(placeMap::get).toList();
+            List<Long> notReembedded = embeddingBatchJob.reembed(enriched);
+            if (!notReembedded.isEmpty()) {
+                placeRepository.resetEmbeddings(notReembedded);
+            }
         }
 
         Set<Long> succeeded = new HashSet<>(succeededIds);
