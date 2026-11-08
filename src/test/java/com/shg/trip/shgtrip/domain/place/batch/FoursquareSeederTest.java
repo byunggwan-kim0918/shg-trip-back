@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
@@ -440,7 +441,7 @@ class FoursquareSeederTest {
         @DisplayName("CSV 소스가 빈 스트림을 반환하면 건너뛴다")
         void seed_emptyStream() throws IOException {
             when(csvSource.open()).thenReturn(new ByteArrayInputStream("".getBytes(StandardCharsets.UTF_8)));
-            seeder.seed();
+            assertThatThrownBy(() -> seeder.seed()).isInstanceOf(BatchStageFailed.class);
             verifyNoInteractions(placeRepository);
         }        @Test
         @DisplayName("CSV 파일을 읽어 장소를 생성한다")
@@ -472,7 +473,7 @@ class FoursquareSeederTest {
         @DisplayName("CSV 소스에서 IOException 발생 시 처리를 중단한다")
         void seed_ioException() throws IOException {
             when(csvSource.open()).thenThrow(new IOException("S3 connection failed"));
-            seeder.seed();
+            assertThatThrownBy(() -> seeder.seed()).isInstanceOf(BatchStageFailed.class);
             verify(placeRepository, never()).upsertFoursquarePlace(
                     any(), any(), any(), any(), any(),
                     any(), any(), any(), any(), any(), any());

@@ -75,11 +75,15 @@ resource "aws_sfn_state_machine" "monthly_pipeline" {
             }
           }
         }
+        # 보강이 하루 가까이 걸릴 수 있어 여유를 둔다. 없으면 멈춘 배치를 무한정 기다린다.
+        TimeoutSeconds = 129600
+        # 앱 종료 코드 1(States.TaskFailed)은 재시도하지 않는다. LLM 보강과 TourAPI 하루 한도를 처음부터 다시 쓴다.
+        # 용량 부족·이미지 pull 실패처럼 앱이 뜨기 전 실패만 다시 시도한다.
         Retry = [{
-          ErrorEquals     = ["States.TaskFailed"]
-          MaxAttempts     = 1
-          IntervalSeconds = 600
-          BackoffRate     = 1
+          ErrorEquals     = ["ECS.AmazonECSException"]
+          MaxAttempts     = 2
+          IntervalSeconds = 300
+          BackoffRate     = 2
         }]
         Catch = [{
           ErrorEquals = ["States.ALL"]

@@ -91,15 +91,18 @@ public class TourApiDetailJob {
         detailCalls = 0;
         int[] detail = new int[4]; // 조회, 영업시간 반영, 요금 반영, 원문은 있는데 영업시간 판독 실패
         int[] match = new int[2];  // 연결, 못 찾음
+        String failure = null;
         try {
             fetchDetails(regions, detail);
             matchPlaces(regions, match);
             fetchDetails(regions, detail);
         } catch (ApiUnavailable e) {
-            log.error("TourAPI 상세 중단: {}", e.getMessage());
+            failure = e.getMessage();
+            log.error("TourAPI 상세 중단: {}", failure);
         }
         log.info("TourAPI 상세 완료 - 호출 검색 {}건·상세 {}건, 연결 {}건, 못 찾음 {}건, 상세 {}건(영업시간 {}건, 판독 실패 {}건, 요금 {}건)",
                 searchCalls, detailCalls, match[0], match[1], detail[0], detail[1], detail[3], detail[2]);
+        if (failure != null) throw new BatchStageFailed("TourAPI 상세 중단: " + failure);
     }
 
     private boolean searchBudgetLeft() {

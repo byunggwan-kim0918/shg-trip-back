@@ -14,9 +14,12 @@ import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
 import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
+import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
+import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.domain.planning.service.RouteOptimizer;
 import com.shg.trip.shgtrip.domain.planning.service.ScoreReport;
+import com.shg.trip.shgtrip.domain.planning.service.VectorSearchQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -36,6 +39,7 @@ import java.util.*;
  * java -jar app.jar --spring.profiles.active=local,eval --eval.mode=replay --eval.ids=181,182
  * </pre>
  * score: 저장본만 채점 / replay: 현재 코드로 다시 돌려 비교 / corpus: 기록 있는 일정 전부 replay
+ * / pool: 기록의 보강 입력으로 벡터 검색만 다시 돌려 후보 풀을 pool-{id}.tsv로 남긴다(질의 임베딩 호출이 나간다).
  *
  * <p>{@code --eval.refresh-attributes}: 기록의 후보에 DB의 현재 속성·영업시간을 덮어쓴다.
  * off(기본) 그대로 / score 채점에만 / all 재실행 입력과 채점 모두.
@@ -53,6 +57,7 @@ public class EvalRunner implements CommandLineRunner {
     private final PlaceRepository placeRepository;
     private final ObjectMapper objectMapper;
     private final ApplicationContext context;
+    private final VectorSearchQueryService vectorSearchQueryService;
 
     private final ItineraryScorer scorer = new ItineraryScorer();
 
@@ -77,6 +82,11 @@ public class EvalRunner implements CommandLineRunner {
     public void run(String... args) throws Exception {
         if (!Set.of("off", "score", "all").contains(refreshAttributes)) {
             throw new IllegalArgumentException("eval.refresh-attributes는 off|score|all: " + refreshAttributes);
+        }
+        if ("pool".equals(mode)) {
+            dumpPools();
+            System.exit(SpringApplication.exit(context, () -> 0));
+            return;
         }
         List<Long> targets = "corpus".equals(mode)
                 ? traceRepository.findAll().stream().map(GenerationTrace::getItineraryId).sorted().toList()
@@ -134,6 +144,25 @@ public class EvalRunner implements CommandLineRunner {
                 args.transportPref(), args.startDate(), candidates, selection, hubDeadline));
         return new Row(itinerary.getId(), itinerary.getDestination(), true, saved, replayed,
                 sameRoute(savedSteps, replayedSteps));
+    }
+
+    /** eval.ids가 비면 기록 전부. 한 줄에 placeId·대분류·유사도·이름. */
+    private void dumpPools() throws Exception {
+        List<GenerationTrace> traces = ids == null || ids.isBlank() ? traceRepository.findAll()
+                : parseIds(ids).stream().map(traceRepository::findByItineraryId).flatMap(Optional::stream).toList();
+        Path dir = Path.of(outDir);
+        Files.createDirectories(dir);
+        for (GenerationTrace trace : traces) {
+            if (trace.getEnrichedInput() == null) continue;
+            VectorEnrichedInput input = objectMapper.readValue(trace.getEnrichedInput(), VectorEnrichedInput.class);
+            StringBuilder sb = new StringBuilder();
+            for (PlaceCandidate c : vectorSearchQueryService.search(input)) {
+                sb.append(String.format(Locale.ROOT, "%s\t%s\t%.4f\t%s%n", c.placeId(),
+                        PlaceCategoryConstants.majorCategory(c.category()), c.similarityScore(), c.name()));
+            }
+            Files.writeString(dir.resolve("pool-" + trace.getItineraryId() + ".tsv"), sb.toString());
+        }
+        log.info("후보 풀 {}건 → {}", traces.size(), dir.toAbsolutePath());
     }
 
     // 비용은 저장본에만 인원 배수가 곱해져 있어 비교에서 뺀다

@@ -234,7 +234,9 @@ final class DiningEnrichment {
         if (t.contains("일식") || c.contains("japanese")) return "JAPANESE";
         if (t.contains("중식") || c.contains("chinese")) return "CHINESE";
         if (t.contains("양식") || c.contains("italian") || c.contains("pizza") || c.contains("burger")
-                || c.contains("western") || c.contains("french")) return "WESTERN";
+                || c.contains("western") || c.contains("french") || c.contains("american") || c.contains("salad")
+                || c.contains("sandwich") || c.contains("bistro") || c.contains("diner")
+                || c.contains("brunch")) return "WESTERN";
         if (t.contains("분식") || c.contains("bunsik") || c.contains("fast food")) return "SNACK";
         if (t.contains("한식") || c.contains("korean")) return "KOREAN_SET";
         return "OTHER";

@@ -120,10 +120,12 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             """)
     List<Place> findTopAccommodationsByRegions(@Param("regions") List<String> regions, Pageable pageable);
 
-    @Query("SELECT p FROM Place p WHERE p.embedding IS NULL AND p.active = true")
+    @Query("SELECT p FROM Place p WHERE p.embedding IS NULL AND p.active = true"
+            + " AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')")
     Page<Place> findByEmbeddingIsNullAndActiveTrue(Pageable pageable);
 
-    @Query("SELECT p FROM Place p WHERE p.embedding IS NULL AND p.active = true AND p.region IN :regions")
+    @Query("SELECT p FROM Place p WHERE p.embedding IS NULL AND p.active = true AND p.region IN :regions"
+            + " AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')")
     Page<Place> findByEmbeddingIsNullAndActiveTrueAndRegionIn(@Param("regions") List<String> regions,
                                                              Pageable pageable);
 
@@ -161,7 +163,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     /**
      * Wikidata 매칭 후보: 지역의 좌표 있는 활성 장소. 행: (id, name, latitude, longitude, category, source).
      *
-     * <p>엔티티에는 임베딩(1536차원)이 실려 있어 통째로 올리면 서울만 수백 MB라 컬럼만 읽는다.
+     * <p>엔티티에는 임베딩이 실려 있어 통째로 올리면 서울만 수백 MB라 컬럼만 읽는다.
      */
     @Query(value = """
             SELECT id, name, latitude, longitude, category, source

@@ -53,7 +53,7 @@ anthropic:
 openai:
   api-key: test-openai-key
   embedding-model: text-embedding-3-small
-  embedding-dimensions: 1536
+  embedding-dimensions: 768
 
 planning:
   validation:

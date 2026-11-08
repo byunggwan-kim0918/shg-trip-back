@@ -20,8 +20,11 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 슬롯별 벡터 검색 → 최소 유사도 임계값 → 하이브리드 랭킹 → 1-based PlaceCandidate 변환.
@@ -182,7 +185,8 @@ public class VectorSearchQueryService {
 
         log.info("전체 벡터 검색 결과: {}개 장소 반환 (요청 총 limit: {})", allResults.size(), totalLimit);
 
-        List<VectorSearchResult> cleaned = filterGeographicOutliers(allResults);
+        List<VectorSearchResult> cleaned = new ArrayList<>(filterGeographicOutliers(allResults));
+        cleaned.addAll(namedPlaces(input, attractionVector(units, queryVectors), cleaned));
 
         // 일정 자리에 들어갈 수 없는 장소는 풀에 두면 Sonnet이나 보충 경로가 집어 든다. 판정은 CandidatePolicy 한 곳이다.
         List<PlaceCandidate> candidates = convertToCandidates(cleaned);
@@ -634,6 +638,79 @@ public class VectorSearchQueryService {
         List<VectorSearchResult> merged = new ArrayList<>(bestById.values());
         merged.addAll(withoutId);
         return merged;
+    }
+
+    private static final int NAMED_SCAN_LIMIT = 300;
+    private static final int NAMED_MAX = 5;
+    /** 이름의 이 비율 이상이 요청 문장에 있어야 그 장소를 말한 것으로 본다. "해운대 블루라인파크"가 "해운대"로 걸리지 않는다. */
+    private static final double NAMED_PREFIX_RATIO = 0.4;
+
+    /**
+     * 요청 문장에 이름이 나온 명소. 일반어 질의 임베딩과 인기도 상위 갈래 어느 쪽에도 안 잡히면
+     * 사용자가 말한 곳이 후보에 없어 선택 단계가 고를 수 없다.
+     */
+    private List<VectorSearchResult> namedPlaces(VectorEnrichedInput input, float[] vector,
+                                                 List<VectorSearchResult> already) {
+        if (input.description() == null || input.description().isBlank() || vector == null) return List.of();
+        String text = compact(input.description());
+        String destination = compact(input.destination()) + "|" + compact(input.normalizedDestination());
+        Set<Long> known = already.stream().map(VectorSearchResult::placeId).filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        // 식당 "광안리유가횟집"이 있다고 광안리해수욕장을 말한 게 해결되지는 않는다.
+        List<String> knownNames = already.stream()
+                .filter(r -> "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(r.category())))
+                .map(r -> placeName(r.name())).toList();
+        Set<String> knownQids = already.stream().map(VectorSearchResult::wikidataId).filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        Map<String, VectorSearchResult> byMention = new LinkedHashMap<>();
+        for (VectorSearchResult r : placeVectorSearchService.findPopular(vector, input.country(), input.regions(),
+                NAMED_SCAN_LIMIT)) {
+            if (!"ATTRACTION".equals(PlaceCategoryConstants.majorCategory(r.category()))
+                    || PlaceCategoryConstants.isAdministrativeZone(r.name())) continue;
+            String mention = mentionedPrefix(placeName(r.name()), text);
+            if (mention == null || destination.contains(mention)) continue;
+            // 언어판 내림차순이라 같은 이름을 먼저 가진 쪽이 대표 명소다.
+            byMention.putIfAbsent(mention, r);
+        }
+        // "광안리"가 걸렸으면 "광안"으로 걸린 광안대교는 사용자가 말한 곳이 아니다.
+        Set<String> mentions = Set.copyOf(byMention.keySet());
+        byMention.keySet().removeIf(m -> mentions.stream()
+                .anyMatch(other -> other.length() > m.length() && other.startsWith(m)));
+        byMention.keySet().removeIf(m -> knownNames.stream().anyMatch(n -> n.startsWith(m)));
+        List<VectorSearchResult> out = byMention.values().stream()
+                .filter(r -> !known.contains(r.placeId()) && !knownQids.contains(r.wikidataId()))
+                .limit(NAMED_MAX)
+                .toList();
+        if (!out.isEmpty()) {
+            log.info("요청 문장에 나온 명소 추가: {}", out.stream().map(VectorSearchResult::name).toList());
+        }
+        return out;
+    }
+
+    /** 이름의 앞부분 중 문장에 나오는 가장 긴 것. 너무 짧으면 null. */
+    static String mentionedPrefix(String name, String text) {
+        int min = Math.max(2, (int) Math.ceil(name.length() * NAMED_PREFIX_RATIO));
+        for (int len = name.length(); len >= min; len--) {
+            if (text.contains(name.substring(0, len))) return name.substring(0, len);
+        }
+        return null;
+    }
+
+    /** 병기 주석("불국사 (佛國寺)")을 떼야 앞부분이 문장의 "불국사"와 맞는다. */
+    private static String placeName(String name) {
+        return compact(name == null ? null : name.replaceAll("\\(.*?\\)|\\[.*?]", ""));
+    }
+
+    private static String compact(String s) {
+        return s == null ? "" : s.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+    }
+
+    private static float[] attractionVector(List<SearchUnit> units, List<float[]> vectors) {
+        for (int i = 0; i < units.size() && i < vectors.size(); i++) {
+            if (units.get(i).slot().role() == SearchRole.ATTRACTION && vectors.get(i) != null) return vectors.get(i);
+        }
+        return vectors.isEmpty() ? null : vectors.get(0);
     }
 
     /**

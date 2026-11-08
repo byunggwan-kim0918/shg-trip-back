@@ -540,6 +540,7 @@ public class OptimizedGenerationExecutor {
         for (List<PlaceCandidate> group : nameGroups.values()) {
             representatives.add(pickRepresentative(group));
         }
+        representatives = dropStoresInsideVenue(representatives);
 
         representatives.sort(Comparator.comparingInt(PlaceCandidate::index));
         List<PlaceCandidate> result = new ArrayList<>(representatives.size());
@@ -551,6 +552,46 @@ public class OptimizedGenerationExecutor {
             log.info("후보 물리적 dedupe: {}개 → {}개", candidates.size(), result.size());
         }
         return result;
+    }
+
+    private static final double STORE_INSIDE_VENUE_KM = 0.3;
+    private static final int VENUE_NAME_MIN_LENGTH = 3;
+
+    /** 상업시설 이름으로 시작하는 근처 매장은 그 건물 안이라 둘 다 두면 같은 건물을 두 번 방문한다. */
+    static List<PlaceCandidate> dropStoresInsideVenue(List<PlaceCandidate> candidates) {
+        List<PlaceCandidate> result = new ArrayList<>(candidates.size());
+        for (PlaceCandidate c : candidates) {
+            if (isStoreInsideVenue(c, candidates)) {
+                log.info("건물 안 매장 제외: {}", c.name());
+            } else {
+                result.add(c);
+            }
+        }
+        return result;
+    }
+
+    static boolean isStoreInsideVenue(PlaceCandidate c, List<PlaceCandidate> pool) {
+        if (c.userSelected() || !isRetail(c) || !hasCoords(c)) return false;
+        String name = compactName(c);
+        return pool.stream().anyMatch(v -> v != c && isRetail(v) && hasCoords(v)
+                && compactName(v).length() >= VENUE_NAME_MIN_LENGTH
+                && name.length() > compactName(v).length()
+                && name.startsWith(compactName(v))
+                && GeoUtils.haversine(v.latitude().doubleValue(), v.longitude().doubleValue(),
+                        c.latitude().doubleValue(), c.longitude().doubleValue()) <= STORE_INSIDE_VENUE_KM);
+    }
+
+    private static boolean isRetail(PlaceCandidate c) {
+        return c.category() != null && c.category().toLowerCase().startsWith("retail");
+    }
+
+    private static boolean hasCoords(PlaceCandidate c) {
+        return c.latitude() != null && c.longitude() != null
+                && !GeoUtils.isZeroCoord(c.latitude(), c.longitude());
+    }
+
+    private static String compactName(PlaceCandidate c) {
+        return c.name() == null ? "" : c.name().toLowerCase().replaceAll("\\s+", "");
     }
 
     /** 대표 선정: 카테고리 신뢰도 → 한글명(한국 사용자 노출용) → rating → 좌표 유효 순. */
@@ -633,7 +674,8 @@ public class OptimizedGenerationExecutor {
     }
 
     /**
-     * 덧붙인 후보 중 앞선 후보와 같은 위키데이터 항목인 것을 뺀다. 출처별 행은 이름·좌표가 달라 addIfNew를 통과한다.
+     * 덧붙인 후보 중 앞선 후보와 같은 위키데이터 항목이거나 다른 후보 건물 안 매장인 것을 뺀다.
+     * 출처별 행·매장은 이름·좌표가 달라 addIfNew를 통과한다.
      * 덧붙인 후보는 선택에 없어 번호를 다시 매겨도 된다.
      */
     List<PlaceCandidate> dropAppendedSameWikidataItem(List<PlaceCandidate> candidates, int baseSize) {
@@ -652,6 +694,7 @@ public class OptimizedGenerationExecutor {
         for (PlaceCandidate c : candidates.subList(baseSize, candidates.size())) {
             String qid = qidById.get(c.placeId());
             if (qid != null && !seen.add(qid)) continue;
+            if (isStoreInsideVenue(c, candidates)) continue;
             result.add(reindexCandidate(c, result.size() + 1));
         }
         if (result.size() < candidates.size()) {

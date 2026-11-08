@@ -13,7 +13,7 @@ public record OpenAIProperties(
             embeddingModel = "text-embedding-3-small";
         }
         if (embeddingDimensions <= 0) {
-            embeddingDimensions = 1536;
+            embeddingDimensions = 768;
         }
     }
 }

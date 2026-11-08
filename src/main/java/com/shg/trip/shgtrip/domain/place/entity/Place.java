@@ -105,8 +105,8 @@ public class Place extends BaseTimeEntity {
     private String source = "google";
 
 
-    /** pgvector embedding (OpenAI text-embedding-3-small: 1536 dimensions) */
-    @Column(columnDefinition = "vector(1536)", insertable = false, updatable = false)
+    /** pgvector halfvec, text-embedding-3-small 768차원 */
+    @Column(columnDefinition = "halfvec(768)", insertable = false, updatable = false)
     private String embedding;
 
     /** 장소 태그 (배치 보강으로 생성) */

@@ -4,7 +4,7 @@ import java.util.List;
 
 public interface EmbeddingService {
 
-    /** @return 1536차원 벡터 */
+    /** @return openai.embedding-dimensions 차원 벡터 */
     float[] embed(String text);
 
     /** @return 입력 순서와 같은 순서의 벡터 목록 */

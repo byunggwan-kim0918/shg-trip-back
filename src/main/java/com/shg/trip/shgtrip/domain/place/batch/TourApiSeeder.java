@@ -127,6 +127,8 @@ public class TourApiSeeder {
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
+    private int failedListCalls;
+
     @Value("${batch.tourapi.service-key:}")
     private String serviceKey;
 
@@ -161,6 +163,7 @@ public class TourApiSeeder {
             log.warn("TOUR_API_SERVICE_KEY가 설정되지 않았습니다. TourAPI 시딩을 건너뜁니다.");
             return;
         }
+        failedListCalls = 0;
 
         int totalInserted = 0;
         int totalSkipped = 0;
@@ -193,8 +196,10 @@ public class TourApiSeeder {
                 totalBackfilled += backfillImagesByKeyword(region, imageBackfillLimit);
             }
         }
-        log.info("TourAPI 시딩 완료 - 신규 {}건, 중복 스킵 {}건, 이미지 복구 {}건",
-                totalInserted, totalSkipped, totalBackfilled);
+        log.info("TourAPI 시딩 완료 - 신규 {}건, 중복 스킵 {}건, 이미지 복구 {}건, 목록 조회 실패 {}건",
+                totalInserted, totalSkipped, totalBackfilled, failedListCalls);
+        // 이미지 보충 조회는 실패해도 다음 실행이 다시 채워 목록 조회만 센다.
+        if (failedListCalls > 0) throw new BatchStageFailed("TourAPI 목록 조회 " + failedListCalls + "건 실패");
     }
 
     /**
@@ -368,6 +373,7 @@ public class TourApiSeeder {
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
+                failedListCalls++;
                 log.warn("TourAPI 호출 실패 - HTTP {} (area={}, type={}, page={})",
                         response.statusCode(), area, contentTypeId, pageNo);
                 return null;
@@ -382,8 +388,10 @@ public class TourApiSeeder {
             return items;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            failedListCalls++;
             return null;
         } catch (Exception e) {
+            failedListCalls++;
             log.warn("TourAPI 응답 처리 실패 (area={}, type={}, page={}): {}",
                     area, contentTypeId, pageNo, e.getMessage());
             return null;

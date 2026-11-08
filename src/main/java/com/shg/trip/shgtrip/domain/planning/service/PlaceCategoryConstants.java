@@ -419,13 +419,14 @@ public final class PlaceCategoryConstants {
     /**
      * 슬롯별 최소 cosine 유사도. 없으면 데이터가 부족할 때 limit를 채우려고 무관한 장소를 끌어온다.
      * 후보가 줄면 FallbackDecider가 COMPACT/FALLBACK으로 이어받는다.
+     * 768차원 halfvec 기준이다. 같은 후보의 유사도가 1536차원보다 대분류별 중앙값 0.013~0.027 높다.
      */
     private static final Map<SearchRole, Double> SLOT_MIN_SIMILARITY = Map.of(
-            SearchRole.TRANSPORTATION, 0.30,
-            SearchRole.RESTAURANT, 0.34,
-            SearchRole.CAFE, 0.36,
-            SearchRole.ACCOMMODATION, 0.34,
-            SearchRole.ATTRACTION, 0.32
+            SearchRole.TRANSPORTATION, 0.32,
+            SearchRole.RESTAURANT, 0.35,
+            SearchRole.CAFE, 0.39,
+            SearchRole.ACCOMMODATION, 0.36,
+            SearchRole.ATTRACTION, 0.34
     );
 
     private static final Map<SearchRole, String> SLOT_MAJOR_CATEGORY = Map.of(
