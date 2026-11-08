@@ -18,6 +18,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * Anthropic Batch API로 미보강 장소의 태그·설명·추천 시간대를 채운다.
@@ -85,6 +89,10 @@ public class BatchEnrichScheduler {
      */
     @Value("${batch.enrich.mode:v1}")
     private String mode;
+
+    /** 동시에 제출해 기다리는 묶음 수. 묶음마다 10초 간격으로 상태를 조회해 이 수만큼 Batch API 요청이 늘어난다. */
+    @Value("${batch.enrich.parallel-chunks:5}")
+    private int parallelChunks;
 
     public BatchEnrichScheduler(PlaceRepository placeRepository, ObjectMapper objectMapper,
                                 EmbeddingBatchJob embeddingBatchJob) {
@@ -154,13 +162,15 @@ public class BatchEnrichScheduler {
         int failed = 0;
         int consecutiveFailedChunks = 0;
         Set<Long> excludedIds = new HashSet<>();
+        // 재사용 batchId는 한 묶음의 결과라 여러 묶음에 나눠 쓸 수 없다.
+        int parallel = resumeBatchId != null && !resumeBatchId.isBlank() ? 1 : Math.max(1, parallelChunks);
 
         while (true) {
-            int pageSize = chunkSize;
+            int pageSize = chunkSize * parallel;
             if (maxPerRegion > 0) {
                 int remaining = maxPerRegion - processed - failed;
                 if (remaining <= 0) break;
-                pageSize = Math.min(chunkSize, remaining);
+                pageSize = Math.min(pageSize, remaining);
             }
             // NOT IN에 빈 컬렉션을 넘기지 않는다(존재할 수 없는 id로 대신한다).
             Collection<Long> excluded = excludedIds.isEmpty() ? List.of(-1L) : excludedIds;
@@ -177,12 +187,12 @@ public class BatchEnrichScheduler {
             log.info("배치 보강 청크 처리 중 - {} {}건 (누적 성공 {}건, 실패 {}건)",
                     regions.isEmpty() ? "전체" : regions, places.size(), processed, failed);
 
-            ChunkResult result = processChunk(places);
-            processed += result.success();
-            failed += result.failed();
-            excludedIds.addAll(result.failedIds());
-
-            consecutiveFailedChunks = result.success() == 0 ? consecutiveFailedChunks + 1 : 0;
+            for (ChunkResult result : processChunks(splitIntoChunks(places))) {
+                processed += result.success();
+                failed += result.failed();
+                excludedIds.addAll(result.failedIds());
+                consecutiveFailedChunks = result.success() == 0 ? consecutiveFailedChunks + 1 : 0;
+            }
             if (consecutiveFailedChunks >= MAX_CONSECUTIVE_FAILED_CHUNKS) {
                 log.error("배치 보강 중단 - 연속 {}개 청크 전부 실패 (API 키·모델명·쿼터 확인 필요)",
                         consecutiveFailedChunks);
@@ -204,6 +214,31 @@ public class BatchEnrichScheduler {
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .toList();
+    }
+
+    /** 결과는 chunks와 같은 순서다. 묶음 처리 중 예외는 그 묶음 전부를 실패로 돌려준다. */
+    List<ChunkResult> processChunks(List<List<Place>> chunks) {
+        if (chunks.size() == 1) {
+            return List.of(processChunk(chunks.get(0)));
+        }
+        List<ChunkResult> results = new ArrayList<>();
+        try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<ChunkResult>> futures = chunks.stream()
+                    .map(chunk -> pool.submit(() -> processChunk(chunk)))
+                    .toList();
+            for (int i = 0; i < chunks.size(); i++) {
+                try {
+                    results.add(futures.get(i).get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    results.add(new ChunkResult(0, chunks.get(i).size(), allIds(chunks.get(i))));
+                } catch (ExecutionException e) {
+                    log.error("배치 보강 묶음 처리 중 예외: {}", e.getCause().getMessage(), e.getCause());
+                    results.add(new ChunkResult(0, chunks.get(i).size(), allIds(chunks.get(i))));
+                }
+            }
+        }
+        return results;
     }
 
     ChunkResult processChunk(List<Place> places) {

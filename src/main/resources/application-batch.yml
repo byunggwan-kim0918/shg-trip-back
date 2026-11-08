@@ -103,6 +103,8 @@ batch:
     regions: ${BATCH_ENRICH_REGIONS:}
     # 지역당 상한(0=무제한). 인기도 → 비식당 순으로 앞에서부터 자른다.
     max-per-region: ${BATCH_ENRICH_MAX_PER_REGION:0}
+    # 동시에 제출하는 Batch API 묶음 수(묶음당 chunk-size건)
+    parallel-chunks: ${BATCH_ENRICH_PARALLEL_CHUNKS:5}
   role-backfill:
     # 카테고리로 확정되는 비방문 장소에 place_role=NOT_VISITABLE 기록(외부 호출 없음)
     enabled: ${BATCH_ROLE_BACKFILL_ENABLED:true}
