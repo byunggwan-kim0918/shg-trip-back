@@ -10,6 +10,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 
@@ -85,5 +87,24 @@ class BatchJobRunnerTest {
         inOrder.verify(wikidataSitelinksJob).run();
         inOrder.verify(batchEnrichScheduler).enrich();
         inOrder.verify(embeddingBatchJob).execute();
+    }
+
+    @Test
+    @DisplayName("한 단계가 실패해도 다음 단계는 돌고, 종료 코드는 1이다")
+    void failedStageKeepsGoingAndExitsNonZero() throws Exception {
+        doThrow(new BatchStageFailed("CSV 읽기 실패")).when(foursquareSeeder).seed();
+
+        batchJobRunner.run();
+
+        verify(embeddingBatchJob).execute();
+        assertThat(batchJobRunner.getExitCode()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("모든 단계가 성공하면 종료 코드는 0이다")
+    void allStagesSucceedExitsZero() throws Exception {
+        batchJobRunner.run();
+
+        assertThat(batchJobRunner.getExitCode()).isZero();
     }
 }

@@ -90,7 +90,7 @@ class PgVectorPlaceSearchServiceTest {
 
             // 유사도 갈래 + 인기도 시딩 갈래를 UNION한다. 필터는 양쪽에 동일하게 걸린다.
             assertThat(sql).contains("UNION");
-            assertThat(sql).contains("ORDER BY p.embedding <=> ?::vector");
+            assertThat(sql).contains("ORDER BY p.embedding <=> ?::halfvec");
             assertThat(sql).contains("ORDER BY p.wikidata_sitelinks DESC");
 
             // params: [vec, country, region, vec(ORDER BY), limit] + [vec, country, region, seedLimit]
@@ -241,7 +241,7 @@ class PgVectorPlaceSearchServiceTest {
             service.store(1L, embedding);
 
             verify(jdbcTemplate).update(
-                    eq("UPDATE places SET embedding = ?::vector WHERE id = ?"),
+                    eq("UPDATE places SET embedding = ?::halfvec WHERE id = ?"),
                     eq("[0.1,0.2,0.3]"),
                     eq(1L)
             );
@@ -280,7 +280,7 @@ class PgVectorPlaceSearchServiceTest {
 
             ArgumentCaptor<List<Object[]>> captor = ArgumentCaptor.forClass(List.class);
             verify(jdbcTemplate).batchUpdate(
-                    eq("UPDATE places SET embedding = ?::vector WHERE id = ?"),
+                    eq("UPDATE places SET embedding = ?::halfvec WHERE id = ?"),
                     captor.capture()
             );
 

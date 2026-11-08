@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -423,7 +424,7 @@ class BatchEnrichSchedulerTest {
         when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class)))
                 .thenReturn(List.of(place1), List.of(place2), List.of());
 
-        spied.enrich();
+        assertThatThrownBy(() -> spied.enrich()).isInstanceOf(BatchStageFailed.class);
 
         verify(placeRepository, times(3)).findEnrichTargets(anyCollection(), any(Pageable.class));
         verify(placeRepository, atLeastOnce()).findEnrichTargets(
@@ -456,7 +457,7 @@ class BatchEnrichSchedulerTest {
                     };
                 });
 
-        spied.enrich();
+        assertThatThrownBy(() -> spied.enrich()).isInstanceOf(BatchStageFailed.class);
 
         verify(spied).processChunk(List.of(ok));
     }
@@ -474,7 +475,7 @@ class BatchEnrichSchedulerTest {
         when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class)))
                 .thenAnswer(inv -> List.of(createPlace(nextId.incrementAndGet(), "장소", "관광", "제주", "한국")));
 
-        spied.enrich();
+        assertThatThrownBy(() -> spied.enrich()).isInstanceOf(BatchStageFailed.class);
 
         verify(spied, times(BatchEnrichScheduler.MAX_CONSECUTIVE_FAILED_CHUNKS)).processChunk(anyList());
     }

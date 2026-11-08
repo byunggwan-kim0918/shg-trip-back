@@ -33,6 +33,15 @@ class EnrichRoleDerivationTest {
     }
 
     @Test
+    @DisplayName("양식 업종은 모델 태그에 한식이 있어도 한정식으로 묶지 않는다")
+    void westernCategoryBeatsKoreanTag() {
+        assertThat(DiningEnrichment.cuisineOf(List.of("식당", "한식"),
+                "Dining and Drinking > Restaurant > Salad Restaurant")).isEqualTo("WESTERN");
+        assertThat(DiningEnrichment.cuisineOf(List.of("식당", "한식"),
+                "Dining and Drinking > Restaurant > American Restaurant > New American Restaurant")).isEqualTo("WESTERN");
+    }
+
+    @Test
     @DisplayName("관광지 역할은 허용 값만 받고, 모르는 값은 버린다(일정 로직이 카테고리로 추정)")
     void attractionRoleParsing() throws Exception {
         ObjectMapper om = new ObjectMapper();

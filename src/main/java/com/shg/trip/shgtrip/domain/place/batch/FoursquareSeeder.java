@@ -97,7 +97,7 @@ public class FoursquareSeeder {
                 log.warn("[FoursquareSeeder] 빈 CSV 데이터");
                 history.fail("빈 CSV 데이터");
                 historyRepository.save(history);
-                return;
+                throw new BatchStageFailed("Foursquare 빈 CSV 데이터");
             }
 
             Map<String, Integer> columnIndex = parseHeader(headerLine);
@@ -105,7 +105,7 @@ public class FoursquareSeeder {
                 log.error("[FoursquareSeeder] 필수 컬럼 누락");
                 history.fail("필수 컬럼 누락");
                 historyRepository.save(history);
-                return;
+                throw new BatchStageFailed("Foursquare 필수 컬럼 누락");
             }
 
             List<String[]> chunk = new ArrayList<>(chunkSize);
@@ -151,11 +151,15 @@ public class FoursquareSeeder {
 
             log.info("[FoursquareSeeder] 완료: processed={}, failedChunks={}, failedRows={}",
                     totalProcessed, failedChunks, failedRows);
+            if (failedChunks > 0) {
+                throw new BatchStageFailed("Foursquare 청크 " + failedChunks + "개(" + failedRows + "건) 실패");
+            }
 
         } catch (IOException e) {
             log.error("[FoursquareSeeder] CSV 읽기 실패: {}", e.getMessage());
             history.fail(e.getMessage());
             historyRepository.save(history);
+            throw new BatchStageFailed("Foursquare CSV 읽기 실패: " + e.getMessage());
         }
     }
 

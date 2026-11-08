@@ -131,12 +131,12 @@ public class WikidataSitelinksJob {
         try {
             foodClasses = fetchFoodClasses();
         } catch (Exception e) {
-            log.warn("Wikidata 식음료 분류 조회 실패 — 이번 실행은 건너뛴다: {}", e.getMessage());
-            return;
+            throw new BatchStageFailed("Wikidata 식음료 분류 조회 실패, 매칭 건너뜀: " + e.getMessage());
         }
 
         int totalMatched = 0;
         int totalChecked = 0;
+        List<String> failedRegions = new ArrayList<>();
         for (RegionBox box : boxes) {
             try {
                 int[] result = processRegion(box, foodClasses);
@@ -144,10 +144,12 @@ public class WikidataSitelinksJob {
                 totalMatched += result[1];
             } catch (Exception e) {
                 // 한 지역이 실패해도 나머지는 계속한다(TourApiSeeder와 같은 방침).
+                failedRegions.add(box.region());
                 log.warn("Wikidata 매칭 실패: region={}, error={}", box.region(), e.getMessage());
             }
         }
         log.info("Wikidata 인기도 매칭 완료: 확인 {}건, 매칭 {}건", totalChecked, totalMatched);
+        if (!failedRegions.isEmpty()) throw new BatchStageFailed("Wikidata 매칭 실패 지역 " + failedRegions);
     }
 
     private int[] processRegion(RegionBox box, Set<String> foodClasses) throws Exception {
@@ -468,12 +470,23 @@ public class WikidataSitelinksJob {
                 .POST(HttpRequest.BodyPublishers.ofString("query=" + URLEncoder.encode(query, StandardCharsets.UTF_8)))
                 .build();
 
+        return sendWithRetry(httpClient, request, objectMapper);
+    }
+
+    /**
+     * 429·5xx·연결 오류·본문이 잘린 200 응답을 재시도한다. 쿼리 시간 제한에 걸린 SPARQL 서비스는
+     * 200 상태로 중간까지만 보내 파싱해 봐야 알 수 있다.
+     */
+    static String sendWithRetry(HttpClient client, HttpRequest request, ObjectMapper objectMapper) throws Exception {
         Exception last = null;
         for (int attempt = 1; attempt <= SPARQL_MAX_ATTEMPTS; attempt++) {
             try {
-                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
                 int status = response.statusCode();
-                if (status == 200) return response.body();
+                if (status == 200) {
+                    objectMapper.readTree(response.body());
+                    return response.body();
+                }
                 last = new IllegalStateException("SPARQL 응답 " + status);
                 if (status != 429 && status < 500) throw last;   // 쿼리 오류는 재시도해도 같다
             } catch (java.io.IOException e) {

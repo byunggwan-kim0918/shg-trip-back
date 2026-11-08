@@ -83,6 +83,9 @@ public class WikidataLandmarkSeeder {
             "Q1440300", "Landmarks and Outdoors > Scenic Lookout",                       // 전망탑
             "Q12518", "Landmarks and Outdoors > Monument",                               // 탑
             "Q39715", "Landmarks and Outdoors > Lighthouse",                             // 등대
+            "Q848813", "Landmarks and Outdoors > Historic and Protected Site",           // 정자
+            "Q276173", "Landmarks and Outdoors > Historic and Protected Site",           // 누각·파빌리온
+            "Q23442", "Landmarks and Outdoors > Island",                                 // 섬
             "Q330284", "Retail > Market",                                                // 시장
             "Q570116", "Landmarks and Outdoors > Tourist Attraction");                   // 관광 명소
 
@@ -98,6 +101,13 @@ public class WikidataLandmarkSeeder {
     @Value("${batch.wikidata.landmarks.min-sitelinks:5}")
     private int minSitelinks;
 
+    /**
+     * 지역별 기준("Gyeongju:2,Jeonju:2"). 지방 명소는 대도시보다 언어판이 적어 같은 기준이면 대표 명소가 빠진다.
+     * 없는 지역은 {@link #minSitelinks}.
+     */
+    @Value("${batch.wikidata.landmarks.min-sitelinks-by-region:}")
+    private String minSitelinksByRegion;
+
     public WikidataLandmarkSeeder(PlaceRepository placeRepository, ObjectMapper objectMapper) {
         this.placeRepository = placeRepository;
         this.objectMapper = objectMapper;
@@ -106,6 +116,7 @@ public class WikidataLandmarkSeeder {
 
     public void seed() {
         int totalInserted = 0;
+        List<String> failedRegions = new ArrayList<>();
         for (Object[] row : placeRepository.findRegionBoundingBoxes(MIN_PLACES_PER_REGION)) {
             String region = (String) row[0];
             if (!wanted(region)) continue;
@@ -118,12 +129,14 @@ public class WikidataLandmarkSeeder {
                 Thread.sleep(2_000); // SPARQL 서비스는 연속 호출하면 429를 낸다
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return;
+                throw new BatchStageFailed("Wikidata 명소 시딩 인터럽트");
             } catch (Exception e) {
+                failedRegions.add(region);
                 log.warn("Wikidata 명소 시딩 실패: region={}, error={}", region, e.getMessage());
             }
         }
         log.info("Wikidata 명소 시딩 완료 - 신규 {}건", totalInserted);
+        if (!failedRegions.isEmpty()) throw new BatchStageFailed("Wikidata 명소 시딩 실패 지역 " + failedRegions);
     }
 
     private boolean wanted(String region) {
@@ -134,7 +147,8 @@ public class WikidataLandmarkSeeder {
 
     private int seedRegion(String region, double minLat, double minLon, double maxLat, double maxLon)
             throws Exception {
-        List<Landmark> landmarks = fetch(minLat, minLon, maxLat, maxLon);
+        List<Landmark> landmarks = fetch(minLat, minLon, maxLat, maxLon,
+                minSitelinksFor(region, minSitelinksByRegion, minSitelinks));
         List<WikidataSitelinksJob.Candidate> existing = placeRepository.findWikidataCandidates(region).stream()
                 .map(WikidataSitelinksJob.Candidate::fromRow)
                 .toList();
@@ -202,21 +216,33 @@ public class WikidataLandmarkSeeder {
                 .build();
     }
 
-    private List<Landmark> fetch(double minLat, double minLon, double maxLat, double maxLon) throws Exception {
+    private List<Landmark> fetch(double minLat, double minLon, double maxLat, double maxLon, int threshold)
+            throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(SPARQL_ENDPOINT + "?query="
-                        + URLEncoder.encode(buildSparql(minLat, minLon, maxLat, maxLon, minSitelinks),
+                        + URLEncoder.encode(buildSparql(minLat, minLon, maxLat, maxLon, threshold),
                         StandardCharsets.UTF_8)))
                 .header("Accept", "application/sparql-results+json")
                 .header("User-Agent", WikidataSitelinksJob.USER_AGENT)
                 .timeout(Duration.ofSeconds(90))
                 .GET()
                 .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() != 200) {
-            throw new IllegalStateException("SPARQL 응답 " + response.statusCode());
+        return parse(WikidataSitelinksJob.sendWithRetry(httpClient, request, objectMapper));
+    }
+
+    static int minSitelinksFor(String region, String byRegion, int fallback) {
+        if (byRegion == null || byRegion.isBlank()) return fallback;
+        for (String entry : byRegion.split(",")) {
+            String[] kv = entry.trim().split(":");
+            if (kv.length == 2 && kv[0].trim().equalsIgnoreCase(region)) {
+                try {
+                    return Integer.parseInt(kv[1].trim());
+                } catch (NumberFormatException e) {
+                    log.warn("min-sitelinks-by-region 값을 읽지 못해 기본값을 쓴다: {}", entry);
+                }
+            }
         }
-        return parse(response.body());
+        return fallback;
     }
 
     static String buildSparql(double minLat, double minLon, double maxLat, double maxLon, int minSitelinks) {

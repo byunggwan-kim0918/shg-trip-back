@@ -30,6 +30,15 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
     private static final int POPULARITY_SEED_MIN = 5;
     private static final int POPULARITY_SEED_MAX = 20;
 
+    private static final String SELECT_COLUMNS = """
+            SELECT p.id, p.name, p.address, p.category, p.tags, p.region, p.country,
+                   p.latitude, p.longitude, p.description, p.rating, p.user_rating_count,
+                   p.wikidata_sitelinks, p.place_role, p.cuisine, p.wikidata_id,
+                   p.attributes::text AS attributes,
+                   1 - (p.embedding <=> ?::halfvec) AS similarity_score
+            FROM places p
+            """;
+
     private final JdbcTemplate jdbcTemplate;
 
     @Override
@@ -51,11 +60,41 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public List<VectorSearchResult> findPopular(float[] queryVector, String country, List<String> regions,
+                                                int limitPerRegion) {
+        if (queryVector == null || queryVector.length == 0 || regions == null || regions.isEmpty()) {
+            return List.of();
+        }
+        // 인기 상위는 역·공항이 절반을 넘어 관광 대분류만 남기지 않으면 LIMIT 안에서 명소가 밀린다.
+        String sql = SELECT_COLUMNS + """
+                WHERE p.embedding IS NOT NULL
+                  AND p.active = true
+                  AND p.country = ?
+                  AND p.region = ?
+                  AND p.wikidata_sitelinks > 0
+                  AND NOT (p.latitude = 0 AND p.longitude = 0)
+                  AND (p.place_role IS NULL OR p.place_role NOT IN ('NOT_VISITABLE', 'TRANSIT'))
+                  AND p.category NOT ILIKE 'Travel and Transportation%'
+                  AND p.category NOT ILIKE 'Dining and Drinking%'
+                ORDER BY p.wikidata_sitelinks DESC
+                LIMIT ?
+                """;
+        String vectorString = toVectorString(queryVector);
+        List<VectorSearchResult> out = new ArrayList<>();
+        for (String region : regions) {
+            out.addAll(jdbcTemplate.query(sql, (rs, rowNum) -> mapRow(rs), vectorString, country, region,
+                    limitPerRegion));
+        }
+        return out;
+    }
+
+    @Override
     @Transactional
     public void store(Long placeId, float[] embedding) {
         String vectorString = toVectorString(embedding);
         jdbcTemplate.update(
-                "UPDATE places SET embedding = ?::vector WHERE id = ?",
+                "UPDATE places SET embedding = ?::halfvec WHERE id = ?",
                 vectorString, placeId
         );
         log.debug("Stored embedding for place id={}", placeId);
@@ -71,6 +110,26 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         log.debug("Deleted embedding for place id={}", placeId);
     }
 
+    /** V48 마이그레이션과 같은 정의여야 한다. */
+    private static final String ANN_INDEX_DDL = """
+            CREATE INDEX IF NOT EXISTS idx_places_embedding_hnsw ON places
+                USING hnsw (embedding halfvec_cosine_ops)
+                WITH (m = 16, ef_construction = 64)
+            """;
+
+    @Override
+    public void dropAnnIndex() {
+        jdbcTemplate.execute("DROP INDEX IF EXISTS idx_places_embedding_hnsw");
+        log.info("근사 검색 인덱스 제거");
+    }
+
+    @Override
+    public void createAnnIndex() {
+        long start = System.currentTimeMillis();
+        jdbcTemplate.execute(ANN_INDEX_DDL);
+        log.info("근사 검색 인덱스 생성 {}ms", System.currentTimeMillis() - start);
+    }
+
     @Override
     @Transactional
     public void storeBatch(Map<Long, float[]> embeddings) {
@@ -78,7 +137,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
             return;
         }
 
-        String sql = "UPDATE places SET embedding = ?::vector WHERE id = ?";
+        String sql = "UPDATE places SET embedding = ?::halfvec WHERE id = ?";
 
         List<Object[]> batchArgs = embeddings.entrySet().stream()
                 .map(entry -> new Object[]{toVectorString(entry.getValue()), entry.getKey()})
@@ -166,16 +225,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
 
         int seedLimit = Math.min(POPULARITY_SEED_MAX, Math.max(POPULARITY_SEED_MIN, limit));
 
-        String columns = """
-                SELECT p.id, p.name, p.address, p.category, p.tags, p.region, p.country,
-                       p.latitude, p.longitude, p.description, p.rating, p.user_rating_count,
-                       p.wikidata_sitelinks, p.place_role, p.cuisine, p.wikidata_id,
-                       p.attributes::text AS attributes,
-                       1 - (p.embedding <=> ?::vector) AS similarity_score
-                FROM places p
-                """;
-
-        String similarityLeg = "(" + columns + whereClause + "ORDER BY p.embedding <=> ?::vector\nLIMIT ?)";
+        String similarityLeg = "(" + SELECT_COLUMNS + whereClause + "ORDER BY p.embedding <=> ?::halfvec\nLIMIT ?)";
         if (!popularitySeed) {
             List<Object> params = new ArrayList<>();
             params.add(vectorString);
@@ -187,7 +237,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
 
         String sql = similarityLeg + "\n"
                 + "UNION\n"
-                + "(" + columns + whereClause + "  AND p.wikidata_sitelinks > 0\n"
+                + "(" + SELECT_COLUMNS + whereClause + "  AND p.wikidata_sitelinks > 0\n"
                 + "ORDER BY p.wikidata_sitelinks DESC\nLIMIT ?)";
 
         List<Object> params = new ArrayList<>();

@@ -76,7 +76,7 @@ anthropic:
 openai:
   api-key: ${OPENAI_API_KEY:}
   embedding-model: text-embedding-3-small
-  embedding-dimensions: 1536
+  embedding-dimensions: 768
 
 
 cloud:

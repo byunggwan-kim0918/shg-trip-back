@@ -3,7 +3,7 @@ package com.shg.trip.shgtrip.domain.place.vector;
 import java.util.List;
 
 /**
- * @param queryVector   검색 쿼리 임베딩 벡터 (1536 dimensions)
+ * @param queryVector   검색 쿼리 임베딩 벡터 (openai.embedding-dimensions 차원)
  * @param destination   country + region 필터 (예: "일본")
  * @param regions       지역 목록 필터 (5일+ 여행 시 지역별 분리 조회용)
  * @param categories    카테고리 필터 목록

@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
@@ -61,6 +62,23 @@ class EmbeddingBatchJobTest {
     }
 
     @Test
+    @DisplayName("미임베딩이 많으면 근사 검색 인덱스를 내렸다가 적재 후 다시 만들고, 적으면 건드리지 않는다")
+    void rebuildsAnnIndexOnlyForBulkLoad() {
+        Place place = createPlace(1L, "센소지", "관광");
+        when(placeRepository.findByEmbeddingIsNullAndActiveTrue(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(place), PageRequest.of(0, 100), 20_000))
+                .thenReturn(Page.empty());
+        when(embeddingService.embedBatch(anyList())).thenReturn(List.of(new float[]{0.1f}));
+
+        embeddingBatchJob.execute();
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(placeVectorSearchService);
+        order.verify(placeVectorSearchService).dropAnnIndex();
+        order.verify(placeVectorSearchService).storeBatch(any());
+        order.verify(placeVectorSearchService).createAnnIndex();
+    }
+
+    @Test
     @DisplayName("미임베딩 장소를 조회하여 임베딩을 생성하고 저장한다")
     void execute_processesUnembeddedPlaces() {
         Place place1 = createPlace(1L, "센소지", "관광");
@@ -79,6 +97,7 @@ class EmbeddingBatchJobTest {
 
         embeddingBatchJob.execute();
 
+        verify(placeVectorSearchService, org.mockito.Mockito.never()).dropAnnIndex();
         verify(embeddingService).embedBatch(anyList());
 
         @SuppressWarnings("unchecked")
@@ -134,7 +153,7 @@ class EmbeddingBatchJobTest {
         when(embeddingService.embedBatch(anyList()))
                 .thenThrow(new RuntimeException("OpenAI API 오류"));
 
-        embeddingBatchJob.execute();
+        assertThatThrownBy(() -> embeddingBatchJob.execute()).isInstanceOf(BatchStageFailed.class);
 
         verifyNoInteractions(placeVectorSearchService);
     }
@@ -155,7 +174,7 @@ class EmbeddingBatchJobTest {
                 .when(placeVectorSearchService).storeBatch(any());
 
         // 예외가 전파되지 않아야 함
-        embeddingBatchJob.execute();
+        assertThatThrownBy(() -> embeddingBatchJob.execute()).isInstanceOf(BatchStageFailed.class);
 
         verify(placeVectorSearchService).storeBatch(any());
     }

@@ -41,6 +41,8 @@ public final class CandidatePolicy {
 
     public static Role roleOf(PlaceCandidate c) {
         if (c == null) return Role.NOT_VISITABLE;
+        // 보강 모델은 근린공원·키즈카페도 SIGHT로 적어 명시 목록이 보강 역할보다 앞선다. 사용자가 고른 곳은 예외다.
+        if (!c.userSelected() && isCertainlyNotVisitable(c.name(), c.category())) return Role.NOT_VISITABLE;
         Role enriched = Role.parse(c.placeRole());
         if (enriched != null) return enriched;
         Role byAttributes = roleOf(c.attributes());
@@ -93,23 +95,29 @@ public final class CandidatePolicy {
     }
 
     /**
-     * 관광 대분류 안의 명시 목록처럼 비방문이 확실해 DB에 영구 기록해도 되는 범위.
+     * 관광 대분류 안의 명시 목록과 키즈카페처럼 비방문이 확실해 DB에 영구 기록해도 되는 범위.
      * 그 밖의 추정은 기록하면 보강 대상에서 빠져 고쳐질 길이 없다.
      */
     public static boolean isCertainlyNotVisitable(String name, String category) {
         String lower = category == null ? "" : category.toLowerCase(Locale.ROOT);
+        // 카페 업종으로 적재된 키즈카페는 관광 대분류가 아니어서 카페 휴식 자리에 들어간다.
+        if (name != null && name.contains("키즈카페")) return true;
         return "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(category)) && isLowValue(name, lower);
     }
 
     /**
-     * 관광 대분류 안의 저가치 시설. 이름은 카테고리가 총칭일 때만 본다.
+     * 관광 대분류 안의 저가치 시설.
      * "Well"을 이름 부분일치로 보면 웰니스·웰컴센터까지 걸린다.
      */
     private static boolean isLowValue(String name, String lowerCategory) {
         if (LOW_VALUE_CATEGORY.stream().anyMatch(lowerCategory::contains)) return true;
         // 박물관은 이름에 "자동차"·"골프"가 있어도 방문지다(경주 세계 자동차 박물관)
         if (lowerCategory.contains("museum")) return false;
-        return name != null && LOW_VALUE_NAME.stream().anyMatch(name::contains);
+        if (name == null) return false;
+        if (LOW_VALUE_NAME.stream().anyMatch(name::contains)) return true;
+        // 공원·유적 입구 레코드는 본 장소와 따로 적재돼 같은 곳을 두 번 넣게 한다. 탐방로 입구는 등산 출발점이라 남긴다.
+        boolean trailhead = lowerCategory.contains("hiking") || lowerCategory.contains("mountain");
+        return !trailhead && name.strip().endsWith("입구");
     }
 
     private static final List<String> LOW_VALUE_CATEGORY = List.of(
@@ -120,7 +128,7 @@ public final class CandidatePolicy {
             "states and municipalities", "rest area");
 
     private static final List<String> LOW_VALUE_NAME = List.of(
-            "골프", "컨트리클럽", "자동차", "모터스", "오토모빌", "주차장", "세차");
+            "골프", "컨트리클럽", "자동차", "모터스", "오토모빌", "주차장", "세차", "근린공원", "키즈카페");
 
     /**
      * 음식 종류 키. 보강된 {@code cuisine}이 있으면 그것을, 없으면 이름·태그 기반 세부 유형을 쓴다.

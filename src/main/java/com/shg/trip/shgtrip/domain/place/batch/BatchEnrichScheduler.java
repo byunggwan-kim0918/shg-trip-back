@@ -32,6 +32,7 @@ public class BatchEnrichScheduler {
 
     /** 연속으로 전부 실패한 청크가 이만큼이면 보강을 멈춘다. */
     static final int MAX_CONSECUTIVE_FAILED_CHUNKS = 3;
+    private static final double MAX_FAILURE_RATIO = 0.2;
 
     private static final String BATCH_API_URL = "https://api.anthropic.com/v1/messages/batches";
     private static final int MAX_RETRIES = 3;
@@ -126,7 +127,7 @@ public class BatchEnrichScheduler {
             log.info("속성 보강 대상 {}건", placeRepository.countAttributeTargetsInRegions(regions));
         }
 
-        int[] totals = new int[2];
+        int[] totals = new int[3];
         if (maxPerRegion > 0 && !regions.isEmpty()) {
             // 지역별로 따로 돌려야 큰 지역(서울)이 상한을 다 먹지 않는다.
             for (String region : regions) {
@@ -136,10 +137,15 @@ public class BatchEnrichScheduler {
             enrichScope(regions, totals);
         }
 
-        log.info("BatchEnrichScheduler 완료 - 보강 성공: {}건, 실패: {}건", totals[0], totals[1]);
+        log.info("BatchEnrichScheduler 완료 - 보강 성공: {}건, 실패: {}건, 중단 {}회",
+                totals[0], totals[1], totals[2]);
+        // 장소 단위 실패는 모델 응답 불량으로 늘 조금씩 나와 비율로 본다.
+        if (totals[2] > 0 || totals[1] > (totals[0] + totals[1]) * MAX_FAILURE_RATIO) {
+            throw new BatchStageFailed("배치 보강 실패 " + totals[1] + "건, 중단 " + totals[2] + "회");
+        }
     }
 
-    /** 한 범위(지역 목록, 비면 전체)를 상한까지 보강한다. totals[0]=성공, [1]=실패 누적. */
+    /** 한 범위(지역 목록, 비면 전체)를 상한까지 보강한다. totals[0]=성공, [1]=실패, [2]=연속 실패 중단 누적. */
     private void enrichScope(List<String> regions, int[] totals) {
         int processed = 0;
         int failed = 0;
@@ -177,6 +183,7 @@ public class BatchEnrichScheduler {
             if (consecutiveFailedChunks >= MAX_CONSECUTIVE_FAILED_CHUNKS) {
                 log.error("배치 보강 중단 - 연속 {}개 청크 전부 실패 (API 키·모델명·쿼터 확인 필요)",
                         consecutiveFailedChunks);
+                totals[2]++;
                 break;
             }
         }
