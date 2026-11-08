@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -478,6 +479,54 @@ class BatchEnrichSchedulerTest {
         assertThatThrownBy(() -> spied.enrich()).isInstanceOf(BatchStageFailed.class);
 
         verify(spied).processChunk(List.of(ok));
+    }
+
+    @Test
+    @DisplayName("병렬: 묶음 수만큼 한 번에 조회해 나눠 동시에 처리하고 결과를 합친다")
+    void enrich_parallelChunks_fetchesAndProcessesTogether() {
+        ReflectionTestUtils.setField(scheduler, "chunkSize", 1);
+        ReflectionTestUtils.setField(scheduler, "parallelChunks", 2);
+        Place place1 = createPlace(1L, "센소지", "관광", "아사쿠사", "일본");
+        Place place2 = createPlace(2L, "메이지신궁", "관광", "하라주쿠", "일본");
+        BatchEnrichScheduler spied = spy(scheduler);
+        doReturn(new BatchEnrichScheduler.ChunkResult(1, 0, List.of())).when(spied).processChunk(List.of(place1));
+        doReturn(new BatchEnrichScheduler.ChunkResult(1, 0, List.of())).when(spied).processChunk(List.of(place2));
+        when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class)))
+                .thenReturn(List.of(place1, place2), List.of());
+
+        spied.enrich();
+
+        verify(placeRepository, times(2)).findEnrichTargets(anyCollection(), eq(PageRequest.of(0, 2)));
+        verify(spied).processChunk(List.of(place1));
+        verify(spied).processChunk(List.of(place2));
+    }
+
+    @Test
+    @DisplayName("병렬: 한 묶음에서 예외가 나도 그 묶음만 실패로 세고 나머지 결과는 살린다")
+    void processChunks_exceptionInOneChunk_failsOnlyThatChunk() {
+        Place place1 = createPlace(1L, "센소지", "관광", "아사쿠사", "일본");
+        Place place2 = createPlace(2L, "메이지신궁", "관광", "하라주쿠", "일본");
+        BatchEnrichScheduler spied = spy(scheduler);
+        doThrow(new IllegalStateException("boom")).when(spied).processChunk(List.of(place1));
+        doReturn(new BatchEnrichScheduler.ChunkResult(1, 0, List.of())).when(spied).processChunk(List.of(place2));
+
+        List<BatchEnrichScheduler.ChunkResult> results = spied.processChunks(List.of(List.of(place1), List.of(place2)));
+
+        assertThat(results).containsExactly(
+                new BatchEnrichScheduler.ChunkResult(0, 1, List.of(1L)),
+                new BatchEnrichScheduler.ChunkResult(1, 0, List.of()));
+    }
+
+    @Test
+    @DisplayName("병렬: 기존 batchId를 재사용할 때는 한 묶음씩만 처리한다")
+    void enrich_resumeBatchId_disablesParallel() {
+        ReflectionTestUtils.setField(scheduler, "parallelChunks", 5);
+        ReflectionTestUtils.setField(scheduler, "resumeBatchId", "msgbatch_x");
+        when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class))).thenReturn(List.of());
+
+        scheduler.enrich();
+
+        verify(placeRepository).findEnrichTargets(anyCollection(), eq(PageRequest.of(0, 1000)));
     }
 
     @Test
