@@ -24,11 +24,12 @@ resource "aws_db_subnet_group" "main" {
   }
 }
 
+# TODO: 장소 전량 보강이 끝나면 db.t3.micro로 내린다. micro는 HNSW 빌드·대량 갱신 중 EBS 버스트가 바닥난다.
 resource "aws_db_instance" "main" {
   identifier        = "shgtrip-db"
   engine            = "postgres"
   engine_version    = "18"
-  instance_class    = "db.t3.micro"
+  instance_class    = "db.t3.medium"
   allocated_storage = 20
   storage_type      = "gp3"
   storage_encrypted = true
