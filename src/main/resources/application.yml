@@ -7,6 +7,10 @@ spring:
     hibernate:
       ddl-auto: validate
     open-in-view: false
+  data:
+    redis:
+      # 인증 필터가 요청마다 탈퇴 표시를 조회한다. 기본값(60초)이면 Redis 장애 때 모든 요청이 그만큼 멈춘다.
+      timeout: 1s
 
 cloud:
   aws:
@@ -17,3 +21,7 @@ cloud:
       # CloudFront 배포 도메인. 설정 시 이미지 정적 URL을 CloudFront로 서빙(운영).
       # 미설정(로컬) 시 LocalStack path-style 정적 URL 사용.
       cloud-front-domain: ${CLOUDFRONT_DOMAIN:}
+withdrawal:
+  kakao-admin-key: ${KAKAO_ADMIN_KEY:}
+  identity-hmac-key: ${WITHDRAWAL_IDENTITY_HMAC_KEY:}
+  kakao-unlink-uri: https://kapi.kakao.com/v1/user/unlink

@@ -190,4 +190,30 @@ class GenerationPolicyServiceTest {
         when(valueOps.increment("parse:rate:min:100")).thenThrow(new RuntimeException("redis down"));
         assertThatCode(() -> service.checkParseAllowed(USER)).doesNotThrowAnyException();
     }
+
+    @Test
+    @DisplayName("탈퇴 시 남은 TTL 그대로 카운터를 식별 해시로 옮기고 원래 키는 지운다")
+    void parksCountersWithRemainingTtl() {
+        when(valueOps.get(QUOTA_KEY)).thenReturn("4");
+        when(redisTemplate.getExpire(QUOTA_KEY, TimeUnit.SECONDS)).thenReturn(1000L);
+
+        service.parkCountersForWithdrawal(USER, java.util.List.of("h1", "h2"));
+
+        verify(valueOps).set("generation:quota:ident:h1", "4", Duration.ofSeconds(1000));
+        verify(valueOps).set("generation:quota:ident:h2", "4", Duration.ofSeconds(1000));
+        verify(redisTemplate).delete(QUOTA_KEY);
+        verify(redisTemplate, never()).delete(FAIL_KEY);
+    }
+
+    @Test
+    @DisplayName("재가입 시 식별 해시의 카운터를 새 사용자로 되돌린다")
+    void restoresCountersOnSignup() {
+        when(valueOps.get("generation:quota:ident:h1")).thenReturn("5");
+        when(redisTemplate.getExpire("generation:quota:ident:h1", TimeUnit.SECONDS)).thenReturn(600L);
+
+        service.restoreCountersOnSignup("h1", 200L);
+
+        verify(valueOps).set("generation:quota:200", "5", Duration.ofSeconds(600));
+        verify(redisTemplate).delete("generation:quota:ident:h1");
+    }
 }

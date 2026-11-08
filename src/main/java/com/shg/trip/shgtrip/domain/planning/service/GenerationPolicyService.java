@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -37,6 +38,7 @@ public class GenerationPolicyService {
     static final int MAX_QUOTA = 5;
     private static final Duration FAIL_TTL = Duration.ofHours(24);
     private static final Duration QUOTA_TTL = Duration.ofDays(30);
+    private static final String IDENTITY_SUFFIX = "ident:";
 
     // 문장 파싱(Haiku)은 디바운스 입력마다 불려 생성보다 훨씬 잦다. 정상 타이핑은 분당 수 회 수준이다.
     private static final String PARSE_MINUTE_KEY_PREFIX = "parse:rate:min:";
@@ -150,6 +152,33 @@ public class GenerationPolicyService {
         Long remaining = redisTemplate.getExpire(key);
         if (remaining != null && remaining == -1) {
             redisTemplate.expire(key, ttl);
+        }
+    }
+
+    /** 탈퇴 직전 카운터를 소셜 계정 식별 해시로 옮긴다. 재가입으로 쿼터·차단이 초기화되지 않게 한다. */
+    public void parkCountersForWithdrawal(Long userId, List<String> identityHashes) {
+        moveCounters(String.valueOf(userId), identityHashes.stream().map(h -> IDENTITY_SUFFIX + h).toList());
+    }
+
+    public void restoreCountersOnSignup(String identityHash, Long newUserId) {
+        moveCounters(IDENTITY_SUFFIX + identityHash, List.of(String.valueOf(newUserId)));
+    }
+
+    private void moveCounters(String fromSuffix, List<String> toSuffixes) {
+        if (toSuffixes.isEmpty()) return;
+        for (String prefix : List.of(FAIL_KEY_PREFIX, QUOTA_KEY_PREFIX)) {
+            String from = prefix + fromSuffix;
+            try {
+                String value = redisTemplate.opsForValue().get(from);
+                Long ttl = getTtlSeconds(from);
+                if (value == null || ttl == null) continue;
+                for (String to : toSuffixes) {
+                    redisTemplate.opsForValue().set(prefix + to, value, Duration.ofSeconds(ttl));
+                }
+                redisTemplate.delete(from);
+            } catch (Exception e) {
+                log.warn("생성 카운터 이전 실패 ({}): {}", from, e.getMessage());
+            }
         }
     }
 

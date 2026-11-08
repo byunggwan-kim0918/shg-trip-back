@@ -8,6 +8,7 @@ import com.shg.trip.shgtrip.domain.auth.repository.RefreshTokenRepository;
 import com.shg.trip.shgtrip.domain.auth.repository.UserAuthProviderRepository;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthProviderStrategy;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthStrategyFactory;
+import com.shg.trip.shgtrip.domain.planning.service.GenerationPolicyService;
 import com.shg.trip.shgtrip.domain.user.dto.ProfileResponse;
 import com.shg.trip.shgtrip.domain.user.entity.User;
 import com.shg.trip.shgtrip.domain.user.repository.UserRepository;
@@ -18,6 +19,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Optional;
 
@@ -32,6 +35,8 @@ public class AuthService {
     private final UserAuthProviderRepository authProviderRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final JwtTokenProvider jwtTokenProvider;
+    private final WithdrawnIdentityHasher identityHasher;
+    private final GenerationPolicyService generationPolicyService;
 
     private static final long REUSE_GRACE_MS = 10_000;
 
@@ -56,6 +61,9 @@ public class AuthService {
         if (existingAuth.isPresent()) {
             user = userRepository.findById(existingAuth.get().getUserId())
                     .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+            if (user.isWithdrawn()) {
+                throw new BusinessException(ErrorCode.USER_WITHDRAWN);
+            }
             isNewUser = user.isNewUser();
         } else {
             user = User.builder()
@@ -72,6 +80,8 @@ public class AuthService {
                     .providerId(userInfo.providerId())
                     .build();
             authProviderRepository.save(authProvider);
+            Long newUserId = user.getId();
+            identityHasher.hash(provider, userInfo.providerId()).ifPresent(hash -> restoreCountersAfterCommit(hash, newUserId));
         }
 
         String accessToken = jwtTokenProvider.createAccessToken(user.getId(), user.getRole().name());
@@ -110,6 +120,10 @@ public class AuthService {
 
         User user = userRepository.findById(refreshToken.getUserId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+        if (user.isWithdrawn()) {
+            refreshTokenRepository.deleteByUserId(user.getId());
+            throw new BusinessException(ErrorCode.USER_WITHDRAWN);
+        }
 
         String newAccessToken = jwtTokenProvider.createAccessToken(user.getId(), user.getRole().name());
         String newRefreshToken = jwtTokenProvider.createRefreshToken();
@@ -145,10 +159,25 @@ public class AuthService {
         return refreshTokenRepository.findByToken(revoked.getReplacedBy())
                 .filter(next -> !next.isRevoked())
                 .flatMap(next -> userRepository.findById(next.getUserId()))
+                .filter(user -> !user.isWithdrawn())
                 .map(user -> new OAuthLoginResult(
                         jwtTokenProvider.createAccessToken(user.getId(), user.getRole().name()),
                         revoked.getReplacedBy(), false, jwtTokenProvider.getRefreshExpiration(),
                         ProfileResponse.from(user)));
+    }
+
+    /** 가입이 롤백되면 카운터가 존재하지 않는 사용자로 옮겨져 사라진다. */
+    private void restoreCountersAfterCommit(String identityHash, Long newUserId) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            generationPolicyService.restoreCountersOnSignup(identityHash, newUserId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                generationPolicyService.restoreCountersOnSignup(identityHash, newUserId);
+            }
+        });
     }
 
     @Transactional

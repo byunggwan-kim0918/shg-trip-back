@@ -2,7 +2,9 @@ package com.shg.trip.shgtrip.domain.user.controller;
 
 import com.shg.trip.shgtrip.domain.user.dto.ProfileResponse;
 import com.shg.trip.shgtrip.domain.user.dto.ProfileUpdateRequest;
+import com.shg.trip.shgtrip.domain.user.dto.WithdrawRequest;
 import com.shg.trip.shgtrip.domain.user.service.UserService;
+import com.shg.trip.shgtrip.domain.user.service.UserWithdrawalService;
 import com.shg.trip.shgtrip.global.response.ApiResponse;
 import com.shg.trip.shgtrip.global.security.UserPrincipal;
 import jakarta.validation.Valid;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 public class UserController {
 
     private final UserService userService;
+    private final UserWithdrawalService userWithdrawalService;
 
     @GetMapping("/me")
     public ResponseEntity<ApiResponse<ProfileResponse>> getMyProfile(
@@ -31,5 +34,13 @@ public class UserController {
             @Valid @RequestBody ProfileUpdateRequest request) {
         ProfileResponse profile = userService.updateProfile(principal.id(), request);
         return ResponseEntity.ok(ApiResponse.success(profile));
+    }
+
+    @DeleteMapping("/me")
+    public ResponseEntity<Void> withdraw(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Valid @RequestBody WithdrawRequest request) {
+        userWithdrawalService.withdraw(principal.id(), request.confirm());
+        return ResponseEntity.noContent().build();
     }
 }

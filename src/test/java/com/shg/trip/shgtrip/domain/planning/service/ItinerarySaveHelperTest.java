@@ -20,6 +20,7 @@ class ItinerarySaveHelperTest {
 
     @Mock private ItineraryDataMapper itineraryDataMapper;
     @Mock private ItineraryRepository itineraryRepository;
+    @Mock private com.shg.trip.shgtrip.domain.user.service.ActiveUserGuard activeUserGuard;
     @InjectMocks private ItinerarySaveHelper saveHelper;
 
     @Test

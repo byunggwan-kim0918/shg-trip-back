@@ -106,3 +106,6 @@ openai:
   embedding-model: text-embedding-3-small
   embedding-dimensions: 768
 
+withdrawal:
+  # 비어 있으면 탈퇴 후 재가입으로 생성 쿼터가 초기화되므로 운영은 값이 없으면 기동하지 않는다.
+  identity-hmac-key: ${WITHDRAWAL_IDENTITY_HMAC_KEY}

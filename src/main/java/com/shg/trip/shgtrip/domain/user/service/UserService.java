@@ -29,6 +29,9 @@ public class UserService {
     public ProfileResponse updateProfile(Long userId, ProfileUpdateRequest request) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+        if (user.isWithdrawn()) {
+            throw new BusinessException(ErrorCode.USER_WITHDRAWN);
+        }
 
         if (!Objects.equals(request.nickname(), user.getNickname())
                 && userRepository.existsByNickname(request.nickname())) {
