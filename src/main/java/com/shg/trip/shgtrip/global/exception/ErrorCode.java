@@ -37,8 +37,8 @@ public enum ErrorCode {
     PLACE_REGION_MISMATCH("PLACE_002", "선택한 장소가 여행지와 다른 지역입니다.", HttpStatus.BAD_REQUEST),
 
     // AI
-    AI_SERVICE_ERROR("AI_001", "일정 생성 중 오류가 발생했습니다.", HttpStatus.SERVICE_UNAVAILABLE),
-    AI_SERVICE_TIMEOUT("AI_002", "일정 생성 응답 시간이 초과되었습니다.", HttpStatus.GATEWAY_TIMEOUT),
+    AI_SERVICE_ERROR("AI_001", "일정을 만들지 못했습니다. 잠시 후 다시 시도해주세요.", HttpStatus.SERVICE_UNAVAILABLE),
+    AI_SERVICE_TIMEOUT("AI_002", "일정 생성이 지연되고 있습니다. 잠시 후 다시 시도해주세요.", HttpStatus.GATEWAY_TIMEOUT),
 
     // Planning
     GENERATION_ALREADY_IN_PROGRESS("PLANNING_001", "이미 일정 생성이 진행 중입니다.", HttpStatus.CONFLICT),
@@ -63,4 +63,10 @@ public enum ErrorCode {
     private final String code;
     private final String message;
     private final HttpStatus httpStatus;
+
+    /** 예외 상세에 모델 응답·외부 API 원인이 담기는 코드라 사용자에게는 기본 문구만 보낸다. */
+    public boolean hidesDetail() {
+        return this == AI_SERVICE_ERROR || this == AI_SERVICE_TIMEOUT
+                || this == EXTERNAL_API_ERROR || this == INTERNAL_SERVER_ERROR;
+    }
 }
