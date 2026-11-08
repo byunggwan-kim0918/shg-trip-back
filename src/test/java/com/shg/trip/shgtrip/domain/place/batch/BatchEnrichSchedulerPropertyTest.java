@@ -33,7 +33,7 @@ class BatchEnrichSchedulerPropertyTest {
         // Arrange
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
         ObjectMapper objectMapper = new ObjectMapper();
-        BatchEnrichScheduler scheduler = new BatchEnrichScheduler(mockRepo, objectMapper);
+        BatchEnrichScheduler scheduler = new BatchEnrichScheduler(mockRepo, objectMapper, Mockito.mock(EmbeddingBatchJob.class));
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
 
         // Act
@@ -72,7 +72,7 @@ class BatchEnrichSchedulerPropertyTest {
         // Arrange
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
         ObjectMapper objectMapper = new ObjectMapper();
-        BatchEnrichScheduler scheduler = new BatchEnrichScheduler(mockRepo, objectMapper);
+        BatchEnrichScheduler scheduler = new BatchEnrichScheduler(mockRepo, objectMapper, Mockito.mock(EmbeddingBatchJob.class));
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
 
         // Act
@@ -157,7 +157,7 @@ class BatchEnrichSchedulerPropertyTest {
         // Arrange
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
         ObjectMapper objectMapper = new ObjectMapper();
-        BatchEnrichScheduler scheduler = new BatchEnrichScheduler(mockRepo, objectMapper);
+        BatchEnrichScheduler scheduler = new BatchEnrichScheduler(mockRepo, objectMapper, Mockito.mock(EmbeddingBatchJob.class));
 
         // Precondition: enriched_at is null before processing
         assertThat(place.getEnrichedAt()).isNull();
