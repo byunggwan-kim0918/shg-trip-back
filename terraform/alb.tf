@@ -19,6 +19,23 @@ resource "aws_acm_certificate" "main" {
   }
 }
 
+resource "aws_acm_certificate" "myshgtrip" {
+  domain_name               = "myshgtrip.com"
+  subject_alternative_names = ["*.myshgtrip.com"]
+  validation_method         = "DNS"
+  key_algorithm             = "RSA_2048"
+
+  tags = {
+    Name    = "myshgtrip.com"
+    Project = var.project
+    Env     = var.env
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 resource "aws_lb" "public" {
   name                       = "shgTrip-public-alb"
   internal                   = false
