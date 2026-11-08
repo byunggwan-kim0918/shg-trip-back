@@ -8,7 +8,7 @@ variable "budget_alert_email" {
 resource "aws_budgets_budget" "monthly" {
   name              = "shgtrip-prod-monthly-budget"
   budget_type       = "COST"
-  limit_amount      = "100.0"
+  limit_amount      = "30.0"
   limit_unit        = "USD"
   time_unit         = "MONTHLY"
   time_period_start = "2026-10-01_00:00"
