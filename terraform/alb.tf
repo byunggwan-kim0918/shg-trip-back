@@ -150,6 +150,11 @@ resource "aws_lb_listener" "public_https" {
   }
 }
 
+resource "aws_lb_listener_certificate" "public_https_myshgtrip" {
+  listener_arn    = aws_lb_listener.public_https.arn
+  certificate_arn = aws_acm_certificate.myshgtrip.arn
+}
+
 resource "aws_lb_listener" "public_http" {
   load_balancer_arn = aws_lb.public.arn
   port              = 80
