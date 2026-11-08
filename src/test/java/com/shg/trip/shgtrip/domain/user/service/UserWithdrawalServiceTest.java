@@ -7,7 +7,9 @@ import com.shg.trip.shgtrip.domain.auth.repository.UserAuthProviderRepository;
 import com.shg.trip.shgtrip.domain.auth.service.WithdrawnIdentityHasher;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.KakaoUnlinkClient;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
+import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
+import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryStepRepository;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationPolicyService;
 import com.shg.trip.shgtrip.domain.planning.service.TravelPlannerService;
 import com.shg.trip.shgtrip.domain.user.entity.User;
@@ -20,6 +22,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -32,11 +35,10 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -49,6 +51,8 @@ class UserWithdrawalServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private UserAuthProviderRepository authProviderRepository;
     @Mock private ItineraryRepository itineraryRepository;
+    @Mock private ItineraryStepRepository itineraryStepRepository;
+    @Mock private ItineraryEditEventRepository itineraryEditEventRepository;
     @Mock private GenerationTraceRepository generationTraceRepository;
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private WithdrawnUserRegistry withdrawnUserRegistry;
@@ -80,7 +84,7 @@ class UserWithdrawalServiceTest {
     }
 
     @Test
-    void 개인정보를_지우고_커밋_후_세션과_카카오_연결을_끊는다() {
+    void 개인정보와_일정을_지우고_커밋_후_세션과_카카오_연결을_끊는다() {
         UserAuthProvider kakao = UserAuthProvider.builder()
                 .userId(1L).provider(OAuthProvider.KAKAO).providerId("k-1").build();
         given(userRepository.findByIdForUpdate(1L)).willReturn(Optional.of(user));
@@ -94,8 +98,13 @@ class UserWithdrawalServiceTest {
         assertThat(user.getNickname()).isNull();
         assertThat(user.getProfileImage()).isNull();
         assertThat(user.getDeletedAt()).isNotNull();
-        verify(generationTraceRepository).deleteByUserId(1L);
-        verify(itineraryRepository).softDeleteAllByUserId(eq(1L), any());
+        InOrder deletes = inOrder(itineraryStepRepository, generationTraceRepository,
+                itineraryEditEventRepository, itineraryRepository);
+        deletes.verify(itineraryStepRepository).deleteAlternativesByUserId(1L);
+        deletes.verify(itineraryStepRepository).deleteAllByUserId(1L);
+        deletes.verify(generationTraceRepository).deleteByUserId(1L);
+        deletes.verify(itineraryEditEventRepository).deleteAllByUserId(1L);
+        deletes.verify(itineraryRepository).deleteAllByUserId(1L);
         verify(authProviderRepository).deleteAll(List.of(kakao));
         verify(travelPlannerService).cancelActiveJob(1L);
         verify(refreshTokenRepository, never()).deleteByUserId(anyLong());
@@ -127,7 +136,7 @@ class UserWithdrawalServiceTest {
 
         service.withdraw(1L, "탈퇴");
 
-        verifyNoInteractions(itineraryRepository, authProviderRepository, kakaoUnlinkClient);
+        verifyNoInteractions(itineraryRepository, itineraryStepRepository, authProviderRepository, kakaoUnlinkClient);
         assertThat(TransactionSynchronizationManager.getSynchronizations()).isEmpty();
     }
 

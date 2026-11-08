@@ -9,7 +9,6 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -48,16 +47,7 @@ public interface ItineraryRepository extends JpaRepository<Itinerary, Long> {
                                @Param("newTitle") String newTitle,
                                @Param("expectedTitle") String expectedTitle);
 
-    /**
-     * 이미 지운 일정도 공유 링크가 남아 있을 수 있어 삭제 여부와 무관하게 링크를 끊는다.
-     * version을 올려야 동시에 읽어 둔 편집 요청이 낙관적 락에 걸려 삭제를 되돌리지 못한다.
-     */
     @Modifying
-    @Query("""
-            UPDATE Itinerary i
-            SET i.deletedAt = COALESCE(i.deletedAt, :now), i.shareToken = NULL, i.shareExpiresAt = NULL,
-                i.version = i.version + 1
-            WHERE i.userId = :userId
-            """)
-    int softDeleteAllByUserId(@Param("userId") Long userId, @Param("now") OffsetDateTime now);
+    @Query("DELETE FROM Itinerary i WHERE i.userId = :userId")
+    int deleteAllByUserId(@Param("userId") Long userId);
 }

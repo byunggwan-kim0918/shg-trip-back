@@ -7,7 +7,9 @@ import com.shg.trip.shgtrip.domain.auth.repository.UserAuthProviderRepository;
 import com.shg.trip.shgtrip.domain.auth.service.WithdrawnIdentityHasher;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.KakaoUnlinkClient;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
+import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
+import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryStepRepository;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationPolicyService;
 import com.shg.trip.shgtrip.domain.planning.service.TravelPlannerService;
 import com.shg.trip.shgtrip.domain.user.entity.User;
@@ -22,7 +24,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.time.OffsetDateTime;
 import java.util.List;
 
 @Slf4j
@@ -35,6 +36,8 @@ public class UserWithdrawalService {
     private final UserRepository userRepository;
     private final UserAuthProviderRepository authProviderRepository;
     private final ItineraryRepository itineraryRepository;
+    private final ItineraryStepRepository itineraryStepRepository;
+    private final ItineraryEditEventRepository itineraryEditEventRepository;
     private final GenerationTraceRepository generationTraceRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final WithdrawnUserRegistry withdrawnUserRegistry;
@@ -44,7 +47,7 @@ public class UserWithdrawalService {
     private final KakaoUnlinkClient kakaoUnlinkClient;
 
     /**
-     * 개인정보를 지우고 세션·공유 링크를 끊는다. 이미 탈퇴한 사용자면 아무것도 하지 않는다.
+     * 개인정보와 일정을 지우고 세션을 끊는다. 이미 탈퇴한 사용자면 아무것도 하지 않는다.
      * Redis 정리와 제공자 연결 해제는 커밋 뒤에 하므로 DB 롤백 시 계정이 반쯤 끊기지 않는다.
      */
     @Transactional
@@ -69,9 +72,12 @@ public class UserWithdrawalService {
                 .map(UserAuthProvider::getProviderId)
                 .toList();
 
-        // 일정 trace에는 사용자가 쓴 요청 문장이 들어 있다.
+        // 자식 테이블 FK가 대부분 없어 DB가 연쇄 삭제하지 않으므로 자식부터 지운다.
+        itineraryStepRepository.deleteAlternativesByUserId(userId);
+        itineraryStepRepository.deleteAllByUserId(userId);
         generationTraceRepository.deleteByUserId(userId);
-        int itineraries = itineraryRepository.softDeleteAllByUserId(userId, OffsetDateTime.now());
+        itineraryEditEventRepository.deleteAllByUserId(userId);
+        int itineraries = itineraryRepository.deleteAllByUserId(userId);
         authProviderRepository.deleteAll(providers);
         user.withdraw();
 

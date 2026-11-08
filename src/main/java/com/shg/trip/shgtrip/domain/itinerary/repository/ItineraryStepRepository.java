@@ -19,4 +19,13 @@ public interface ItineraryStepRepository extends JpaRepository<ItineraryStep, Lo
     int updateNotesByItineraryIdAndStepOrder(@Param("itineraryId") Long itineraryId,
                                               @Param("stepOrder") Integer stepOrder,
                                               @Param("notes") String notes);
+
+    @Modifying
+    @Query("DELETE FROM AlternativeOption a WHERE a.step.id IN "
+            + "(SELECT s.id FROM ItineraryStep s WHERE s.itinerary.userId = :userId)")
+    int deleteAlternativesByUserId(@Param("userId") Long userId);
+
+    @Modifying
+    @Query("DELETE FROM ItineraryStep s WHERE s.itinerary.id IN (SELECT i.id FROM Itinerary i WHERE i.userId = :userId)")
+    int deleteAllByUserId(@Param("userId") Long userId);
 }
