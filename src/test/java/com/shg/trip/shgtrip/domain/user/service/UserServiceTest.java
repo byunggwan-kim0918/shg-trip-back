@@ -28,6 +28,8 @@ class UserServiceTest {
 
     @Mock
     private UserRepository userRepository;
+    @Mock
+    private com.shg.trip.shgtrip.domain.auth.repository.UserAuthProviderRepository authProviderRepository;
 
     @Test
     @DisplayName("존재하는 유저의 프로필을 조회할 수 있다")
@@ -42,6 +44,23 @@ class UserServiceTest {
         // then
         assertThat(response.nickname()).isEqualTo("테스터");
         assertThat(response.email()).isEqualTo("test@email.com");
+    }
+
+    @Test
+    @DisplayName("프로필에 가입한 소셜 제공자가 담긴다")
+    void getProfile_includesProvider() {
+        // given
+        given(userRepository.findById(1L)).willReturn(Optional.of(User.builder().email("a@b.c").build()));
+        given(authProviderRepository.findByUserId(1L)).willReturn(java.util.List.of(
+                com.shg.trip.shgtrip.domain.auth.entity.UserAuthProvider.builder()
+                        .userId(1L).provider(com.shg.trip.shgtrip.domain.auth.entity.OAuthProvider.NAVER)
+                        .providerId("n-1").build()));
+
+        // when
+        ProfileResponse response = userService.getProfile(1L);
+
+        // then
+        assertThat(response.provider()).isEqualTo(com.shg.trip.shgtrip.domain.auth.entity.OAuthProvider.NAVER);
     }
 
     @Test

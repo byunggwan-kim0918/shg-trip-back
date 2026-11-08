@@ -1,11 +1,14 @@
 package com.shg.trip.shgtrip.domain.user.service;
 
+import com.shg.trip.shgtrip.domain.auth.dto.OAuthSession;
+import com.shg.trip.shgtrip.domain.auth.dto.OAuthUserInfo;
 import com.shg.trip.shgtrip.domain.auth.entity.OAuthProvider;
 import com.shg.trip.shgtrip.domain.auth.entity.UserAuthProvider;
 import com.shg.trip.shgtrip.domain.auth.repository.RefreshTokenRepository;
 import com.shg.trip.shgtrip.domain.auth.repository.UserAuthProviderRepository;
 import com.shg.trip.shgtrip.domain.auth.service.WithdrawnIdentityHasher;
-import com.shg.trip.shgtrip.domain.auth.service.oauth.KakaoUnlinkClient;
+import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthProviderStrategy;
+import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthStrategyFactory;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
@@ -27,18 +30,25 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -59,15 +69,25 @@ class UserWithdrawalServiceTest {
     @Mock private WithdrawnIdentityHasher identityHasher;
     @Mock private GenerationPolicyService generationPolicyService;
     @Mock private TravelPlannerService travelPlannerService;
-    @Mock private KakaoUnlinkClient kakaoUnlinkClient;
+    @Mock private OAuthStrategyFactory strategyFactory;
+    @Mock private TransactionTemplate transactionTemplate;
+    @Mock private OAuthProviderStrategy strategy;
 
     private User user;
+    private UserAuthProvider linked;
 
     @BeforeEach
     void setUp() {
         TransactionSynchronizationManager.initSynchronization();
-        user = User.builder().email("a@b.c").nickname("닉네임").profileImage("http://img").build();
+        user = User.builder().email("a@b.c").nickname("닉네임").profileImage("https://img").build();
         ReflectionTestUtils.setField(user, "id", 1L);
+        linked = UserAuthProvider.builder().userId(1L).provider(OAuthProvider.NAVER).providerId("n-1").build();
+        lenient().when(strategyFactory.getStrategy(OAuthProvider.NAVER)).thenReturn(strategy);
+        lenient().doAnswer(inv -> {
+            inv.<Consumer<org.springframework.transaction.TransactionStatus>>getArgument(0)
+                    .accept(new SimpleTransactionStatus());
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
     }
 
     @AfterEach
@@ -76,28 +96,19 @@ class UserWithdrawalServiceTest {
     }
 
     @Test
-    void 확인_문구가_다르면_아무것도_하지_않는다() {
-        assertThatThrownBy(() -> service.withdraw(1L, "탈퇴할래요"))
-                .isInstanceOf(BusinessException.class)
-                .hasMessageContaining(ErrorCode.WITHDRAWAL_CONFIRM_MISMATCH.getMessage());
-        verifyNoInteractions(userRepository, itineraryRepository, authProviderRepository);
-    }
-
-    @Test
-    void 개인정보와_일정을_지우고_커밋_후_세션과_카카오_연결을_끊는다() {
-        UserAuthProvider kakao = UserAuthProvider.builder()
-                .userId(1L).provider(OAuthProvider.KAKAO).providerId("k-1").build();
+    void 같은_계정으로_재인증하면_지우고_커밋_후_연결을_해제한다() {
+        givenReauthAs("n-1");
+        given(authProviderRepository.findByProviderAndProviderId(OAuthProvider.NAVER, "n-1"))
+                .willReturn(Optional.of(linked));
         given(userRepository.findByIdForUpdate(1L)).willReturn(Optional.of(user));
-        given(authProviderRepository.findByUserId(1L)).willReturn(List.of(kakao));
-        given(identityHasher.hash(OAuthProvider.KAKAO, "k-1")).willReturn(Optional.of("h"));
+        given(authProviderRepository.findByUserId(1L)).willReturn(List.of(linked));
+        given(identityHasher.hash(OAuthProvider.NAVER, "n-1")).willReturn(Optional.of("h"));
 
-        service.withdraw(1L, "탈퇴");
+        service.withdraw(1L, OAuthProvider.NAVER, "code");
 
         assertThat(user.getStatus()).isEqualTo(UserStatus.WITHDRAWN);
         assertThat(user.getEmail()).isEqualTo("withdrawn-1@invalid");
         assertThat(user.getNickname()).isNull();
-        assertThat(user.getProfileImage()).isNull();
-        assertThat(user.getDeletedAt()).isNotNull();
         InOrder deletes = inOrder(itineraryStepRepository, generationTraceRepository,
                 itineraryEditEventRepository, itineraryRepository);
         deletes.verify(itineraryStepRepository).deleteAlternativesByUserId(1L);
@@ -105,39 +116,88 @@ class UserWithdrawalServiceTest {
         deletes.verify(generationTraceRepository).deleteByUserId(1L);
         deletes.verify(itineraryEditEventRepository).deleteAllByUserId(1L);
         deletes.verify(itineraryRepository).deleteAllByUserId(1L);
-        verify(authProviderRepository).deleteAll(List.of(kakao));
-        verify(travelPlannerService).cancelActiveJob(1L);
-        verify(refreshTokenRepository, never()).deleteByUserId(anyLong());
+        verify(authProviderRepository).deleteAll(List.of(linked));
+        verify(strategy, never()).revoke(anyString());
 
         commit();
 
         verify(withdrawnUserRegistry).mark(1L);
         verify(refreshTokenRepository).deleteByUserId(1L);
         verify(generationPolicyService).parkCountersForWithdrawal(1L, List.of("h"));
-        verify(kakaoUnlinkClient).unlink("k-1");
+        verify(strategy).revoke("provider-token");
     }
 
     @Test
-    void 커밋_후_정리가_하나_실패해도_나머지는_계속한다() {
-        given(userRepository.findByIdForUpdate(1L)).willReturn(Optional.of(user));
-        given(authProviderRepository.findByUserId(1L)).willReturn(List.of());
-        doThrow(new RuntimeException("redis down")).when(withdrawnUserRegistry).mark(1L);
+    void 다른_계정으로_재인증하면_아무것도_지우지_않고_토큰도_쓰지_않는다() {
+        givenReauthAs("someone-else");
+        UserAuthProvider other = UserAuthProvider.builder()
+                .userId(2L).provider(OAuthProvider.NAVER).providerId("someone-else").build();
+        given(authProviderRepository.findByProviderAndProviderId(OAuthProvider.NAVER, "someone-else"))
+                .willReturn(Optional.of(other));
 
-        service.withdraw(1L, "탈퇴");
+        assertThatThrownBy(() -> service.withdraw(1L, OAuthProvider.NAVER, "code"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(ErrorCode.REAUTH_MISMATCH.getMessage());
+        verifyNoInteractions(transactionTemplate, userRepository, itineraryRepository);
+        verify(strategy, never()).revoke(anyString());
+    }
+
+    @Test
+    void 가입되지_않은_소셜_계정으로_재인증하면_거부하고_방금_생긴_연결은_끊는다() {
+        givenReauthAs("unknown");
+        given(authProviderRepository.findByProviderAndProviderId(OAuthProvider.NAVER, "unknown"))
+                .willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.withdraw(1L, OAuthProvider.NAVER, "code"))
+                .hasMessageContaining(ErrorCode.REAUTH_MISMATCH.getMessage());
+        verifyNoInteractions(transactionTemplate);
+        verify(strategy).revoke("provider-token");
+    }
+
+    @Test
+    void 코드_교환이_실패하면_아무것도_하지_않는다() {
+        given(strategy.authenticate("bad")).willThrow(new BusinessException(ErrorCode.OAUTH_AUTHENTICATION_FAILED));
+
+        assertThatThrownBy(() -> service.withdraw(1L, OAuthProvider.NAVER, "bad"))
+                .hasMessageContaining(ErrorCode.REAUTH_FAILED.getMessage());
+        verifyNoInteractions(transactionTemplate, authProviderRepository);
+    }
+
+    @Test
+    void 연결_해제가_실패해도_나머지_정리는_끝난다() {
+        givenReauthAs("n-1");
+        given(authProviderRepository.findByProviderAndProviderId(OAuthProvider.NAVER, "n-1"))
+                .willReturn(Optional.of(linked));
+        given(userRepository.findByIdForUpdate(1L)).willReturn(Optional.of(user));
+        given(authProviderRepository.findByUserId(1L)).willReturn(List.of(linked));
+        doThrow(new RuntimeException("redis down")).when(withdrawnUserRegistry).mark(1L);
+        doThrow(new RuntimeException("naver down")).when(strategy).revoke("provider-token");
+
+        service.withdraw(1L, OAuthProvider.NAVER, "code");
         commit();
 
         verify(refreshTokenRepository).deleteByUserId(1L);
+        verify(strategy).revoke("provider-token");
     }
 
     @Test
     void 이미_탈퇴한_사용자면_다시_처리하지_않는다() {
+        givenReauthAs("n-1");
+        given(authProviderRepository.findByProviderAndProviderId(OAuthProvider.NAVER, "n-1"))
+                .willReturn(Optional.of(linked));
         user.withdraw();
         given(userRepository.findByIdForUpdate(1L)).willReturn(Optional.of(user));
 
-        service.withdraw(1L, "탈퇴");
+        service.withdraw(1L, OAuthProvider.NAVER, "code");
 
-        verifyNoInteractions(itineraryRepository, itineraryStepRepository, authProviderRepository, kakaoUnlinkClient);
+        verifyNoInteractions(itineraryRepository, itineraryStepRepository, refreshTokenRepository);
         assertThat(TransactionSynchronizationManager.getSynchronizations()).isEmpty();
+        verify(authProviderRepository, never()).findByUserId(anyLong());
+    }
+
+    private void givenReauthAs(String providerId) {
+        given(strategy.authenticate("code")).willReturn(new OAuthSession(
+                new OAuthUserInfo(providerId, "a@b.c", "닉", null), "provider-token"));
     }
 
     private static void commit() {

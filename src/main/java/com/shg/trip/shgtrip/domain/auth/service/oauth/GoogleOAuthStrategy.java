@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.auth.service.oauth;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.shg.trip.shgtrip.domain.auth.dto.OAuthSession;
 import com.shg.trip.shgtrip.domain.auth.dto.OAuthUserInfo;
 import com.shg.trip.shgtrip.domain.auth.entity.OAuthProvider;
 import com.shg.trip.shgtrip.global.config.OAuthProperties;
@@ -19,6 +20,8 @@ import org.springframework.web.client.RestClient;
 @RequiredArgsConstructor
 public class GoogleOAuthStrategy implements OAuthProviderStrategy {
 
+    private static final String REVOKE_URI = "https://oauth2.googleapis.com/revoke";
+
     private final RestClient restClient;
     private final OAuthProperties oAuthProperties;
 
@@ -28,9 +31,25 @@ public class GoogleOAuthStrategy implements OAuthProviderStrategy {
     }
 
     @Override
-    public OAuthUserInfo getUserInfo(String authorizationCode) {
+    public OAuthSession authenticate(String authorizationCode) {
         String accessToken = exchangeToken(authorizationCode);
-        return fetchUserInfo(accessToken);
+        return new OAuthSession(fetchUserInfo(accessToken), accessToken);
+    }
+
+    @Override
+    public void revoke(String accessToken) {
+        try {
+            MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
+            body.add("token", accessToken);
+            restClient.post()
+                    .uri(REVOKE_URI)
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .body(body)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (Exception e) {
+            log.warn("구글 연결 해제 실패: {}", e.getMessage());
+        }
     }
 
     private String exchangeToken(String code) {
@@ -68,10 +87,6 @@ public class GoogleOAuthStrategy implements OAuthProviderStrategy {
 
             String providerId = response.get("id").asText();
             String email = response.has("email") ? response.get("email").asText() : null;
-
-            if (email == null || email.isBlank()) {
-                throw new BusinessException(ErrorCode.EMAIL_NOT_PROVIDED);
-            }
 
             String nickname = response.has("name") ? response.get("name").asText() : null;
             String profileImage = response.has("picture") ? response.get("picture").asText() : null;

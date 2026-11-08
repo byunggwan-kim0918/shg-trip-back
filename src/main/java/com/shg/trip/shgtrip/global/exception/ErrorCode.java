@@ -21,7 +21,9 @@ public enum ErrorCode {
     USER_NOT_FOUND("USER_001", "사용자를 찾을 수 없습니다.", HttpStatus.NOT_FOUND),
     DUPLICATE_NICKNAME("USER_002", "이미 사용 중인 닉네임입니다.", HttpStatus.CONFLICT),
     USER_WITHDRAWN("USER_003", "탈퇴한 계정입니다.", HttpStatus.UNAUTHORIZED),
-    WITHDRAWAL_CONFIRM_MISMATCH("USER_004", "확인 문구가 일치하지 않습니다.", HttpStatus.BAD_REQUEST),
+    REAUTH_MISMATCH("USER_004", "탈퇴하려는 계정과 다른 계정으로 로그인했어요.", HttpStatus.FORBIDDEN),
+    // 401이면 BFF가 세션 만료로 보고 refresh 후 같은 code로 재시도한다.
+    REAUTH_FAILED("USER_005", "본인 확인에 실패했어요. 다시 시도해 주세요.", HttpStatus.BAD_REQUEST),
 
     // Itinerary
     ITINERARY_NOT_FOUND("ITINERARY_001", "일정을 찾을 수 없습니다.", HttpStatus.NOT_FOUND),

@@ -1,5 +1,8 @@
 package com.shg.trip.shgtrip.domain.user.service;
 
+import com.shg.trip.shgtrip.domain.auth.entity.OAuthProvider;
+import com.shg.trip.shgtrip.domain.auth.entity.UserAuthProvider;
+import com.shg.trip.shgtrip.domain.auth.repository.UserAuthProviderRepository;
 import com.shg.trip.shgtrip.domain.user.dto.ProfileResponse;
 import com.shg.trip.shgtrip.domain.user.dto.ProfileUpdateRequest;
 import com.shg.trip.shgtrip.domain.user.entity.User;
@@ -18,11 +21,16 @@ import java.util.Objects;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final UserAuthProviderRepository authProviderRepository;
 
     public ProfileResponse getProfile(Long userId) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
-        return ProfileResponse.from(user);
+        OAuthProvider provider = authProviderRepository.findByUserId(userId).stream()
+                .map(UserAuthProvider::getProvider)
+                .findFirst()
+                .orElse(null);
+        return ProfileResponse.from(user, provider);
     }
 
     @Transactional

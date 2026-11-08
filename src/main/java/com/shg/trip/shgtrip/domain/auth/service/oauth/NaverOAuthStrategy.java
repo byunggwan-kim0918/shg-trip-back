@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.auth.service.oauth;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.shg.trip.shgtrip.domain.auth.dto.OAuthSession;
 import com.shg.trip.shgtrip.domain.auth.dto.OAuthUserInfo;
 import com.shg.trip.shgtrip.domain.auth.entity.OAuthProvider;
 import com.shg.trip.shgtrip.global.config.OAuthProperties;
@@ -28,9 +29,34 @@ public class NaverOAuthStrategy implements OAuthProviderStrategy {
     }
 
     @Override
-    public OAuthUserInfo getUserInfo(String authorizationCode) {
+    public OAuthSession authenticate(String authorizationCode) {
         String accessToken = exchangeToken(authorizationCode);
-        return fetchUserInfo(accessToken);
+        return new OAuthSession(fetchUserInfo(accessToken), accessToken);
+    }
+
+    @Override
+    public void revoke(String accessToken) {
+        try {
+            OAuthProperties.ProviderProperties props = oAuthProperties.naver();
+            MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
+            body.add("grant_type", "delete");
+            body.add("client_id", props.clientId());
+            body.add("client_secret", props.clientSecret());
+            body.add("access_token", accessToken);
+            body.add("service_provider", "NAVER");
+            JsonNode response = restClient.post()
+                    .uri(props.tokenUri())
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .body(body)
+                    .retrieve()
+                    .body(JsonNode.class);
+            // 실패도 200으로 오고 본문의 error로 구분된다.
+            if (response == null || response.has("error")) {
+                log.warn("네이버 연결 해제 실패: {}", response == null ? "빈 응답" : response.path("error").asText());
+            }
+        } catch (Exception e) {
+            log.warn("네이버 연결 해제 실패: {}", e.getMessage());
+        }
     }
 
     private String exchangeToken(String code) {
@@ -73,10 +99,6 @@ public class NaverOAuthStrategy implements OAuthProviderStrategy {
 
             String providerId = responseBody.get("id").asText();
             String email = responseBody.has("email") ? responseBody.get("email").asText() : null;
-
-            if (email == null || email.isBlank()) {
-                throw new BusinessException(ErrorCode.EMAIL_NOT_PROVIDED);
-            }
 
             String nickname = responseBody.has("nickname") ? responseBody.get("nickname").asText() : null;
             String profileImage = responseBody.has("profile_image") ? responseBody.get("profile_image").asText() : null;

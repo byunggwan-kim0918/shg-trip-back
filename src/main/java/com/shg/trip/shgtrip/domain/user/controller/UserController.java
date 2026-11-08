@@ -2,7 +2,7 @@ package com.shg.trip.shgtrip.domain.user.controller;
 
 import com.shg.trip.shgtrip.domain.user.dto.ProfileResponse;
 import com.shg.trip.shgtrip.domain.user.dto.ProfileUpdateRequest;
-import com.shg.trip.shgtrip.domain.user.dto.WithdrawRequest;
+import com.shg.trip.shgtrip.domain.user.dto.WithdrawalRequest;
 import com.shg.trip.shgtrip.domain.user.service.UserService;
 import com.shg.trip.shgtrip.domain.user.service.UserWithdrawalService;
 import com.shg.trip.shgtrip.global.response.ApiResponse;
@@ -36,11 +36,11 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success(profile));
     }
 
-    @DeleteMapping("/me")
+    @PostMapping("/me/withdrawal")
     public ResponseEntity<Void> withdraw(
             @AuthenticationPrincipal UserPrincipal principal,
-            @Valid @RequestBody WithdrawRequest request) {
-        userWithdrawalService.withdraw(principal.id(), request.confirm());
+            @Valid @RequestBody WithdrawalRequest request) {
+        userWithdrawalService.withdraw(principal.id(), request.provider(), request.code());
         return ResponseEntity.noContent().build();
     }
 }

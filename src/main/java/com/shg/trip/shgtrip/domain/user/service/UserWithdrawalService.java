@@ -1,11 +1,13 @@
 package com.shg.trip.shgtrip.domain.user.service;
 
+import com.shg.trip.shgtrip.domain.auth.dto.OAuthSession;
 import com.shg.trip.shgtrip.domain.auth.entity.OAuthProvider;
 import com.shg.trip.shgtrip.domain.auth.entity.UserAuthProvider;
 import com.shg.trip.shgtrip.domain.auth.repository.RefreshTokenRepository;
 import com.shg.trip.shgtrip.domain.auth.repository.UserAuthProviderRepository;
 import com.shg.trip.shgtrip.domain.auth.service.WithdrawnIdentityHasher;
-import com.shg.trip.shgtrip.domain.auth.service.oauth.KakaoUnlinkClient;
+import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthProviderStrategy;
+import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthStrategyFactory;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
@@ -20,18 +22,17 @@ import com.shg.trip.shgtrip.global.security.WithdrawnUserRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
+import java.util.Optional;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserWithdrawalService {
-
-    public static final String CONFIRM_PHRASE = "탈퇴";
 
     private final UserRepository userRepository;
     private final UserAuthProviderRepository authProviderRepository;
@@ -44,17 +45,39 @@ public class UserWithdrawalService {
     private final WithdrawnIdentityHasher identityHasher;
     private final GenerationPolicyService generationPolicyService;
     private final TravelPlannerService travelPlannerService;
-    private final KakaoUnlinkClient kakaoUnlinkClient;
+    private final OAuthStrategyFactory strategyFactory;
+    private final TransactionTemplate transactionTemplate;
 
     /**
-     * 개인정보와 일정을 지우고 세션을 끊는다. 이미 탈퇴한 사용자면 아무것도 하지 않는다.
-     * Redis 정리와 제공자 연결 해제는 커밋 뒤에 하므로 DB 롤백 시 계정이 반쯤 끊기지 않는다.
+     * 탈퇴 직전 소셜 재로그인으로 받은 code로 본인을 확인한 뒤 개인정보와 일정을 지우고 세션·제공자 연결을 끊는다.
+     * 제공자 호출은 DB 잠금을 잡기 전에 끝내고, Redis 정리와 연결 해제는 커밋 뒤에 해 롤백 시 계정이 반쯤 끊기지 않는다.
      */
-    @Transactional
-    public void withdraw(Long userId, String confirm) {
-        if (!CONFIRM_PHRASE.equals(confirm == null ? null : confirm.trim())) {
-            throw new BusinessException(ErrorCode.WITHDRAWAL_CONFIRM_MISMATCH);
+    public void withdraw(Long userId, OAuthProvider provider, String code) {
+        OAuthProviderStrategy strategy = strategyFactory.getStrategy(provider);
+        OAuthSession session;
+        try {
+            session = strategy.authenticate(code);
+        } catch (BusinessException e) {
+            throw new BusinessException(ErrorCode.REAUTH_FAILED);
         }
+        Optional<UserAuthProvider> linked =
+                authProviderRepository.findByProviderAndProviderId(provider, session.userInfo().providerId());
+        if (linked.isEmpty()) {
+            // 미가입 계정은 재로그인 동의로 앱 연결이 막 생겼으므로 그 계정 주인의 토큰으로 바로 끊는다.
+            strategy.revoke(session.accessToken());
+            log.warn("탈퇴 재인증 계정 불일치 userId={} provider={} 미가입 계정", userId, provider);
+            throw new BusinessException(ErrorCode.REAUTH_MISMATCH);
+        }
+        // 다른 회원 계정의 토큰이므로 연결 해제에도 쓰지 않는다.
+        if (!linked.get().getUserId().equals(userId)) {
+            log.warn("탈퇴 재인증 계정 불일치 userId={} provider={} 다른 회원 계정", userId, provider);
+            throw new BusinessException(ErrorCode.REAUTH_MISMATCH);
+        }
+        transactionTemplate.executeWithoutResult(status ->
+                deleteAccount(userId, () -> strategy.revoke(session.accessToken())));
+    }
+
+    private void deleteAccount(Long userId, Runnable revokeProvider) {
         User user = userRepository.findByIdForUpdate(userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
         if (user.isWithdrawn()) {
@@ -66,10 +89,6 @@ public class UserWithdrawalService {
         List<UserAuthProvider> providers = authProviderRepository.findByUserId(userId);
         List<String> identityHashes = providers.stream()
                 .flatMap(p -> identityHasher.hash(p.getProvider(), p.getProviderId()).stream())
-                .toList();
-        List<String> kakaoIds = providers.stream()
-                .filter(p -> p.getProvider() == OAuthProvider.KAKAO)
-                .map(UserAuthProvider::getProviderId)
                 .toList();
 
         // 자식 테이블 FK가 대부분 없어 DB가 연쇄 삭제하지 않으므로 자식부터 지운다.
@@ -84,18 +103,18 @@ public class UserWithdrawalService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                cleanUpAfterCommit(userId, identityHashes, kakaoIds);
+                cleanUpAfterCommit(userId, identityHashes, revokeProvider);
             }
         });
         log.info("회원 탈퇴 userId={} providers={} itineraries={}",
                 userId, providers.stream().map(UserAuthProvider::getProvider).toList(), itineraries);
     }
 
-    private void cleanUpAfterCommit(Long userId, List<String> identityHashes, List<String> kakaoIds) {
+    private void cleanUpAfterCommit(Long userId, List<String> identityHashes, Runnable revokeProvider) {
         runQuietly("탈퇴 표시", () -> withdrawnUserRegistry.mark(userId));
         runQuietly("refresh token 삭제", () -> refreshTokenRepository.deleteByUserId(userId));
         generationPolicyService.parkCountersForWithdrawal(userId, identityHashes);
-        kakaoIds.forEach(kakaoUnlinkClient::unlink);
+        runQuietly("제공자 연결 해제", revokeProvider);
     }
 
     private void runQuietly(String label, Runnable task) {
