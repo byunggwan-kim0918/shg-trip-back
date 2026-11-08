@@ -1,24 +1,15 @@
 # ── 로드밸런서 ────────────────────────────────────────────────────────────────
 
-# DNS 검증 레코드가 Cloudflare에 있어서 aws_acm_certificate_validation은 두지 않는다
-resource "aws_acm_certificate" "main" {
-  domain_name               = "shg-trip.cloud"
-  subject_alternative_names = ["*.shg-trip.cloud", "shg-trip.cloud"]
-  validation_method         = "DNS"
-  key_algorithm             = "RSA_2048"
-
-  tags = {
-    Name      = "shg-trip.cloud"
-    Project   = var.project
-    Env       = var.env
-    ManagedBy = "manual"
-  }
+# shg-trip.cloud 인증서는 리스너에서 뗀 뒤 CLI로 지운다. 리스너에 붙은 채로 TF가 지우면 실패한다.
+removed {
+  from = aws_acm_certificate.main
 
   lifecycle {
-    create_before_destroy = true
+    destroy = false
   }
 }
 
+# DNS 검증 레코드가 Cloudflare에 있어서 aws_acm_certificate_validation은 두지 않는다
 resource "aws_acm_certificate" "myshgtrip" {
   domain_name               = "myshgtrip.com"
   subject_alternative_names = ["*.myshgtrip.com"]
@@ -129,7 +120,7 @@ resource "aws_lb_listener" "public_https" {
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-Res-PQ-2025-09"
-  certificate_arn   = aws_acm_certificate.main.arn
+  certificate_arn   = aws_acm_certificate.myshgtrip.arn
 
   # AWS가 단축형과 forward 블록을 둘 다 돌려줘서 둘 다 써야 plan에 diff가 안 생긴다
   default_action {
