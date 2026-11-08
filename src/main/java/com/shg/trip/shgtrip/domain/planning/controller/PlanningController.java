@@ -9,6 +9,7 @@ import com.shg.trip.shgtrip.domain.planning.service.GenerationPolicyService;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationStream;
 import com.shg.trip.shgtrip.domain.planning.service.TravelPlannerService;
 import com.shg.trip.shgtrip.domain.planning.service.ai.SentenceParseService;
+import com.shg.trip.shgtrip.domain.user.service.ActiveUserGuard;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import com.shg.trip.shgtrip.global.response.ApiResponse;
@@ -29,6 +30,7 @@ public class PlanningController {
     private final TravelPlannerService travelPlannerService;
     private final SentenceParseService sentenceParseService;
     private final GenerationPolicyService generationPolicyService;
+    private final ActiveUserGuard activeUserGuard;
 
     /**
      * 콘텐츠 실패는 디바운스 루프의 4xx 스팸을 막으려고 200 + empty()로 반환한다.
@@ -51,6 +53,7 @@ public class PlanningController {
         if (principal == null) {
             throw new BusinessException(ErrorCode.INVALID_TOKEN, "인증 정보가 없습니다.");
         }
+        activeUserGuard.requireActive(principal.id());
         return ApiResponse.success(travelPlannerService.startGeneration(request, principal.id()));
     }
 

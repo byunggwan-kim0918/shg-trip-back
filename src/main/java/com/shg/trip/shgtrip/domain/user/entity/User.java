@@ -50,6 +50,19 @@ public class User extends BaseTimeEntity {
         this.nickname = nickname;
     }
 
+    /** 개인정보를 지우고 행만 남긴다. email은 NOT NULL이라 식별 불가능한 값으로 바꾼다. */
+    public void withdraw() {
+        this.email = "withdrawn-" + id + "@invalid";
+        this.nickname = null;
+        this.profileImage = null;
+        this.status = UserStatus.WITHDRAWN;
+        this.deletedAt = OffsetDateTime.now();
+    }
+
+    public boolean isWithdrawn() {
+        return status == UserStatus.WITHDRAWN;
+    }
+
     public boolean isNewUser() {
         return this.nickname == null || this.nickname.isBlank();
     }

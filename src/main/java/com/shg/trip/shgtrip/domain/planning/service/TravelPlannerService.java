@@ -152,6 +152,13 @@ public class TravelPlannerService {
         }
     }
 
+    public void cancelActiveJob(Long userId) {
+        String jobId = redisTemplate.opsForValue().getAndDelete(ACTIVE_USER_KEY_PREFIX + userId);
+        if (jobId != null) {
+            cancelJobInternal(jobId);
+        }
+    }
+
     /**
      * 활성 유저 키는 건드리지 않는다.
      */

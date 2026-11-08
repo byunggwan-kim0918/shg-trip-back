@@ -18,6 +18,7 @@ import java.io.IOException;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtTokenProvider jwtTokenProvider;
+    private final WithdrawnUserRegistry withdrawnUserRegistry;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -27,7 +28,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         if (token != null && jwtTokenProvider.validateToken(token)) {
             Authentication auth = jwtTokenProvider.getAuthentication(token);
-            SecurityContextHolder.getContext().setAuthentication(auth);
+            if (!(auth.getPrincipal() instanceof UserPrincipal principal)
+                    || !withdrawnUserRegistry.isWithdrawn(principal.id())) {
+                SecurityContextHolder.getContext().setAuthentication(auth);
+            }
         }
 
         filterChain.doFilter(request, response);

@@ -10,10 +10,12 @@ import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
+import com.shg.trip.shgtrip.domain.user.service.ActiveUserGuard;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -32,6 +34,8 @@ public class GenerationTraceRecorder {
     private final GenerationTraceRepository traceRepository;
     private final ObjectMapper objectMapper;
     private final AnthropicProperties anthropicProperties;
+    private final ActiveUserGuard activeUserGuard;
+    private final TransactionTemplate transactionTemplate;
 
     public void record(Itinerary saved, String jobId, ItineraryGenerateRequest request,
                        VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
@@ -39,7 +43,7 @@ public class GenerationTraceRecorder {
                        ScheduleArgs args, long totalMs) {
         Long itineraryId = saved.getId();
         try {
-            traceRepository.save(GenerationTrace.builder()
+            GenerationTrace trace = GenerationTrace.builder()
                     .itineraryId(itineraryId)
                     .jobId(jobId)
                     .traceVersion(TRACE_VERSION)
@@ -53,7 +57,12 @@ public class GenerationTraceRecorder {
                             "sonnet", anthropicProperties.sonnet())))
                     .totalMs(totalMs)
                     .generatedSteps(snapshotJson(saved))
-                    .build());
+                    .build();
+            // 요청 문장이 들어 있어 탈퇴가 trace를 지운 뒤에 들어가면 안 된다.
+            transactionTemplate.executeWithoutResult(status -> {
+                activeUserGuard.lockActive(saved.getUserId());
+                traceRepository.save(trace);
+            });
         } catch (Exception e) {
             log.warn("생성 기록 저장 실패 (itineraryId={}, jobId={}): {}", itineraryId, jobId, e.getMessage());
         }

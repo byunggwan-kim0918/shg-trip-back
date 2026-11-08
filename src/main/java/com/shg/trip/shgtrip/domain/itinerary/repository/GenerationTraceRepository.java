@@ -18,4 +18,8 @@ public interface GenerationTraceRepository extends JpaRepository<GenerationTrace
     @Modifying
     @Query("DELETE FROM GenerationTrace t WHERE t.itineraryId = :itineraryId")
     void deleteByItineraryId(Long itineraryId);
+
+    @Modifying
+    @Query("DELETE FROM GenerationTrace t WHERE t.itineraryId IN (SELECT i.id FROM Itinerary i WHERE i.userId = :userId)")
+    int deleteByUserId(Long userId);
 }

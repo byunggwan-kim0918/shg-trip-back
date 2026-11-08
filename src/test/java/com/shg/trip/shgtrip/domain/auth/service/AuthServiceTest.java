@@ -10,6 +10,7 @@ import com.shg.trip.shgtrip.domain.auth.repository.RefreshTokenRepository;
 import com.shg.trip.shgtrip.domain.auth.repository.UserAuthProviderRepository;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthProviderStrategy;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthStrategyFactory;
+import com.shg.trip.shgtrip.domain.planning.service.GenerationPolicyService;
 import com.shg.trip.shgtrip.domain.user.entity.User;
 import com.shg.trip.shgtrip.domain.user.repository.UserRepository;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
@@ -42,6 +43,45 @@ class AuthServiceTest {
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private JwtTokenProvider jwtTokenProvider;
     @Mock private OAuthProviderStrategy oAuthProviderStrategy;
+    @Mock private WithdrawnIdentityHasher identityHasher;
+    @Mock private GenerationPolicyService generationPolicyService;
+
+    @Test
+    @DisplayName("신규 가입이 탈퇴한 소셜 계정이면 남은 생성 카운터를 이어받는다")
+    void processOAuthCallback_newUser_restoresWithdrawnCounters() {
+        OAuthCallbackRequest request = new OAuthCallbackRequest("kakao", "auth-code");
+        OAuthUserInfo userInfo = new OAuthUserInfo("kakao-123", "test@email.com", "테스터", null);
+        User newUser = User.builder().email("test@email.com").nickname("테스터").build();
+        org.springframework.test.util.ReflectionTestUtils.setField(newUser, "id", 7L);
+
+        given(oAuthStrategyFactory.getStrategy(OAuthProvider.KAKAO)).willReturn(oAuthProviderStrategy);
+        given(oAuthProviderStrategy.getUserInfo("auth-code")).willReturn(userInfo);
+        given(authProviderRepository.findByProviderAndProviderId(OAuthProvider.KAKAO, "kakao-123"))
+                .willReturn(Optional.empty());
+        given(userRepository.save(any(User.class))).willReturn(newUser);
+        given(identityHasher.hash(OAuthProvider.KAKAO, "kakao-123")).willReturn(Optional.of("h"));
+
+        authService.processOAuthCallback(request);
+
+        verify(generationPolicyService).restoreCountersOnSignup("h", 7L);
+    }
+
+    @Test
+    @DisplayName("탈퇴한 사용자의 refresh token은 거부하고 남은 세션을 지운다")
+    void refreshAccessToken_withdrawnUser_rejected() {
+        RefreshToken token = RefreshToken.builder().token("t").userId(1L).expiration(604800000L).build();
+        User user = User.builder().email("a@b.c").nickname("닉네임").build();
+        org.springframework.test.util.ReflectionTestUtils.setField(user, "id", 1L);
+        user.withdraw();
+        given(refreshTokenRepository.findByToken("t")).willReturn(Optional.of(token));
+        given(userRepository.findById(1L)).willReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> authService.refreshAccessToken("t"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining(ErrorCode.USER_WITHDRAWN.getMessage());
+        verify(refreshTokenRepository).deleteByUserId(1L);
+        verify(jwtTokenProvider, never()).createAccessToken(any(), any());
+    }
 
     @Test
     @DisplayName("신규 유저 OAuth 로그인 시 유저가 생성되고 토큰이 발급된다")

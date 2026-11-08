@@ -4,9 +4,12 @@ import com.shg.trip.shgtrip.domain.auth.entity.OAuthProvider;
 import com.shg.trip.shgtrip.domain.auth.entity.UserAuthProvider;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface UserAuthProviderRepository extends JpaRepository<UserAuthProvider, Long> {
 
     Optional<UserAuthProvider> findByProviderAndProviderId(OAuthProvider provider, String providerId);
+
+    List<UserAuthProvider> findByUserId(Long userId);
 }
