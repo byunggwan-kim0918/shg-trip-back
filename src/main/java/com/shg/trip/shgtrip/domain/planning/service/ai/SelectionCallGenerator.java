@@ -68,7 +68,7 @@ public class SelectionCallGenerator {
             if (isTruncated(message)) {
                 log.error("선택 재시도 후에도 truncated (retryMaxTokens={})", retryMaxTokens);
                 throw new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                        "AI 선택 응답이 토큰 한도로 잘렸습니다.");
+                        "장소 선택 응답이 토큰 한도로 잘렸습니다.");
             }
         }
 
@@ -81,7 +81,7 @@ public class SelectionCallGenerator {
             message = callSonnet(userMessage, selectionTool, usedMaxTokens);
             result = isTruncated(message) ? null : parseValid(message, days);
             if (result == null) {
-                throw new BusinessException(ErrorCode.AI_SERVICE_ERROR, "AI 선택 응답 형식이 올바르지 않습니다.");
+                throw new BusinessException(ErrorCode.AI_SERVICE_ERROR, "장소 선택 응답 형식이 올바르지 않습니다.");
             }
         }
 
@@ -120,7 +120,7 @@ public class SelectionCallGenerator {
                 .findFirst()
                 .map(block -> block.asToolUse()._input().convert(SelectionOutput.class))
                 .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                        "AI 응답에서 장소 선택 데이터를 추출할 수 없습니다."));
+                        "생성 응답에서 장소 선택 데이터를 추출할 수 없습니다."));
     }
 
     /**

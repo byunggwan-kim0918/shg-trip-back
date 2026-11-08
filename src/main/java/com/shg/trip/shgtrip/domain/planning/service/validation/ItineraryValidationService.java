@@ -209,7 +209,7 @@ public class ItineraryValidationService {
             // AI 장애 시 threshold 미만 점수를 줘야 enhance 루프에 들어간다.
             int failScore = Math.max(0, planningProperties.validation().softThreshold() - 1);
             return ValidationResult.softFail(failScore, List.of(), List.of("Soft 검증 중 오류 발생"),
-                    "AI 품질 평가 실패: " + e.getMessage());
+                    "품질 평가 실패: " + e.getMessage());
         }
     }
 

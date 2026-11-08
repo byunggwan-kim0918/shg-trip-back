@@ -96,7 +96,7 @@ public class ClaudeAIService implements AIService {
         } catch (Exception e) {
             log.error("Failed to enrich input for destination '{}': {}", input.destination(), e.getMessage(), e);
             throw new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                    "입력 보강 중 AI 서비스 오류가 발생했습니다: " + e.getMessage());
+                    "입력 보강 중 일정 생성 서비스 오류가 발생했습니다: " + e.getMessage());
         }
     }
 
@@ -144,15 +144,15 @@ public class ClaudeAIService implements AIService {
                     .findFirst()
                     .map(block -> block.asToolUse()._input().convert(ItineraryData.class))
                     .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                            "AI 응답에서 일정 데이터를 추출할 수 없습니다."));
+                            "생성 응답에서 일정 데이터를 추출할 수 없습니다."));
 
             // 장소 이름이 빈 스텝만 있는 응답을 그대로 넘기면 빈 일정이 저장된다.
             boolean placeholderOnly = result.steps() == null || result.steps().stream().allMatch(
                     st -> st.place() == null || st.place().name() == null || st.place().name().isBlank());
             if (placeholderOnly) {
-                log.error("AI 응답에 실제 장소가 없음 — steps={}, stopReason={}",
+                log.error("생성 응답에 실제 장소가 없음 — steps={}, stopReason={}",
                         result.steps() == null ? 0 : result.steps().size(), message.stopReason());
-                throw new BusinessException(ErrorCode.AI_SERVICE_ERROR, "AI 응답에 일정 장소가 없습니다.");
+                throw new BusinessException(ErrorCode.AI_SERVICE_ERROR, "생성 응답에 일정 장소가 없습니다.");
             }
 
             // stopReason이 max_tokens면 JSON이 잘려 데이터가 불완전하다.
@@ -163,7 +163,7 @@ public class ClaudeAIService implements AIService {
                 log.error("AI output truncated by max_tokens ({}). Generated {} steps for {} days.",
                         maxTokens, actualSteps, days);
                 throw new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                        "AI 응답이 토큰 한도로 잘렸습니다. 일정 데이터가 불완전합니다.");
+                        "생성 응답이 토큰 한도로 잘렸습니다. 일정 데이터가 불완전합니다.");
             }
 
             log.debug("Generated itinerary for '{}': title='{}', steps={}, stopReason={}",
@@ -177,7 +177,7 @@ public class ClaudeAIService implements AIService {
         } catch (Exception e) {
             log.error("Failed to generate itinerary for '{}': {}", enrichedInput.destination(), e.getMessage(), e);
             throw new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                    "일정 생성 중 AI 서비스 오류가 발생했습니다: " + e.getMessage());
+                    "일정 생성 중 일정 생성 서비스 오류가 발생했습니다: " + e.getMessage());
         }
     }
 
@@ -215,13 +215,13 @@ public class ClaudeAIService implements AIService {
                     .findFirst()
                     .map(block -> block.asToolUse()._input().convert(ItineraryData.class))
                     .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                            "AI 응답에서 보강된 일정 데이터를 추출할 수 없습니다."));
+                            "생성 응답에서 보강된 일정 데이터를 추출할 수 없습니다."));
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
             log.error("Failed to enhance itinerary: {}", e.getMessage(), e);
             throw new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                    "일정 보강 중 AI 서비스 오류가 발생했습니다: " + e.getMessage());
+                    "일정 보강 중 일정 생성 서비스 오류가 발생했습니다: " + e.getMessage());
         }
     }
 
@@ -249,13 +249,13 @@ public class ClaudeAIService implements AIService {
                     .findFirst()
                     .map(block -> block.asToolUse()._input().convert(ItineraryData.class))
                     .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                            "AI 응답에서 재생성된 일정 데이터를 추출할 수 없습니다."));
+                            "생성 응답에서 재생성된 일정 데이터를 추출할 수 없습니다."));
         } catch (BusinessException e) {
             throw e;
         } catch (Exception e) {
             log.error("Failed to regenerate itinerary for '{}': {}", enrichedInput.destination(), e.getMessage(), e);
             throw new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                    "일정 재생성 중 AI 서비스 오류가 발생했습니다: " + e.getMessage());
+                    "일정 재생성 중 일정 생성 서비스 오류가 발생했습니다: " + e.getMessage());
         }
     }
 
@@ -340,7 +340,7 @@ public class ClaudeAIService implements AIService {
 
         // ItineraryValidationService catch 블록과 같은 fallback 점수를 써야 판정이 일관된다.
         int fallbackScore = Math.max(0, planningProperties.validation().softThreshold() - 1);
-        return new SoftEvaluationResult(fallbackScore, List.of("AI 품질 평가 실패, 기본값 적용"));
+        return new SoftEvaluationResult(fallbackScore, List.of("품질 평가 실패, 기본값 적용"));
     }
 
     /**
