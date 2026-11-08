@@ -37,3 +37,8 @@ output "cloudfront_images_domain" {
   description = "장소 이미지 서빙 CloudFront 배포 도메인 (CLOUDFRONT_DOMAIN 환경변수 값)"
   value       = aws_cloudfront_distribution.images.domain_name
 }
+
+output "myshgtrip_cert_validation" {
+  description = "Cloudflare에 DNS 전용으로 추가할 ACM 검증 CNAME"
+  value       = [for o in aws_acm_certificate.myshgtrip.domain_validation_options : { name = o.resource_record_name, value = o.resource_record_value }]
+}

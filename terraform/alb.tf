@@ -19,6 +19,7 @@ resource "aws_acm_certificate" "main" {
   }
 }
 
+resource "aws_acm_certificate" "myshgtrip" {
 resource "aws_lb" "public" {
   name                       = "shgTrip-public-alb"
   internal                   = false
