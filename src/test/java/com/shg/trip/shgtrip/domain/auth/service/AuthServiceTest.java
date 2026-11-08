@@ -67,6 +67,25 @@ class AuthServiceTest {
     }
 
     @Test
+    @DisplayName("제공자 닉네임이 투명 문자거나 이미 쓰이면 비워 두고 온보딩으로 보낸다")
+    void processOAuthCallback_newUser_rejectsUnusableProviderNickname() {
+        given(oAuthStrategyFactory.getStrategy(OAuthProvider.KAKAO)).willReturn(oAuthProviderStrategy);
+        given(authProviderRepository.findByProviderAndProviderId(any(), any())).willReturn(Optional.empty());
+        given(userRepository.save(any(User.class))).willAnswer(inv -> inv.getArgument(0));
+
+        given(oAuthProviderStrategy.getUserInfo("c1")).willReturn(new OAuthUserInfo("k1", "a@b.c", "\u3164\u3164", null));
+        assertThat(authService.processOAuthCallback(new OAuthCallbackRequest("kakao", "c1")).isNewUser()).isTrue();
+
+        given(userRepository.existsByNickname("테스터")).willReturn(true);
+        given(oAuthProviderStrategy.getUserInfo("c2")).willReturn(new OAuthUserInfo("k2", "a@b.c", " 테스터 ", null));
+        assertThat(authService.processOAuthCallback(new OAuthCallbackRequest("kakao", "c2")).isNewUser()).isTrue();
+
+        given(oAuthProviderStrategy.getUserInfo("c3")).willReturn(new OAuthUserInfo("k3", "a@b.c", "여행자\u3000\u3000김", null));
+        assertThat(authService.processOAuthCallback(new OAuthCallbackRequest("kakao", "c3")).isNewUser()).isFalse();
+        verify(userRepository).existsByNickname("여행자 김");
+    }
+
+    @Test
     @DisplayName("탈퇴한 사용자의 refresh token은 거부하고 남은 세션을 지운다")
     void refreshAccessToken_withdrawnUser_rejected() {
         RefreshToken token = RefreshToken.builder().token("t").userId(1L).expiration(604800000L).build();

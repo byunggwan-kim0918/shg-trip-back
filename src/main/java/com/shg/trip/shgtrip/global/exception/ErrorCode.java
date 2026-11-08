@@ -24,6 +24,7 @@ public enum ErrorCode {
     REAUTH_MISMATCH("USER_004", "탈퇴하려는 계정과 다른 계정으로 로그인했습니다.", HttpStatus.FORBIDDEN),
     // 401이면 BFF가 세션 만료로 보고 refresh 후 같은 code로 재시도한다.
     REAUTH_FAILED("USER_005", "본인 확인에 실패했습니다. 다시 시도해주세요.", HttpStatus.BAD_REQUEST),
+    WITHDRAWAL_RATE_LIMITED("USER_006", "탈퇴 요청이 너무 잦습니다. 잠시 후 다시 시도해주세요.", HttpStatus.TOO_MANY_REQUESTS),
 
     // Itinerary
     ITINERARY_NOT_FOUND("ITINERARY_001", "일정을 찾을 수 없습니다.", HttpStatus.NOT_FOUND),
@@ -58,6 +59,8 @@ public enum ErrorCode {
     // Common
     RESOURCE_NOT_FOUND("COMMON_002", "요청한 리소스를 찾을 수 없습니다.", HttpStatus.NOT_FOUND),
     INVALID_INPUT("COMMON_001", "잘못된 입력입니다.", HttpStatus.BAD_REQUEST),
+    METHOD_NOT_ALLOWED("COMMON_003", "지원하지 않는 요청 방식입니다.", HttpStatus.METHOD_NOT_ALLOWED),
+    UNSUPPORTED_MEDIA_TYPE("COMMON_004", "지원하지 않는 요청 형식입니다.", HttpStatus.UNSUPPORTED_MEDIA_TYPE),
     INTERNAL_SERVER_ERROR("COMMON_999", "서버 오류가 발생했습니다.", HttpStatus.INTERNAL_SERVER_ERROR);
 
     private final String code;

@@ -72,6 +72,8 @@ class UserWithdrawalServiceTest {
     @Mock private OAuthStrategyFactory strategyFactory;
     @Mock private TransactionTemplate transactionTemplate;
     @Mock private OAuthProviderStrategy strategy;
+    @Mock private org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    @Mock private org.springframework.data.redis.core.ValueOperations<String, String> valueOps;
 
     private User user;
     private UserAuthProvider linked;
@@ -83,6 +85,8 @@ class UserWithdrawalServiceTest {
         ReflectionTestUtils.setField(user, "id", 1L);
         linked = UserAuthProvider.builder().userId(1L).provider(OAuthProvider.NAVER).providerId("n-1").build();
         lenient().when(strategyFactory.getStrategy(OAuthProvider.NAVER)).thenReturn(strategy);
+        lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        lenient().when(valueOps.increment(org.mockito.ArgumentMatchers.anyString())).thenReturn(1L);
         lenient().doAnswer(inv -> {
             inv.<Consumer<org.springframework.transaction.TransactionStatus>>getArgument(0)
                     .accept(new SimpleTransactionStatus());
@@ -193,6 +197,29 @@ class UserWithdrawalServiceTest {
         verifyNoInteractions(itineraryRepository, itineraryStepRepository, refreshTokenRepository);
         assertThat(TransactionSynchronizationManager.getSynchronizations()).isEmpty();
         verify(authProviderRepository, never()).findByUserId(anyLong());
+    }
+
+    @Test
+    void 분당_요청_한도를_넘으면_제공자를_호출하지_않고_거부한다() {
+        given(valueOps.increment("withdraw:rate:1")).willReturn(6L);
+
+        assertThatThrownBy(() -> service.withdraw(1L, OAuthProvider.NAVER, "code"))
+                .hasMessageContaining(ErrorCode.WITHDRAWAL_RATE_LIMITED.getMessage());
+        verifyNoInteractions(strategy);
+    }
+
+    @Test
+    void 요청_제한_조회가_실패해도_탈퇴는_진행한다() {
+        given(redisTemplate.opsForValue()).willThrow(new IllegalStateException("redis down"));
+        givenReauthAs("n-1");
+        given(authProviderRepository.findByProviderAndProviderId(OAuthProvider.NAVER, "n-1"))
+                .willReturn(Optional.of(linked));
+        given(userRepository.findByIdForUpdate(1L)).willReturn(Optional.of(user));
+        given(authProviderRepository.findByUserId(1L)).willReturn(List.of(linked));
+
+        service.withdraw(1L, OAuthProvider.NAVER, "code");
+
+        assertThat(user.getStatus()).isEqualTo(UserStatus.WITHDRAWN);
     }
 
     private void givenReauthAs(String providerId) {

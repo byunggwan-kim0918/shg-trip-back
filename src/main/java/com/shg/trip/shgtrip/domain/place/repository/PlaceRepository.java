@@ -75,13 +75,46 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             """)
     List<Place> findActiveByNameLike(@Param("name") String name, Pageable pageable);
 
-    @Query("""
+    /**
+     * 평점은 대부분 비어 있어 평점순이면 설명에만 키워드가 든 장소가 실제 명소보다 앞선다.
+     * 순서를 쿼리가 정하므로 Pageable에 정렬을 넣으면 안 된다.
+     *
+     * @param keyword  소문자로 바꾸고 LIKE 와일드카드(\\, %, _)를 이스케이프한 값
+     * @param category null이면 전체
+     */
+    @Query(value = """
             SELECT p FROM Place p
-            WHERE LOWER(p.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
-               OR LOWER(p.address) LIKE LOWER(CONCAT('%', :keyword, '%'))
-               OR LOWER(p.description) LIKE LOWER(CONCAT('%', :keyword, '%'))
+            WHERE p.active = true
+              AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
+              AND (:category IS NULL OR p.category = :category)
+              AND (LOWER(p.name) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+                OR LOWER(p.address) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+                OR LOWER(p.description) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')
+            ORDER BY CASE
+                       WHEN LOWER(p.name) = :exact THEN 0
+                       WHEN LOWER(p.name) LIKE CONCAT(:keyword, ' (%') ESCAPE '\\' THEN 0
+                       WHEN LOWER(p.name) LIKE CONCAT(:keyword, '%') ESCAPE '\\' THEN 1
+                       WHEN LOWER(p.name) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' THEN 2
+                       ELSE 3
+                     END,
+                     p.wikidataSitelinks DESC NULLS LAST,
+                     p.rating DESC NULLS LAST,
+                     LENGTH(p.name),
+                     p.id
+            """,
+            countQuery = """
+            SELECT COUNT(p) FROM Place p
+            WHERE p.active = true
+              AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
+              AND (:category IS NULL OR p.category = :category)
+              AND (LOWER(p.name) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+                OR LOWER(p.address) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+                OR LOWER(p.description) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')
             """)
-    Page<Place> searchByKeyword(@Param("keyword") String keyword, Pageable pageable);
+    Page<Place> searchByKeyword(@Param("keyword") String keyword,
+                                @Param("exact") String exact,
+                                @Param("category") String category,
+                                Pageable pageable);
 
     @Query("""
             SELECT p FROM Place p
@@ -98,17 +131,6 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             Pageable pageable
     );
 
-    @Query("""
-            SELECT p FROM Place p
-            WHERE (:category IS NULL OR p.category = :category)
-              AND (LOWER(p.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
-                OR LOWER(p.address) LIKE LOWER(CONCAT('%', :keyword, '%')))
-            """)
-    Page<Place> searchByKeywordAndCategory(
-            @Param("keyword") String keyword,
-            @Param("category") String category,
-            Pageable pageable
-    );
 
     /** 숙소 후보 보완용. region 목록 내 Lodging 카테고리 장소를 평점 순으로 준다. */
     @Query("""

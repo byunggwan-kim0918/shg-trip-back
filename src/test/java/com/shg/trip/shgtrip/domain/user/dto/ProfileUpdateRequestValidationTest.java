@@ -30,4 +30,29 @@ class ProfileUpdateRequestValidationTest {
         assertThat(validator.validate(new ProfileUpdateRequest("ab\tcd"))).isNotEmpty();
         assertThat(validator.validate(new ProfileUpdateRequest("여행자 01"))).isEmpty();
     }
+
+    @Test
+    @DisplayName("제로폭·방향 제어 문자는 거부하고 공백은 하나로 합쳐 같은 모양의 다른 닉네임을 막는다")
+    void rejectsLookalikeNicknames() {
+        assertThat(validator.validate(new ProfileUpdateRequest("b\u200Byu"))).isNotEmpty();
+        assertThat(validator.validate(new ProfileUpdateRequest("\u200B\u200B"))).isNotEmpty();
+        assertThat(validator.validate(new ProfileUpdateRequest("ab\u202Ecd"))).isNotEmpty();
+
+        assertThat(new ProfileUpdateRequest("여행자     01").nickname()).isEqualTo("여행자 01");
+        assertThat(new ProfileUpdateRequest("여행자\u3000\u00A001").nickname()).isEqualTo("여행자 01");
+        // 한글 자모 분리형(NFD)도 완성형과 같은 값으로 저장된다
+        assertThat(new ProfileUpdateRequest("\u1100\u1161\u1102\u1161").nickname()).isEqualTo("가나");
+    }
+
+    @Test
+    @DisplayName("한글 채움 문자·점자 공백·결합 기호처럼 글자 분류인 투명 문자도 거부한다")
+    void rejectsInvisibleLetters() {
+        assertThat(validator.validate(new ProfileUpdateRequest("\u3164\u3164"))).isNotEmpty();
+        assertThat(validator.validate(new ProfileUpdateRequest("여행자\u3164"))).isNotEmpty();
+        assertThat(validator.validate(new ProfileUpdateRequest("ab\u115F"))).isNotEmpty();
+        assertThat(validator.validate(new ProfileUpdateRequest("\u2800\u2800"))).isNotEmpty();
+        assertThat(validator.validate(new ProfileUpdateRequest("ab\uFE0F"))).isNotEmpty();
+        assertThat(validator.validate(new ProfileUpdateRequest("!!"))).isNotEmpty();
+        assertThat(validator.validate(new ProfileUpdateRequest("여행자_01"))).isEmpty();
+    }
 }

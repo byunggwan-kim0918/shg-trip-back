@@ -3,12 +3,20 @@ package com.shg.trip.shgtrip.global.exception;
 import com.shg.trip.shgtrip.global.response.ApiResponse;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.data.mapping.PropertyReferenceException;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.stream.Collectors;
 
@@ -53,6 +61,43 @@ public class GlobalExceptionHandler {
         return ResponseEntity
                 .badRequest()
                 .body(ApiResponse.error(ErrorCode.INVALID_INPUT, fullMessage));
+    }
+
+    /**
+     * 깨진 JSON·빈 본문·없는 enum 값·빠진 파라미터나 쿠키·없는 정렬 필드처럼
+     * 클라이언트가 고쳐야 하는 요청이 500으로 기록되지 않게 한다.
+     */
+    @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class,
+            ServletRequestBindingException.class, PropertyReferenceException.class})
+    public ResponseEntity<ApiResponse<Void>> handleUnreadableRequest(Exception e) {
+        log.warn("Bad request: {}", e.getMessage());
+        return error(ErrorCode.INVALID_INPUT);
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        log.warn("Method not allowed: {}", e.getMessage());
+        return error(ErrorCode.METHOD_NOT_ALLOWED, e.getHeaders());
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException e) {
+        log.warn("Unsupported media type: {}", e.getMessage());
+        return error(ErrorCode.UNSUPPORTED_MEDIA_TYPE, e.getHeaders());
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResource(NoResourceFoundException e) {
+        return error(ErrorCode.RESOURCE_NOT_FOUND);
+    }
+
+    private static ResponseEntity<ApiResponse<Void>> error(ErrorCode code) {
+        return error(code, HttpHeaders.EMPTY);
+    }
+
+    /** 405의 Allow, 415의 Accept처럼 RFC가 요구하는 헤더를 그대로 싣는다. */
+    private static ResponseEntity<ApiResponse<Void>> error(ErrorCode code, HttpHeaders headers) {
+        return ResponseEntity.status(code.getHttpStatus()).headers(headers).body(ApiResponse.error(code));
     }
 
     @ExceptionHandler(Exception.class)

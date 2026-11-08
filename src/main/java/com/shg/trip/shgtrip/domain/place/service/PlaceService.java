@@ -8,8 +8,11 @@ import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+
+import java.util.Locale;
 import org.springframework.transaction.annotation.Transactional;
 
 @Slf4j
@@ -31,13 +34,20 @@ public class PlaceService {
     }
 
     public Page<PlaceResponse> searchPlaces(String keyword, Pageable pageable) {
-        return placeRepository.searchByKeyword(keyword, pageable)
-                .map(PlaceResponse::from);
+        return searchPlaces(keyword, null, pageable);
     }
 
     public Page<PlaceResponse> searchPlaces(String keyword, String category, Pageable pageable) {
-        return placeRepository.searchByKeywordAndCategory(keyword, category, pageable)
+        String lowered = keyword.strip().toLowerCase(Locale.ROOT);
+        Pageable unsorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
+        return placeRepository.searchByKeyword(escapeLike(lowered), lowered,
+                        category == null || category.isBlank() ? null : category, unsorted)
                 .map(PlaceResponse::from);
+    }
+
+    /** 사용자가 친 %, _가 와일드카드로 해석되면 모든 장소가 이름 일치 순위로 올라온다. */
+    static String escapeLike(String value) {
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     public Page<PlaceResponse> searchNearby(double lat, double lng, double radiusKm, Pageable pageable) {

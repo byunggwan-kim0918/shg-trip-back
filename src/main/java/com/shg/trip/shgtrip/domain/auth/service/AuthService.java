@@ -9,6 +9,7 @@ import com.shg.trip.shgtrip.domain.auth.repository.UserAuthProviderRepository;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthProviderStrategy;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthStrategyFactory;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationPolicyService;
+import com.shg.trip.shgtrip.domain.user.NicknamePolicy;
 import com.shg.trip.shgtrip.domain.user.dto.ProfileResponse;
 import com.shg.trip.shgtrip.domain.user.entity.User;
 import com.shg.trip.shgtrip.domain.user.repository.UserRepository;
@@ -68,7 +69,7 @@ public class AuthService {
         } else {
             user = User.builder()
                     .email(userInfo.email())
-                    .nickname(userInfo.nickname())
+                    .nickname(signupNickname(userInfo.nickname()))
                     .profileImage(userInfo.profileImage())
                     .build();
             user = userRepository.save(user);
@@ -164,6 +165,15 @@ public class AuthService {
                         jwtTokenProvider.createAccessToken(user.getId(), user.getRole().name()),
                         revoked.getReplacedBy(), false, jwtTokenProvider.getRefreshExpiration(),
                         ProfileResponse.from(user)));
+    }
+
+    /** 제공자 닉네임이 기준에 안 맞거나 이미 쓰이면 비워 두고 온보딩에서 정하게 한다. */
+    private String signupNickname(String providerNickname) {
+        String nickname = NicknamePolicy.normalize(providerNickname);
+        if (!NicknamePolicy.isAcceptable(nickname) || userRepository.existsByNickname(nickname)) {
+            return null;
+        }
+        return nickname;
     }
 
     /** 가입이 롤백되면 카운터가 존재하지 않는 사용자로 옮겨져 사라진다. */

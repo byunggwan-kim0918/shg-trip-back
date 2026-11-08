@@ -56,6 +56,8 @@ class UserWithdrawalTransactionTest {
     @Mock private TravelPlannerService travelPlannerService;
     @Mock private OAuthStrategyFactory strategyFactory;
     @Mock private OAuthProviderStrategy strategy;
+    @Mock private org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    @Mock private org.springframework.data.redis.core.ValueOperations<String, String> valueOps;
 
     private UserWithdrawalService service;
 
@@ -64,7 +66,9 @@ class UserWithdrawalTransactionTest {
         service = new UserWithdrawalService(userRepository, authProviderRepository, itineraryRepository,
                 itineraryStepRepository, itineraryEditEventRepository, generationTraceRepository,
                 refreshTokenRepository, withdrawnUserRegistry, identityHasher, generationPolicyService,
-                travelPlannerService, strategyFactory, new TransactionTemplate(new NoResourceTransactionManager()));
+                travelPlannerService, strategyFactory, new TransactionTemplate(new NoResourceTransactionManager()),
+                redisTemplate);
+        org.mockito.Mockito.lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);
 
         User user = User.builder().email("a@b.c").nickname("닉").build();
         ReflectionTestUtils.setField(user, "id", 1L);
