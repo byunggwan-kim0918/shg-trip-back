@@ -101,7 +101,7 @@ public class AuthService {
             throw new BusinessException(ErrorCode.INTERNAL_SERVER_ERROR);
         }
 
-        return new OAuthLoginResult(accessToken, refreshToken, isNewUser, refreshExpirationMs, ProfileResponse.from(user));
+        return new OAuthLoginResult(accessToken, refreshToken, isNewUser, refreshExpirationMs, ProfileResponse.from(user, provider));
     }
 
     @Transactional

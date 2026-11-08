@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.auth.service.oauth;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.shg.trip.shgtrip.domain.auth.dto.OAuthSession;
 import com.shg.trip.shgtrip.domain.auth.dto.OAuthUserInfo;
 import com.shg.trip.shgtrip.domain.auth.entity.OAuthProvider;
 import com.shg.trip.shgtrip.global.config.OAuthProperties;
@@ -19,6 +20,8 @@ import org.springframework.web.client.RestClient;
 @RequiredArgsConstructor
 public class KakaoOAuthStrategy implements OAuthProviderStrategy {
 
+    private static final String UNLINK_URI = "https://kapi.kakao.com/v1/user/unlink";
+
     private final RestClient restClient;
     private final OAuthProperties oAuthProperties;
 
@@ -28,9 +31,22 @@ public class KakaoOAuthStrategy implements OAuthProviderStrategy {
     }
 
     @Override
-    public OAuthUserInfo getUserInfo(String authorizationCode) {
+    public OAuthSession authenticate(String authorizationCode) {
         String accessToken = exchangeToken(authorizationCode);
-        return fetchUserInfo(accessToken);
+        return new OAuthSession(fetchUserInfo(accessToken), accessToken);
+    }
+
+    @Override
+    public void revoke(String accessToken) {
+        try {
+            restClient.post()
+                    .uri(UNLINK_URI)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (Exception e) {
+            log.warn("카카오 연결 해제 실패: {}", e.getMessage());
+        }
     }
 
     private String exchangeToken(String code) {
@@ -72,11 +88,7 @@ public class KakaoOAuthStrategy implements OAuthProviderStrategy {
             String email = kakaoAccount != null && kakaoAccount.has("email")
                     ? kakaoAccount.get("email").asText() : null;
 
-            if (email == null || email.isBlank()) {
-                throw new BusinessException(ErrorCode.EMAIL_NOT_PROVIDED);
-            }
-
-            JsonNode profile = kakaoAccount.get("profile");
+            JsonNode profile = kakaoAccount != null ? kakaoAccount.get("profile") : null;
             String nickname = profile != null && profile.has("nickname")
                     ? profile.get("nickname").asText() : null;
             String profileImage = profile != null && profile.has("profile_image_url")
