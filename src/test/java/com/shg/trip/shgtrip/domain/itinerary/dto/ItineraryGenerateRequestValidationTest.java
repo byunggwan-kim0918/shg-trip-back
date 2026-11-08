@@ -118,7 +118,7 @@ class ItineraryGenerateRequestValidationTest {
     }
 
     @Test
-    @DisplayName("여행지 50자·AI에게 한마디 500자를 넘으면 거부된다")
+    @DisplayName("여행지 50자·추가 요청 500자를 넘으면 거부된다")
     void rejectsLongTextFields() {
         assertThat(messages(withOptions("가".repeat(50), List.of("healing"), List.of("cafe"), null, null, "나".repeat(500))))
                 .isEmpty();

@@ -45,7 +45,7 @@ public record ItineraryGenerateRequest(
         @Future(message = "종료일은 미래 날짜여야 합니다.")
         LocalDate endDate,
 
-        @Size(max = 500, message = "AI에게 한마디는 500자 이내로 입력해주세요.")
+        @Size(max = 500, message = "추가 요청은 500자 이내로 입력해주세요.")
         String description,
 
         List<Long> selectedPlaceIds,  // Manual Mode 전용, nullable

@@ -246,7 +246,7 @@ public class OptimizedGenerationExecutor {
 
         } catch (BusinessException e) {
             log.error("OptimizedGeneration 비즈니스 오류 (jobId={}): {}", jobId, e.getMessage());
-            sendSseError(emitter, e.getErrorCode().getCode(), e.getMessage());
+            sendSseError(emitter, e.getErrorCode().getCode(), e.userMessage());
         } catch (Exception e) {
             log.error("OptimizedGeneration 예기치 않은 오류 (jobId={})", jobId, e);
             sendSseError(emitter, "UNEXPECTED_ERROR", "일정 생성 중 오류가 발생했습니다.");

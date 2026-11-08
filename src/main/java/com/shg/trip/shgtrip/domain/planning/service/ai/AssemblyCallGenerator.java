@@ -66,7 +66,7 @@ public class AssemblyCallGenerator {
             if (isTruncated(message)) {
                 log.error("스토리 재시도 후에도 truncated (retryMaxTokens={})", retryMaxTokens);
                 throw new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                        "AI 스토리 응답이 토큰 한도로 잘렸습니다.");
+                        "일정 설명 응답이 토큰 한도로 잘렸습니다.");
             }
         }
 
@@ -75,7 +75,7 @@ public class AssemblyCallGenerator {
                 .findFirst()
                 .map(block -> block.asToolUse()._input().convert(AssemblyItineraryOutput.class))
                 .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
-                        "AI 응답에서 스토리 데이터를 추출할 수 없습니다."));
+                        "생성 응답에서 스토리 데이터를 추출할 수 없습니다."));
 
         log.info("AssemblyCallGenerator 완료: title='{}', steps={}, inputTokens={}, outputTokens={}, 캐시읽음/쓰기={}",
                 result.title(),
