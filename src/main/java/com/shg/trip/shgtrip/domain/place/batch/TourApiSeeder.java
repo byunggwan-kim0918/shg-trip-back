@@ -340,7 +340,7 @@ public class TourApiSeeder {
 
             for (JsonNode item : items) {
                 if (!name.equals(item.path("title").asText(null))) continue;
-                String image = item.path("firstimage").asText(null);
+                String image = secureImageUrl(item.path("firstimage").asText(null));
                 if (image != null && !image.isBlank()) return image;
             }
             return null;
@@ -487,7 +487,7 @@ public class TourApiSeeder {
 
         String address = item.path("addr1").asText("");
         if (address.isBlank()) address = region;
-        String imageUrl = item.path("firstimage").asText(null);
+        String imageUrl = secureImageUrl(item.path("firstimage").asText(null));
 
         // savedAt은 nullable=false인데 @Builder.Default 초기값이 없어 안 채우면 insert가 NOT NULL로 실패한다.
         // active도 builder 경유 시 @Builder.Default가 무시될 수 있어 직접 지정한다.
@@ -506,5 +506,11 @@ public class TourApiSeeder {
                 .active(true)
                 .savedAt(java.time.OffsetDateTime.now())
                 .build();
+    }
+
+    /** TourAPI는 같은 이미지 서버를 http로도 주는데, https 페이지에 그대로 넣으면 혼합 콘텐츠로 막힐 수 있다. */
+    static String secureImageUrl(String url) {
+        if (url == null || url.isBlank()) return url;
+        return url.startsWith("http://") ? "https://" + url.substring("http://".length()) : url;
     }
 }

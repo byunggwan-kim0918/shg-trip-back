@@ -42,7 +42,9 @@ public final class CandidatePolicy {
     public static Role roleOf(PlaceCandidate c) {
         if (c == null) return Role.NOT_VISITABLE;
         // 보강 모델은 근린공원·키즈카페도 SIGHT로 적어 명시 목록이 보강 역할보다 앞선다. 사용자가 고른 곳은 예외다.
-        if (!c.userSelected() && isCertainlyNotVisitable(c.name(), c.category())) return Role.NOT_VISITABLE;
+        if (!c.userSelected() && (isBlocked(c.name()) || isCertainlyNotVisitable(c.name(), c.category()))) {
+            return Role.NOT_VISITABLE;
+        }
         Role enriched = Role.parse(c.placeRole());
         if (enriched != null) return enriched;
         Role byAttributes = roleOf(c.attributes());
@@ -93,6 +95,18 @@ public final class CandidatePolicy {
                 return Role.NOT_VISITABLE;
         }
     }
+
+    /** 동행·지역과 무관하게 추천하지 않는 장소. 방문 가능 여부가 아니라 정책이라 DB 역할로 기록하지 않는다. */
+    static boolean isBlocked(String name) {
+        if (name == null) return false;
+        String compact = name.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        return BLOCKED_NAME.stream().anyMatch(compact::contains);
+    }
+
+    // 공백 없는 소문자로 비교한다. 야스쿠니는 근처 도로(靖国通り) 이름을 쓰는 가게가 걸리지 않게 시설 이름 전체로 둔다.
+    private static final List<String> BLOCKED_NAME = List.of(
+            "야스쿠니신사", "靖国神社", "靖國神社", "yasukunishrine", "yasukunijinja", "유슈칸", "遊就館",
+            "제주러브랜드", "jejuloveland");
 
     /**
      * 관광 대분류 안의 명시 목록과 키즈카페처럼 비방문이 확실해 DB에 영구 기록해도 되는 범위.

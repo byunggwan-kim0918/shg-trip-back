@@ -34,6 +34,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -104,6 +105,7 @@ class ItineraryServiceTest {
 
     private void mockFind() {
         when(itineraryRepository.findByIdWithDetails(ITINERARY_ID)).thenReturn(Optional.of(itinerary));
+        lenient().when(itineraryRepository.findByIdForUpdate(ITINERARY_ID)).thenReturn(Optional.of(itinerary));
     }
 
     private ItineraryEditEvent onlyEvent() {
@@ -414,5 +416,53 @@ class ItineraryServiceTest {
         ItineraryEditEvent e = onlyEvent();
         assertThat(e.getType()).isEqualTo(ItineraryEditEvent.Type.SELECT_ALTERNATIVE);
         assertThat(e.getPayload()).containsEntry("fromPlaceId", 110L).containsEntry("toPlaceId", 999L);
+    }
+
+    @Test
+    @DisplayName("숙소·공항은 순서 변경으로 자리를 옮길 수 없고, 다른 스텝이 그 자리로 들어와도 거부한다")
+    void rejectsMovingAnchors() {
+        mockFind();
+        ReflectionTestUtils.setField(stepById(10L).getPlace(), "category", "Travel and Transportation > Transport Hub > Airport");
+
+        assertThatThrownBy(() -> itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 1, List.of(11L, 10L, 12L)))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("숙소와 공항·역은 자리를 옮길 수 없어요");
+        assertThatThrownBy(() -> itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 1, List.of(12L, 11L, 10L)))
+                .isInstanceOf(BusinessException.class);
+
+        ItineraryResponse res = itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 1, List.of(10L, 12L, 11L));
+        assertThat(byId(res).get(10L).stepOrder()).isEqualTo(0);
+    }
+
+    @Test
+    @DisplayName("편집 뒤 일정 금액은 장소 비용과 이동 비용의 합으로 다시 계산한다")
+    void recalculatesEstimatedCostAfterEdit() {
+        mockFind();
+        itinerary.getSteps().forEach(st -> ReflectionTestUtils.setField(st, "estimatedCost", BigDecimal.valueOf(10_000)));
+
+        ItineraryResponse res = itineraryService.deleteStep(ITINERARY_ID, USER_ID, 11L);
+
+        BigDecimal expected = itinerary.getSteps().stream()
+                .map(st -> BigDecimal.valueOf(10_000).add(
+                        st.getTransportationCost() != null ? st.getTransportationCost() : BigDecimal.ZERO))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        assertThat(res.estimatedCost()).isEqualByComparingTo(expected);
+        assertThat(expected).isGreaterThan(BigDecimal.valueOf(50_000));
+    }
+
+    @Test
+    @DisplayName("편집은 일정 행 잠금을 먼저 잡는다")
+    void locksItineraryBeforeEditing() {
+        mockFind();
+
+        itineraryService.deleteStep(ITINERARY_ID, USER_ID, 11L);
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(itineraryRepository);
+        order.verify(itineraryRepository).findByIdForUpdate(ITINERARY_ID);
+        order.verify(itineraryRepository).findByIdWithDetails(ITINERARY_ID);
+    }
+
+    private ItineraryStep stepById(long id) {
+        return itinerary.getSteps().stream().filter(st -> st.getId().equals(id)).findFirst().orElseThrow();
     }
 }

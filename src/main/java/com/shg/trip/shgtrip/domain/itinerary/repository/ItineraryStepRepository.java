@@ -10,15 +10,20 @@ import org.springframework.transaction.annotation.Transactional;
 public interface ItineraryStepRepository extends JpaRepository<ItineraryStep, Long> {
 
     /**
-     * 부모 Itinerary를 로드하지 않아 @Version이 안 올라가므로 비동기 story 채움이 동시 편집(PUT)과 충돌하지 않는다.
+     * 부모 Itinerary를 수정하지 않아 @Version이 안 올라가므로 비동기 story 채움이 동시 편집(PUT)과 충돌하지 않는다.
      * {@code @Modifying} JPQL은 트랜잭션이 자동으로 걸리지 않아 빼면 @Async 호출부에서 TransactionRequiredException이 난다.
      */
     @Transactional
     @Modifying
-    @Query("UPDATE ItineraryStep s SET s.notes = :notes WHERE s.itinerary.id = :itineraryId AND s.stepOrder = :stepOrder")
-    int updateNotesByItineraryIdAndStepOrder(@Param("itineraryId") Long itineraryId,
-                                              @Param("stepOrder") Integer stepOrder,
-                                              @Param("notes") String notes);
+    @Query("""
+            UPDATE ItineraryStep s SET s.notes = :notes
+            WHERE s.itinerary.id = :itineraryId AND s.dayNumber = :dayNumber
+              AND s.place.id IN (SELECT p.id FROM Place p WHERE p.name = :placeName)
+            """)
+    int updateNotesByDayAndPlace(@Param("itineraryId") Long itineraryId,
+                                 @Param("dayNumber") Integer dayNumber,
+                                 @Param("placeName") String placeName,
+                                 @Param("notes") String notes);
 
     @Modifying
     @Query("DELETE FROM AlternativeOption a WHERE a.step.id IN "

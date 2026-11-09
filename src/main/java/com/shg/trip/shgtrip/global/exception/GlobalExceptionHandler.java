@@ -8,6 +8,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.data.mapping.PropertyReferenceException;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -31,7 +32,7 @@ public class GlobalExceptionHandler {
         resetEventStreamContentType(response);
         return ResponseEntity
                 .status(e.getErrorCode().getHttpStatus())
-                .body(ApiResponse.error(e.getErrorCode()));
+                .body(ApiResponse.error(e.getErrorCode(), e.userMessage()));
     }
 
     @ExceptionHandler(ResponseStatusException.class)
@@ -72,6 +73,13 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResponse<Void>> handleUnreadableRequest(Exception e) {
         log.warn("Bad request: {}", e.getMessage());
         return error(ErrorCode.INVALID_INPUT);
+    }
+
+    /** 낙관락 충돌과 교착·잠금 대기 실패(PostgreSQL deadlock_detected)는 다시 시도하면 되는 요청이다. */
+    @ExceptionHandler(ConcurrencyFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConcurrencyFailure(ConcurrencyFailureException e) {
+        log.warn("Concurrent update conflict: {}", e.getMessage());
+        return error(ErrorCode.ITINERARY_VERSION_CONFLICT);
     }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)

@@ -34,6 +34,18 @@ class GlobalExceptionHandlerTest {
         @GetMapping("/sample")
         String get(@RequestParam int page) { return "ok"; }
 
+        @GetMapping("/business")
+        String business() { throw new BusinessException(ErrorCode.INVALID_INPUT, "해당 날짜의 마지막 일정은 삭제할 수 없습니다."); }
+
+        @GetMapping("/ai")
+        String ai() { throw new BusinessException(ErrorCode.AI_SERVICE_ERROR, "모델 응답 원문"); }
+
+        @GetMapping("/deadlock")
+        String deadlock() { throw new org.springframework.dao.CannotAcquireLockException("deadlock detected"); }
+
+        @GetMapping("/conflict")
+        String conflict() { throw new org.springframework.orm.ObjectOptimisticLockingFailureException(Object.class, 1L); }
+
         @GetMapping("/cookie")
         String cookie(@org.springframework.web.bind.annotation.CookieValue("refresh_token") String token) { return "ok"; }
     }
@@ -83,5 +95,26 @@ class GlobalExceptionHandlerTest {
     void 지원하지_않는_본문_형식은_415() throws Exception {
         mockMvc.perform(post("/sample").contentType(MediaType.TEXT_PLAIN).content("x"))
                 .andExpect(status().isUnsupportedMediaType());
+    }
+
+    @Test
+    void 업무_예외는_서버가_정한_문구를_그대로_보낸다() throws Exception {
+        mockMvc.perform(get("/business"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value("해당 날짜의 마지막 일정은 삭제할 수 없습니다."));
+    }
+
+    @Test
+    void 외부_원인이_담기는_코드는_기본_문구로_숨긴다() throws Exception {
+        mockMvc.perform(get("/ai"))
+                .andExpect(jsonPath("$.error.message").value(ErrorCode.AI_SERVICE_ERROR.getMessage()));
+    }
+
+    @Test
+    void 동시_수정_충돌은_409() throws Exception {
+        mockMvc.perform(get("/conflict"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.error.code").value("ITINERARY_003"));
+        mockMvc.perform(get("/deadlock")).andExpect(status().isConflict());
     }
 }

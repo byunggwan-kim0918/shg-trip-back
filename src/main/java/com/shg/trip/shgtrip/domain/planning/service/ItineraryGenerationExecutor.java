@@ -24,8 +24,10 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.*;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -83,12 +85,13 @@ public class ItineraryGenerationExecutor {
                     () -> validationService.validateWithRetry(itineraryData, enrichedInput, selectedPlaces));
 
             validateSelectedPlacesIncluded(validated, selectedPlaces);
+            ItineraryData allowed = withoutBlockedPlaces(validated, selectedPlaces);
 
-            sendStepStream(emitter, validated.steps());
+            sendStepStream(emitter, allowed.steps());
 
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 90, "일정을 저장하고 있습니다...", "SAVING");
-            Itinerary saved = saveHelper.save(validated, enrichedInput, userId);
+            Itinerary saved = saveHelper.save(allowed, enrichedInput, userId);
 
             resultStore.save(jobId, saved.getId(), userId);
             // optimized 성공 지점과 상호배타라 쿼터는 정확히 1회 소모된다.
@@ -105,6 +108,34 @@ public class ItineraryGenerationExecutor {
         } finally {
             MDC.remove("jobId");
         }
+    }
+
+    /** 이 경로는 Sonnet이 이름을 직접 지어 후보 정책을 거치지 않는다. 사용자가 고른 장소는 남긴다. */
+    static ItineraryData withoutBlockedPlaces(ItineraryData data, List<Place> selectedPlaces) {
+        if (data.steps() == null) return data;
+        Set<String> chosen = selectedPlaces.stream().map(Place::getName).collect(Collectors.toSet());
+        Predicate<String> blocked = name -> name != null && !chosen.contains(name) && CandidatePolicy.isBlocked(name);
+        List<StepData> steps = new ArrayList<>();
+        Integer droppedDay = null;
+        for (StepData s : data.steps()) {
+            if (s.place() != null && blocked.test(s.place().name())) {
+                droppedDay = s.dayNumber();
+                continue;
+            }
+            // 뺀 장소에서 출발한 이동 구간이 남으면 그 거리·비용이 저장된다. 비워 두면 fillMissingTransportation이 다시 잰다.
+            boolean legFromDropped = Objects.equals(droppedDay, s.dayNumber());
+            droppedDay = null;
+            List<AlternativeData> alts = s.alternatives() == null ? null
+                    : s.alternatives().stream().filter(a -> !blocked.test(a.name())).toList();
+            steps.add(new StepData(s.stepOrder(), s.dayNumber(), s.startTime(), s.endTime(), s.place(), alts,
+                    legFromDropped ? null : s.transportationMode(),
+                    legFromDropped ? null : s.transportationDuration(),
+                    legFromDropped ? null : s.transportationDistance(),
+                    legFromDropped ? null : s.transportationCost(),
+                    s.notes(), s.estimatedCost()));
+        }
+        return new ItineraryData(data.title(), data.destination(), data.estimatedCost(), data.tags(), steps,
+                data.qualityNotices());
     }
 
     private void validateSelectedPlacesIncluded(ItineraryData data, List<Place> requiredPlaces) {
