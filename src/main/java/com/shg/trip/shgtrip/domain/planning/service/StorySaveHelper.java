@@ -35,6 +35,11 @@ public class StorySaveHelper {
     @Transactional
     public void saveStory(Long itineraryId, List<StepData> fixedSteps, AssemblyItineraryOutput storyOutput,
                           String draftTitle) {
+        // 편집(ItineraryService)과 같은 순서로 일정 행부터 잠가야 스텝·제목 갱신이 편집과 교착하지 않는다.
+        if (itineraryRepository.findByIdForUpdate(itineraryId).isEmpty()) {
+            log.info("story 저장 생략 - 일정이 삭제됨 (itineraryId={})", itineraryId);
+            return;
+        }
         Map<Integer, String> storyByOrder = new HashMap<>();
         if (storyOutput.steps() != null) {
             for (AssemblyItineraryOutput.StoryStep s : storyOutput.steps()) {
@@ -46,14 +51,15 @@ public class StorySaveHelper {
         int updated = 0;
         for (StepData step : fixedSteps) {
             String story = storyByOrder.get(step.stepOrder());
-            if (story == null) {
+            if (story == null || step.place() == null) {
                 continue;
             }
             expected++;
-            int affected = itineraryStepRepository.updateNotesByItineraryIdAndStepOrder(
-                    itineraryId, step.stepOrder(), story);
+            // story 도착 전에 순서 변경·삭제·대안 선택이 있으면 stepOrder가 다른 장소를 가리킨다.
+            int affected = itineraryStepRepository.updateNotesByDayAndPlace(
+                    itineraryId, step.dayNumber(), step.place().name(), story);
             if (affected == 0) {
-                log.warn("story 업데이트가 0행에 적용됨 - stepOrder 불일치 의심 (itineraryId={}, stepOrder={})",
+                log.warn("story 업데이트가 0행에 적용됨 - 편집으로 빠진 장소 (itineraryId={}, stepOrder={})",
                         itineraryId, step.stepOrder());
             } else {
                 updated += affected;

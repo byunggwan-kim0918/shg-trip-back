@@ -11,6 +11,8 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.stream.Stream;
 
 @Entity
 @Table(name = "itineraries")
@@ -136,6 +138,14 @@ public class Itinerary extends BaseTimeEntity {
         if (category.startsWith("Arts and Entertainment")) return 3;
         if (category.startsWith("Dining and Drinking")) return 2;
         return 1;
+    }
+
+    /** 상세 화면 합계와 같은 식(장소 비용 + 이동 비용)이라 편집 뒤 목록·공유 금액이 어긋나지 않는다. */
+    public void recalculateEstimatedCost() {
+        this.estimatedCost = steps.stream()
+                .flatMap(s -> Stream.of(s.getEstimatedCost(), s.getTransportationCost()))
+                .filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     public void complete() {

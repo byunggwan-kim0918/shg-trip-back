@@ -166,4 +166,14 @@ class TourApiSeederTest {
         assertThat(TourApiSeeder.parseArea("99-1")).isNull();
         assertThat(TourApiSeeder.parseArea("abc")).isNull();
     }
+
+    @Test
+    void 이미지_주소는_https로_저장한다() {
+        assertThat(TourApiSeeder.secureImageUrl("http://tong.visitkorea.or.kr/cms/a.jpg"))
+                .isEqualTo("https://tong.visitkorea.or.kr/cms/a.jpg");
+        assertThat(TourApiSeeder.secureImageUrl("https://tong.visitkorea.or.kr/cms/a.jpg"))
+                .isEqualTo("https://tong.visitkorea.or.kr/cms/a.jpg");
+        assertThat(TourApiSeeder.secureImageUrl("")).isEmpty();
+        assertThat(TourApiSeeder.secureImageUrl(null)).isNull();
+    }
 }

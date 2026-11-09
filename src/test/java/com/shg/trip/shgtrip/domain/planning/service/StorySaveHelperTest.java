@@ -35,6 +35,8 @@ class StorySaveHelperTest {
     @BeforeEach
     void setUp() {
         helper = new StorySaveHelper(itineraryStepRepository, itineraryRepository);
+        lenient().when(itineraryRepository.findByIdForUpdate(42L))
+                .thenReturn(java.util.Optional.of(mock(com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary.class)));
     }
 
     private StepData step(int order) {
@@ -52,15 +54,15 @@ class StorySaveHelperTest {
                 List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기1"),
                         new AssemblyItineraryOutput.StoryStep(2, "이야기2")));
 
-        when(itineraryStepRepository.updateNotesByItineraryIdAndStepOrder(eq(42L), eq(1), eq("이야기1")))
+        when(itineraryStepRepository.updateNotesByDayAndPlace(eq(42L), eq(1), eq("장소1"), eq("이야기1")))
                 .thenReturn(1);
-        when(itineraryStepRepository.updateNotesByItineraryIdAndStepOrder(eq(42L), eq(2), eq("이야기2")))
+        when(itineraryStepRepository.updateNotesByDayAndPlace(eq(42L), eq(1), eq("장소2"), eq("이야기2")))
                 .thenReturn(1);
 
         helper.saveStory(42L, steps, output, DRAFT_TITLE);
 
-        verify(itineraryStepRepository).updateNotesByItineraryIdAndStepOrder(42L, 1, "이야기1");
-        verify(itineraryStepRepository).updateNotesByItineraryIdAndStepOrder(42L, 2, "이야기2");
+        verify(itineraryStepRepository).updateNotesByDayAndPlace(42L, 1, "장소1", "이야기1");
+        verify(itineraryStepRepository).updateNotesByDayAndPlace(42L, 1, "장소2", "이야기2");
     }
 
     @Test
@@ -70,7 +72,7 @@ class StorySaveHelperTest {
         AssemblyItineraryOutput output = new AssemblyItineraryOutput(
                 "제주 오름과 흑돼지 4일", List.of("새태그"),
                 List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기")));
-        when(itineraryStepRepository.updateNotesByItineraryIdAndStepOrder(eq(42L), eq(1), eq("이야기")))
+        when(itineraryStepRepository.updateNotesByDayAndPlace(eq(42L), eq(1), eq("장소1"), eq("이야기")))
                 .thenReturn(1);
         when(itineraryRepository.updateTitleIfUnchanged(42L, "제주 오름과 흑돼지 4일", DRAFT_TITLE))
                 .thenReturn(1);
@@ -87,7 +89,7 @@ class StorySaveHelperTest {
         AssemblyItineraryOutput output = new AssemblyItineraryOutput(
                 "제주 오름과 흑돼지 4일", List.of("새태그"),
                 List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기")));
-        when(itineraryStepRepository.updateNotesByItineraryIdAndStepOrder(eq(42L), eq(1), eq("이야기")))
+        when(itineraryStepRepository.updateNotesByDayAndPlace(eq(42L), eq(1), eq("장소1"), eq("이야기")))
                 .thenReturn(1);
         // WHERE 조건(제목이 아직 임시값)에 걸리지 않아 0행 — 사용자가 이미 고친 상태
         when(itineraryRepository.updateTitleIfUnchanged(anyLong(), anyString(), anyString())).thenReturn(0);
@@ -96,6 +98,7 @@ class StorySaveHelperTest {
 
         // 조건부 UPDATE 한 번만 시도하고, 그 외 제목 관련 추가 조작은 없다
         verify(itineraryRepository, times(1)).updateTitleIfUnchanged(42L, "제주 오름과 흑돼지 4일", DRAFT_TITLE);
+        verify(itineraryRepository).findByIdForUpdate(42L);
         verifyNoMoreInteractions(itineraryRepository);
     }
 
@@ -103,7 +106,7 @@ class StorySaveHelperTest {
     @DisplayName("story 제목이 비었거나 임시값과 같으면 제목 UPDATE를 시도하지 않는다")
     void saveStory_skipsTitleUpdateWhenNothingToChange() {
         List<StepData> steps = List.of(step(1));
-        when(itineraryStepRepository.updateNotesByItineraryIdAndStepOrder(eq(42L), eq(1), eq("이야기")))
+        when(itineraryStepRepository.updateNotesByDayAndPlace(eq(42L), eq(1), eq("장소1"), eq("이야기")))
                 .thenReturn(1);
 
         helper.saveStory(42L, steps, new AssemblyItineraryOutput(
@@ -111,7 +114,7 @@ class StorySaveHelperTest {
         helper.saveStory(42L, steps, new AssemblyItineraryOutput(
                 DRAFT_TITLE, List.of(), List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기"))), DRAFT_TITLE);
 
-        verifyNoInteractions(itineraryRepository);
+        verify(itineraryRepository, never()).updateTitleIfUnchanged(anyLong(), anyString(), anyString());
     }
 
     @Test
@@ -119,7 +122,7 @@ class StorySaveHelperTest {
     void saveStory_truncatesOverlongTitle() {
         List<StepData> steps = List.of(step(1));
         String overlong = "가".repeat(140);
-        when(itineraryStepRepository.updateNotesByItineraryIdAndStepOrder(eq(42L), eq(1), eq("이야기")))
+        when(itineraryStepRepository.updateNotesByDayAndPlace(eq(42L), eq(1), eq("장소1"), eq("이야기")))
                 .thenReturn(1);
         when(itineraryRepository.updateTitleIfUnchanged(anyLong(), anyString(), anyString())).thenReturn(1);
 
@@ -139,13 +142,25 @@ class StorySaveHelperTest {
                 List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기1"),
                         new AssemblyItineraryOutput.StoryStep(3, "유령스텝")));
 
-        when(itineraryStepRepository.updateNotesByItineraryIdAndStepOrder(eq(42L), eq(1), eq("이야기1")))
+        when(itineraryStepRepository.updateNotesByDayAndPlace(eq(42L), eq(1), eq("장소1"), eq("이야기1")))
                 .thenReturn(1);
 
         helper.saveStory(42L, steps, output, DRAFT_TITLE);
 
         // stepOrder=2는 LLM 응답에 없어 호출 안 됨, stepOrder=3은 fixedSteps에 없어 루프 대상이 아님
-        verify(itineraryStepRepository, times(1)).updateNotesByItineraryIdAndStepOrder(anyLong(), anyInt(), anyString());
-        verify(itineraryStepRepository).updateNotesByItineraryIdAndStepOrder(42L, 1, "이야기1");
+        verify(itineraryStepRepository, times(1)).updateNotesByDayAndPlace(anyLong(), anyInt(), anyString(), anyString());
+        verify(itineraryStepRepository).updateNotesByDayAndPlace(42L, 1, "장소1", "이야기1");
+    }
+
+    @Test
+    @DisplayName("story 전에 일정이 지워졌으면 아무것도 쓰지 않는다")
+    void saveStory_skipsDeletedItinerary() {
+        when(itineraryRepository.findByIdForUpdate(42L)).thenReturn(java.util.Optional.empty());
+
+        helper.saveStory(42L, List.of(step(1)), new AssemblyItineraryOutput(
+                "새 제목", List.of(), List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기"))), DRAFT_TITLE);
+
+        verifyNoInteractions(itineraryStepRepository);
+        verify(itineraryRepository, never()).updateTitleIfUnchanged(anyLong(), anyString(), anyString());
     }
 }

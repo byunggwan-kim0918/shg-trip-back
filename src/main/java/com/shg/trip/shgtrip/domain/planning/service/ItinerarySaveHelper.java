@@ -48,6 +48,7 @@ public class ItinerarySaveHelper {
             throw new BusinessException(ErrorCode.INSUFFICIENT_PLACE_DATA);
         }
         itinerary.assignCoverFromSteps();
+        itinerary.recalculateEstimatedCost();
         return itineraryRepository.save(itinerary);
     }
 }

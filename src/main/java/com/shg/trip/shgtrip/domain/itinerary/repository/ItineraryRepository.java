@@ -3,7 +3,9 @@ package com.shg.trip.shgtrip.domain.itinerary.repository;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -22,6 +24,11 @@ public interface ItineraryRepository extends JpaRepository<Itinerary, Long> {
             WHERE i.id = :id AND i.deletedAt IS NULL
             """)
     Optional<Itinerary> findByIdWithDetails(@Param("id") Long id);
+
+    /** 같은 일정의 스텝 편집을 직렬화한다. 두 번째 요청은 앞 요청이 바꾼 상태를 보고 판단한다. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT i FROM Itinerary i WHERE i.id = :id AND i.deletedAt IS NULL")
+    Optional<Itinerary> findByIdForUpdate(@Param("id") Long id);
 
     Page<Itinerary> findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(Long userId, Pageable pageable);
 

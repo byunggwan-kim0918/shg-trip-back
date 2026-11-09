@@ -405,4 +405,14 @@ class OptimizedGenerationExecutorTest {
         p.markWikidataMatch(qid, 10);
         return p;
     }
+
+    @Test
+    @DisplayName("찾지 못한 입력 장소와 일정에서 빠진 필수 장소를 각각 안내한다")
+    void mustVisitNotices() {
+        assertThat(OptimizedGenerationExecutor.mustVisitNotices(List.of(), List.of())).isEmpty();
+        assertThat(OptimizedGenerationExecutor.mustVisitNotices(List.of("없는장소"), List.of("도톤보리", "오사카성")))
+                .containsExactly(
+                        "'없는장소'은(는) 장소를 찾지 못해 일정에 넣지 못했어요.",
+                        "꼭 가고 싶다고 고른 '도톤보리', '오사카성'을(를) 일정에 넣지 못했어요.");
+    }
 }

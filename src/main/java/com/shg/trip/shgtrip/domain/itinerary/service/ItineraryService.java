@@ -10,6 +10,7 @@ import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventReposi
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
+import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
@@ -145,8 +146,7 @@ public class ItineraryService {
      */
     @Transactional
     public ItineraryResponse selectAlternative(Long itineraryId, Long stepId, Long alternativeId, Long userId) {
-        Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
-        verifyEditable(itinerary);
+        Itinerary itinerary = findEditableForUpdate(itineraryId, userId);
 
         ItineraryStep step = itinerary.getSteps().stream()
                 .filter(s -> s.getId().equals(stepId))
@@ -168,6 +168,7 @@ public class ItineraryService {
         entityManager.flush();
 
         recalculateTransportation(itinerary.getSteps(), step);
+        itinerary.recalculateEstimatedCost();
 
         return ItineraryResponse.from(itinerary);
     }
@@ -178,8 +179,7 @@ public class ItineraryService {
      */
     @Transactional
     public ItineraryResponse reorderSteps(Long itineraryId, Long userId, Integer dayNumber, List<Long> orderedStepIds) {
-        Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
-        verifyEditable(itinerary);
+        Itinerary itinerary = findEditableForUpdate(itineraryId, userId);
 
         List<ItineraryStep> daySteps = itinerary.getSteps().stream()
                 .filter(s -> dayNumber.equals(s.getDayNumber()))
@@ -194,6 +194,8 @@ public class ItineraryService {
             throw new BusinessException(ErrorCode.INVALID_INPUT,
                     "재정렬 요청이 해당 날짜의 단계 목록과 일치하지 않습니다.");
         }
+
+        verifyAnchorsKept(daySteps, orderedStepIds);
 
         // 슬롯 시간을 스텝 변경 전에 먼저 캡처해야 뮤테이션 중 값이 섞이지 않는다.
         List<Integer> slots = daySteps.stream()
@@ -223,6 +225,7 @@ public class ItineraryService {
         entityManager.flush();
 
         recalculateDayTransportation(itinerary.getSteps(), dayNumber);
+        itinerary.recalculateEstimatedCost();
         return ItineraryResponse.from(itinerary);
     }
 
@@ -231,8 +234,7 @@ public class ItineraryService {
      */
     @Transactional
     public ItineraryResponse deleteStep(Long itineraryId, Long userId, Long stepId) {
-        Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
-        verifyEditable(itinerary);
+        Itinerary itinerary = findEditableForUpdate(itineraryId, userId);
 
         ItineraryStep target = itinerary.getSteps().stream()
                 .filter(s -> s.getId().equals(stepId))
@@ -262,6 +264,7 @@ public class ItineraryService {
         entityManager.flush();
 
         recalculateDayTransportation(itinerary.getSteps(), dayNumber);
+        itinerary.recalculateEstimatedCost();
         return ItineraryResponse.from(itinerary);
     }
 
@@ -351,6 +354,40 @@ public class ItineraryService {
                 new double[]{fromPlace.getLatitude().doubleValue(), fromPlace.getLongitude().doubleValue()},
                 new double[]{toPlace.getLatitude().doubleValue(), toPlace.getLongitude().doubleValue()},
                 "any", MAX_REASONABLE_LEG_KM);
+    }
+
+    /**
+     * 숙소·공항·역은 체크인·출발 시각에 묶여 있어 슬롯 시간만 받는 재정렬로 옮기면 09:30 체크인 같은 일정이 된다.
+     */
+    private static void verifyAnchorsKept(List<ItineraryStep> daySteps, List<Long> orderedStepIds) {
+        List<ItineraryStep> current = daySteps.stream()
+                .sorted(Comparator.comparingInt(ItineraryStep::getStepOrder))
+                .toList();
+        for (int i = 0; i < current.size(); i++) {
+            ItineraryStep step = current.get(i);
+            if (isAnchor(step) && !step.getId().equals(orderedStepIds.get(i))) {
+                throw new BusinessException(ErrorCode.INVALID_INPUT, "숙소와 공항·역은 자리를 옮길 수 없어요.");
+            }
+        }
+    }
+
+    private static boolean isAnchor(ItineraryStep step) {
+        Place place = step.getPlace();
+        if (place == null) return false;
+        if (place.getPlaceRole() != null) {
+            return "LODGING".equals(place.getPlaceRole()) || "TRANSIT".equals(place.getPlaceRole());
+        }
+        String major = PlaceCategoryConstants.majorCategory(place.getCategory());
+        return "LODGING".equals(major) || "TRANSIT_HUB".equals(major);
+    }
+
+    /** 행 잠금을 먼저 잡아야 동시에 들어온 두 번째 편집이 앞 편집이 지운 대안·스텝을 다시 지우려다 500이 나지 않는다. */
+    private Itinerary findEditableForUpdate(Long itineraryId, Long userId) {
+        itineraryRepository.findByIdForUpdate(itineraryId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.ITINERARY_NOT_FOUND, "일정을 찾을 수 없습니다."));
+        Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+        verifyEditable(itinerary);
+        return itinerary;
     }
 
     /** 확정은 장소 구성을 잠근다. 제목·태그는 표시 정보라 확정 뒤에도 고칠 수 있다. */

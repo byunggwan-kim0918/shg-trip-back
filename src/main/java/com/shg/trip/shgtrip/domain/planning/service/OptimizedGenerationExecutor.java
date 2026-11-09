@@ -94,10 +94,12 @@ public class OptimizedGenerationExecutor {
             List<PlaceCandidate> candidatesRaw = executeWithHeartbeat(emitter,
                     () -> vectorSearchQueryService.search(enrichedInput));
 
-            List<Place> selectedPlaces = new ArrayList<>(resolveSelectedPlaces(request));
+            List<String> pickNotices = new ArrayList<>();
+            List<String> unresolvedNames = new ArrayList<>();
+            List<Place> selectedPlaces = new ArrayList<>(resolveSelectedPlaces(request, pickNotices));
             // DB 조회뿐이지만 느려질 때 프록시가 끊지 않게 heartbeat로 감싼다.
             selectedPlaces.addAll(executeWithHeartbeat(emitter,
-                    () -> resolveCustomPlaces(request, enrichedInput, candidatesRaw, emitter)));
+                    () -> resolveCustomPlaces(request, enrichedInput, candidatesRaw, emitter, unresolvedNames)));
             placeRegionValidator.validate(selectedPlaces, enrichedInput); // 불일치 시 BusinessException → SSE error
             List<PlaceCandidate> candidates = mergeSelectedPlaces(candidatesRaw, selectedPlaces);
             // 후보 수십 건의 median이라 저장 단계의 오매칭 거리 판정 기준으로 쓴다.
@@ -190,7 +192,10 @@ public class OptimizedGenerationExecutor {
             RouteOptimizer.ScheduleResult scheduleResult = executeWithHeartbeat(emitter,
                     () -> routeOptimizer.schedule(selectionOutput, candidatesWithLocalStays, scheduleArgs));
             List<StepData> fixedSteps = scaleCostsForParty(scheduleResult.steps(), enrichedInput.partySize());
-            List<String> qualityNotices = scheduleResult.notices();
+            List<String> qualityNotices = new ArrayList<>(scheduleResult.notices());
+            qualityNotices.addAll(pickNotices);
+            qualityNotices.addAll(mustVisitNotices(unresolvedNames,
+                    missingUserSelected(candidatesWithLocalStays, fixedSteps)));
 
             // 인위적 sleep을 넣으면 SSE 스레드가 blocking된다.
             sendStepStream(emitter, fixedSteps);
@@ -214,7 +219,6 @@ public class OptimizedGenerationExecutor {
             if (!validationResult.valid()) {
                 log.error("Optimized 경로 구조 검증 실패 (결정론적 로직 버그 가능성): {}", validationResult.failureReason());
             }
-            verifyUserSelectedIncluded(candidatesWithLocalStays, fixedSteps);
 
             // [90%] 구조 일정 저장. story는 비동기로 채운다.
             if (cancellationRegistry.isCancelled(jobId)) return;
@@ -713,19 +717,38 @@ public class OptimizedGenerationExecutor {
     }
 
     /**
-     * 사용자 필수 장소가 최종 스텝에 전부 포함됐는지 검증한다. 주입·보호가 결정론적이라 누락은 로직 버그이고,
-     * hardValidator처럼 로그만 남기고 진행한다.
+     * 최종 스텝에 없는 사용자 필수 장소 이름. 주입·보호가 결정론적이라 누락은 로직 버그로 로그를 남기지만,
+     * 사용자는 고른 곳이 빠진 이유를 알 수 없어 안내 문구로도 돌려준다.
      */
-    private void verifyUserSelectedIncluded(List<PlaceCandidate> candidates, List<StepData> fixedSteps) {
+    private List<String> missingUserSelected(List<PlaceCandidate> candidates, List<StepData> fixedSteps) {
         Set<String> stepNames = fixedSteps.stream()
                 .map(StepData::place)
                 .filter(Objects::nonNull)
                 .map(p -> normalize(p.name()))
                 .collect(Collectors.toSet());
-        candidates.stream()
+        List<String> missing = candidates.stream()
                 .filter(PlaceCandidate::userSelected)
-                .filter(c -> !stepNames.contains(normalize(c.name())))
-                .forEach(c -> log.error("사용자 필수 장소가 최종 일정에서 누락 (결정론적 로직 버그): {}", c.name()));
+                .map(PlaceCandidate::name)
+                .filter(name -> !stepNames.contains(normalize(name)))
+                .distinct()
+                .toList();
+        missing.forEach(name -> log.error("사용자 필수 장소가 최종 일정에서 누락 (결정론적 로직 버그): {}", name));
+        return missing;
+    }
+
+    static List<String> mustVisitNotices(List<String> unresolved, List<String> dropped) {
+        List<String> notices = new ArrayList<>();
+        if (!unresolved.isEmpty()) {
+            notices.add(quoted(unresolved) + "은(는) 장소를 찾지 못해 일정에 넣지 못했어요.");
+        }
+        if (!dropped.isEmpty()) {
+            notices.add("꼭 가고 싶다고 고른 " + quoted(dropped) + "을(를) 일정에 넣지 못했어요.");
+        }
+        return notices;
+    }
+
+    private static String quoted(List<String> names) {
+        return names.stream().map(n -> "'" + n + "'").collect(Collectors.joining(", "));
     }
 
     private String normalize(String name) {
@@ -738,7 +761,8 @@ public class OptimizedGenerationExecutor {
      * DB에 없으면 만들지 않고 실패로 안내한다.
      */
     private List<Place> resolveCustomPlaces(ItineraryGenerateRequest request, VectorEnrichedInput enrichedInput,
-                                            List<PlaceCandidate> candidatesRaw, GenerationStream emitter) {
+                                            List<PlaceCandidate> candidatesRaw, GenerationStream emitter,
+                                            List<String> unresolved) {
         List<String> names = request.customPlaceNames();
         if (names == null || names.isEmpty()) return List.of();
 
@@ -763,6 +787,7 @@ public class OptimizedGenerationExecutor {
             }
         }
 
+        unresolved.addAll(failed);
         if (!failed.isEmpty()) {
             sendSseEvent(emitter, "SEARCHING", 22,
                     "'" + String.join(", ", failed) + "' 장소는 찾지 못해 제외했습니다.");
@@ -823,7 +848,7 @@ public class OptimizedGenerationExecutor {
     /**
      * 프론트 자유입력(음수 임시 ID)은 selectedPlaceIds 변환 시 제외되지만 방어적으로 양수만 조회한다.
      */
-    private List<Place> resolveSelectedPlaces(ItineraryGenerateRequest request) {
+    private List<Place> resolveSelectedPlaces(ItineraryGenerateRequest request, List<String> notices) {
         List<Long> ids = request.selectedPlaceIds();
         if (ids == null || ids.isEmpty()) return List.of();
         List<Long> validIds = ids.stream()
@@ -832,7 +857,12 @@ public class OptimizedGenerationExecutor {
                 .distinct()
                 .collect(Collectors.toList());
         if (validIds.isEmpty()) return List.of();
-        return placeRepository.findAllById(validIds);
+        List<Place> found = placeRepository.findAllById(validIds);
+        // 검색 뒤 삭제된 장소는 이름을 알 수 없어 개수로 알린다.
+        if (found.size() < validIds.size()) {
+            notices.add("고른 장소 중 " + (validIds.size() - found.size()) + "곳은 찾을 수 없어 일정에서 뺐어요.");
+        }
+        return found;
     }
 
     /**
