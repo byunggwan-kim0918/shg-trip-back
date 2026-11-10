@@ -182,6 +182,14 @@ public class Place extends BaseTimeEntity {
     @Column(name = "deactivated_at")
     private OffsetDateTime deactivatedAt;
 
+    /** stale(월간 추출에서 빠짐, 다시 나오면 되살림) | policy(되살리지 않음). 활성 행은 null. */
+    @Column(name = "deactivated_reason", length = 20)
+    private String deactivatedReason;
+
+    /** 한국어 표시 이름. {@link #name}은 저장·조회 키라 그대로 두고 화면·프롬프트만 이 값을 쓴다. */
+    @Column(name = "name_ko")
+    private String nameKo;
+
     @Column(nullable = false)
     private OffsetDateTime savedAt;
 
@@ -223,11 +231,13 @@ public class Place extends BaseTimeEntity {
     public void deactivate() {
         this.active = false;
         this.deactivatedAt = OffsetDateTime.now();
+        this.deactivatedReason = "policy";
     }
 
     public void reactivate() {
         this.active = true;
         this.deactivatedAt = null;
+        this.deactivatedReason = null;
     }
 
     /** 체류시간·입장료 없이 반영하는 호환 오버로드. */

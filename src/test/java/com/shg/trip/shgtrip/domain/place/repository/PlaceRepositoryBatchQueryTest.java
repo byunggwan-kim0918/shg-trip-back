@@ -126,4 +126,77 @@ class PlaceRepositoryBatchQueryTest {
 
         assertThat(targets).extracting(Place::getId).doesNotContain(failed.getId());
     }
+
+    private void upsert(String fsqId, String name) {
+        placeRepository.upsertFoursquarePlace(fsqId, name, "", BigDecimal.valueOf(31.23), BigDecimal.valueOf(121.47),
+                "CN", REGION, "Dining and Drinking > Restaurant", "{}", "", null);
+    }
+
+    private Object[] state(String fsqId) {
+        em.flush();
+        em.clear();
+        return (Object[]) em.createNativeQuery("""
+                SELECT active, deactivated_reason, name, name_ko, enriched_at FROM places WHERE fsq_place_id = ?
+                """).setParameter(1, fsqId).getSingleResult();
+    }
+
+    @Test
+    @DisplayName("이번 적재에 안 나온 행은 stale로 꺼지고, 다음 적재에 다시 나오면 되살아난다")
+    void staleRowIsDeactivatedAndRevived() {
+        upsert("zz-fsq-stale", "饭店");
+        upsert("zz-fsq-linked", "外滩");
+        em.createNativeQuery("UPDATE places SET wikidata_id = 'Q1' WHERE fsq_place_id = 'zz-fsq-linked'").executeUpdate();
+        placeRepository.upsertFoursquarePlace("zz-fsq-other", "饭店", "", BigDecimal.valueOf(31.23),
+                BigDecimal.valueOf(121.47), "CN", REGION + "_OTHER", "Dining and Drinking > Restaurant", "{}", "", null);
+
+        // 방금 적재한 행은 이번 실행 기준(시작 1시간 전)으로는 빠진 행이 아니다
+        assertThat(placeRepository.countStaleFoursquare("CN", REGION, OffsetDateTime.now().minusHours(1))).isZero();
+
+        OffsetDateTime nextRunStart = OffsetDateTime.now().plusHours(2);
+        assertThat(placeRepository.countStaleFoursquare("CN", REGION, nextRunStart)).isEqualTo(1);
+        assertThat(placeRepository.countExistingFoursquare("CN", REGION, nextRunStart)).isEqualTo(2);
+        assertThat(placeRepository.deactivateStaleFoursquare("CN", REGION, nextRunStart, 1000)).isEqualTo(1);
+        assertThat(state("zz-fsq-stale")).containsSequence(false, "stale");
+        assertThat(state("zz-fsq-linked")).containsSequence(true, null);
+        assertThat(state("zz-fsq-other")).containsSequence(true, null);
+
+        upsert("zz-fsq-stale", "饭店");
+        assertThat(state("zz-fsq-stale")).containsSequence(true, null);
+        Object deactivatedAt = em.createNativeQuery(
+                "SELECT deactivated_at FROM places WHERE fsq_place_id = 'zz-fsq-stale'").getSingleResult();
+        assertThat(deactivatedAt).isNull();
+    }
+
+    @Test
+    @DisplayName("정책으로 끈 행은 다시 적재돼도 꺼진 채로 둔다")
+    void policyRowStaysOff() {
+        upsert("zz-fsq-policy", "饭店");
+        em.createNativeQuery("UPDATE places SET active = false, deactivated_reason = 'policy' WHERE fsq_place_id = ?")
+                .setParameter(1, "zz-fsq-policy").executeUpdate();
+
+        upsert("zz-fsq-policy", "饭店");
+
+        assertThat(state("zz-fsq-policy")).containsSequence(false, "policy");
+    }
+
+    @Test
+    @DisplayName("원문 이름이 바뀌면 한국어 이름·보강 시각을 비우고, 한글 이름 행은 그대로 둔다")
+    void renameResetsKoreanNameAndEnrichment() {
+        upsert("zz-fsq-rename", "饭店");
+        upsert("zz-fsq-hangul", "한글식당");
+        em.createNativeQuery("UPDATE places SET name_ko = '판뎬', enriched_at = now() WHERE fsq_place_id IN (?, ?)")
+                .setParameter(1, "zz-fsq-rename").setParameter(2, "zz-fsq-hangul").executeUpdate();
+
+        upsert("zz-fsq-rename", "新饭店");
+        upsert("zz-fsq-hangul", "Hangul Restaurant");
+
+        Object[] renamed = state("zz-fsq-rename");
+        assertThat(renamed[2]).isEqualTo("新饭店");
+        assertThat(renamed[3]).isNull();
+        assertThat(renamed[4]).isNull();
+        Object[] hangul = state("zz-fsq-hangul");
+        assertThat(hangul[2]).isEqualTo("한글식당");
+        assertThat(hangul[3]).isEqualTo("판뎬");
+        assertThat(hangul[4]).isNotNull();
+    }
 }

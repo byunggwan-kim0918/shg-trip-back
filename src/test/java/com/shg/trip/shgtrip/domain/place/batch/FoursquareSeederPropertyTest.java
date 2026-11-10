@@ -5,6 +5,7 @@ import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import net.jqwik.api.*;
 import net.jqwik.api.constraints.Size;
 import org.mockito.Mockito;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -35,7 +36,7 @@ class FoursquareSeederPropertyTest {
         // Set up mock repository
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
 
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null, TransactionOperations.withoutTransaction());
 
         String[] row = new String[]{
                 "fsq_" + Math.abs(existingPlace.getName().hashCode()), // fsq_place_id
@@ -78,7 +79,7 @@ class FoursquareSeederPropertyTest {
     ) {
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
 
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null, TransactionOperations.withoutTransaction());
 
         Map<String, Integer> columnIndex = Map.of(
                 "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
@@ -111,7 +112,7 @@ class FoursquareSeederPropertyTest {
             @ForAll("validCsvRows") String[] validRow
     ) {
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null, TransactionOperations.withoutTransaction());
 
         Map<String, Integer> columnIndex = Map.of(
                 "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
@@ -141,7 +142,7 @@ class FoursquareSeederPropertyTest {
             @ForAll("rowsWithMissingRequiredField") String[] invalidRow
     ) {
         PlaceRepository mockRepo = Mockito.mock(PlaceRepository.class);
-        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null);
+        FoursquareSeeder seeder = new FoursquareSeeder(mockRepo, null, null, TransactionOperations.withoutTransaction());
 
         Map<String, Integer> columnIndex = Map.of(
                 "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
