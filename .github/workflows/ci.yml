@@ -61,6 +61,23 @@ jobs:
           name: jacoco-report
           path: build/reports/jacoco/test/html/
 
+  # FSQ 추출기 규칙 테스트 (합성 테이블, 외부 호출 없음)
+  extractor-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # 러너의 시스템 Python은 pip 직접 설치를 막는다(PEP 668).
+      - name: Run extractor tests
+        working-directory: fsq-extractor
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt pytest
+          .venv/bin/python -m pytest -q test_extract.py
+
   # Job 2: 통합 테스트 (DB/Redis service container)
   integration-test:
     needs: unit-test

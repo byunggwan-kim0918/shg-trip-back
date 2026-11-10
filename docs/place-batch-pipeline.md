@@ -9,7 +9,7 @@
 ```
 Step Functions (월 1회)
   ExtractFSQ — fsq-extractor/extract.py (Python + DuckDB, 별도 이미지)
-        FSQ OS Places Iceberg → 한국 12개 도시 → S3 foursquare/dt={yyyy-MM-dd}/foursquare-places.csv
+        FSQ OS Places Iceberg → 한국 12개 도시 + 해외 여행지 → S3 foursquare/dt={yyyy-MM-dd}/foursquare-places.csv
         · 도시 판정: locality가 도시명이면 그 도시, 비었거나 구·군이면 region, 둘 다 비면 좌표 범위.
           어느 경우든 그 도시 좌표 범위 안이어야 함. region 컬럼은 표준 영어 도시명(Seoul, Jeju…)으로 출력.
           (locality가 자유 텍스트라 표기가 제각각 — 영어 정확일치였던 예전엔 18만 건 중 1.5만, 제주 46건)
@@ -21,8 +21,22 @@ Step Functions (월 1회)
           한글은 반복 횟수로 판정하지 않는다 — 고향집·서울식당 같은 흔한 상호가 걸린다. 판정 목록은 실행 로그에 남는다
         · Iceberg 스캔엔 단순 조건만 걸고 한국 행을 임시 테이블로 받은 뒤 규칙 적용
           (리스트 컬럼 조건이 파일 프루닝으로 밀리면 iceberg 확장이 내부 오류로 죽는다)
-        · 규칙 테스트: fsq-extractor/test_extract.py (합성 테이블)
+        · 해외(JP·CN·VN·TW): src/main/resources/destinations.json 여행지(국가별 중심·반경)로 배정. region = 여행지 표준 영어명
+          - 국가별 여행지 범위 합집합을 단순 조건으로 한 번에 스캔 → 반경 안 + 반경 대비 가장 가까운 여행지
+          - 갱신 기준: 식당 1년, 명소·야외 5년, 그 외 2년
+          - 역할(명소·식음료·숙소·시장·교통 허브)만 남기고, 명소·교통의 승강장·개찰구·출구·탑승구·주차장 이름 제외
+          - 체인: 글로벌 브랜드(다국어 별칭 목록) + 대상 여행지 전체에서 같은 상호 100곳 이상인 현지 대형 체인 제외.
+            여행 코스형 브랜드(이치란·딘타이펑·하이디라오·콩카페 등)는 허용, 같은 브랜드는 여행지당 3곳(신호 순)
+            상호(stem)는 앞머리 괄호(【公式】)·첫 괄호 이하·" - 지점명"·끝의 "…店"을 떼서 비교
+          - signal 컬럼: 전화·웹사이트·SNS·오래 영업(등록 후 2·5년)·구체 업종 점수(0~6). 한국 행은 빈 값
+          - 여행지 규모(선별 후 행 수)별 명소·식음료 상한(DESTINATION_CAPS, 6만+ 5000/7500 … 4천 미만 없음).
+            순위는 signal → fsq_place_id 해시. 숙소·시장·교통 허브는 상한 없음
+          - EXTRACT_COUNTRIES(쉼표 구분, all = 전체)로 국가를 고른다. 없으면 한국만(월간 실행 기본값),
+            목록에 없는 코드는 실패. 한국은 항상 포함
+        · 규칙 테스트: fsq-extractor/test_extract.py (합성 테이블, CI extractor-test)
+        · 이미지 빌드 컨텍스트는 shg-trip-back(-f fsq-extractor/Dockerfile) — destinations.json을 함께 넣는다
         · 필요 env: FSQ_ACCESS_TOKEN — Places Portal 개인 토큰, 유효기간 30일. 매달 갱신해 Secrets Manager에 넣어야 함
+          선택 env: DUCKDB_MEMORY_LIMIT(기본 컨테이너 메모리의 75%, 알 수 없으면 3GB), DUCKDB_THREADS(기본 2)
 
   RunBatch — BatchJobRunner (CommandLineRunner, @Profile("batch"))
   [1/4] FoursquareSeeder.seed()

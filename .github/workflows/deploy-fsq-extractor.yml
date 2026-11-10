@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'fsq-extractor/**'
+      - 'src/main/resources/destinations.json'
   workflow_dispatch:
 
 env:
@@ -21,6 +22,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # :latest를 덮어쓰기 전에 추출 규칙 테스트를 통과해야 한다.
+      - name: Run extractor tests
+        working-directory: fsq-extractor
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt pytest
+          .venv/bin/python -m pytest -q test_extract.py
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
@@ -39,7 +48,7 @@ jobs:
           FSQ_REPO: shgtrip-fsq-extractor
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t fsq-extractor:$IMAGE_TAG ./fsq-extractor
+          docker build -f fsq-extractor/Dockerfile -t fsq-extractor:$IMAGE_TAG .
           docker tag fsq-extractor:$IMAGE_TAG $ECR_REGISTRY/$FSQ_REPO:$IMAGE_TAG
           docker tag fsq-extractor:$IMAGE_TAG $ECR_REGISTRY/$FSQ_REPO:latest
           docker push $ECR_REGISTRY/$FSQ_REPO:$IMAGE_TAG
