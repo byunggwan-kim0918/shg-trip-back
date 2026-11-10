@@ -3,7 +3,7 @@ package com.shg.trip.shgtrip.domain.itinerary.dto;
 import java.util.Set;
 
 /**
- * 마법사 선택지 id는 프론트 {@code lib/constants/wizardOptions.ts}·{@code lib/types/itinerary.ts}와 1:1로 맞춘다.
+ * 생성 요청이 받는 테마·카테고리·페이스·이동 id. 한국어 라벨은 대화 입력의 {@code GeneratorSupport}가 가진다.
  * Bean Validation 애너테이션이 컴파일 상수만 받아 정규식을 원본으로 두고 집합은 거기서 만든다.
  */
 public final class WizardOptionIds {

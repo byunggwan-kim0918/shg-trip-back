@@ -49,6 +49,9 @@ public enum ErrorCode {
     INSUFFICIENT_PLACE_DATA("PLANNING_005", "이 여행지는 아직 장소 정보가 부족해요. 다른 여행지로 시도해 주세요.", HttpStatus.UNPROCESSABLE_ENTITY),
     GENERATION_JOB_NOT_FOUND("PLANNING_006", "생성 작업을 찾을 수 없어요. 만료됐거나 이미 끝난 작업이에요.", HttpStatus.NOT_FOUND),
     PARSE_RATE_LIMITED("PLANNING_007", "문장 분석 요청이 너무 잦아요. 잠시 후 다시 시도해 주세요.", HttpStatus.TOO_MANY_REQUESTS),
+    TRIP_CHAT_RATE_LIMITED("PLANNING_008", "답변을 너무 자주 보냈어요. 잠시 후 다시 보내주세요.", HttpStatus.TOO_MANY_REQUESTS),
+    TRIP_CHAT_CONFLICT("PLANNING_009", "다른 화면에서 대화가 바뀌었어요. 최신 내용으로 다시 불러올게요.", HttpStatus.CONFLICT),
+    TRIP_CHAT_UNAVAILABLE("PLANNING_010", "답변을 정리하지 못했어요. 잠시 후 다시 보내주세요.", HttpStatus.SERVICE_UNAVAILABLE),
 
     // External
     EXTERNAL_API_ERROR("EXTERNAL_001", "외부 API 오류가 발생했습니다.", HttpStatus.BAD_GATEWAY),

@@ -5123,7 +5123,7 @@ public class RouteOptimizer {
         }
 
         // 조용히 기본값으로 떨어지면 테마 시간창 누락을 아무도 모른다.
-        // 슬러그가 프론트와의 계약(wizardOptions.ts)이라 한글 별칭을 두면 같은 테마의 어휘가 두 벌이 된다.
+        // 슬러그가 생성 요청 계약(WizardOptionIds)이라 한글 별칭을 두면 같은 테마의 어휘가 두 벌이 된다.
         if (!unmatched.isEmpty()) {
             log.warn("테마 시간창 미매칭 {} — 기본 시간창으로 처리한다 (THEME_SCHEDULES 키는 영문 슬러그)",
                     unmatched);

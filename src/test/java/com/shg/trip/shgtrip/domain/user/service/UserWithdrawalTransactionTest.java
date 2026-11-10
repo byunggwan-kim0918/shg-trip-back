@@ -28,6 +28,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionTemplate;
+import com.shg.trip.shgtrip.domain.tripchat.repository.TripChatSessionRepository;
 
 import java.util.List;
 import java.util.Optional;
@@ -49,6 +50,7 @@ class UserWithdrawalTransactionTest {
     @Mock private ItineraryStepRepository itineraryStepRepository;
     @Mock private ItineraryEditEventRepository itineraryEditEventRepository;
     @Mock private GenerationTraceRepository generationTraceRepository;
+    @Mock private TripChatSessionRepository tripChatSessionRepository;
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private WithdrawnUserRegistry withdrawnUserRegistry;
     @Mock private WithdrawnIdentityHasher identityHasher;
@@ -65,7 +67,7 @@ class UserWithdrawalTransactionTest {
     void setUp() {
         service = new UserWithdrawalService(userRepository, authProviderRepository, itineraryRepository,
                 itineraryStepRepository, itineraryEditEventRepository, generationTraceRepository,
-                refreshTokenRepository, withdrawnUserRegistry, identityHasher, generationPolicyService,
+                tripChatSessionRepository, refreshTokenRepository, withdrawnUserRegistry, identityHasher, generationPolicyService,
                 travelPlannerService, strategyFactory, new TransactionTemplate(new NoResourceTransactionManager()),
                 redisTemplate);
         org.mockito.Mockito.lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps);

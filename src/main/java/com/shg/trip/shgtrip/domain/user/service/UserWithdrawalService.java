@@ -9,6 +9,7 @@ import com.shg.trip.shgtrip.domain.auth.service.WithdrawnIdentityHasher;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthProviderStrategy;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthStrategyFactory;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
+import com.shg.trip.shgtrip.domain.tripchat.repository.TripChatSessionRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryStepRepository;
@@ -42,6 +43,7 @@ public class UserWithdrawalService {
     private final ItineraryStepRepository itineraryStepRepository;
     private final ItineraryEditEventRepository itineraryEditEventRepository;
     private final GenerationTraceRepository generationTraceRepository;
+    private final TripChatSessionRepository tripChatSessionRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final WithdrawnUserRegistry withdrawnUserRegistry;
     private final WithdrawnIdentityHasher identityHasher;
@@ -104,6 +106,7 @@ public class UserWithdrawalService {
         itineraryStepRepository.deleteAllByUserId(userId);
         generationTraceRepository.deleteByUserId(userId);
         itineraryEditEventRepository.deleteAllByUserId(userId);
+        tripChatSessionRepository.deleteByUserId(userId);
         int itineraries = itineraryRepository.deleteAllByUserId(userId);
         authProviderRepository.deleteAll(providers);
         user.withdraw();

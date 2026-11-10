@@ -155,7 +155,7 @@ public final class ScheduleTuning {
 
     /**
      * pace별 하루 관광·체험 개수 [최소, 최대]. 끼니는 따로 세고, 카페·간식은 관광 자리 하나를 쓴다.
-     * 선택·fallback 프롬프트와 채점기가 이 값을 읽는다. 프론트 wizardOptions.ts는 숫자를 따로 적고 있어 같이 바꿔야 한다.
+     * 선택·fallback 프롬프트와 채점기가 이 값을 읽는다.
      */
     static final Map<String, int[]> SIGHTS_PER_DAY = Map.of(
             "tight", new int[]{3, 5},
