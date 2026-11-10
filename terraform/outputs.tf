@@ -38,6 +38,16 @@ output "cloudfront_images_domain" {
   value       = aws_cloudfront_distribution.images.domain_name
 }
 
+output "web_assets_cdn_domain" {
+  description = "프론트 정적 파일 CloudFront 도메인 (shg-trip-front ASSET_PREFIX 값)"
+  value       = aws_cloudfront_distribution.web_assets.domain_name
+}
+
+output "web_assets_bucket" {
+  description = "프론트 정적 파일 버킷 (shg-trip-front 배포 워크플로 업로드 대상)"
+  value       = aws_s3_bucket.web_assets.id
+}
+
 output "myshgtrip_cert_validation" {
   description = "Cloudflare에 DNS 전용으로 추가할 ACM 검증 CNAME"
   value       = [for o in aws_acm_certificate.myshgtrip.domain_validation_options : { name = o.resource_record_name, value = o.resource_record_value }]

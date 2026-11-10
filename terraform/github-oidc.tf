@@ -263,6 +263,21 @@ resource "aws_iam_role_policy" "github_deploy_front" {
           aws_iam_role.ecs_execution.arn,
           aws_iam_role.web_task.arn
         ]
+      },
+      {
+        Sid      = "ListWebAssets"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = [aws_s3_bucket.web_assets.arn]
+        Condition = {
+          StringLike = { "s3:prefix" = ["_next/static/*"] }
+        }
+      },
+      {
+        Sid      = "UploadWebAssets"
+        Effect   = "Allow"
+        Action   = ["s3:PutObject"]
+        Resource = ["${aws_s3_bucket.web_assets.arn}/_next/static/*"]
       }
     ]
   })
