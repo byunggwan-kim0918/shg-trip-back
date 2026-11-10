@@ -10,6 +10,7 @@ import com.shg.trip.shgtrip.domain.auth.service.WithdrawnIdentityHasher;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthProviderStrategy;
 import com.shg.trip.shgtrip.domain.auth.service.oauth.OAuthStrategyFactory;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
+import com.shg.trip.shgtrip.domain.tripchat.repository.TripChatSessionRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryStepRepository;
@@ -64,6 +65,7 @@ class UserWithdrawalServiceTest {
     @Mock private ItineraryStepRepository itineraryStepRepository;
     @Mock private ItineraryEditEventRepository itineraryEditEventRepository;
     @Mock private GenerationTraceRepository generationTraceRepository;
+    @Mock private TripChatSessionRepository tripChatSessionRepository;
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private WithdrawnUserRegistry withdrawnUserRegistry;
     @Mock private WithdrawnIdentityHasher identityHasher;
@@ -113,12 +115,13 @@ class UserWithdrawalServiceTest {
         assertThat(user.getStatus()).isEqualTo(UserStatus.WITHDRAWN);
         assertThat(user.getEmail()).isEqualTo("withdrawn-1@invalid");
         assertThat(user.getNickname()).isNull();
-        InOrder deletes = inOrder(itineraryStepRepository, generationTraceRepository,
+        InOrder deletes = inOrder(itineraryStepRepository, generationTraceRepository, tripChatSessionRepository,
                 itineraryEditEventRepository, itineraryRepository);
         deletes.verify(itineraryStepRepository).deleteAlternativesByUserId(1L);
         deletes.verify(itineraryStepRepository).deleteAllByUserId(1L);
         deletes.verify(generationTraceRepository).deleteByUserId(1L);
         deletes.verify(itineraryEditEventRepository).deleteAllByUserId(1L);
+        deletes.verify(tripChatSessionRepository).deleteByUserId(1L);
         deletes.verify(itineraryRepository).deleteAllByUserId(1L);
         verify(authProviderRepository).deleteAll(List.of(linked));
         verify(strategy, never()).revoke(anyString());

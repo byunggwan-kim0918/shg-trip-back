@@ -48,6 +48,14 @@ public class GenerationPolicyService {
     private static final Duration PARSE_MINUTE_TTL = Duration.ofMinutes(1);
     private static final Duration PARSE_DAY_TTL = Duration.ofDays(1);
 
+    // 대화 입력은 자유 입력 답마다 Haiku를 부른다. 한 세션은 보통 4~6회다.
+    private static final String TRIP_CHAT_MINUTE_KEY_PREFIX = "tripchat:rate:min:";
+    private static final String TRIP_CHAT_DAY_KEY_PREFIX = "tripchat:rate:day:";
+    static final int MAX_TRIP_CHAT_PER_MINUTE = 20;
+    static final int MAX_TRIP_CHAT_PER_DAY = 200;
+    private static final Duration TRIP_CHAT_MINUTE_TTL = Duration.ofMinutes(1);
+    private static final Duration TRIP_CHAT_DAY_TTL = Duration.ofDays(1);
+
     /**
      * 사용자 입력 문제만 실패로 센다. AI 포맷 오류·{@code valid} 키 누락("INVALID_INPUT" 폴백)·미상 코드를
      * 세면 정상 사용자가 AI 변덕으로 24h 차단된다.
@@ -134,6 +142,29 @@ public class GenerationPolicyService {
         if (perDay > MAX_PARSE_PER_DAY) {
             throw new BusinessException(ErrorCode.PARSE_RATE_LIMITED,
                     "오늘 문장 분석 한도(" + MAX_PARSE_PER_DAY + "회)를 모두 사용했어요. 마법사로 직접 입력해 주세요.");
+        }
+    }
+
+    /**
+     * 대화 입력 해석 호출 제한(고정 창). Redis 장애 시에는 통과시킨다. 입력을 막는 쪽 피해가 더 크다.
+     */
+    public void checkTripChatAllowed(Long userId) {
+        long perMinute;
+        long perDay;
+        try {
+            perMinute = incrementWindow(TRIP_CHAT_MINUTE_KEY_PREFIX + userId, TRIP_CHAT_MINUTE_TTL);
+            perDay = perMinute > MAX_TRIP_CHAT_PER_MINUTE ? 0
+                    : incrementWindow(TRIP_CHAT_DAY_KEY_PREFIX + userId, TRIP_CHAT_DAY_TTL);
+        } catch (Exception e) {
+            log.warn("checkTripChatAllowed 조회 실패 — 통과(fail-open, user {}): {}", userId, e.getMessage());
+            return;
+        }
+        if (perMinute > MAX_TRIP_CHAT_PER_MINUTE) {
+            throw new BusinessException(ErrorCode.TRIP_CHAT_RATE_LIMITED);
+        }
+        if (perDay > MAX_TRIP_CHAT_PER_DAY) {
+            throw new BusinessException(ErrorCode.TRIP_CHAT_RATE_LIMITED,
+                    "오늘 대화 답변 한도(" + MAX_TRIP_CHAT_PER_DAY + "회)를 모두 사용했어요. 내일 다시 이어서 할 수 있어요.");
         }
     }
 

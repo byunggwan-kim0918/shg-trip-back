@@ -192,6 +192,28 @@ class GenerationPolicyServiceTest {
     }
 
     @Test
+    @DisplayName("대화 입력: 분당 한도 초과는 PLANNING_008")
+    void tripChatRateLimitPerMinute() {
+        when(valueOps.increment("tripchat:rate:min:100")).thenReturn((long) GenerationPolicyService.MAX_TRIP_CHAT_PER_MINUTE + 1);
+        assertThatThrownBy(() -> service.checkTripChatAllowed(USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.TRIP_CHAT_RATE_LIMITED);
+    }
+
+    @Test
+    @DisplayName("대화 입력: 일일 한도 초과는 PLANNING_008, Redis 장애 시 통과")
+    void tripChatRateLimitPerDayAndFailOpen() {
+        when(valueOps.increment("tripchat:rate:min:100")).thenReturn(1L);
+        when(valueOps.increment("tripchat:rate:day:100")).thenReturn((long) GenerationPolicyService.MAX_TRIP_CHAT_PER_DAY + 1);
+        assertThatThrownBy(() -> service.checkTripChatAllowed(USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.TRIP_CHAT_RATE_LIMITED);
+
+        when(valueOps.increment("tripchat:rate:min:100")).thenThrow(new RuntimeException("redis down"));
+        assertThatCode(() -> service.checkTripChatAllowed(USER)).doesNotThrowAnyException();
+    }
+
+    @Test
     @DisplayName("탈퇴 시 남은 TTL 그대로 카운터를 식별 해시로 옮기고 원래 키는 지운다")
     void parksCountersWithRemainingTtl() {
         when(valueOps.get(QUOTA_KEY)).thenReturn("4");

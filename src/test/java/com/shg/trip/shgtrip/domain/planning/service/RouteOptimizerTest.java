@@ -2202,7 +2202,7 @@ class RouteOptimizerTest {
     @Test
     @DisplayName("테마 슬러그가 매칭되지 않아도 기본 시간창으로 동작한다")
     void unmatchedThemeFallsBackToDefaults() {
-        // 프론트 계약은 영문 슬러그다(wizardOptions.ts). 한글을 넣으면 매칭되지 않고
+        // 생성 요청 계약은 영문 슬러그다(WizardOptionIds). 한글을 넣으면 매칭되지 않고
         // 기본 시간창으로 떨어진다 — 별칭을 늘리지 않는 대신 log.warn으로 드러낸다.
         ScheduleConfig korean = routeOptimizer.scheduleConfig(List.of("야경"), "normal");
         ScheduleConfig none = routeOptimizer.scheduleConfig(List.of(), "normal");
