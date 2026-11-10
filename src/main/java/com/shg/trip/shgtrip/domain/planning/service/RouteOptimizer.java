@@ -346,7 +346,7 @@ public class RouteOptimizer {
     }
 
     /**
-     * @param userCategories 사용자가 마법사에서 고른 카테고리 id. 일정에 한 번도 없는 카테고리를 spare에서 보충한다.
+     * @param userCategories 생성 요청의 카테고리 id. 일정에 한 번도 없는 카테고리를 spare에서 보충한다.
      *                       빈 값이면 커버리지 보충을 건너뛴다.
      */
     public List<StepData> repairAndSchedule(SelectionOutput selection, List<PlaceCandidate> candidates,

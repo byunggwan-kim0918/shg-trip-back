@@ -40,14 +40,6 @@ public class GenerationPolicyService {
     private static final Duration QUOTA_TTL = Duration.ofDays(30);
     private static final String IDENTITY_SUFFIX = "ident:";
 
-    // 문장 파싱(Haiku)은 디바운스 입력마다 불려 생성보다 훨씬 잦다. 정상 타이핑은 분당 수 회 수준이다.
-    private static final String PARSE_MINUTE_KEY_PREFIX = "parse:rate:min:";
-    private static final String PARSE_DAY_KEY_PREFIX = "parse:rate:day:";
-    static final int MAX_PARSE_PER_MINUTE = 20;
-    static final int MAX_PARSE_PER_DAY = 200;
-    private static final Duration PARSE_MINUTE_TTL = Duration.ofMinutes(1);
-    private static final Duration PARSE_DAY_TTL = Duration.ofDays(1);
-
     // 대화 입력은 자유 입력 답마다 Haiku를 부른다. 한 세션은 보통 4~6회다.
     private static final String TRIP_CHAT_MINUTE_KEY_PREFIX = "tripchat:rate:min:";
     private static final String TRIP_CHAT_DAY_KEY_PREFIX = "tripchat:rate:day:";
@@ -118,30 +110,6 @@ public class GenerationPolicyService {
             log.info("Generation success for user {} — quota used={}", userId, count);
         } catch (Exception e) {
             log.warn("recordSuccess best-effort 실패 (user {}): {}", userId, e.getMessage());
-        }
-    }
-
-    /**
-     * 문장 파싱 호출 제한(고정 창). 초과면 BusinessException(TOO_MANY_REQUESTS).
-     * Redis 장애 시에는 통과시킨다. 파싱은 생성 전 보조 기능이라 막는 쪽 피해가 더 크다.
-     */
-    public void checkParseAllowed(Long userId) {
-        long perMinute;
-        long perDay;
-        try {
-            perMinute = incrementWindow(PARSE_MINUTE_KEY_PREFIX + userId, PARSE_MINUTE_TTL);
-            perDay = perMinute > MAX_PARSE_PER_MINUTE ? 0
-                    : incrementWindow(PARSE_DAY_KEY_PREFIX + userId, PARSE_DAY_TTL);
-        } catch (Exception e) {
-            log.warn("checkParseAllowed 조회 실패 — 통과(fail-open, user {}): {}", userId, e.getMessage());
-            return;
-        }
-        if (perMinute > MAX_PARSE_PER_MINUTE) {
-            throw new BusinessException(ErrorCode.PARSE_RATE_LIMITED);
-        }
-        if (perDay > MAX_PARSE_PER_DAY) {
-            throw new BusinessException(ErrorCode.PARSE_RATE_LIMITED,
-                    "오늘 문장 분석 한도(" + MAX_PARSE_PER_DAY + "회)를 모두 사용했어요. 마법사로 직접 입력해 주세요.");
         }
     }
 

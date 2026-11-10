@@ -25,12 +25,12 @@
 - **소셜 로그인** — Kakao / Google / Naver 계정으로 가입·로그인하고 JWT로 세션을 유지합니다. Refresh Token 회전을 적용해 토큰 재사용(탈취)이 감지되면 전체 세션이 무효화됩니다.
 - **AI 일정 자동 생성 (Auto Mode)** — 목적지·기간·테마·예산 등을 입력하면 Claude가 동선·시간을 최적화한 일정과 각 방문지의 차선책을 함께 생성합니다.
 - **직접 선택 (Manual Mode)** — 원하는 장소들을 골라 그 장소 위주로 일정을 구성합니다.
-- **자연어 문장 파싱** — "8월에 2박 3일 부산 맛집 위주로" 같은 문장을 구조화된 입력 필드로 변환합니다.
+- **대화형 여행 입력** — 질문 하나에 짧게 답하면 Claude Haiku가 답을 해석해 여행 조건으로 정리하고, 모호하거나 예약 정보가 빠진 항목은 한 번까지 되묻습니다. 확인 화면에서 항목별로 고친 뒤 생성을 시작합니다.
 - **실시간 스트리밍** — 생성이 진행되는 동안 진행률과 완성되는 Day 카드가 SSE로 실시간 전송됩니다.
 - **일정 편집** — 제목·태그 수정, 스텝(방문지) 드래그 재정렬, 스텝 삭제, 각 스텝의 대안 선택, 일정 확정(finalize)이 가능합니다.
 - **공유** — 공유 링크를 만들어 비로그인 사용자도 볼 수 있는 공개 페이지로 일정을 공유합니다.
 - **장소 검색** — 키워드·카테고리·반경으로 DB 장소를 검색합니다.
-- **남용 방지** — 30일간 생성 5회 쿼터, 입력 검증 반복 실패 시 일시적 생성 제한을 둡니다.
+- **남용 방지** — 30일간 생성 5회 쿼터, 입력 검증 반복 실패 시 일시적 생성 제한, 대화 답변 분당 20회·하루 200회 제한을 둡니다.
 
 ## 아키텍처 요약
 
@@ -66,10 +66,10 @@ src/main/java/com/shg/trip/shgtrip/
 src/main/resources/
 ├── application.yml            # 공통 + local/prod/batch/test 프로파일
 ├── prompts/                   # AI 프롬프트 템플릿 8종
-└── db/migration/              # Flyway V1~V34
+└── db/migration/              # Flyway V1~V50
 ```
 
-프롬프트 템플릿: `enrich-input`, `select-places`, `assemble-itinerary`, `generate-itinerary`, `enhance-itinerary`, `regenerate-itinerary`, `validate-soft`, `parse-sentence`.
+프롬프트 템플릿: `enrich-input`, `select-places`, `assemble-itinerary`, `generate-itinerary`, `enhance-itinerary`, `regenerate-itinerary`, `validate-soft`, `trip-chat-turn`.
 
 ## 로컬 실행
 
@@ -166,11 +166,23 @@ cp .env.example .env
 | GET | `/api/places/{id}` | 장소 상세 |
 | GET | `/api/places/search` | 장소 검색 |
 
+### 대화형 여행 입력 (인증 필요)
+
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/api/trip-chats/current` | 진행 중인 대화 (없으면 `null`) |
+| POST | `/api/trip-chats` | 새 대화 시작 (`clientRequestId`로 중복 생성 방지) |
+| DELETE | `/api/trip-chats/current` | 진행 중인 대화 보관 (처음부터 다시) |
+| DELETE | `/api/trip-chats/{id}` | 생성이 끝난 대화 보관 |
+| POST | `/api/trip-chats/{id}/answers` | 답변 (`text` / `unknown` / `none`, `clientTurnId`로 멱등) |
+| POST | `/api/trip-chats/{id}/edits` | 항목 수정 질문 열기 |
+| POST | `/api/trip-chats/{id}/edits/cancel` | 수정 취소 |
+| POST | `/api/trip-chats/{id}/confirm` | 확인한 조건으로 생성 시작 → `jobId` |
+
 ### 일정 생성 (인증 필요, SSE)
 
 | Method | Path | 설명 |
 |--------|------|------|
-| POST | `/api/itineraries/parse` | 자연어 문장 → 구조화 입력 필드 |
 | POST | `/api/itineraries/generate` | 생성 시작 → `jobId` 반환 |
 | GET | `/api/itineraries/generate/{jobId}/stream` | SSE 스트림 (`progress`/`step-stream`/`complete`/`error`) |
 | GET | `/api/itineraries/generate/{jobId}/result` | 생성 결과(`itineraryId`) 조회 |
