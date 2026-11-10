@@ -3,12 +3,9 @@ package com.shg.trip.shgtrip.domain.planning.controller;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.planning.dto.GenerateJobResponse;
 import com.shg.trip.shgtrip.domain.planning.dto.GenerationQuotaResponse;
-import com.shg.trip.shgtrip.domain.planning.dto.SentenceParseRequest;
-import com.shg.trip.shgtrip.domain.planning.dto.SentenceParseResponse;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationPolicyService;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationStream;
 import com.shg.trip.shgtrip.domain.planning.service.TravelPlannerService;
-import com.shg.trip.shgtrip.domain.planning.service.ai.SentenceParseService;
 import com.shg.trip.shgtrip.domain.user.service.ActiveUserGuard;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
@@ -28,23 +25,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class PlanningController {
 
     private final TravelPlannerService travelPlannerService;
-    private final SentenceParseService sentenceParseService;
     private final GenerationPolicyService generationPolicyService;
     private final ActiveUserGuard activeUserGuard;
-
-    /**
-     * 콘텐츠 실패는 디바운스 루프의 4xx 스팸을 막으려고 200 + empty()로 반환한다.
-     */
-    @PostMapping("/parse")
-    public ApiResponse<SentenceParseResponse> parseSentence(
-            @Valid @RequestBody SentenceParseRequest request,
-            @AuthenticationPrincipal UserPrincipal principal) {
-        if (principal == null) {
-            throw new BusinessException(ErrorCode.INVALID_TOKEN, "인증 정보가 없습니다.");
-        }
-        generationPolicyService.checkParseAllowed(principal.id());
-        return ApiResponse.success(sentenceParseService.parse(request.sentence()));
-    }
 
     @PostMapping("/generate")
     public ApiResponse<GenerateJobResponse> generateItinerary(
