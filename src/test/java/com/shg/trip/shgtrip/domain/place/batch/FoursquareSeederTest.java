@@ -158,6 +158,21 @@ class FoursquareSeederTest {
         }
 
         @Test
+        @DisplayName("추출기가 붙인 signal 컬럼과 비어 있는 마지막 필드가 있어도 같은 행으로 매핑한다")
+        void mapToRecord_trailingSignalColumn() {
+            Map<String, Integer> index = seeder.parseHeader(
+                    "fsq_place_id,name,latitude,longitude,country,region,category,address,tags,description,signal");
+            String[] korean = seeder.parseCsvLine(
+                    "fsq_kr,식당,37.57,126.98,KR,Seoul,Dining and Drinking > Restaurant,\"\",x,\"\",");
+            String[] overseas = seeder.parseCsvLine(
+                    "fsq_cn,饭店,31.23,121.47,CN,Shanghai,Dining and Drinking > Restaurant,\"\",x,\"\",3");
+
+            assertThat(korean).hasSize(11);
+            assertThat(seeder.mapToRecord(korean, index).region()).isEqualTo("Seoul");
+            assertThat(seeder.mapToRecord(overseas, index).region()).isEqualTo("Shanghai");
+        }
+
+        @Test
         @DisplayName("description이 URL이면 sourceUrl로 분리하고 description은 비운다")
         void mapToRecord_urlDescriptionMovedToSourceUrl() {
             String[] fields = {"fsq_url", "쉼표", "33.3953", "126.2419", "South Korea", "Jeju", "Cafe",

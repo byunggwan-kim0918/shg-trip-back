@@ -70,7 +70,7 @@ aws ecr get-login-password --region ap-northeast-2 \
   | docker login --username AWS \
     --password-stdin <account_id>.dkr.ecr.ap-northeast-2.amazonaws.com
 
-docker build -t shgtrip-fsq-extractor ./fsq-extractor
+docker build -f fsq-extractor/Dockerfile -t shgtrip-fsq-extractor .   # shg-trip-back에서 실행
 docker tag shgtrip-fsq-extractor:latest \
   <account_id>.dkr.ecr.ap-northeast-2.amazonaws.com/shgtrip-fsq-extractor:latest
 docker push \

@@ -1,13 +1,16 @@
 """
 FSQ OS Places 월간 추출기
 
-Places Portal Iceberg REST Catalog에서 한국/일본 주요 도시 데이터를 추출하여 S3에 저장한다.
+Places Portal Iceberg REST Catalog에서 한국 주요 도시와 해외 여행지(destinations.json) 데이터를 추출하여 S3에 저장한다.
 공식 문서: https://docs.foursquare.com/data-products/docs/places-os-data-schema
 테이블 경로: places.datasets.places_os
 """
 import duckdb
 import boto3
+import json
+import math
 import os
+import unicodedata
 import logging
 from dataclasses import dataclass
 from datetime import date
@@ -46,6 +49,73 @@ GENERIC_LATIN_NAMES = (
 # 갱신이 뜸할 뿐 사라지지 않는다. 실측: 2년 기준이면 첨성대 12행 중 2행, 경포대 18행 중 5행만 남았다.
 FRESH_YEARS_DEFAULT = 2
 FRESH_YEARS_LANDMARK = 5
+
+# ── 해외 ──────────────────────────────────────────────────────────────────────
+# 해외는 도시 텍스트 대신 여행지 목록(백엔드와 같은 파일)의 중심·반경으로 배정한다.
+# 이미지에는 extract.py 옆에, 저장소에서는 백엔드 resources에 있다.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DESTINATIONS_FILE = os.environ.get("DESTINATIONS_FILE") or next(
+    (p for p in (os.path.join(_HERE, "destinations.json"),
+                 os.path.join(_HERE, "..", "src", "main", "resources", "destinations.json"))
+     if os.path.exists(p)), "destinations.json")
+
+# 해외 식당은 갱신 1년. 2년 기준이면 폐업 표시가 늦은 중국·베트남 식당이 많이 남는다.
+OVERSEAS_FRESH_YEARS_DINING = 1
+
+# 여러 나라에 지점이 있는 브랜드. 현지 문자 표기가 달라 반복 횟수로는 한 브랜드로 묶이지 않는다.
+GLOBAL_CHAINS = (
+    "starbucks", "星巴克", "スターバックス", "mcdonald", "麦当劳", "麥當勞", "マクドナルド",
+    "kfc", "肯德基", "ケンタッキー", "burger king", "汉堡王", "漢堡王", "バーガーキング",
+    "subway", "赛百味", "賽百味", "サブウェイ", "pizza hut", "必胜客", "必勝客", "ピザハット",
+    "domino's", "domino’s", "domino pizza", "达美乐", "達美樂", "ドミノ・ピザ", "costa coffee", "咖世家",
+    "tim hortons", "dunkin", "唐恩都乐", "ダンキン", "krispy kreme", "クリスピー・クリーム",
+    "baskin", "サーティワン", "31冰淇淋", "häagen-dazs", "haagen-dazs", "哈根达斯", "哈根達斯",
+    "ハーゲンダッツ", "dairy queen", "冰雪皇后", "shake shack", "taco bell", "papa john",
+    "wendy's", "wendy’s", "ウェンディーズ", "carl's jr", "carl’s jr", "popeyes", "paris baguette", "巴黎贝甜", "巴黎貝甜",
+    "tous les jours", "多乐之日", "the coffee bean", "coffee bean & tea leaf", "香啡缤", "pacific coffee",
+    "lotteria", "ロッテリア", "乐天利", "jollibee", "texas chicken", "auntie anne", "gong cha", "贡茶",
+    "貢茶", "mister donut", "ミスタードーナツ", "mixue", "蜜雪冰城", "luckin", "瑞幸",
+)
+# 한 나라 대상 여행지 전체에서 같은 상호가 이만큼 이상이면 현지 대형 체인으로 보고 뺀다.
+# 일본은 すき家·吉野家·松屋 같은 규동 체인이 수백~천 곳이라 남겨 두면 끼니가 체인으로 채워진다.
+MASS_CHAIN_MIN_BRANCHES = 100
+# 체인이어도 그 자체가 여행 코스인 브랜드. 위 두 규칙보다 우선한다.
+TOURIST_CHAINS = (
+    "ichiran", "一蘭", "一兰", "ippudo", "一風堂", "一风堂", "sushiro", "スシロー", "寿司郎",
+    "marugame", "丸亀製麺", "丸龜製麵", "丸龟制面", "din tai fung", "鼎泰豐", "鼎泰丰",
+    "haidilao", "海底捞", "海底撈", "cộng cà phê", "cong caphe", "cong ca phe", "kebuke", "可不可",
+    "50嵐", "85度c", "85°c", "點都德", "点都德", "茶颜悦色", "551蓬莱", "551蓬萊",
+    "starbucks reserve roastery", "スターバックス リザーブ ロースタリー", "星巴克臻选上海烘焙工坊",
+)
+# 같은 브랜드는 여행지마다 이만큼만 남겨 후보가 한 브랜드로 덮이지 않게 한다.
+BRAND_PER_DESTINATION = 3
+
+# 여행지 규모(선별 후 행 수)별 명소·식음료 상한. 숙소·시장·교통 허브는 수가 적어 두지 않는다.
+# 일정 후보는 슬롯마다 상위 수십 곳만 쓰므로 대도시도 수천 곳이면 충분하고, 도쿄 전량(약 19만)이면 DB가 두 배가 된다.
+DESTINATION_CAPS = (  # (최소 행 수, 명소 상한, 식음료 상한)
+    (60_000, 5000, 7500),
+    (25_000, 2500, 5000),
+    (10_000, 1500, 3100),
+    (4_000, 1000, 1900),
+)
+
+# 일정에 쓸 수 없는 명소·교통 시설 하위 장소(승강장·개찰구·출구·주차장).
+JUNK_NAME_PATTERN = (r"(?i)(番線|改札|ホーム|出口|入口|駐車場|乗り場|のりば|站台|出入口|出站口|登机口|搭乗口"
+                     r"|[A-Z]\d*口|\d+号口|停车场|停車場|Bãi (đỗ|giữ) xe|\bExit\s?\d|\bGate\s?\d|\bPlatform\s?\d)")
+# Arts and Entertainment 아래의 비여행 업종.
+NON_TRAVEL_SIGHT_PATTERN = ("(Movie Theater|Casino|Strip Club|Adult|Pachinko|Gaming Cafe|Internet Cafe|Bingo"
+                            "|Lottery|Bowling|Playground|Dog Park|Cemetery|Karaoke)")
+# 업종이 이것뿐이면 "구체 업종" 신호를 주지 않는다.
+GENERIC_FOOD_CATEGORIES = (
+    "Dining and Drinking > Restaurant",
+    "Dining and Drinking > Cafe, Coffee, and Tea House",
+    "Dining and Drinking > Bar",
+    "Dining and Drinking > Restaurant > Asian Restaurant",
+    "Dining and Drinking > Restaurant > Asian Restaurant > Chinese Restaurant",
+    "Dining and Drinking > Restaurant > Asian Restaurant > Japanese Restaurant",
+    "Dining and Drinking > Restaurant > Asian Restaurant > Vietnamese Restaurant",
+    "Dining and Drinking > Restaurant > Asian Restaurant > Taiwanese Restaurant",
+)
 
 
 @dataclass(frozen=True)
@@ -299,8 +369,250 @@ def stage_korea(conn: duckdb.DuckDBPyConnection) -> str:
     return "kr"
 
 
+def load_destinations(path: str, countries) -> list:
+    """여행지 목록에서 countries(None이면 전체)에 속한 것만. 목록에 없는 국가 코드를 요청하면 실패한다."""
+    with open(path, encoding="utf-8") as f:
+        dests = json.load(f)
+    if countries is not None:
+        unknown = set(countries) - {d["country"] for d in dests}
+        if unknown:
+            raise ValueError(f"여행지 목록에 없는 국가: {sorted(unknown)}")
+    return [d for d in dests if countries is None or d["country"] in countries]
+
+
+def create_destination_table(conn: duckdb.DuckDBPyConnection, dests: list, name: str = "dest") -> str:
+    conn.execute(f"CREATE OR REPLACE TEMP TABLE {name} "
+                 "(country VARCHAR, name VARCHAR, lat DOUBLE, lng DOUBLE, radius_km DOUBLE)")
+    conn.executemany(f"INSERT INTO {name} VALUES (?, ?, ?, ?, ?)",
+                     [(d["country"], d["name"], d["lat"], d["lng"], d["radiusKm"]) for d in dests])
+    return name
+
+
+def country_boxes(dests: list) -> dict:
+    """국가마다 여행지 반경 원을 모두 덮는 범위 하나 (min_lat, max_lat, min_lng, max_lng)."""
+    boxes = {}
+    for d in dests:
+        dlat = d["radiusKm"] / 111.0
+        dlng = d["radiusKm"] / (111.0 * math.cos(math.radians(d["lat"])))
+        b = boxes.setdefault(d["country"], [90.0, -90.0, 180.0, -180.0])
+        b[0], b[1] = min(b[0], d["lat"] - dlat), max(b[1], d["lat"] + dlat)
+        b[2], b[3] = min(b[2], d["lng"] - dlng), max(b[3], d["lng"] + dlng)
+    return {c: tuple(b) for c, b in boxes.items()}
+
+
+def stage_overseas(conn: duckdb.DuckDBPyConnection, dests: list) -> str:
+    """
+    해외 영업중 행을 국가별 범위(country_boxes)로 받는다. 스캔 조건은 단순 비교만 쓴다(stage_korea 참고).
+    여행지 반경 배정은 받은 뒤 로컬 테이블에서 한다.
+    """
+    cond = " OR ".join(
+        f"(country = {_quote(c)} AND latitude BETWEEN {b[0]} AND {b[1]} AND longitude BETWEEN {b[2]} AND {b[3]})"
+        for c, b in country_boxes(dests).items())
+    conn.execute(f"""
+        CREATE TEMP TABLE ov AS
+        SELECT fsq_place_id, name, latitude, longitude, address, country, date_closed, date_created,
+               date_refreshed, website, tel, instagram, facebook_id, fsq_category_labels, unresolved_flags
+        FROM {TABLE_PATH}
+        WHERE date_closed IS NULL AND ({cond})
+    """)
+    for country, n in conn.execute("SELECT country, count(*) FROM ov GROUP BY 1 ORDER BY 1").fetchall():
+        log.info("해외 영업중 %s %d행 적재", country, n)
+    return "ov"
+
+
+def _starts_with_any(col: str, prefixes: tuple) -> str:
+    return _any("starts_with", col, tuple(unicodedata.normalize("NFC", p).lower() for p in prefixes))
+
+
+def _stem_expr(col: str) -> str:
+    """상호에서 브랜드 부분만. 앞머리 괄호(【公式】), 첫 괄호 이하, " - 지점명", 끝의 "…店" 토큰을 차례로 뗀다."""
+    return ("trim(regexp_replace(regexp_replace(regexp_replace(regexp_replace("
+            f"{col}, '^\\s*[\\(（\\[【][^\\)）\\]】]*[\\)）\\]】]\\s*', ''), "
+            "'\\s*[\\(（\\[【].*$', ''), "
+            "'\\s+[-–|｜]\\s+.*$', ''), "
+            "'\\s+\\S*(店|分店|支店|門市|门市)$', ''))")
+
+
+def build_scored_query(source: str, dest: str) -> str:
+    """
+    해외 행을 여행지에 배정하고 상호(stem)와 신호 점수를 붙인 SELECT문.
+    갱신 기준 → 역할 → 하위시설 이름 제외 → 여행지 배정 → 점수 순서다.
+    """
+    haversine = ("2 * 6371 * asin(sqrt(pow(sin(radians(k.latitude - d.lat) / 2), 2) + cos(radians(k.latitude))"
+                 " * cos(radians(d.lat)) * pow(sin(radians(k.longitude - d.lng) / 2), 2)))")
+    generic = ", ".join(_quote(c) for c in GENERIC_FOOD_CATEGORIES)
+    return f"""
+    WITH base AS (
+        SELECT *,
+               fsq_category_labels[1] AS cat,
+               split_part(fsq_category_labels[1], ' > ', 1) AS top_category
+        FROM {source}
+        WHERE country IN (SELECT DISTINCT country FROM {dest})
+          AND date_closed IS NULL
+          AND coalesce(len(unresolved_flags), 0) = 0
+          AND CAST(date_refreshed AS DATE) >= CURRENT_DATE - to_years(
+                CASE WHEN split_part(fsq_category_labels[1], ' > ', 1) = 'Dining and Drinking'
+                          THEN {OVERSEAS_FRESH_YEARS_DINING}
+                     WHEN split_part(fsq_category_labels[1], ' > ', 1) = 'Landmarks and Outdoors'
+                          THEN {FRESH_YEARS_LANDMARK}
+                     ELSE {FRESH_YEARS_DEFAULT} END)
+    ),
+    roled AS (
+        SELECT *,
+               CASE
+                 WHEN cat LIKE '%States and Municipalities%' OR cat LIKE '%Residential%' THEN NULL
+                 WHEN top_category = 'Dining and Drinking' THEN 'food'
+                 WHEN cat LIKE '%Lodging%' THEN 'lodging'
+                 WHEN cat LIKE 'Travel and Transportation > Transport Hub%'
+                      AND NOT regexp_matches(cat, '(Bus Stop|Platform)') THEN 'transit'
+                 WHEN (top_category IN ('Landmarks and Outdoors', 'Arts and Entertainment')
+                       OR cat LIKE 'Community and Government > Spiritual Center%')
+                      AND NOT regexp_matches(cat, {_quote(NON_TRAVEL_SIGHT_PATTERN)}) THEN 'sight'
+                 WHEN cat LIKE 'Retail%'
+                      AND regexp_matches(cat, '(Market|Shopping Mall|Department Store|Shopping Plaza|Souvenir|Outlet)')
+                      THEN 'market'
+               END AS role
+        FROM base
+    ),
+    kept AS (
+        SELECT * FROM roled
+        WHERE role IS NOT NULL
+          AND NOT (role <> 'food' AND regexp_matches(name, {_quote(JUNK_NAME_PATTERN)}))
+    ),
+    placed AS (
+        SELECT k.*, d.name AS dest, {haversine} AS km, d.radius_km
+        FROM kept k
+        JOIN {dest} d
+          ON k.country = d.country
+         AND k.latitude BETWEEN d.lat - d.radius_km / 111.0 AND d.lat + d.radius_km / 111.0
+         AND k.longitude BETWEEN d.lng - d.radius_km / (111.0 * cos(radians(d.lat)))
+                             AND d.lng + d.radius_km / (111.0 * cos(radians(d.lat)))
+    ),
+    nearest AS (
+        SELECT * FROM placed
+        WHERE km <= radius_km
+        QUALIFY row_number() OVER (PARTITION BY fsq_place_id ORDER BY km / radius_km, dest) = 1
+    ),
+    named AS (
+        -- 베트남어 성조 표기는 조합형·완성형이 섞여 있어 접두어 비교 전에 NFC로 맞춘다.
+        SELECT *, lower(nfc_normalize(trim(name))) AS lname FROM nearest
+    )
+    SELECT *,
+           {_stem_expr('lname')} AS stem,
+           (CASE WHEN coalesce(tel, '') <> '' THEN 1 ELSE 0 END
+            + CASE WHEN coalesce(website, '') <> '' THEN 1 ELSE 0 END
+            + CASE WHEN coalesce(instagram, '') <> '' OR facebook_id IS NOT NULL THEN 1 ELSE 0 END
+            -- 오래 영업하면서 지금도 갱신되는 곳. 인기도 데이터가 없는 해외 식당의 단골 대용 신호다.
+            + CASE WHEN TRY_CAST(date_created AS DATE) <= TRY_CAST(date_refreshed AS DATE) - INTERVAL 5 YEAR THEN 2
+                   WHEN TRY_CAST(date_created AS DATE) <= TRY_CAST(date_refreshed AS DATE) - INTERVAL 2 YEAR THEN 1
+                   ELSE 0 END
+            + CASE WHEN cat IN ({generic}) THEN 0 ELSE 1 END) AS signal
+    FROM named
+    """
+
+
+def _cap_expr(role_col: str, total_col: str) -> str:
+    """DESTINATION_CAPS를 행마다 적용할 상한 식. 규모가 가장 작은 구간보다 작으면 상한이 없다."""
+    cases = " ".join(
+        f"WHEN {total_col} >= {n} THEN CASE {role_col} WHEN 'sight' THEN {sight} ELSE {food} END"
+        for n, sight, food in DESTINATION_CAPS)
+    return f"CASE {cases} ELSE NULL END"
+
+
+def _selection_ctes(scored: str) -> str:
+    """
+    체인 규칙 → 여행지 규모별 명소·식음료 상한. 상한 안 순위는 signal이고 같으면 fsq_place_id 해시다.
+    상호를 알 수 없는 행(stem 1자 이하)은 브랜드로 묶지 않는다.
+    """
+    return f"""mass_chain AS (
+        SELECT country, stem, count(*) AS n
+        FROM {scored}
+        WHERE role = 'food' AND length(stem) >= 2
+        GROUP BY country, stem
+        HAVING count(*) >= {MASS_CHAIN_MIN_BRANCHES}
+    ),
+    food AS (
+        SELECT s.* FROM {scored} s
+        WHERE s.role = 'food'
+          AND ({_starts_with_any('s.lname', TOURIST_CHAINS)}
+               OR (NOT {_starts_with_any('s.lname', GLOBAL_CHAINS)}
+                   AND NOT EXISTS (SELECT 1 FROM mass_chain m WHERE m.country = s.country AND m.stem = s.stem)))
+        QUALIFY row_number() OVER (
+                    PARTITION BY dest, CASE WHEN length(stem) >= 2 THEN stem ELSE fsq_place_id END
+                    ORDER BY signal DESC, hash(fsq_place_id)) <= {BRAND_PER_DESTINATION}
+    ),
+    unchained AS (
+        SELECT * FROM {scored} WHERE role <> 'food'
+        UNION ALL BY NAME
+        SELECT * FROM food
+    ),
+    ranked AS (
+        SELECT *,
+               count(*) OVER (PARTITION BY dest) AS dest_total,
+               row_number() OVER (PARTITION BY dest, role ORDER BY signal DESC, hash(fsq_place_id)) AS role_rank
+        FROM unchained
+    ),
+    selected AS (
+        SELECT * FROM ranked
+        WHERE role NOT IN ('sight', 'food')
+           OR role_rank <= coalesce({_cap_expr('role', 'dest_total')}, role_rank)
+    )"""
+
+
+_OVERSEAS_OUTPUT = """
+    SELECT
+        fsq_place_id,
+        regexp_replace(name, '[\\r\\n]+', ' ', 'g')                     AS name,
+        latitude,
+        longitude,
+        country,
+        dest                                                          AS region,
+        cat                                                           AS category,
+        regexp_replace(coalesce(address, ''), '[\\r\\n]+', ' ', 'g')    AS address,
+        array_to_string(fsq_category_labels, ';')                     AS tags,
+        regexp_replace(coalesce(website, ''), '[\\r\\n]+', ' ', 'g')    AS description,
+        signal
+    FROM selected
+    """
+
+
+def build_overseas_query(source: str, dest: str) -> str:
+    """해외 적재 대상 SELECT문. 출력 컬럼은 build_extract_query에 signal을 더한 것이다."""
+    return f"WITH scored AS ({build_scored_query(source, dest)}), {_selection_ctes('scored')} {_OVERSEAS_OUTPUT}"
+
+
+def build_output_query(kr_source: str, scored: str = None) -> str:
+    """
+    최종 CSV 쿼리. 한국 + 해외(scored는 build_scored_query 결과 테이블).
+    해외가 없는 달에도 signal 컬럼을 둬 CSV 스키마를 고정한다.
+    """
+    query = f"SELECT *, CAST(NULL AS INTEGER) AS signal FROM ({build_extract_query(kr_source)})"
+    if scored:
+        query += f" UNION ALL BY NAME SELECT * FROM (WITH {_selection_ctes(scored)} {_OVERSEAS_OUTPUT})"
+    return query
+
+
+def overseas_mass_chains(conn: duckdb.DuckDBPyConnection, scored: str) -> list:
+    """현지 대형 체인으로 빠진 브랜드 (국가, 상호, 행 수). 허용 목록 누락을 로그로 확인하려고 쓴다."""
+    return conn.execute(f"""
+        WITH {_selection_ctes(scored)}
+        SELECT country, stem, n FROM mass_chain ORDER BY country, n DESC
+    """).fetchall()
+
+
+def extract_countries():
+    """
+    해외 추출 국가(EXTRACT_COUNTRIES, 쉼표 구분). "all"이면 None(여행지 목록 전체), 없으면 빈 집합(한국만).
+    해외 식당은 상한 전 수십만 건이라 월간 실행이 의도 없이 적재하지 않도록 명시해야 켜진다.
+    """
+    raw = os.environ.get("EXTRACT_COUNTRIES", "").strip()
+    if raw.lower() == "all":
+        return None
+    return {c.strip().upper() for c in raw.split(",") if c.strip()}
+
+
 def extract(conn: duckdb.DuckDBPyConnection) -> int:
-    """한국 주요 도시 데이터를 추출하여 CSV로 저장한다."""
+    """한국 주요 도시와 해외 여행지 데이터를 추출하여 CSV로 저장한다."""
     log.info("추출 시작: %s (KR, %d개 도시)", TABLE_PATH, len(CITIES))
     source = stage_korea(conn)
 
@@ -309,18 +621,46 @@ def extract(conn: duckdb.DuckDBPyConnection) -> int:
     log.info("체인 판정 %d개 브랜드(음식·음료에서 제외): %s", len(chains),
              ", ".join(f"{stem}({n})" for _, stem, n in chains))
 
+    scored = None
+    countries = extract_countries()
+    if countries is None or countries:
+        dests = load_destinations(DESTINATIONS_FILE, countries)
+        log.info("해외 추출: %d개 여행지 (%s)", len(dests), ", ".join(sorted({d["country"] for d in dests})))
+        overseas = stage_overseas(conn, dests)
+        dest = create_destination_table(conn, dests)
+        # 체인 로그와 최종 출력이 같은 배정·점수 결과를 읽는다(수백만 행 조인을 한 번만 한다).
+        conn.execute(f"CREATE TEMP TABLE ov_scored AS {build_scored_query(overseas, dest)}")
+        scored = "ov_scored"
+        for country, stem, n in overseas_mass_chains(conn, scored):
+            log.info("  현지 대형 체인 제외 %s %s(%d)", country, stem, n)
+
     # 줄바꿈이 낀 필드는 적재기의 줄 단위 CSV 파서를 깨뜨리므로 쿼리에서 공백으로 바꿔 둔다.
-    conn.execute(f"COPY ({build_extract_query(source)}) TO '{OUTPUT_FILE}' (HEADER, DELIMITER ',')")
+    conn.execute(f"COPY ({build_output_query(source, scored)}) TO '{OUTPUT_FILE}' (HEADER, DELIMITER ',')")
 
     count = conn.execute(
         f"SELECT COUNT(*) FROM read_csv_auto('{OUTPUT_FILE}')"
     ).fetchone()[0]
-    for region, n in conn.execute(
-        f"SELECT region, count(*) FROM read_csv_auto('{OUTPUT_FILE}') GROUP BY region ORDER BY 2 DESC"
+    for country, region, n in conn.execute(
+        f"SELECT country, region, count(*) FROM read_csv_auto('{OUTPUT_FILE}') GROUP BY 1, 2 ORDER BY 1, 3 DESC"
     ).fetchall():
-        log.info("  %-10s %7d건", region, n)
+        log.info("  %s %-18s %7d건", country, region, n)
     log.info("추출 완료: %d건 → %s", count, OUTPUT_FILE)
     return count
+
+
+def memory_limit() -> str:
+    """DUCKDB_MEMORY_LIMIT가 없으면 컨테이너 메모리의 75%. 태스크 크기를 바꿔도 따로 맞출 값이 없다."""
+    if os.environ.get("DUCKDB_MEMORY_LIMIT"):
+        return os.environ["DUCKDB_MEMORY_LIMIT"]
+    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(path) as f:
+                raw = f.read().strip()
+        except OSError:
+            continue
+        if raw.isdigit() and int(raw) < 1 << 50:
+            return f"{max(1, int(int(raw) * 0.75) >> 30)}GB"
+    return "3GB"
 
 
 def upload_to_s3(row_count: int) -> str:
@@ -356,9 +696,9 @@ if __name__ == "__main__":
     try:
         conn = duckdb.connect()
         conn.execute("SET home_directory='/tmp';")
-        conn.execute("SET memory_limit='3GB';")
+        conn.execute(f"SET memory_limit='{memory_limit()}';")
         conn.execute("SET temp_directory='/tmp/duckdb';")
-        conn.execute("SET threads=2;")
+        conn.execute(f"SET threads={int(os.environ.get('DUCKDB_THREADS', '2'))};")
         connect_iceberg(conn)
 
         row_count = extract(conn)
