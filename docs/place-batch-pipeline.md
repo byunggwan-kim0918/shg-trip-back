@@ -44,8 +44,15 @@ Step Functions (월 1회)
           → foursquare/dt={yyyy-MM-dd}/ 최신 파티션 CSV 읽기
         → 비여행 카테고리 제외(은행·병원·학교·버스정류장·도로·주차장·헬스장·놀이터 등 —
           BLOCKED_CATEGORY_KEYWORDS. 교회·공항·역·마트는 명소/동선 기점이라 남김)
-        → 1000행씩 chunk 분할 → @Transactional processChunk()
+        → 이름 255자·주소 500자로 자름(name+address 인덱스 행 크기 한도)
+        → 1000행씩 chunk 분할 → processChunk(): 청크 한 트랜잭션 upsert, 실패하면 행마다 다시 넣어 문제 행만 실패로 셈
+          (연결·시간 초과, 행 연속 10건 실패는 청크 실패. 청크 실패 또는 실패 행 1% 초과면 단계 실패)
         → CSV 내부 중복 제거(fsq_place_id) → upsertFoursquarePlace() native upsert
+          (이름이 바뀌면 임베딩·음식 종류·보강 시각·name_ko 초기화, deactivated_reason='stale' 행은 되살림, 'policy'는 그대로)
+        → 빠진 장소 비활성화: 이번 CSV에 나온 (국가, 지역)마다 이번에 다시 나오지 않은 활성 Foursquare 행을
+          deactivated_reason='stale'로 끔(1000행씩). Wikidata·TourAPI와 연결된 행은 다른 시더의 중복 판정에 쓰여 제외.
+          실패 행이 난 지역은 건너뛰고, 실행 전부터 있던 활성 행의 30%(max-ratio)를 넘게 빠지면 그 지역은 건너뜀.
+          BATCH_FOURSQUARE_DEACTIVATE_STALE=false(기본)면 지역별 대상 건수만 로그. 끈 행 수는 이력 deleted에 기록
         → PlaceSeedingHistory에 시작/완료/실패 이력 기록
   [1/4-보완] TourApiSeeder.seed()  (batch.tourapi.enabled=true일 때만)
         한국관광공사 TourAPI areaBasedList2 (12 관광지, 14 문화시설, 39 음식점, 32 숙박)

@@ -10,10 +10,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.springframework.dao.QueryTimeoutException;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -23,9 +25,11 @@ import java.time.OffsetDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
@@ -43,11 +47,12 @@ class FoursquareSeederTest {
     @Mock
     private PlaceSeedingHistoryRepository historyRepository;
 
-    @InjectMocks
     private FoursquareSeeder seeder;
 
     @BeforeEach
     void setUp() {
+        seeder = new FoursquareSeeder(placeRepository, csvSource, historyRepository,
+                TransactionOperations.withoutTransaction());
         ReflectionTestUtils.setField(seeder, "chunkSize", 1000);
     }
 
@@ -440,6 +445,158 @@ class FoursquareSeederTest {
             verify(placeRepository, times(1)).upsertFoursquarePlace(
                     eq("fsq_same"), eq("7-Eleven"), anyString(), any(), any(),
                     eq("Japan"), eq("Tokyo"), eq("Store"), anyString(), anyString(), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("청크 실패 처리")
+    class ChunkFailure {
+
+        private final Map<String, Integer> columnIndex = Map.of(
+                "fsq_place_id", 0, "name", 1, "latitude", 2, "longitude", 3,
+                "country", 4, "region", 5, "category", 6, "address", 7, "tags", 8, "description", 9);
+
+        private String[] row(String id) {
+            return new String[]{id, "식당" + id, "37.5", "127.0", "KR", "Seoul", "Restaurant", "", "", ""};
+        }
+
+        @Test
+        @DisplayName("일괄 upsert가 실패하면 행마다 다시 넣고 문제 행만 실패로 센다")
+        void processChunk_fallsBackToRows() {
+            lenient().doThrow(new RuntimeException("bad row")).when(placeRepository).upsertFoursquarePlace(
+                    eq("bad"), anyString(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                    anyString(), anyString(), any());
+
+            int[] result = seeder.processChunk(List.of(row("a"), row("bad"), row("b")), columnIndex);
+
+            assertThat(result).containsExactly(2, 1);
+            verify(placeRepository, atLeastOnce()).upsertFoursquarePlace(
+                    eq("b"), anyString(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                    anyString(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("연결·시간 초과 오류는 행 단위로 다시 하지 않고 청크 실패로 던진다")
+        void processChunk_rethrowsConnectionFailure() {
+            doThrow(new QueryTimeoutException("timeout")).when(placeRepository).upsertFoursquarePlace(
+                    anyString(), anyString(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                    anyString(), anyString(), any());
+
+            assertThatThrownBy(() -> seeder.processChunk(List.of(row("a"), row("b")), columnIndex))
+                    .isInstanceOf(QueryTimeoutException.class);
+            verify(placeRepository, times(1)).upsertFoursquarePlace(
+                    anyString(), anyString(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                    anyString(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("행 단위 재시도가 연속으로 실패하면 청크 실패로 던진다")
+        void processChunk_givesUpAfterConsecutiveRowFailures() {
+            doThrow(new IllegalArgumentException("bad")).when(placeRepository).upsertFoursquarePlace(
+                    anyString(), anyString(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                    anyString(), anyString(), any());
+            List<String[]> rows = java.util.stream.IntStream.range(0, 20).mapToObj(i -> row("r" + i)).toList();
+
+            assertThatThrownBy(() -> seeder.processChunk(rows, columnIndex)).isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("이름과 주소를 인덱스 한도 안으로 자른다")
+        void mapToRecord_truncatesLongNameAndAddress() {
+            String[] fields = {"x", "名".repeat(300), "31.2", "121.4", "CN", "Shanghai", "Restaurant",
+                    "路".repeat(800), "", ""};
+
+            FoursquareSeeder.FoursquareRecord record = seeder.mapToRecord(fields, columnIndex);
+
+            assertThat(record.name()).hasSize(255);
+            assertThat(record.address()).hasSize(500);
+        }
+    }
+
+    @Nested
+    @DisplayName("빠진 장소 비활성화")
+    class StaleDeactivation {
+
+        private final OffsetDateTime since = OffsetDateTime.now().minusHours(1);
+        private final FoursquareSeeder.RegionKey osaka = new FoursquareSeeder.RegionKey("JP", "Osaka");
+        private final FoursquareSeeder.RegionKey shanghai = new FoursquareSeeder.RegionKey("CN", "Shanghai");
+
+        @Test
+        @DisplayName("기본값(dry-run)은 건수만 세고 끄지 않는다")
+        void dryRunOnlyCounts() {
+            when(placeRepository.countStaleFoursquare("JP", "Osaka", since)).thenReturn(10);
+            when(placeRepository.countExistingFoursquare("JP", "Osaka", since)).thenReturn(100);
+
+            assertThat(seeder.deactivateStalePlaces(Set.of(osaka), since)).isZero();
+            verify(placeRepository, never()).deactivateStaleFoursquare(anyString(), anyString(), any(), anyInt());
+        }
+
+        @Test
+        @DisplayName("켜면 비율 안의 지역만 묶음 단위로 끄고, 비율을 넘는 지역은 건너뛴다")
+        void deactivatesWithinRatioInBatches() {
+            ReflectionTestUtils.setField(seeder, "deactivateStale", true);
+            ReflectionTestUtils.setField(seeder, "maxStaleRatio", 0.3);
+            when(placeRepository.countStaleFoursquare("JP", "Osaka", since)).thenReturn(1500);
+            when(placeRepository.countExistingFoursquare("JP", "Osaka", since)).thenReturn(10000);
+            when(placeRepository.deactivateStaleFoursquare("JP", "Osaka", since, 1000)).thenReturn(1000, 500);
+            when(placeRepository.countStaleFoursquare("CN", "Shanghai", since)).thenReturn(80);
+            when(placeRepository.countExistingFoursquare("CN", "Shanghai", since)).thenReturn(100);
+
+            assertThat(seeder.deactivateStalePlaces(Set.of(osaka, shanghai), since)).isEqualTo(1500);
+            verify(placeRepository, times(2)).deactivateStaleFoursquare("JP", "Osaka", since, 1000);
+            verify(placeRepository, never()).deactivateStaleFoursquare(eq("CN"), anyString(), any(), anyInt());
+        }
+
+        @Test
+        @DisplayName("이번 적재에 없는 지역은 조회하지 않는다")
+        void onlySeenRegions() {
+            ReflectionTestUtils.setField(seeder, "deactivateStale", true);
+            assertThat(seeder.deactivateStalePlaces(Set.of(), since)).isZero();
+            verifyNoInteractions(placeRepository);
+        }
+
+        @Test
+        @DisplayName("seed()는 실패 행이 난 지역을 빼고, 실행 시작 1시간 전을 기준으로 넘긴다")
+        void seedSkipsRegionsWithFailedRows() throws IOException {
+            when(historyRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            String csv = """
+                    fsq_place_id,name,latitude,longitude,country,region,category,address,tags,description
+                    ok1,식당1,37.5,127.0,KR,Seoul,Restaurant,,,
+                    bad,식당2,35.1,129.0,KR,Busan,Restaurant,,,
+                    ok2,식당3,35.1,129.0,KR,Busan,Restaurant,,,
+                    """ + java.util.stream.IntStream.range(0, 300)
+                    .mapToObj(i -> "j" + i + ",식당,33.5,126.5,KR,Jeju,Restaurant,,,\n")
+                    .collect(java.util.stream.Collectors.joining());
+            when(csvSource.open()).thenReturn(new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8)));
+            lenient().doThrow(new IllegalArgumentException("bad")).when(placeRepository).upsertFoursquarePlace(
+                    eq("bad"), anyString(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                    anyString(), anyString(), any());
+            OffsetDateTime before = OffsetDateTime.now();
+
+            seeder.seed();
+
+            ArgumentCaptor<OffsetDateTime> sinceCaptor = ArgumentCaptor.forClass(OffsetDateTime.class);
+            verify(placeRepository).countStaleFoursquare(eq("KR"), eq("Seoul"), sinceCaptor.capture());
+            verify(placeRepository, never()).countStaleFoursquare(eq("KR"), eq("Busan"), any());
+            assertThat(sinceCaptor.getValue()).isBefore(before.minusMinutes(59));
+        }
+
+        @Test
+        @DisplayName("seed()는 실패 행이 1%를 넘으면 비활성화 없이 단계를 실패로 끝낸다")
+        void seedFailsOnManyFailedRows() throws IOException {
+            when(historyRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            String csv = """
+                    fsq_place_id,name,latitude,longitude,country,region,category,address,tags,description
+                    ok1,식당1,37.5,127.0,KR,Seoul,Restaurant,,,
+                    bad,식당2,37.5,127.0,KR,Seoul,Restaurant,,,
+                    """;
+            when(csvSource.open()).thenReturn(new ByteArrayInputStream(csv.getBytes(StandardCharsets.UTF_8)));
+            lenient().doThrow(new IllegalArgumentException("bad")).when(placeRepository).upsertFoursquarePlace(
+                    eq("bad"), anyString(), anyString(), any(), any(), anyString(), anyString(), anyString(),
+                    anyString(), anyString(), any());
+
+            assertThatThrownBy(() -> seeder.seed()).isInstanceOf(BatchStageFailed.class);
+            verify(placeRepository, never()).countStaleFoursquare(anyString(), anyString(), any());
         }
     }
 

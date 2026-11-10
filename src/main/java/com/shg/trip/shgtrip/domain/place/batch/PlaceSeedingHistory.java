@@ -48,10 +48,12 @@ public class PlaceSeedingHistory {
         if (createdAt == null) createdAt = OffsetDateTime.now();
     }
 
-    public void complete(int totalProcessed, int inserted, int updated, int failed, int failedChunks) {
+    /** @param deactivated 이번 추출에서 빠져 끈 행 수(deleted 컬럼에 남긴다) */
+    public void complete(int totalProcessed, int inserted, int updated, int deactivated, int failed, int failedChunks) {
         this.totalProcessed = totalProcessed;
         this.inserted = inserted;
         this.updated = updated;
+        this.deleted = deactivated;
         this.failed = failed;
         this.failedChunks = failedChunks;
         this.finishedAt = OffsetDateTime.now();

@@ -7,7 +7,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.TransientDataAccessException;
+import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -15,6 +18,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -27,9 +31,40 @@ public class FoursquareSeeder {
     private final PlaceRepository placeRepository;
     private final FoursquareCsvSource csvSource;
     private final PlaceSeedingHistoryRepository historyRepository;
+    private final TransactionOperations transactionOperations;
 
     @Value("${batch.foursquare.chunk-size:1000}")
     private int chunkSize;
+
+    /** 끄면 이번 추출에서 빠진 행 수만 로그로 남긴다. */
+    @Value("${batch.foursquare.deactivate-stale.enabled:false}")
+    private boolean deactivateStale;
+
+    /** 지역의 활성 행 중 이 비율보다 많이 빠지면 추출 이상으로 보고 그 지역은 끄지 않는다. */
+    @Value("${batch.foursquare.deactivate-stale.max-ratio:0.3}")
+    private double maxStaleRatio;
+
+    /**
+     * 이번 실행 시작보다 이만큼 앞선 saved_at만 "이번에 안 나온 행"으로 본다.
+     * saved_at은 DB 시각이고 실행 시작은 컨테이너 시각이라 둘의 차이를 흡수한다.
+     */
+    private static final Duration STALE_CLOCK_MARGIN = Duration.ofHours(1);
+
+    /** 인덱스(name, address) 행 크기 한도 안에 들도록 자른다. 중국어·일본어는 한 글자가 3바이트다. */
+    private static final int MAX_NAME_LENGTH = 255;
+    private static final int MAX_ADDRESS_LENGTH = 500;
+
+    /** 실패 행이 처리 행의 이 비율을 넘으면 단계를 실패로 끝낸다. 몇 건의 나쁜 행은 경고만 남긴다. */
+    private static final double MAX_FAILED_ROW_RATIO = 0.01;
+    /** 행 단위 재시도에서 연속으로 이만큼 실패하면 데이터가 아니라 DB 문제로 보고 청크를 포기한다. */
+    private static final int MAX_CONSECUTIVE_ROW_FAILURES = 10;
+    private static final int DEACTIVATE_BATCH_SIZE = 1000;
+
+    record RegionKey(String country, String region) {
+        static RegionKey of(FoursquareRecord r) {
+            return new RegionKey(r.country(), r.region());
+        }
+    }
 
     private static final List<String> REQUIRED_COLUMNS = List.of(
             "fsq_place_id", "name", "latitude", "longitude", "country", "region", "category");
@@ -89,6 +124,8 @@ public class FoursquareSeeder {
                         .build()
         );
 
+        Set<RegionKey> seenRegions = new HashSet<>();
+        Set<RegionKey> failedRegions = new HashSet<>();
         try (InputStream is = csvSource.open();
              BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
 
@@ -119,8 +156,9 @@ public class FoursquareSeeder {
 
                 if (chunk.size() >= chunkSize) {
                     try {
-                        int[] result = processChunk(chunk, columnIndex);
+                        int[] result = processChunk(chunk, columnIndex, seenRegions, failedRegions);
                         totalProcessed += result[0];
+                        failedRows += result[1];
                     } catch (Exception e) {
                         failedChunks++;
                         failedRows += chunk.size();
@@ -133,8 +171,9 @@ public class FoursquareSeeder {
 
             if (!chunk.isEmpty()) {
                 try {
-                    int[] result = processChunk(chunk, columnIndex);
+                    int[] result = processChunk(chunk, columnIndex, seenRegions, failedRegions);
                     totalProcessed += result[0];
+                    failedRows += result[1];
                 } catch (Exception e) {
                     failedChunks++;
                     failedRows += chunk.size();
@@ -143,16 +182,36 @@ public class FoursquareSeeder {
                 }
             }
 
+            boolean tooManyFailedRows = failedRows > (totalProcessed + failedRows) * MAX_FAILED_ROW_RATIO;
+            int deactivated = 0;
+            if (failedChunks > 0 || tooManyFailedRows) {
+                log.warn("[FoursquareSeeder] 적재 실패(청크 {}개, 행 {}건)가 있어 빠진 장소 비활성화를 건너뜀",
+                        failedChunks, failedRows);
+            } else {
+                // 실패 행이 있는 지역은 그 행의 saved_at이 옛 값이라 멀쩡한 장소를 끌 수 있다.
+                seenRegions.removeAll(failedRegions);
+                try {
+                    deactivated = deactivateStalePlaces(seenRegions, history.getStartedAt().minus(STALE_CLOCK_MARGIN));
+                } catch (RuntimeException e) {
+                    history.fail("빠진 장소 비활성화 실패: " + e.getMessage());
+                    historyRepository.save(history);
+                    throw new BatchStageFailed("Foursquare 빠진 장소 비활성화 실패: " + e.getMessage());
+                }
+            }
+
             // upsert 반환값은 insert/update를 구분하지 않아 DB에서 직접 센다
             int inserted = placeRepository.countInsertedSince(history.getStartedAt());
             int updated = placeRepository.countUpdatedSince(history.getStartedAt());
-            history.complete(totalProcessed, inserted, updated, failedRows, failedChunks);
+            history.complete(totalProcessed, inserted, updated, deactivated, failedRows, failedChunks);
             historyRepository.save(history);
 
-            log.info("[FoursquareSeeder] 완료: processed={}, failedChunks={}, failedRows={}",
-                    totalProcessed, failedChunks, failedRows);
+            log.info("[FoursquareSeeder] 완료: processed={}, deactivated={}, failedChunks={}, failedRows={}",
+                    totalProcessed, deactivated, failedChunks, failedRows);
             if (failedChunks > 0) {
                 throw new BatchStageFailed("Foursquare 청크 " + failedChunks + "개(" + failedRows + "건) 실패");
+            }
+            if (tooManyFailedRows) {
+                throw new BatchStageFailed("Foursquare 실패 행 " + failedRows + "건(처리 " + totalProcessed + "건)");
             }
 
         } catch (IOException e) {
@@ -163,44 +222,116 @@ public class FoursquareSeeder {
         }
     }
 
-    @Transactional
+    /** 테스트용. 지역 기록 없이 청크를 처리한다. */
     public int[] processChunk(List<String[]> rows, Map<String, Integer> columnIndex) {
+        return processChunk(rows, columnIndex, new HashSet<>(), new HashSet<>());
+    }
+
+    /**
+     * 청크를 한 트랜잭션으로 upsert한다(행마다 커밋하면 왕복·fsync가 행 수만큼 든다).
+     * 실패하면 행마다 따로 다시 넣어 문제 행만 실패로 센다. 연결·시간 초과는 행마다 다시 해도
+     * 같은 시간만큼 기다리므로 그대로 던져 청크 실패로 센다.
+     *
+     * @param seenRegions   적재된 행의 (국가, 지역)을 더한다
+     * @param failedRegions 실패한 행의 (국가, 지역)을 더한다
+     * @return {처리 행 수, 실패 행 수}
+     */
+    int[] processChunk(List<String[]> rows, Map<String, Integer> columnIndex,
+                       Set<RegionKey> seenRegions, Set<RegionKey> failedRegions) {
         if (rows == null || rows.isEmpty()) return new int[]{0, 0};
-
-        List<FoursquareRecord> records = rows.stream()
-                .map(row -> mapToRecord(row, columnIndex))
-                .filter(Objects::nonNull)
-                .toList();
-
-        if (records.isEmpty()) return new int[]{0, 0};
 
         // CSV 내부 중복은 fsq_place_id 기준으로 먼저 나온 행을 남긴다
         Map<String, FoursquareRecord> dedupMap = new LinkedHashMap<>();
-        for (FoursquareRecord r : records) {
-            dedupMap.putIfAbsent(r.fsqPlaceId(), r);
+        rows.stream()
+                .map(row -> mapToRecord(row, columnIndex))
+                .filter(Objects::nonNull)
+                .forEach(r -> dedupMap.putIfAbsent(r.fsqPlaceId(), r));
+        if (dedupMap.isEmpty()) return new int[]{0, 0};
+        Collection<FoursquareRecord> records = dedupMap.values();
+
+        try {
+            transactionOperations.executeWithoutResult(status -> records.forEach(this::upsert));
+            records.forEach(r -> seenRegions.add(RegionKey.of(r)));
+            return new int[]{records.size(), 0};
+        } catch (DataAccessResourceFailureException | TransientDataAccessException
+                 | CannotCreateTransactionException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            log.warn("[FoursquareSeeder] 청크 일괄 처리 실패, 행 단위로 다시 시도: {}", e.getMessage());
         }
 
-        int processed = 0;
-        for (FoursquareRecord record : dedupMap.values()) {
-            // 청크 간·동시 실행 중복은 DB upsert가 처리한다
-            placeRepository.upsertFoursquarePlace(
-                    record.fsqPlaceId(),
-                    record.name(),
-                    record.address() != null ? record.address() : "",
-                    record.latitude(),
-                    record.longitude(),
-                    record.country(),
-                    record.region(),
-                    record.category(),
-                    toPostgresArray(record.tags()),
-                    record.description() != null ? record.description() : "",
-                    record.sourceUrl()
-            );
-            processed++;
+        int processed = 0, failed = 0, consecutive = 0;
+        for (FoursquareRecord record : records) {
+            try {
+                transactionOperations.executeWithoutResult(status -> upsert(record));
+                seenRegions.add(RegionKey.of(record));
+                processed++;
+                consecutive = 0;
+            } catch (RuntimeException e) {
+                failed++;
+                failedRegions.add(RegionKey.of(record));
+                if (++consecutive >= MAX_CONSECUTIVE_ROW_FAILURES) {
+                    throw new IllegalStateException("행 단위 재시도 연속 " + consecutive + "건 실패", e);
+                }
+                log.warn("[FoursquareSeeder] 행 실패 {}: {}", record.fsqPlaceId(), e.getMessage());
+            }
         }
+        return new int[]{processed, failed};
+    }
 
-        // upsert는 insert/update를 구분하지 않아 처리 건수만 돌려준다
-        return new int[]{processed, 0};
+    private void upsert(FoursquareRecord record) {
+        placeRepository.upsertFoursquarePlace(
+                record.fsqPlaceId(),
+                record.name(),
+                record.address() != null ? record.address() : "",
+                record.latitude(),
+                record.longitude(),
+                record.country(),
+                record.region(),
+                record.category(),
+                toPostgresArray(record.tags()),
+                record.description() != null ? record.description() : "",
+                record.sourceUrl()
+        );
+    }
+
+    /**
+     * 이번 적재에 나온 (국가, 지역)에서, 이번에 다시 나오지 않은 활성 Foursquare 행을 끈다.
+     * 폐업 표시·신고·오래된 행·상한 밖 행이 추출에서 빠져도 upsert만으로는 꺼지지 않기 때문이다.
+     * 이번 추출에 없는 국가·지역(단계 적재 중인 나라, 추출 대상이 아닌 옛 지역)은 건드리지 않는다.
+     *
+     * @return 끈 행 수(dry-run이면 0)
+     */
+    int deactivateStalePlaces(Set<RegionKey> regions, OffsetDateTime seenSince) {
+        int deactivated = 0, skipped = 0;
+        List<RegionKey> sorted = regions.stream()
+                .sorted(Comparator.comparing(RegionKey::country).thenComparing(RegionKey::region))
+                .toList();
+        for (RegionKey key : sorted) {
+            int stale = placeRepository.countStaleFoursquare(key.country(), key.region(), seenSince);
+            if (stale == 0) continue;
+            int existing = placeRepository.countExistingFoursquare(key.country(), key.region(), seenSince);
+            double ratio = (double) stale / existing;
+            if (!deactivateStale) {
+                log.info("[FoursquareSeeder] 빠진 장소(미적용) {} {}: {}/{}건 ({}%)",
+                        key.country(), key.region(), stale, existing, Math.round(ratio * 100));
+            } else if (ratio > maxStaleRatio) {
+                skipped++;
+                log.warn("[FoursquareSeeder] 빠진 장소 비율 초과로 건너뜀 {} {}: {}/{}건",
+                        key.country(), key.region(), stale, existing);
+            } else {
+                int n;
+                do {
+                    n = placeRepository.deactivateStaleFoursquare(
+                            key.country(), key.region(), seenSince, DEACTIVATE_BATCH_SIZE);
+                    deactivated += n;
+                } while (n == DEACTIVATE_BATCH_SIZE);
+            }
+        }
+        if (deactivateStale) {
+            log.info("[FoursquareSeeder] 빠진 장소 비활성화 {}건, 비율 초과로 건너뛴 지역 {}곳", deactivated, skipped);
+        }
+        return deactivated;
     }
 
     /**
@@ -269,9 +400,9 @@ public class FoursquareSeeder {
             if (sourceUrl != null) description = null;
         }
 
-        return new FoursquareRecord(fsqPlaceId.trim(), name.trim(), latitude, longitude,
+        return new FoursquareRecord(fsqPlaceId.trim(), truncate(name.trim(), MAX_NAME_LENGTH), latitude, longitude,
                 country.trim(), truncate(region.trim(), 255), truncate(category.trim(), 255),
-                address != null ? address.trim() : null, tags, description, sourceUrl);
+                address != null ? truncate(address.trim(), MAX_ADDRESS_LENGTH) : null, tags, description, sourceUrl);
     }
 
     private String truncate(String value, int maxLength) {

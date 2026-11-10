@@ -302,7 +302,8 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     @Transactional
     @Query(value = """
             UPDATE places
-            SET latitude = :lat, longitude = :lng, active = true, deactivated_at = NULL, updated_at = now()
+            SET latitude = :lat, longitude = :lng, active = true, deactivated_at = NULL, deactivated_reason = NULL,
+                updated_at = now()
             WHERE name = :name AND region = :region AND source = 'tourapi'
               AND ((latitude = 0 AND longitude = 0)
                    OR (abs(latitude - 19.694) < 0.01 AND abs(longitude - 117.993) < 0.01))
@@ -503,6 +504,47 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             """, nativeQuery = true)
     int countUpdatedSince(@Param("since") OffsetDateTime since);
 
+    /** 이번 적재(seenSince) 전부터 있던 활성 Foursquare 행 수. 빠진 비율의 분모다. */
+    @Query(value = """
+            SELECT count(*) FROM places
+            WHERE source = 'foursquare' AND active AND country = :country AND region = :region
+              AND created_at < :seenSince
+            """, nativeQuery = true)
+    int countExistingFoursquare(@Param("country") String country, @Param("region") String region,
+                                @Param("seenSince") OffsetDateTime seenSince);
+
+    /**
+     * 이번 적재(seenSince 이후 upsert)에서 다시 나오지 않은 활성 Foursquare 행 수.
+     * Wikidata·TourAPI와 연결된 행은 다른 시더가 중복 판정에 써서 끄면 대표 명소가 다시 들어오지 않으므로 뺀다.
+     */
+    @Query(value = """
+            SELECT count(*) FROM places
+            WHERE source = 'foursquare' AND active AND country = :country AND region = :region
+              AND saved_at < :seenSince AND wikidata_id IS NULL AND tourapi_content_id IS NULL
+            """, nativeQuery = true)
+    int countStaleFoursquare(@Param("country") String country, @Param("region") String region,
+                             @Param("seenSince") OffsetDateTime seenSince);
+
+    /**
+     * 위 행을 최대 limit건 deactivated_reason = 'stale'로 끈다. 다음 적재에 다시 나오면 upsert가 되살린다.
+     * 한 번에 다 끄면 생성 경로의 후보 기록(markCandidateAppearance)이 행 잠금을 오래 기다린다.
+     *
+     * @return 끈 행 수. limit보다 작으면 남은 대상이 없다.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places
+            SET active = false, deactivated_at = now(), deactivated_reason = 'stale', updated_at = now()
+            WHERE id IN (
+                SELECT id FROM places
+                WHERE source = 'foursquare' AND active AND country = :country AND region = :region
+                  AND saved_at < :seenSince AND wikidata_id IS NULL AND tourapi_content_id IS NULL
+                LIMIT :limit)
+            """, nativeQuery = true)
+    int deactivateStaleFoursquare(@Param("country") String country, @Param("region") String region,
+                                  @Param("seenSince") OffsetDateTime seenSince, @Param("limit") int limit);
+
     /**
      * Foursquare 시딩용 네이티브 upsert. fsq_place_id(FSQ 전역 고유 ID) 충돌 시 메타데이터만 갱신하고 핵심 필드는 보존한다.
      * 주소가 없는 체인점도 지점별 fsq_place_id로 구분되며, 청크 간·동시 실행 중복을 DB가 처리한다.
@@ -511,7 +553,10 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * LLM 보강 결과보다 항상 저품질이다. name도 CSV 영문명이 기존 한글명을 되돌리지 않도록 CASE 가드를 둔다.
      *
      * <p>카테고리가 바뀌면 임베딩·역할·음식 종류·보강 시각을 비운다. 전부 옛 카테고리 기준이라
-     * 남겨 두면 다음 배치가 다시 만들지 않는다.
+     * 남겨 두면 다음 배치가 다시 만들지 않는다. 이름이 바뀌면 임베딩·음식 종류·보강 시각·한국어 이름을 비운다.
+     *
+     * <p>월간 추출에서 빠져 꺼진 행(deactivated_reason = 'stale')이 다시 나오면 되살린다.
+     * 정책으로 끈 행('policy')은 그대로 둔다.
      */
     @Modifying
     @Transactional
@@ -532,13 +577,23 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 region = EXCLUDED.region,
                 category = EXCLUDED.category,
                 embedding = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                                      OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
                                  THEN NULL ELSE places.embedding END,
                 place_role = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
                                   THEN NULL ELSE places.place_role END,
                 cuisine = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                                    OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
                                THEN NULL ELSE places.cuisine END,
                 enriched_at = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                                        OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
                                    THEN NULL ELSE places.enriched_at END,
+                name_ko = CASE WHEN places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name
+                               THEN NULL ELSE places.name_ko END,
+                active = CASE WHEN places.deactivated_reason = 'stale' THEN true ELSE places.active END,
+                deactivated_at = CASE WHEN places.deactivated_reason = 'stale' THEN NULL
+                                      ELSE places.deactivated_at END,
+                deactivated_reason = CASE WHEN places.deactivated_reason = 'stale' THEN NULL
+                                          ELSE places.deactivated_reason END,
                 tags = CASE WHEN places.enriched_at IS NOT NULL THEN places.tags
                             ELSE EXCLUDED.tags END,
                 description = CASE WHEN places.enriched_at IS NOT NULL THEN places.description
