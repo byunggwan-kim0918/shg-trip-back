@@ -24,15 +24,16 @@ resource "aws_db_subnet_group" "main" {
   }
 }
 
-# TODO: 장소 전량 보강이 끝나면 db.t3.micro로 내린다. micro는 HNSW 빌드·대량 갱신 중 EBS 버스트가 바닥난다.
+# TODO: 해외 장소 적재가 끝나면 db.t4g.medium으로 바꾼다. 벡터 인덱스가 1GB를 넘어 small(2GB)로는 못 담는다.
 resource "aws_db_instance" "main" {
-  identifier        = "shgtrip-db"
-  engine            = "postgres"
-  engine_version    = "18"
-  instance_class    = "db.t3.medium"
-  allocated_storage = 20
-  storage_type      = "gp3"
-  storage_encrypted = true
+  identifier            = "shgtrip-db"
+  engine                = "postgres"
+  engine_version        = "18"
+  instance_class        = "db.t3.medium"
+  allocated_storage     = 20
+  max_allocated_storage = 50
+  storage_type          = "gp3"
+  storage_encrypted     = true
 
   db_name  = "trip"
   username = var.db_username

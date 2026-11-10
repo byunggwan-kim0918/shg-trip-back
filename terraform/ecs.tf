@@ -46,12 +46,13 @@ resource "aws_cloudwatch_log_group" "web" {
 }
 
 # ── FSQ 추출기 Task Definition ────────────────────────────────────────────────
+# 해외 4개국 행(약 600만, 일본 450만)을 DuckDB에 올려 여행지 반경으로 배정한다. 4GB에서는 스필이 길어져 시간 제한에 걸린다.
 resource "aws_ecs_task_definition" "fsq_extractor" {
   family                   = "${var.project}-fsq-extractor"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = "1024"
-  memory                   = "4096"
+  cpu                      = "2048"
+  memory                   = "16384"
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.fsq_extractor_task.arn
 
