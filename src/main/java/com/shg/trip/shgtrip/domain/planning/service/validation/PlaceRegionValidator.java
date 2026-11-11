@@ -1,9 +1,12 @@
 package com.shg.trip.shgtrip.domain.planning.service.validation;
 
+import com.shg.trip.shgtrip.domain.place.destination.Destination;
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -13,12 +16,16 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 검증 기준은 enrich가 산출한 {@link VectorEnrichedInput#regions()} 하나뿐이라 여기서 별도 지역 매핑을 두지 않는다.
- * 오탐을 막으려고 regions가 비었거나 KR이 아니거나 장소 region이 null이면 건너뛰고, regionAllocation 지역은 모두 허용한다.
+ * 검증 기준은 enrich가 산출한 {@link VectorEnrichedInput#regions()}다. 오탐을 막으려고 regions가 비었거나 장소 region이
+ * null이면 건너뛰고, regionAllocation 지역은 모두 허용한다. 해외는 같은 상위 여행지(destinations.json parent)에 묶인
+ * 여행지를 모두 허용한다(타이베이 여행의 지우펀, 교토 여행의 나라 장소).
  */
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class PlaceRegionValidator {
+
+    private final Destinations destinations;
 
     /**
      * 선택 장소의 지역이 여행지 지역과 다르면 {@link BusinessException}을 던진다.
@@ -28,13 +35,6 @@ public class PlaceRegionValidator {
      */
     public void validate(List<Place> selectedPlaces, VectorEnrichedInput enrichedInput) {
         if (selectedPlaces == null || selectedPlaces.isEmpty()) {
-            return;
-        }
-
-        // 해외는 place.region 포맷이 정의되지 않아 검증하지 않는다.
-        String country = enrichedInput.country();
-        if (country != null && !"KR".equalsIgnoreCase(country)) {
-            log.debug("지역 검증 스킵(해외): country={}", country);
             return;
         }
 
@@ -89,6 +89,11 @@ public class PlaceRegionValidator {
                         .forEach(allowed::add);
             }
         }
+        Set<String> roots = allowed.stream().map(destinations::rootOf).collect(Collectors.toSet());
+        destinations.all().stream()
+                .map(Destination::name)
+                .filter(name -> roots.contains(destinations.rootOf(name)))
+                .forEach(allowed::add);
         return allowed;
     }
 }

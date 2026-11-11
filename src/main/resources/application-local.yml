@@ -63,6 +63,8 @@ oauth:
     redirect-uri: http://localhost:3000/callback/naver
 
 planning:
+  # 일정을 만들어 주는 국가(한국은 늘 포함). 장소 적재·검증을 마친 나라만 넣는다
+  enabled-countries: ${PLANNING_ENABLED_COUNTRIES:KR,JP}
   validation:
     # Soft 검증 통과 기준 점수 (0~100)
     soft-threshold: 70

@@ -111,6 +111,26 @@ class InvariantCheckerTest {
             assertThat(status.totalKm()).isCloseTo(200.0 / 1.3, org.assertj.core.data.Offset.offset(1.0));
             assertThat(status.withinBudget()).isFalse();
         }
+
+        @Test
+        @DisplayName("해외 도착 허브에서 나오는 구간과 출발 허브로 가는 구간은 하루 거리에 넣지 않는다. 국내 허브는 넣는다")
+        void excludesOverseasHubTransfers() {
+            List<DayState> days = List.of(day(1, null));
+            List<StepData> overseas = List.of(
+                    stepIn(1, "10:00", "10:30", "Narita International Airport", AIRPORT, null, "JP"),
+                    stepIn(1, "12:00", "13:00", "식당", RESTAURANT, new BigDecimal("78.0"), "JP"),
+                    stepIn(1, "13:30", "15:00", "명소", ATTRACTION, new BigDecimal("13.0"), "JP"),
+                    stepIn(1, "17:00", "17:30", "Haneda Airport", AIRPORT, new BigDecimal("26.0"), "JP"));
+            List<StepData> domestic = overseas.stream()
+                    .map(st -> stepIn(1, st.startTime(), st.endTime(), st.place().name(), st.place().category(),
+                            st.transportationDistance(), "KR"))
+                    .toList();
+
+            assertThat(checker.evaluate(days, overseas, "car", List.of(), "normal").get(1).totalKm())
+                    .isCloseTo(13.0 / 1.3, org.assertj.core.data.Offset.offset(0.1));
+            assertThat(checker.evaluate(days, domestic, "car", List.of(), "normal").get(1).totalKm())
+                    .isCloseTo(117.0 / 1.3, org.assertj.core.data.Offset.offset(0.1));
+        }
     }
 
     @Nested
@@ -257,8 +277,13 @@ class InvariantCheckerTest {
 
     private static StepData stepWithDistance(int day, String start, String end, String name,
                                              String category, BigDecimal distanceKm) {
+        return stepIn(day, start, end, name, category, distanceKm, "KR");
+    }
+
+    private static StepData stepIn(int day, String start, String end, String name,
+                                   String category, BigDecimal distanceKm, String country) {
         return new StepData(0, day, start, end,
-                new PlaceData(name, name + " 주소", category, "Jeju", "KR"),
+                new PlaceData(name, name + " 주소", category, "Jeju", country),
                 List.of(), distanceKm != null ? "CAR" : null, null, distanceKm, null, null, null);
     }
 }

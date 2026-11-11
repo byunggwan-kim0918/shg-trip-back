@@ -10,6 +10,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.TransportationHub;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import lombok.extern.slf4j.Slf4j;
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
@@ -33,17 +34,21 @@ public class OptimizedClaudeAIService {
     private final AnthropicProperties anthropicProperties;
     private final ObjectMapper objectMapper;
     private final ClaudeAIService fallbackService;
+    private final Destinations destinations;
     private final String enrichPromptTemplate;
 
     public OptimizedClaudeAIService(AnthropicClient anthropicClient,
                                      AnthropicProperties anthropicProperties,
                                      ObjectMapper objectMapper,
-                                     ClaudeAIService fallbackService) {
+                                     ClaudeAIService fallbackService,
+                                     Destinations destinations) {
         this.anthropicClient = anthropicClient;
         this.anthropicProperties = anthropicProperties;
         this.objectMapper = objectMapper;
         this.fallbackService = fallbackService;
-        this.enrichPromptTemplate = loadPromptTemplateSafe("prompts/enrich-input.txt");
+        this.destinations = destinations;
+        this.enrichPromptTemplate = loadPromptTemplateSafe("prompts/enrich-input.txt")
+                .replace(EnrichDestinations.PLACEHOLDER, EnrichDestinations.promptLines(destinations));
     }
 
     /**
@@ -110,7 +115,7 @@ public class OptimizedClaudeAIService {
 
             String normalizedDestination = getStringOrDefault(parsed, "normalizedDestination", input.destination());
             String country = getStringOrDefault(parsed, "country", "");
-            List<String> regions = getListOrDefault(parsed, "regions");
+            List<String> regions = EnrichDestinations.canonicalRegions(getListOrDefault(parsed, "regions"), destinations);
             List<String> searchTags = getListOrDefault(parsed, "searchTags");
             String budgetRange = getStringOrDefault(parsed, "budgetRange", "MEDIUM");
             String seasonContext = getStringOrDefault(parsed, "seasonContext", "");
@@ -119,7 +124,7 @@ public class OptimizedClaudeAIService {
             Map<String, List<String>> regionAllocation = null;
             Object regionAllocObj = parsed.get("regionAllocation");
             if (regionAllocObj instanceof Map) {
-                regionAllocation = (Map<String, List<String>>) regionAllocObj;
+                regionAllocation = EnrichDestinations.canonicalAllocation((Map<?, ?>) regionAllocObj, destinations);
             }
 
             TransportationHub transportationHub = null;

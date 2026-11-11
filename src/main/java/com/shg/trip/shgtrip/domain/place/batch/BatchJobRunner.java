@@ -26,6 +26,7 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     private final BatchEnrichScheduler batchEnrichScheduler;
     private final WikidataSitelinksJob wikidataSitelinksJob;
     private final WikidataLandmarkSeeder wikidataLandmarkSeeder;
+    private final GatewaySeeder gatewaySeeder;
     private final NameKoOverrideJob nameKoOverrideJob;
     private final PlaceRoleBackfillJob placeRoleBackfillJob;
     private final TourApiDetailJob tourApiDetailJob;
@@ -59,6 +60,10 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     @Value("${batch.foursquare.enabled:true}")
     private boolean foursquareEnabled;
 
+    /** Wikidata 매칭 앞에 돌아야 새 관문도 같은 실행에서 보강 대상이 된다. 외부 호출이 없다. */
+    @Value("${batch.gateways.enabled:true}")
+    private boolean gatewaysEnabled;
+
     /** 보강·Wikidata 매칭 뒤, 임베딩 전에 돌아야 보정한 이름이 같은 실행의 임베딩에 들어간다. */
     @Value("${batch.name-ko-overrides.enabled:true}")
     private boolean nameKoOverridesEnabled;
@@ -89,6 +94,11 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
         if (tourApiDetailEnabled) {
             log.info("[1/4-공식] TourAPI 공식 영업시간 연결 시작");
             stage("[1/4-공식] TourAPI 공식 영업시간 연결", tourApiDetailJob::run);
+        }
+
+        if (gatewaysEnabled) {
+            log.info("[1/4-관문] 해외 관문 적재 시작");
+            stage("[1/4-관문] 해외 관문 적재", gatewaySeeder::seed);
         }
 
         // 인기도 매칭보다 먼저 돌아야 새로 넣은 명소도 같은 실행에서 인기도·보강 대상이 된다.

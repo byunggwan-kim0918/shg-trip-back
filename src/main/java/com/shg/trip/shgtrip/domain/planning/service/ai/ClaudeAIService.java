@@ -7,6 +7,7 @@ import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.Tool;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.planning.dto.EnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.ItineraryData;
@@ -46,12 +47,14 @@ public class ClaudeAIService implements AIService {
     public ClaudeAIService(AnthropicClient anthropicClient,
                            AnthropicProperties anthropicProperties,
                            PlanningProperties planningProperties,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           Destinations destinations) {
         this.anthropicClient = anthropicClient;
         this.anthropicProperties = anthropicProperties;
         this.planningProperties = planningProperties;
         this.objectMapper = objectMapper;
-        this.enrichInputPromptTemplate = loadPromptTemplate("prompts/enrich-input.txt");
+        this.enrichInputPromptTemplate = loadPromptTemplate("prompts/enrich-input.txt")
+                .replace(EnrichDestinations.PLACEHOLDER, EnrichDestinations.promptLines(destinations));
         this.generateItineraryPromptTemplate = loadPromptTemplate("prompts/generate-itinerary.txt");
         this.enhanceItineraryPromptTemplate = loadPromptTemplate("prompts/enhance-itinerary.txt");
         this.regenerateItineraryPromptTemplate = loadPromptTemplate("prompts/regenerate-itinerary.txt");

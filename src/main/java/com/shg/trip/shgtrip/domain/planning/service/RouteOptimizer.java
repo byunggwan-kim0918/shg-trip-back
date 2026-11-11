@@ -783,9 +783,9 @@ public class RouteOptimizer {
 
         double[] limits = distanceLimits(transportPref, cfg == null ? null : cfg.pace);
         List<double[]> path = new ArrayList<>();
-        // 허브를 빼고 재면 마지막 날 공항 왕복이 빠져 예산 안으로 오판한다.
+        // 국내 허브를 빼고 재면 마지막 날 공항 왕복이 빠져 예산 안으로 오판한다.
         double[] arrivalHub = day.arrivalHubIndex != null
-                ? coordsOf(byIndex(candidates, day.arrivalHubIndex)) : null;
+                ? budgetCoords(byIndex(candidates, day.arrivalHubIndex)) : null;
         if (arrivalHub != null) path.add(arrivalHub);
         for (Integer idx : day.placeIndices) {
             double[] c = coordsOf(byIndex(candidates, idx));
@@ -794,7 +794,7 @@ public class RouteOptimizer {
         double[] hotel = accommodationCoords(day, candidates);
         if (hotel != null) path.add(hotel);
         double[] departureHub = day.departureHubIndex != null
-                ? coordsOf(byIndex(candidates, day.departureHubIndex)) : null;
+                ? budgetCoords(byIndex(candidates, day.departureHubIndex)) : null;
         if (departureHub != null) path.add(departureHub);
         if (path.isEmpty()) return false;
 
@@ -4067,7 +4067,7 @@ public class RouteOptimizer {
         double[] limits = distanceLimits(transportPref, cfg == null ? null : cfg.pace);
         double legCap = limits[0];
         double dayCap = limits[1];
-        double[] originCoord = coordsOf(origin);
+        double[] originCoord = budgetCoords(origin);
 
         for (int guard = 0; guard < 2 && seq.size() > 1; guard++) {
             // 하루 실주행 = (출발지 → 첫 스텝) + 스텝 간 이동.
@@ -4077,7 +4077,12 @@ public class RouteOptimizer {
                 coords.add(originCoord);
                 offset = 1;
             }
-            for (Integer i : seq) coords.add(coordsOf(byIndex(candidates, i)));
+            // 해외 관문은 null 좌표로 두어 위치는 유지하고 그 구간만 합계에서 뺀다.
+            for (Integer i : seq) {
+                PlaceCandidate c = byIndex(candidates, i);
+                boolean hub = i.equals(day.arrivalHubIndex) || i.equals(day.departureHubIndex);
+                coords.add(hub ? budgetCoords(c) : coordsOf(c));
+            }
 
             double total = 0;
             double worstLeg = 0;
@@ -5311,6 +5316,11 @@ public class RouteOptimizer {
         // subRegion/description은 저장에 쓰이지 않고 story 생성(Haiku) 컨텍스트로만 전달된다.
         return new PlaceData(c.name(), c.address(), c.category(), c.region(), c.country(),
                 c.subRegion(), c.description());
+    }
+
+    /** 하루 거리 예산에 넣을 좌표. 해외 관문은 null이다({@link InvariantChecker#isOverseasHubTransfer}와 같은 기준). */
+    private double[] budgetCoords(PlaceCandidate c) {
+        return c != null && InvariantChecker.isOverseasHub(c.country(), c.category()) ? null : coordsOf(c);
     }
 
     private double[] coordsOf(PlaceCandidate c) {

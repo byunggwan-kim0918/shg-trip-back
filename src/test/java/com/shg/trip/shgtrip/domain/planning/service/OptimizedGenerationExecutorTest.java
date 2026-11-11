@@ -16,10 +16,16 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 
@@ -68,6 +74,8 @@ class OptimizedGenerationExecutorTest {
 
     @BeforeEach
     void setUp() {
+        ReflectionTestUtils.setField(executor, "destinations",
+                com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath());
         ScheduledFuture<?> noopFuture = mock(ScheduledFuture.class);
         doReturn(noopFuture).when(sseHeartbeatScheduler)
                 .scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any());
@@ -103,7 +111,7 @@ class OptimizedGenerationExecutorTest {
                 "normal", "any", new BigDecimal("2000000"),
                 LocalDate.of(2025, 7, 1), LocalDate.of(2025, 7, 4),
                 "도쿄 여행", null,
-                "도쿄", "일본", List.of("시부야", "아사쿠사"),
+                "도쿄", "JP", List.of("시부야", "아사쿠사"),
                 List.of("맛집", "쇼핑", "라멘"), null,
                 "MEDIUM", "7월 여름 시즌", "도쿄 여행 컨텍스트",
                 null, null
@@ -193,19 +201,156 @@ class OptimizedGenerationExecutorTest {
         verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
     }
 
+    /** 끝난 스트림에 새 연결을 붙여 지금까지 보낸 이벤트 중 error 데이터를 꺼낸다. */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> sentError() throws IOException {
+        SseEmitter client = mock(SseEmitter.class);
+        emitter.attach(client);
+        ArgumentCaptor<Set<ResponseBodyEmitter.DataWithMediaType>> sent = ArgumentCaptor.forClass(Set.class);
+        verify(client, atLeastOnce()).send(sent.capture());
+        return sent.getAllValues().stream().flatMap(Set::stream)
+                .map(ResponseBodyEmitter.DataWithMediaType::getData)
+                .filter(d -> d instanceof Map<?, ?> m && "error".equals(m.get("status")))
+                .map(d -> (Map<String, Object>) d)
+                .findFirst().orElseThrow();
+    }
+
+    private VectorEnrichedInput withCountry(String country, List<String> regions) {
+        return withCountry(country, regions, vectorEnrichedInput.transportPref());
+    }
+
+    private VectorEnrichedInput withCountry(String country, List<String> regions, String transportPref) {
+        VectorEnrichedInput v = vectorEnrichedInput;
+        return new VectorEnrichedInput(v.destination(), v.themes(), v.categories(), v.pace(), transportPref,
+                v.budget(), v.startDate(), v.endDate(), v.description(), v.selectedPlaceIds(),
+                v.normalizedDestination(), country, regions, v.searchTags(), v.regionAllocation(), v.budgetRange(),
+                v.seasonContext(), v.enrichedContext(), v.transportationHub(), v.categorySearchQueries());
+    }
+
     @Test
-    @DisplayName("Fallback 경로: 카테고리 후보 부족 시 기존 executor로 위임")
+    @DisplayName("Fallback 경로: 국내 카테고리 후보 부족 시 기존 executor로 위임")
     void execute_fallbackPath_delegatesToExistingExecutor() {
+        VectorEnrichedInput korea = withCountry("KR", List.of("Busan"));
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
-        when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
-        when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
+        when(optimizedClaudeAIService.enrichInput(request)).thenReturn(EnrichmentResult.success(korea));
+        when(vectorSearchQueryService.search(any())).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.FALLBACK);
 
         executor.execute("job-3", request, 1L, emitter);
 
-        verify(fallbackExecutor).execute("job-3", request, 1L, emitter);
+        verify(fallbackExecutor).execute(eq("job-3"), any(), eq(1L), eq(emitter));
         verify(selectionCallGenerator, never()).selectPlaces(any(), any());
         verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
+    }
+
+    @Test
+    @DisplayName("해외는 후보가 부족해도 fallback으로 가지 않고 장소 부족으로 끝낸다(근교 여행지면 상위 도시 안내)")
+    void execute_overseasSparse_doesNotFallback() throws IOException {
+        VectorEnrichedInput jiufen = withCountry("TW", List.of("Jiufen"));
+        ReflectionTestUtils.setField(executor, "enabledCountries", List.of("KR", "JP", "TW"));
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(request)).thenReturn(EnrichmentResult.success(jiufen));
+        when(vectorSearchQueryService.search(any())).thenReturn(candidates);
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.FALLBACK);
+
+        executor.execute("job-tw", request, 1L, emitter);
+
+        verify(fallbackExecutor, never()).execute(anyString(), any(), anyLong(), any());
+        verify(generationPolicyService, never()).recordSuccess(anyLong());
+        assertThat(sentError()).containsEntry("errorCode", "PLANNING_005")
+                .containsEntry("message", "'지우펀'만으로는 장소가 적어 일정을 만들기 어려워요. '타이베이'까지 함께 넣어 다시 요청해 주세요.");
+        assertThat(emitter.isFinished()).isTrue();
+    }
+
+    @Test
+    @DisplayName("공개하지 않은 나라는 검색 전에 준비 중 안내로 끝내고 생성 한도를 쓰지 않는다")
+    void execute_countryNotEnabled_stopsBeforeSearch() throws IOException {
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(request))
+                .thenReturn(EnrichmentResult.success(withCountry("CN", List.of("Shanghai"))));
+
+        executor.execute("job-cn", request, 1L, emitter);
+
+        verify(vectorSearchQueryService, never()).search(any());
+        verify(generationPolicyService, never()).recordSuccess(anyLong());
+        verify(generationPolicyService, never()).recordValidationFailure(anyLong(), any());
+        assertThat(sentError()).containsEntry("errorCode", "PLANNING_005")
+                .containsEntry("message", "중국 여행지는 아직 준비 중이에요. 지금은 한국·일본 여행지로 일정을 만들 수 있어요.");
+        assertThat(emitter.isFinished()).isTrue();
+        assertThat(executor.notEnabledMessage("FR")).startsWith("이 여행지는 아직 준비 중이에요.");
+        assertThat(executor.isEnabledCountry("")).isTrue();
+        assertThat(executor.isEnabledCountry("kr")).isTrue();
+    }
+
+    @Test
+    @DisplayName("한국 면허로 운전할 수 없는 나라(중국·베트남)의 자동차 요청은 택시·차량 호출 기준이라고 알린다")
+    void execute_carWhereKoreanLicenseInvalid_addsNotice() {
+        ReflectionTestUtils.setField(executor, "enabledCountries", List.of("KR", "JP", "CN"));
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(request))
+                .thenReturn(EnrichmentResult.success(withCountry("CN", List.of("Shanghai"), "car")));
+        when(vectorSearchQueryService.search(any())).thenReturn(candidates);
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
+        when(selectionCallGenerator.selectPlaces(any(), anyList())).thenReturn(selectionOutput);
+        when(routeOptimizer.schedule(any(), anyList(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
+
+        executor.execute("job-car", request, 1L, emitter);
+
+        verify(indexResultMapper).toDraftItineraryData(eq(fixedSteps), any(), anyString(), anyList(),
+                argThat((List<String> notices) -> notices.contains(
+                        "중국은 한국 운전면허로 운전할 수 없어 택시·차량 호출로 다니는 기준으로 짰어요.")));
+        verify(vectorSearchQueryService).search(argThat(in -> "any".equals(in.transportPref())));
+        verify(routeOptimizer).schedule(any(), anyList(), argThat((ScheduleArgs a) -> "any".equals(a.transportPref())));
+    }
+
+    @Test
+    @DisplayName("같은 공항이 이미 후보에 있으면(3km 안 공항) 관문을 다시 붙이지 않는다")
+    void appendGateways_skipsAirportAlreadyInCandidates() {
+        PlaceCandidate fsqKobe = new PlaceCandidate(1, 48707L, "神戸空港 (Kobe Airport - UKB/RJBE)", "x",
+                "Travel and Transportation > Transport Hub > Airport > Airport Terminal", List.of(), "Kobe", "JP",
+                new BigDecimal("34.6328"), new BigDecimal("135.2239"), null, null, 0.5);
+        com.shg.trip.shgtrip.domain.place.entity.Place gatewayKobe = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                .id(901L).name("Kobe Airport").address("Kobe Airport, Kobe")
+                .latitude(new BigDecimal("34.6328")).longitude(new BigDecimal("135.2380"))
+                .category("Travel and Transportation > Transport Hub > Airport").region("Kobe").country("JP")
+                .source("gateway").placeRole("TRANSIT").build();
+        when(placeRepository.findGatewaysByRegions(List.of("Kobe"))).thenReturn(List.of(gatewayKobe));
+
+        assertThat(executor.appendGateways(List.of(fsqKobe), List.of("Kobe"))).containsExactly(fsqKobe);
+    }
+
+    @Test
+    @DisplayName("관문 없는 근교 여행지는 상위 여행지의 관문을 붙인다(호이안 → 다낭)")
+    void appendGateways_usesParentGatewaysForNearbyDestinations() {
+        when(placeRepository.findGatewaysByRegions(List.of("Da Nang", "Taipei"))).thenReturn(List.of());
+
+        executor.appendGateways(candidates, List.of("Hoi An", "Da Nang", "Taipei", "Jiufen"));
+
+        verify(placeRepository).findGatewaysByRegions(List.of("Da Nang", "Taipei"));
+    }
+
+    @Test
+    @DisplayName("해외 여행지의 관문(공항)을 후보 끝에 붙이고, 이미 있으면 다시 넣지 않는다")
+    void appendGateways_addsMissingGateways() {
+        com.shg.trip.shgtrip.domain.place.entity.Place narita = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                .id(900L).name("Narita International Airport").address("Narita International Airport, Tokyo")
+                .latitude(new BigDecimal("35.772")).longitude(new BigDecimal("140.3929"))
+                .category("Travel and Transportation > Transport Hub > Airport").region("Tokyo").country("JP")
+                .source("gateway").placeRole("TRANSIT").build();
+        com.shg.trip.shgtrip.domain.place.entity.Place already = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                .id(100L).name("센소지").address("x").latitude(BigDecimal.ONE).longitude(BigDecimal.ONE)
+                .category("관광").region("Tokyo").country("JP").source("gateway").build();
+        when(placeRepository.findGatewaysByRegions(List.of("Tokyo"))).thenReturn(List.of(narita, already));
+
+        List<PlaceCandidate> result = executor.appendGateways(candidates, List.of("Tokyo"));
+
+        assertThat(result).hasSize(candidates.size() + 1);
+        assertThat(result.get(result.size() - 1)).satisfies(c -> {
+            assertThat(c.name()).isEqualTo("Narita International Airport");
+            assertThat(c.index()).isEqualTo(candidates.size() + 1);
+            assertThat(c.placeRole()).isEqualTo("TRANSIT");
+        });
     }
 
     @Test

@@ -48,6 +48,55 @@ class DestinationsTest {
     }
 
     @Test
+    @DisplayName("표준명·한국어 이름은 findByName, 별칭(하위 구역·옛 이름)은 resolve로만 찾는다")
+    void findByNameAndResolve() {
+        assertThat(destinations.findByName("ho chi minh city")).get().extracting(Destination::name).isEqualTo("Ho Chi Minh City");
+        assertThat(destinations.findByName("호찌민")).get().extracting(Destination::name).isEqualTo("Ho Chi Minh City");
+        assertThat(destinations.findByName("Hochiminh City")).get().extracting(Destination::name).isEqualTo("Ho Chi Minh City");
+        assertThat(destinations.findByName("Saigon")).isEmpty();
+        assertThat(destinations.resolve("Saigon")).get().extracting(Destination::name).isEqualTo("Ho Chi Minh City");
+        assertThat(destinations.resolve("Asakusa")).get().extracting(Destination::name).isEqualTo("Tokyo");
+        assertThat(destinations.resolve("Busan")).isEmpty();
+        assertThat(destinations.resolve(null)).isEmpty();
+        assertThat(destinations.resolve("  ")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("표준명·한국어 이름·별칭은 각자 자기 여행지로만 찾아지고, 한국 도시명과 겹치지 않는다")
+    void namesAndAliasesResolveUniquely() {
+        assertThat(destinations.all()).allSatisfy(d -> {
+            assertThat(destinations.findByName(d.name())).as(d.name()).get().isEqualTo(d);
+            assertThat(destinations.findByName(d.nameKo())).as(d.nameKo()).get().isEqualTo(d);
+            assertThat(d.aliases()).allSatisfy(a -> assertThat(destinations.resolve(a)).as(a).get().isEqualTo(d));
+        });
+        for (String korea : List.of("Seoul", "Busan", "Jeju", "Incheon", "Daegu", "Daejeon", "Gwangju", "Suwon",
+                "Gangneung", "Gyeongju", "Jeonju", "Yeosu", "서울", "부산", "제주")) {
+            assertThat(destinations.resolve(korea)).as(korea).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("상위 여행지를 끝까지 따라간다. 목록에 없으면 그대로다")
+    void rootOf() {
+        assertThat(destinations.rootOf("Kinosaki")).isEqualTo("Osaka");
+        assertThat(destinations.rootOf("Nara")).isEqualTo("Osaka");
+        assertThat(destinations.rootOf("Osaka")).isEqualTo("Osaka");
+        assertThat(destinations.rootOf("Busan")).isEqualTo("Busan");
+    }
+
+    @Test
+    @DisplayName("관문 없는 근교 여행지는 상위 여행지에서 관문을 찾는다")
+    void gatewayRegion() {
+        assertThat(destinations.gatewayRegion("Hoi An")).isEqualTo("Da Nang");
+        assertThat(destinations.gatewayRegion("Hakone")).isEqualTo("Hakone");
+        assertThat(destinations.gatewayRegion("Tokyo")).isEqualTo("Tokyo");
+        assertThat(destinations.gatewayRegion("Busan")).isEqualTo("Busan");
+        assertThat(destinations.all()).filteredOn(d -> d.gateways().isEmpty() && d.parent() != null)
+                .allSatisfy(d -> assertThat(destinations.find(destinations.gatewayRegion(d.name())))
+                        .get().satisfies(p -> assertThat(p.gateways()).isNotEmpty()));
+    }
+
+    @Test
     @DisplayName("이름이 겹치면 읽지 않는다. 이름이 places.region 값이다")
     void rejectsDuplicateNames() {
         Destination a = new Destination("JP", "Osaka", "오사카", 34.69, 135.50, 20, "city", null, null, null);

@@ -1012,6 +1012,43 @@ class RouteOptimizerTest {
     }
 
     @Test
+    @DisplayName("해외 관문 공항 구간은 하루 거리 예산에 넣지 않아 시내 장소를 자르지 않는다")
+    void repairAndSchedule_overseasGatewayLegNotInDayBudget() {
+        String airport = "Travel and Transportation > Transport Hub > Airport";
+        List<PlaceCandidate> candidates = List.of(
+                overseas(place(1, "Narita International Airport", airport, 35.772, 140.3929, "Tokyo")),
+                overseas(place(2, "Imperial Palace", "Landmarks and Outdoors > Park", 35.681, 139.767, "Tokyo")),
+                overseas(place(3, "Lunch", "Dining and Drinking > Restaurant", 35.682, 139.768, "Tokyo")),
+                overseas(place(4, "Far Park", "Landmarks and Outdoors > Park", 35.861, 139.767, "Tokyo")),
+                overseas(place(5, "Dinner", "Dining and Drinking > Restaurant", 35.683, 139.766, "Tokyo")),
+                overseas(place(6, "Haneda Airport", airport, 35.5494, 139.7798, "Tokyo"))
+        );
+        // 공항 구간(57km + 15km)을 넣으면 하루 상한 92km를 넘어 왕복 40km인 Far Park가 잘린다
+        SelectionOutput selection = new SelectionOutput(
+                "concept",
+                List.of(new SelectionOutput.DayPlan(1, 1, List.of(2, 3, 4, 5), null, 6)),
+                List.of(),
+                List.of()
+        );
+        com.shg.trip.shgtrip.domain.planning.dto.TransportationHub hub =
+                new com.shg.trip.shgtrip.domain.planning.dto.TransportationHub(
+                        "Narita International Airport", "Haneda Airport", "AIRPORT");
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(
+                selection, candidates, "normal", "any", null, List.of(), hub, false);
+
+        assertThat(steps).extracting(s -> s.place().name())
+                .startsWith("Narita International Airport")
+                .endsWith("Haneda Airport")
+                .contains("Far Park");
+    }
+
+    private static PlaceCandidate overseas(PlaceCandidate c) {
+        return new PlaceCandidate(c.index(), c.placeId(), c.name(), c.address(), c.category(), c.tags(), c.region(),
+                "JP", c.latitude(), c.longitude(), c.description(), c.rating(), c.similarityScore());
+    }
+
+    @Test
     @DisplayName("하루를 마치는 숙소 도착 스텝의 체류는 30분이다 (90분 체류로 인한 23시대 종료 방지)")
     void repairAndSchedule_accommodationArrivalIsThirtyMinutes() {
         List<PlaceCandidate> candidates = List.of(
