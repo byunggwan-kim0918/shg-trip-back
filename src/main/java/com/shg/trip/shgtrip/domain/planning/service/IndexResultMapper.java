@@ -361,7 +361,7 @@ public class IndexResultMapper {
         return candidates
                 .filter(c -> "LODGING".equals(PlaceCategoryConstants.majorCategory(c.category())))
                 // 리뷰 없는 평점 5.0 스텁이 실제 호텔을 이기지 못하게 한다.
-                .filter(c -> PlaceCategoryConstants.isVisitableEntity(c.name(), c.address()))
+                .filter(c -> PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country()))
                 // 주소 게이트를 통과한 스텁도 있어 평점이 아니라 인기도(평점 × 리뷰 수)로 고른다.
                 .max(Comparator.<PlaceCandidate>comparingDouble(PlaceProminence::of)
                         .thenComparing(c -> c.rating() != null ? c.rating() : BigDecimal.ZERO))

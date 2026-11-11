@@ -357,6 +357,21 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("같은 장소의 출처별 행은 한국어 이름이 있는 행을 대표로 남긴다")
+    void dedupe_prefersRowWithKoreanName() {
+        PlaceCandidate fsq = new PlaceCandidate(1, 1L, "浅草寺", "東京都台東区浅草2-3-1",
+                "Community and Government > Spiritual Center > Buddhist Temple", List.of(), "Tokyo", "JP",
+                new BigDecimal("35.7148"), new BigDecimal("139.7967"), null, null, 0.5);
+        PlaceCandidate wiki = new PlaceCandidate(2, 2L, "浅草寺", "浅草寺, Tokyo",
+                "Community and Government > Spiritual Center > Buddhist Temple", List.of(), "Tokyo", "JP",
+                new BigDecimal("35.7148"), new BigDecimal("139.7967"), null, null, 0.5, null, null, null, null,
+                false, null, null, null, null, null, null, false, null, null, "센소지");
+
+        assertThat(executor.dedupePhysicalCandidates(List.of(fsq, wiki)))
+                .singleElement().extracting(PlaceCandidate::placeId).isEqualTo(2L);
+    }
+
+    @Test
     @DisplayName("관문 없는 근교 여행지는 상위 여행지의 관문을 붙인다(호이안 → 다낭)")
     void appendGateways_usesParentGatewaysForNearbyDestinations() {
         when(placeRepository.findGatewaysByRegions(List.of("Da Nang", "Taipei"))).thenReturn(List.of());
