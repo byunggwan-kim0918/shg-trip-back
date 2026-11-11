@@ -131,12 +131,23 @@ final class DiningEnrichment {
      * @param famous true일 때만 description을 요청한다
      */
     static String buildPrompt(String name, String category, String existingDescription, Venue venue, boolean famous) {
+        return buildPrompt(name, category, existingDescription, venue, famous, null, false);
+    }
+
+    /**
+     * @param overseasContext 해외 장소의 국가·여행지·주소 줄({@link OverseasEnrichment#contextLines}). 한국이면 null
+     * @param askNameKo       name_ko를 함께 묻는다
+     */
+    static String buildPrompt(String name, String category, String existingDescription, Venue venue, boolean famous,
+                              String overseasContext, boolean askNameKo) {
+        boolean overseas = overseasContext != null;
         StringBuilder sb = new StringBuilder();
         sb.append("다음 음식·음료 업장의 검색용 태그와 방문 시간대를 정리해주세요.\n\n");
         sb.append("장소 정보:\n");
         sb.append("- 이름: ").append(name).append("\n");
         sb.append("- 카테고리: ").append(category).append("\n");
         sb.append("- 업종: ").append(venue != null ? venue.label : "미정").append("\n");
+        if (overseas) sb.append(overseasContext);
         if (existingDescription != null && !existingDescription.isBlank()) {
             sb.append("- 기존 설명: ").append(existingDescription.strip()).append("\n");
         }
@@ -157,6 +168,10 @@ final class DiningEnrichment {
                 .append("커피, 차, 주스, 맥주, 와인, 전통주, 칵테일.\n")
                 .append("   예: \"아라 생선구이\" → 생선구이, 해산물 / \"OO삼겹살\" → 삼겹살, 돼지고기 / ")
                 .append("\"OO칼국수\" → 칼국수, 면요리 / \"OO쭈꾸미\" → 쭈꾸미, 해산물\n");
+        if (overseas) {
+            sb.append("   음식 이름은 한국에서 부르는 이름으로 쓴다. 해외 예: \"一蘭\" → 라멘, 면요리 / ")
+                    .append("\"海底捞火锅\" → 훠궈 / \"Phở Thìn\" → 쌀국수, 면요리 / \"鼎泰豐\" → 샤오롱바오, 중식\n");
+        }
         if (venue == null || venue == Venue.MEAL) {
             sb.append(n++).append(". 업종이 식당이면 카페·커피·디저트·빵·빙수·아이스크림이 들어간 태그를 쓰지 않는다.\n");
         }
@@ -169,7 +184,7 @@ final class DiningEnrichment {
                     .append("확인될 때 쓴다.\n");
         }
         sb.append(n++).append(". 홍보성·주관적 단어와 지명은 쓰지 않는다: ")
-                .append(String.join(", ", FILLER_WORDS)).append(", 서울·부산 같은 지역명.\n");
+                .append(String.join(", ", FILLER_WORDS)).append(overseas ? ", 도쿄·상하이 같은 지역명.\n" : ", 서울·부산 같은 지역명.\n");
         sb.append(n++).append(". tags는 0~5개. 확인되는 것이 없으면 빈 배열로 둔다.\n");
         sb.append(n++).append(". recommended_time_slots는 morning, afternoon, evening, night, all_day 중에서 고른다. ")
                 .append("기본은 ").append(venue != null ? String.join("·", venue.defaultSlots)
@@ -180,8 +195,12 @@ final class DiningEnrichment {
             sb.append(n++).append(". description에는 이 업장에 대해 널리 알려진 사실(역사·대표 메뉴)만 ")
                     .append("한국어 2문장 이내로 쓴다. 확실하지 않으면 null.\n");
         }
+        if (askNameKo) {
+            sb.append(n++).append(". ").append(OverseasEnrichment.nameKoRule().replace("\n", "\n   ")).append("\n");
+        }
 
         sb.append("\nJSON 형식으로만 응답해주세요 (다른 텍스트 없이):\n{\n");
+        if (askNameKo) sb.append("  \"name_ko\": \"...\",\n");
         if (venue == null) sb.append("  \"venue\": \"식당\",\n");
         sb.append("  \"tags\": [\"칼국수\", \"면요리\"],\n");
         sb.append("  \"recommended_time_slots\": [\"afternoon\", \"evening\"]");
@@ -197,12 +216,17 @@ final class DiningEnrichment {
      *                   모르는 값이면 식당으로 본다(총칭 카테고리가 "Restaurant"이므로).
      */
     static Result interpret(JsonNode root, Venue knownVenue, boolean famous) {
+        return interpret(root, knownVenue, famous, Set.of());
+    }
+
+    /** @param extraRegionNames 한국 지역명에 더해 태그에서 지울 이름(해외 장소의 나라·여행지) */
+    static Result interpret(JsonNode root, Venue knownVenue, boolean famous, Set<String> extraRegionNames) {
         Venue venue = knownVenue;
         if (venue == null) {
             venue = Venue.fromLabel(textOrNull(root.get("venue")));
             if (venue == null) venue = Venue.MEAL;
         }
-        List<String> tags = finalizeTags(venue, textList(root.get("tags")));
+        List<String> tags = finalizeTags(venue, textList(root.get("tags")), extraRegionNames);
         List<String> slots = sanitizeSlots(textList(root.get("recommended_time_slots")), venue);
         String description = famous ? textOrNull(root.get("description")) : null;
         return new Result(tags, description, slots, venue.defaultMinutes, roleOf(venue),
@@ -252,13 +276,21 @@ final class DiningEnrichment {
      * </ul>
      */
     static List<String> finalizeTags(Venue venue, List<String> modelTags) {
+        return finalizeTags(venue, modelTags, Set.of());
+    }
+
+    /** @param extraRegionNames 한국 지역명에 더해 지울 이름. 공백을 뺀 소문자로 비교한다 */
+    static List<String> finalizeTags(Venue venue, List<String> modelTags, Set<String> extraRegionNames) {
         LinkedHashSet<String> out = new LinkedHashSet<>();
         out.add(venue.label);
         out.addAll(venue.extraTags);
         for (String raw : modelTags) {
             if (out.size() >= MAX_TAGS) break;
             String tag = normalizeTag(raw);
-            if (tag == null || isFiller(tag) || isRegionName(tag)) continue;
+            if (tag == null || isFiller(tag) || isRegionName(tag)
+                    || extraRegionNames.contains(tag.replaceAll("\\s+", "").toLowerCase(Locale.ROOT))) {
+                continue;
+            }
             if (venue.isLightStop() ? PlaceCategoryConstants.isRestaurantTag(tag)
                     : PlaceCategoryConstants.isNonMealTag(tag)) {
                 continue;

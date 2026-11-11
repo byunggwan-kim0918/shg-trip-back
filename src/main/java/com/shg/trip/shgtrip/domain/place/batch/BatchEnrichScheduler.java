@@ -40,11 +40,13 @@ public class BatchEnrichScheduler {
 
     private static final String BATCH_API_URL = "https://api.anthropic.com/v1/messages/batches";
     private static final int MAX_RETRIES = 3;
-    private static final long POLL_INTERVAL_MS = 10_000;
+    /** 실행에서 제외한 실패 id 상한. 대상 조회의 NOT IN 바인드 파라미터 한도(pgjdbc 32767)보다 작아야 한다. */
+    static final int MAX_EXCLUDED_IDS = 20_000;
 
     /** 결과 JSONL 다운로드 타임아웃(분). 청크 1000건 기준 여유 있게 잡는다. */
     private static final int RESULTS_DOWNLOAD_TIMEOUT_MINUTES = 10;
-    private static final long MAX_POLL_DURATION_MS = 3_600_000;
+    /** 429의 Retry-After 상한(초). */
+    private static final long MAX_RETRY_AFTER_SEC = 120;
 
     private final PlaceRepository placeRepository;
     private final ObjectMapper objectMapper;
@@ -83,6 +85,26 @@ public class BatchEnrichScheduler {
     @Value("${batch.enrich.resume-batch-id:}")
     private String resumeBatchId;
 
+    /** 묶음 하나의 결과를 기다리는 상한. Batch API는 최대 24시간 걸린다. 끊긴 묶음은 resume-batch-id로 다시 반영한다. */
+    @Value("${batch.enrich.max-poll-duration:PT24H}")
+    private Duration maxPollDuration = Duration.ofHours(24);
+
+    /**
+     * 보강 단계 전체(결과 대기 포함)의 상한. 넘기면 배치 작업 제한(Step Functions 36h)에 걸려 뒤의 임베딩 단계가
+     * 돌지 않고, 내려 둔 근사 검색 인덱스도 다시 만들어지지 않는다.
+     */
+    @Value("${batch.enrich.max-duration:PT10H}")
+    private Duration maxDuration = Duration.ofHours(10);
+
+    @Value("${anthropic.batch.poll-interval-ms:10000}")
+    private long pollIntervalMs = 10_000;
+
+    /** 재시도 대기의 첫 단위. 시도마다 두 배로 늘린다. */
+    private long retryBaseMs = 1_000;
+
+    /** 이번 보강 단계의 끝 시각(epoch ms). 결과 대기도 이 시각에서 끊는다. */
+    private volatile long runDeadlineMs = Long.MAX_VALUE;
+
     /**
      * v1: 미보강 장소의 태그·설명·역할 보강. v2: 속성만 분류({@link AttributeEnrichment}).
      * 운영 배치가 켜져 있어 기본값은 v1이다. v2는 대상·비용이 달라 명시적으로 켤 때만 돈다.
@@ -94,20 +116,38 @@ public class BatchEnrichScheduler {
     @Value("${batch.enrich.parallel-chunks:5}")
     private int parallelChunks;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public BatchEnrichScheduler(PlaceRepository placeRepository, ObjectMapper objectMapper,
                                 EmbeddingBatchJob embeddingBatchJob) {
-        this.placeRepository = placeRepository;
-        this.objectMapper = objectMapper;
-        this.embeddingBatchJob = embeddingBatchJob;
-        this.httpClient = HttpClient.newBuilder()
+        this(placeRepository, objectMapper, embeddingBatchJob, HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(30))
                 // 결과 파일 URL은 서명된 스토리지로 302 리다이렉트되어, 따라가지 않으면 본문이 비어 온다
                 .followRedirects(HttpClient.Redirect.NORMAL)
-                .build();
+                .build());
     }
 
-    /** failedIds는 enriched_at이 여전히 NULL이라 다음 조회에 다시 잡히므로 이번 실행에서 제외할 ID다. */
-    record ChunkResult(int success, int failed, List<Long> failedIds) {
+    BatchEnrichScheduler(PlaceRepository placeRepository, ObjectMapper objectMapper,
+                         EmbeddingBatchJob embeddingBatchJob, HttpClient httpClient) {
+        this.placeRepository = placeRepository;
+        this.objectMapper = objectMapper;
+        this.embeddingBatchJob = embeddingBatchJob;
+        this.httpClient = httpClient;
+    }
+
+    /**
+     * failedIds는 enriched_at이 여전히 NULL이라 다음 조회에 다시 잡히므로 이번 실행에서 제외할 ID다.
+     *
+     * @param countsTowardAbort 연속 실패 중단에 세는가. 결과 대기 시간 초과와 전부 만료된 묶음은 API 키·모델
+     *                          오류가 아니라 세지 않는다
+     */
+    record ChunkResult(int success, int failed, List<Long> failedIds, boolean countsTowardAbort) {
+        ChunkResult(int success, int failed, List<Long> failedIds) {
+            this(success, failed, failedIds, true);
+        }
+    }
+
+    /** @param resultsUrl 결과 파일 URL, 끝나지 않았거나 실패면 null */
+    record PollResult(String resultsUrl, boolean timedOut) {
     }
 
     /**
@@ -120,6 +160,12 @@ public class BatchEnrichScheduler {
     public void enrich() {
         if (anthropicApiKey == null || anthropicApiKey.isBlank()) {
             log.warn("Anthropic API key가 설정되지 않았습니다. 배치 보강을 건너뜁니다.");
+            return;
+        }
+
+        List<String> resumeIds = parseList(resumeBatchId);
+        if (!resumeIds.isEmpty()) {
+            resume(resumeIds);
             return;
         }
 
@@ -142,14 +188,19 @@ public class BatchEnrichScheduler {
             if (waiting > 0) log.warn("Wikidata 매칭 전이라 보강을 미룬 장소 {}건", waiting);
         }
 
+        long exhausted = placeRepository.countEnrichExhausted();
+        if (exhausted > 0) log.warn("보강 응답이 3번 실패해 제외된 장소 {}건", exhausted);
+
+        long deadline = System.currentTimeMillis() + maxDuration.toMillis();
+        runDeadlineMs = deadline;
         int[] totals = new int[3];
         if (maxPerRegion > 0 && !regions.isEmpty()) {
             // 지역별로 따로 돌려야 큰 지역(서울)이 상한을 다 먹지 않는다.
             for (String region : regions) {
-                enrichScope(List.of(region), totals);
+                enrichScope(List.of(region), totals, deadline);
             }
         } else {
-            enrichScope(regions, totals);
+            enrichScope(regions, totals, deadline);
         }
 
         log.info("BatchEnrichScheduler 완료 - 보강 성공: {}건, 실패: {}건, 중단 {}회",
@@ -161,15 +212,18 @@ public class BatchEnrichScheduler {
     }
 
     /** 한 범위(지역 목록, 비면 전체)를 상한까지 보강한다. totals[0]=성공, [1]=실패, [2]=연속 실패 중단 누적. */
-    private void enrichScope(List<String> regions, int[] totals) {
+    private void enrichScope(List<String> regions, int[] totals, long deadline) {
         int processed = 0;
         int failed = 0;
         int consecutiveFailedChunks = 0;
         Set<Long> excludedIds = new HashSet<>();
-        // 재사용 batchId는 한 묶음의 결과라 여러 묶음에 나눠 쓸 수 없다.
-        int parallel = resumeBatchId != null && !resumeBatchId.isBlank() ? 1 : Math.max(1, parallelChunks);
+        int parallel = Math.max(1, parallelChunks);
 
         while (true) {
+            if (System.currentTimeMillis() >= deadline) {
+                log.warn("보강 시간 상한({}) 도달 - 남은 장소는 다음 실행에서 보강", maxDuration);
+                break;
+            }
             int pageSize = chunkSize * parallel;
             if (maxPerRegion > 0) {
                 int remaining = maxPerRegion - processed - failed;
@@ -195,7 +249,16 @@ public class BatchEnrichScheduler {
                 processed += result.success();
                 failed += result.failed();
                 excludedIds.addAll(result.failedIds());
-                consecutiveFailedChunks = result.success() == 0 ? consecutiveFailedChunks + 1 : 0;
+                if (result.success() > 0) {
+                    consecutiveFailedChunks = 0;
+                } else if (result.countsTowardAbort()) {
+                    consecutiveFailedChunks++;
+                }
+            }
+            if (excludedIds.size() > MAX_EXCLUDED_IDS) {
+                log.error("배치 보강 중단 - 이번 실행 실패 {}건이 상한 {}건을 넘음", excludedIds.size(), MAX_EXCLUDED_IDS);
+                totals[2]++;
+                break;
             }
             if (consecutiveFailedChunks >= MAX_CONSECUTIVE_FAILED_CHUNKS) {
                 log.error("배치 보강 중단 - 연속 {}개 청크 전부 실패 (API 키·모델명·쿼터 확인 필요)",
@@ -213,11 +276,76 @@ public class BatchEnrichScheduler {
     }
 
     private List<String> parseRegions() {
-        if (enrichRegions == null || enrichRegions.isBlank()) return List.of();
-        return Arrays.stream(enrichRegions.split(","))
+        return parseList(enrichRegions);
+    }
+
+    private static List<String> parseList(String csv) {
+        if (csv == null || csv.isBlank()) return List.of();
+        return Arrays.stream(csv.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .toList();
+    }
+
+    /**
+     * 끝난 배치들의 결과만 다시 반영한다(재제출 없음, 결과 보관 29일). 장소는 결과의 custom_id로 읽는다.
+     * 그 사이 보강된 행은 옛 결과로 덮지 않고, 실패 횟수도 올리지 않는다.
+     */
+    void resume(List<String> batchIds) {
+        runDeadlineMs = Long.MAX_VALUE;
+        int succeeded = 0;
+        int failed = 0;
+        int failedBatches = 0;
+        for (String batchId : batchIds) {
+            try {
+                log.info("기존 배치 결과 재반영 - batchId={} (재제출 없음)", batchId);
+                String jsonl = fetchResults(batchId);
+                if (jsonl == null) {
+                    log.error("배치 결과를 가져오지 못함 - batchId={}", batchId);
+                    failedBatches++;
+                    continue;
+                }
+                List<Place> pending = placeRepository.findAllById(placeIdsIn(jsonl)).stream()
+                        .filter(this::stillPending)
+                        .toList();
+                if (pending.isEmpty()) log.warn("재반영할 장소 없음(모두 이미 반영됨) - batchId={}, mode={}", batchId, mode);
+                ChunkResult result = applyResults(jsonl, pending, false);
+                succeeded += result.success();
+                failed += result.failed();
+            } catch (Exception e) {
+                log.error("배치 결과 재반영 중 예외 - batchId={}: {}", batchId, e.getMessage(), e);
+                failedBatches++;
+            }
+        }
+        log.info("배치 결과 재반영 완료 - 성공 {}건, 실패 {}건, 처리 못 한 배치 {}개", succeeded, failed, failedBatches);
+        if (failedBatches > 0 || failed > (succeeded + failed) * MAX_FAILURE_RATIO) {
+            throw new BatchStageFailed("배치 결과 재반영 실패 " + failed + "건, 배치 " + failedBatches + "개");
+        }
+    }
+
+    private boolean stillPending(Place p) {
+        if (!attributeMode()) return p.getEnrichedAt() == null;
+        return p.getEnrichVersion() == null || p.getEnrichVersion() < AttributeEnrichment.VERSION;
+    }
+
+    /** 끝난 배치의 결과 JSONL. 끝나지 않았거나 실패면 null. */
+    String fetchResults(String batchId) {
+        PollResult poll = pollForCompletion(batchId);
+        return poll.resultsUrl() == null ? null : downloadResults(poll.resultsUrl());
+    }
+
+    List<Long> placeIdsIn(String jsonl) {
+        List<Long> ids = new ArrayList<>();
+        for (String line : jsonl.split("\n")) {
+            if (line.isBlank()) continue;
+            try {
+                String customId = objectMapper.readTree(line).path("custom_id").asText("");
+                if (customId.startsWith("place_")) ids.add(Long.parseLong(customId.substring("place_".length())));
+            } catch (Exception e) {
+                log.warn("결과 행 custom_id 읽기 실패: {}", e.getMessage());
+            }
+        }
+        return ids;
     }
 
     /** 결과는 chunks와 같은 순서다. 묶음 처리 중 예외는 그 묶음 전부를 실패로 돌려준다. */
@@ -247,28 +375,21 @@ public class BatchEnrichScheduler {
 
     ChunkResult processChunk(List<Place> places) {
         try {
-            String batchId;
-            if (resumeBatchId != null && !resumeBatchId.isBlank()) {
-                // 재제출하지 않고 기존 배치 결과만 다시 가져온다(중복 과금 방지)
-                batchId = resumeBatchId.trim();
-                log.info("기존 배치 결과 재사용 - batchId={} (재제출 없음)", batchId);
-            } else {
-                List<Map<String, Object>> requests = buildBatchRequests(places);
-
-                batchId = submitBatch(requests);
-                if (batchId == null) {
-                    log.error("배치 제출 실패 - {}건 모두 실패 처리", places.size());
-                    return new ChunkResult(0, places.size(), allIds(places));
-                }
-            }
-
-            String resultsUrl = pollForCompletion(batchId);
-            if (resultsUrl == null) {
-                log.error("배치 폴링 실패 또는 타임아웃 - batchId={}", batchId);
+            List<Map<String, Object>> requests = buildBatchRequests(places);
+            String batchId = submitBatch(requests);
+            if (batchId == null) {
+                log.error("배치 제출 실패 - {}건 모두 실패 처리", places.size());
                 return new ChunkResult(0, places.size(), allIds(places));
             }
 
-            return processResults(resultsUrl, places);
+            PollResult poll = pollForCompletion(batchId);
+            if (poll.resultsUrl() == null) {
+                // 결과는 나중에 batch.enrich.resume-batch-id로 다시 반영할 수 있다
+                log.error("배치 결과 대기 실패 - batchId={}, 시간 초과={}", batchId, poll.timedOut());
+                return new ChunkResult(0, places.size(), allIds(places), !poll.timedOut());
+            }
+
+            return processResults(batchId, poll.resultsUrl(), places);
 
         } catch (Exception e) {
             log.error("배치 보강 처리 중 예외 발생: {}", e.getMessage(), e);
@@ -310,11 +431,15 @@ public class BatchEnrichScheduler {
     }
 
     String buildEnrichPrompt(Place place) {
+        boolean overseas = OverseasEnrichment.isOverseas(place.getCountry());
         if (DiningEnrichment.isDining(place.getCategory())) {
             return DiningEnrichment.buildPrompt(place.getName(), place.getCategory(), place.getDescription(),
                     DiningEnrichment.venueOf(place.getCategory()),
-                    DiningEnrichment.isFamous(place.getWikidataSitelinks()));
+                    DiningEnrichment.isFamous(place.getWikidataSitelinks()),
+                    overseas ? OverseasEnrichment.contextLines(place) : null,
+                    overseas && place.getNameKo() == null);
         }
+        if (overseas) return buildOverseasPrompt(place);
         StringBuilder sb = new StringBuilder();
         sb.append("다음 장소 정보를 분석하여 태그, 설명, 추천 방문 시간대를 생성해주세요.\n\n");
         sb.append("장소 정보:\n");
@@ -346,6 +471,45 @@ public class BatchEnrichScheduler {
         sb.append("\nplace_role: SIGHT(명소·자연·유적·박물관·공원) / ACTIVITY(체험·레저·테마파크) / "
                 + "SHOPPING(쇼핑몰·백화점·쇼핑거리) / MARKET(전통시장·야시장) / LODGING(숙소) / TRANSIT(공항·역·터미널) / "
                 + "NOT_VISITABLE(여행자가 일부러 찾아갈 곳이 아님: 편의점·은행·병원·사무실·주차장·일반 매장·아파트·학교 등)");
+        return sb.toString();
+    }
+
+    /**
+     * 해외 관광지 프롬프트. 한국 프롬프트와 같은 항목에 국가·여행지·주소, 현지 통화 입장료, (비어 있으면) name_ko를 더한다.
+     * 입장료 예시가 제주 명소라 해외 행에 쓰면 원화 금액이 나온다.
+     */
+    String buildOverseasPrompt(Place place) {
+        OverseasEnrichment.Currency currency = OverseasEnrichment.currencyOf(place.getCountry());
+        boolean askNameKo = place.getNameKo() == null;
+        StringBuilder sb = new StringBuilder();
+        sb.append("다음 해외 장소 정보를 분석하여 한국인 여행자용 태그, 설명, 추천 방문 시간대를 생성해주세요.\n\n");
+        sb.append("장소 정보:\n");
+        sb.append("- 이름: ").append(place.getName()).append("\n");
+        sb.append("- 카테고리: ").append(place.getCategory()).append("\n");
+        sb.append(OverseasEnrichment.contextLines(place));
+        if (place.getDescription() != null && !place.getDescription().isBlank()) {
+            sb.append("- 기존 설명: ").append(place.getDescription()).append("\n");
+        }
+        sb.append("\n");
+        sb.append("다음 JSON 형식으로만 응답해주세요 (다른 텍스트 없이):\n");
+        sb.append("{\n");
+        if (askNameKo) sb.append("  \"name_ko\": \"...\",  // 한국어 표시 이름(아래 규칙)\n");
+        sb.append("  \"tags\": [\"태그1\", \"태그2\", ...],  // 5~10개 관련 태그 (한국어)\n");
+        sb.append("  \"description\": \"장소에 대한 2~3문장 설명 (한국어)\",\n");
+        sb.append("  \"recommended_time_slots\": [\"morning\", \"afternoon\", \"evening\"],  // 추천 방문 시간대\n");
+        sb.append("  \"recommended_duration_minutes\": 90,  // 평균 체류시간(분, 정수)\n");
+        sb.append("  \"admission_fee_local\": 0,  // 입장료(").append(currency.label()).append(", 정수). ")
+                .append("무료면 0, 유료면 성인 1인 기준 실제 입장료\n");
+        sb.append("  \"place_role\": \"SIGHT\"  // 여행 일정에서의 역할(아래 목록 중 하나)\n");
+        sb.append("}\n");
+        sb.append("\n추천 시간대는 다음 중에서 선택: morning, afternoon, evening, night, all_day");
+        sb.append("\n체류시간 가이드: 등산·트레킹 150~240 / 해변·시장 60 / 박물관·미술관 90 / 사찰·신사 60 / 테마파크 300");
+        sb.append("\n입장료 가이드: 공원·해변·거리·외관만 보는 곳·대부분의 신사는 0(무료). 관리되는 유료 명소만 ")
+                .append(currency.label()).append(" 단위 실제 금액. 식당·카페·숙소는 0.");
+        sb.append("\nplace_role: SIGHT(명소·자연·유적·박물관·공원) / ACTIVITY(체험·레저·테마파크) / "
+                + "SHOPPING(쇼핑몰·백화점·쇼핑거리) / MARKET(전통시장·야시장) / LODGING(숙소) / TRANSIT(공항·역·터미널) / "
+                + "NOT_VISITABLE(여행자가 일부러 찾아갈 곳이 아님: 편의점·은행·병원·사무실·주차장·일반 매장·아파트·학교 등)");
+        if (askNameKo) sb.append("\n").append(OverseasEnrichment.nameKoRule());
         return sb.toString();
     }
 
@@ -384,10 +548,10 @@ public class BatchEnrichScheduler {
                     return batchId;
                 }
 
-                if (response.statusCode() >= 500) {
-                    log.warn("배치 제출 서버 에러 (HTTP {}), 재시도 {}/{}",
+                if (response.statusCode() >= 500 || response.statusCode() == 429) {
+                    log.warn("배치 제출 일시 오류 (HTTP {}), 재시도 {}/{}",
                             response.statusCode(), attempt + 1, MAX_RETRIES);
-                    sleepWithBackoff(attempt);
+                    if (attempt < MAX_RETRIES - 1) sleepBeforeRetry(attempt, response);
                     continue;
                 }
 
@@ -409,18 +573,30 @@ public class BatchEnrichScheduler {
     }
 
     private void sleepWithBackoff(int attempt) {
-        try {
-            Thread.sleep(1000L * (1L << attempt));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        sleep(retryBaseMs * (1L << attempt));
     }
 
-    /** @return 결과 파일 URL (실패/타임아웃 시 null) */
-    String pollForCompletion(String batchId) {
-        long startTime = System.currentTimeMillis();
+    /** Retry-After보다 일찍 보내면 다시 429다. */
+    private void sleepBeforeRetry(int attempt, HttpResponse<String> response) {
+        sleep(Math.max(retryBaseMs * (1L << attempt), retryAfterMs(response)));
+    }
 
-        while (System.currentTimeMillis() - startTime < MAX_POLL_DURATION_MS) {
+    static long retryAfterMs(HttpResponse<String> response) {
+        java.net.http.HttpHeaders headers = response.headers();
+        if (response.statusCode() != 429 || headers == null) return 0;
+        return headers.firstValue("retry-after").map(v -> {
+            try {
+                return Math.min(Long.parseLong(v.trim()), MAX_RETRY_AFTER_SEC) * 1000;
+            } catch (NumberFormatException e) {
+                return 0L;
+            }
+        }).orElse(0L);
+    }
+
+    PollResult pollForCompletion(String batchId) {
+        long until = Math.min(System.currentTimeMillis() + maxPollDuration.toMillis(), runDeadlineMs);
+
+        while (System.currentTimeMillis() < until) {
             try {
                 HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create(BATCH_API_URL + "/" + batchId))
@@ -432,9 +608,15 @@ public class BatchEnrichScheduler {
 
                 HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
-                if (response.statusCode() != 200) {
-                    log.warn("배치 상태 조회 실패 - HTTP {}", response.statusCode());
-                    sleep(POLL_INTERVAL_MS);
+                int code = response.statusCode();
+                if (code >= 400 && code < 500 && code != 429) {
+                    // 없는 batchId(오타·보관 기간 지남)·키 오류는 기다려도 같다
+                    log.error("배치 상태 조회 실패 - batchId={}, HTTP {}: {}", batchId, code, response.body());
+                    return new PollResult(null, false);
+                }
+                if (code != 200) {
+                    log.warn("배치 상태 조회 실패 - HTTP {}", code);
+                    sleep(Math.max(pollIntervalMs, retryAfterMs(response)));
                     continue;
                 }
 
@@ -445,37 +627,46 @@ public class BatchEnrichScheduler {
                     case "ended" -> {
                         String resultsUrl = root.get("results_url").asText();
                         log.info("배치 완료 - batchId={}", batchId);
-                        return resultsUrl;
+                        return new PollResult(resultsUrl, false);
                     }
-                    case "canceling", "expired" -> {
-                        log.error("배치 비정상 종료 - batchId={}, status={}", batchId, status);
-                        return null;
+                    case "canceling" -> {
+                        log.error("배치 취소 중 - batchId={}", batchId);
+                        return new PollResult(null, false);
                     }
                     default -> {
                         log.debug("배치 진행 중 - batchId={}, status={}", batchId, status);
                     }
                 }
 
-                sleep(POLL_INTERVAL_MS);
+                sleep(pollIntervalMs);
 
             } catch (IOException | InterruptedException e) {
                 if (e instanceof InterruptedException) {
                     Thread.currentThread().interrupt();
-                    return null;
+                    return new PollResult(null, false);
                 }
                 log.warn("배치 상태 폴링 중 예외: {}", e.getMessage());
-                sleep(POLL_INTERVAL_MS);
+                sleep(pollIntervalMs);
             }
         }
 
         log.error("배치 폴링 타임아웃 - batchId={}", batchId);
-        return null;
+        return new PollResult(null, true);
     }
 
-    ChunkResult processResults(String resultsUrl, List<Place> places) {
+    ChunkResult processResults(String batchId, String resultsUrl, List<Place> places) {
+        String jsonl = downloadResults(resultsUrl);
+        if (jsonl == null) {
+            log.error("배치 결과 다운로드 실패 - batchId={} (resume-batch-id로 다시 반영 가능)", batchId);
+            return new ChunkResult(0, places.size(), allIds(places));
+        }
+        return applyResults(jsonl, places);
+    }
+
+    /** 결과 JSONL. 실패면 null. 비용은 이미 낸 뒤라 실패해도 resume-batch-id로 다시 받을 수 있다. */
+    String downloadResults(String resultsUrl) {
         try {
             // 결과는 요청 수만큼의 JSONL이라 청크가 커질수록 길어진다.
-            // 배치 비용은 이미 지불된 뒤라 여기서 타임아웃이 나면 결과를 그냥 날린다.
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(resultsUrl))
                     .header("x-api-key", anthropicApiKey)
@@ -488,17 +679,16 @@ public class BatchEnrichScheduler {
 
             if (response.statusCode() != 200) {
                 log.error("배치 결과 조회 실패 - HTTP {}", response.statusCode());
-                return new ChunkResult(0, places.size(), allIds(places));
+                return null;
             }
-
-            return applyResults(response.body(), places);
+            return response.body();
 
         } catch (IOException | InterruptedException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            log.error("배치 결과 처리 중 예외: {}", e.getMessage(), e);
-            return new ChunkResult(0, places.size(), allIds(places));
+            log.error("배치 결과 다운로드 중 예외: {}", e.getMessage(), e);
+            return null;
         }
     }
 
@@ -507,12 +697,26 @@ public class BatchEnrichScheduler {
      * 장소를 하나씩 챙기지 않으면 enriched_at이 NULL로 남아 다음 청크마다 다시 제출된다.
      */
     ChunkResult applyResults(String jsonl, List<Place> places) {
+        return applyResults(jsonl, places, true);
+    }
+
+    /**
+     * 장소 실패 횟수에는 응답을 해석하지 못한 경우와, 성공이 있는 묶음의 요청 오류(invalid_request_error)만 센다.
+     * 만료·취소·일시 오류(overloaded·api_error)·성공 0건 묶음의 오류(모델명 등 묶음 전체 장애)는 장소 탓이 아니다.
+     *
+     * @param countAttempts 장소 실패 횟수(enrich_attempts)를 올린다. 이미 반영한 결과를 다시 반영할 때는 끈다
+     */
+    ChunkResult applyResults(String jsonl, List<Place> places, boolean countAttempts) {
         Map<Long, Place> placeMap = new HashMap<>();
         for (Place place : places) {
             placeMap.put(place.getId(), place);
         }
 
         List<Long> succeededIds = new ArrayList<>();
+        Set<Long> erroredIds = new HashSet<>();
+        Set<Long> unreadableIds = new HashSet<>();
+        int expiredOrCanceled = 0;
+        int seen = 0;
         long[] usage = new long[4]; // input, output, cache read, cache write
         int unclassifiable = 0;
 
@@ -530,9 +734,13 @@ public class BatchEnrichScheduler {
                     continue;
                 }
 
+                seen++;
                 JsonNode resultBody = resultNode.get("result");
-                if (resultBody == null || !"succeeded".equals(resultBody.path("type").asText())) {
+                String type = resultBody == null ? "" : resultBody.path("type").asText();
+                if (!"succeeded".equals(type)) {
                     log.warn("장소 보강 실패 - placeId={}, result={}", placeId, resultBody);
+                    if ("expired".equals(type) || "canceled".equals(type)) expiredOrCanceled++;
+                    else if (isRequestError(resultBody)) erroredIds.add(placeId);
                     continue;
                 }
 
@@ -542,6 +750,7 @@ public class BatchEnrichScheduler {
                             AttributeEnrichment.interpret(resultBody.get("message"), place.getCategory());
                     if (attributes == null) {
                         log.warn("속성 분류 응답 없음 또는 잘림 - placeId={}", placeId);
+                        unreadableIds.add(placeId);
                         continue;
                     }
                     if (attributes.hasNoClassification()) unclassifiable++;
@@ -554,16 +763,20 @@ public class BatchEnrichScheduler {
                 String content = extractTextContent(resultBody.get("message"));
                 if (content == null) {
                     log.warn("응답 텍스트 추출 실패 - placeId={}", placeId);
+                    unreadableIds.add(placeId);
                     continue;
                 }
 
-                if (applyEnrichment(place, content)) {
-                    placeRepository.save(place);
-                    succeededIds.add(placeId);
+                if (!applyEnrichment(place, content)) {
+                    unreadableIds.add(placeId);
+                    continue;
                 }
+                placeRepository.writeEnrichment(place);
+                succeededIds.add(placeId);
 
             } catch (Exception e) {
-                log.warn("결과 행 처리 중 오류: {}", e.getMessage());
+                // 저장 실패·코드 오류는 장소 탓이 아니라 실패 횟수에 넣지 않는다
+                log.error("결과 행 처리 중 오류: {}", e.getMessage(), e);
             }
         }
 
@@ -579,9 +792,27 @@ public class BatchEnrichScheduler {
 
         Set<Long> succeeded = new HashSet<>(succeededIds);
         List<Long> failedIds = places.stream().map(Place::getId).filter(id -> !succeeded.contains(id)).toList();
+        Set<Long> placeFaults = new HashSet<>(unreadableIds);
+        if (!succeededIds.isEmpty()) placeFaults.addAll(erroredIds);
+        if (countAttempts && !placeFaults.isEmpty() && !attributeMode()) {
+            try {
+                placeRepository.incrementEnrichAttempts(placeFaults);
+            } catch (Exception e) {
+                log.warn("보강 실패 횟수 기록 실패: {}", e.getMessage());
+            }
+        }
+        boolean allExpired = succeededIds.isEmpty() && seen > 0 && expiredOrCanceled == seen;
         log.info("배치 결과 처리 완료 - 성공: {}건(분류 없음 {}건), 실패: {}건, 토큰 input={} output={} 캐시읽음={} 캐시쓰기={}",
                 succeededIds.size(), unclassifiable, failedIds.size(), usage[0], usage[1], usage[2], usage[3]);
-        return new ChunkResult(succeededIds.size(), failedIds.size(), failedIds);
+        return new ChunkResult(succeededIds.size(), failedIds.size(), failedIds, !allExpired);
+    }
+
+    /** errored 결과의 오류 종류. 결과 형식이 error.error.type이라 한 단계 안쪽을 먼저 본다. */
+    static boolean isRequestError(JsonNode resultBody) {
+        JsonNode error = resultBody == null ? null : resultBody.path("error");
+        if (error == null || error.isMissingNode()) return false;
+        String type = error.path("error").path("type").asText(error.path("type").asText(""));
+        return "invalid_request_error".equals(type);
     }
 
     private static void addUsage(long[] usage, JsonNode node) {
@@ -617,10 +848,12 @@ public class BatchEnrichScheduler {
     private static final java.util.Set<String> ATTRACTION_ROLES = java.util.Set.of(
             "SIGHT", "ACTIVITY", "SHOPPING", "MARKET", "LODGING", "TRANSIT", "NOT_VISITABLE");
 
+    /** 응답이 JSON이 아니면(잘림 포함) false다. 그 밖의 예외는 던진다. 코드 오류를 장소 실패 횟수로 세지 않는다. */
     boolean applyEnrichment(Place place, String content) {
         try {
             String json = extractJson(content);
             JsonNode root = objectMapper.readTree(json);
+            boolean overseas = OverseasEnrichment.isOverseas(place.getCountry());
 
             if (DiningEnrichment.isDining(place.getCategory())) {
                 if (!root.isObject()) {
@@ -629,13 +862,16 @@ public class BatchEnrichScheduler {
                 }
                 DiningEnrichment.Result dining = DiningEnrichment.interpret(root,
                         DiningEnrichment.venueOf(place.getCategory()),
-                        DiningEnrichment.isFamous(place.getWikidataSitelinks()));
+                        DiningEnrichment.isFamous(place.getWikidataSitelinks()),
+                        overseas ? OverseasEnrichment.ownRegionNames(place) : Set.of());
                 place.enrichWith(dining.tags(), dining.description(), dining.timeSlots(),
                         dining.durationMinutes(), null);
                 // 카테고리 리프까지 보고 음식 종류를 다시 정한다(태그만으로는 "라멘집"의 면요리가 빠질 수 있다).
-                String cuisine = "MEAL".equals(dining.placeRole())
-                        ? DiningEnrichment.cuisineOf(dining.tags(), place.getCategory()) : null;
+                String cuisine = !"MEAL".equals(dining.placeRole()) ? null
+                        : overseas ? OverseasEnrichment.cuisineOf(dining.tags(), place.getCategory())
+                        : DiningEnrichment.cuisineOf(dining.tags(), place.getCategory());
                 place.assignRole(dining.placeRole(), cuisine);
+                if (overseas) place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko")));
                 return true;
             }
 
@@ -670,7 +906,7 @@ public class BatchEnrichScheduler {
 
             Integer admissionFee = null;
             JsonNode feeNode = root.get("admission_fee");
-            if (feeNode != null && feeNode.canConvertToInt()) {
+            if (!overseas && feeNode != null && feeNode.canConvertToInt()) {
                 int parsed = feeNode.asInt();
                 if (parsed >= 0) admissionFee = parsed; // 0(무료)도 유효값
             }
@@ -679,9 +915,15 @@ public class BatchEnrichScheduler {
             place.enrichWith(tags, description, timeSlots, durationMinutes,
                     place.getTourapiDetailAt() != null ? null : admissionFee);
             place.assignRole(parseAttractionRole(root.get("place_role")), null);
+            if (overseas) {
+                OverseasEnrichment.Currency currency = OverseasEnrichment.currencyOf(place.getCountry());
+                place.recordAdmissionLocal(OverseasEnrichment.admissionLocal(root.get("admission_fee_local"), currency),
+                        currency.code());
+                place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko")));
+            }
             return true;
 
-        } catch (Exception e) {
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             log.warn("보강 데이터 파싱 실패 - placeId={}, error={}", place.getId(), e.getMessage());
             return false;
         }

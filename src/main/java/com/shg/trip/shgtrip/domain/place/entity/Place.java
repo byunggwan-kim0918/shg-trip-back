@@ -127,6 +127,18 @@ public class Place extends BaseTimeEntity {
     @Column(name = "admission_fee")
     private Integer admissionFee;
 
+    /** 해외 명소 입장료(현지 통화, 배치 보강으로 생성). 해외 행은 {@link #admissionFee}(원)를 비워 둔다. */
+    @Column(name = "admission_fee_local")
+    private Integer admissionFeeLocal;
+
+    /** {@link #admissionFeeLocal}의 통화(ISO 4217, 예: JPY). */
+    @Column(name = "admission_currency", length = 3)
+    private String admissionCurrency;
+
+    /** 보강 응답이 실패한 횟수. 네이티브 쿼리로만 바꾸고, 3회 이상이면 보강 대상에서 빠진다. */
+    @Column(name = "enrich_attempts", insertable = false, updatable = false)
+    private Short enrichAttempts;
+
     /**
      * 일정 속 역할(배치 보강으로 생성): MEAL, CAFE, BAR, SIGHT, ACTIVITY, SHOPPING, MARKET, LODGING,
      * TRANSIT, NOT_VISITABLE. 없으면 카테고리·이름 추정으로 대신한다(CandidatePolicy.roleOf).
@@ -249,6 +261,18 @@ public class Place extends BaseTimeEntity {
     public void enrichWith(List<String> newTags, String newDescription, List<String> newTimeSlots,
                            Integer durationMinutes) {
         enrichWith(newTags, newDescription, newTimeSlots, durationMinutes, null);
+    }
+
+    /** 비어 있을 때만 채운다. Wikidata 한국어 라벨이나 보정표가 이미 정한 이름이 우선이다. */
+    public void fillNameKo(String newNameKo) {
+        if (this.nameKo == null && newNameKo != null && !newNameKo.isBlank()) this.nameKo = newNameKo;
+    }
+
+    /** 0(무료)도 기록한다. 금액·통화가 없으면 기존 값을 둔다. */
+    public void recordAdmissionLocal(Integer amount, String currency) {
+        if (amount == null || amount < 0 || currency == null) return;
+        this.admissionFeeLocal = amount;
+        this.admissionCurrency = currency;
     }
 
     /** 보강이 정한 일정 속 역할·음식 종류. null이면 기존 값을 유지한다. */

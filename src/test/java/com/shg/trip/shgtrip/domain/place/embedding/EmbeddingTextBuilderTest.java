@@ -261,4 +261,14 @@ class EmbeddingTextBuilderTest {
             assertThat(result).isEqualTo("장소명");
         }
     }
+
+    @Test
+    @DisplayName("해외 장소는 원문 이름 뒤에 한국어 이름을 넣는다")
+    void includesNameKo() {
+        com.shg.trip.shgtrip.domain.place.entity.Place place = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                .name("浅草寺").nameKo("센소지").category("Buddhist Temple").region("Tokyo")
+                .latitude(java.math.BigDecimal.ONE).longitude(java.math.BigDecimal.ONE).address("x").build();
+
+        assertThat(EmbeddingTextBuilder.buildText(place)).isEqualTo("浅草寺 센소지 Buddhist Temple Tokyo");
+    }
 }

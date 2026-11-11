@@ -39,6 +39,7 @@ class BatchEnrichSchedulerTest {
     void setUp() {
         objectMapper = new ObjectMapper();
         scheduler = new BatchEnrichScheduler(placeRepository, objectMapper, embeddingBatchJob);
+        ReflectionTestUtils.setField(scheduler, "maxDuration", java.time.Duration.ofHours(10));
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
         ReflectionTestUtils.setField(scheduler, "anthropicApiKey", "test-api-key");
         ReflectionTestUtils.setField(scheduler, "enrichModel", "claude-haiku-4-5-20251001");
@@ -283,7 +284,7 @@ class BatchEnrichSchedulerTest {
         String succeeded = """
                 {"custom_id":"place_1","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"{\\"tags\\":[\\"사찰\\"]}"}]}}}""";
         String error = """
-                {"custom_id":"place_2","result":{"type":"errored","error":{"type":"overloaded_error"}}}""";
+                {"custom_id":"place_2","result":{"type":"errored","error":{"type":"error","error":{"type":"invalid_request_error"}}}}""";
         String foreign = """
                 {"custom_id":"place_99","result":{"type":"succeeded","message":{"content":[]}}}""";
         String jsonl = String.join("\n", succeeded, error, "{깨진 행", foreign, "");
@@ -293,9 +294,52 @@ class BatchEnrichSchedulerTest {
         assertThat(result.success()).isEqualTo(1);
         assertThat(result.failed()).isEqualTo(2);
         assertThat(result.failedIds()).containsExactly(2L, 3L);
-        verify(placeRepository).save(ok);
+        verify(placeRepository).writeEnrichment(ok);
+        verify(placeRepository, never()).save(any(Place.class));
+        // 성공이 있는 묶음의 요청 오류만 장소 탓이다. 결과에서 빠진 장소는 세지 않는다.
+        verify(placeRepository).incrementEnrichAttempts(java.util.Set.of(2L));
         verify(embeddingBatchJob).reembed(List.of(ok));
         verify(placeRepository, never()).resetEmbeddings(anyList());
+    }
+
+    @Test
+    @DisplayName("결과 반영: 만료·취소는 실패 횟수에 세지 않고, 전부 만료면 연속 실패 중단에도 세지 않는다")
+    void applyResults_expiredNotCounted() {
+        Place a = createPlace(1L, "센소지", "관광", "아사쿠사", "일본");
+        Place b = createPlace(2L, "메이지신궁", "관광", "하라주쿠", "일본");
+        String jsonl = String.join("\n",
+                "{\"custom_id\":\"place_1\",\"result\":{\"type\":\"expired\"}}",
+                "{\"custom_id\":\"place_2\",\"result\":{\"type\":\"canceled\"}}");
+
+        BatchEnrichScheduler.ChunkResult result = scheduler.applyResults(jsonl, List.of(a, b));
+
+        assertThat(result.failed()).isEqualTo(2);
+        assertThat(result.countsTowardAbort()).isFalse();
+        verify(placeRepository, never()).incrementEnrichAttempts(anyCollection());
+    }
+
+    @Test
+    @DisplayName("결과 반영: 성공 없이 전부 오류인 묶음은 묶음 전체 장애라 실패 횟수에 세지 않고 중단 판정에는 센다")
+    void applyResults_allErroredIsBatchFault() {
+        Place a = createPlace(1L, "센소지", "관광", "아사쿠사", "일본");
+        String jsonl = "{\"custom_id\":\"place_1\",\"result\":{\"type\":\"errored\",\"error\":{\"type\":\"invalid_request_error\"}}}";
+
+        BatchEnrichScheduler.ChunkResult result = scheduler.applyResults(jsonl, List.of(a));
+
+        assertThat(result.countsTowardAbort()).isTrue();
+        verify(placeRepository, never()).incrementEnrichAttempts(anyCollection());
+    }
+
+    @Test
+    @DisplayName("결과 반영: 응답을 해석하지 못한 장소는 실패 횟수에 센다")
+    void applyResults_unreadableCounted() {
+        Place place = createPlace(1L, "센소지", "관광", "아사쿠사", "일본");
+        String line = """
+                {"custom_id":"place_1","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"이건 JSON이 아님"}]}}}""";
+
+        scheduler.applyResults(line, List.of(place));
+
+        verify(placeRepository).incrementEnrichAttempts(java.util.Set.of(1L));
     }
 
     @Test
@@ -316,7 +360,7 @@ class BatchEnrichSchedulerTest {
     @DisplayName("결과 반영: 저장이 실패한 장소도 실패 목록에 들어간다")
     void applyResults_saveFailure_isFailed() {
         Place place = createPlace(1L, "센소지", "관광", "아사쿠사", "일본");
-        when(placeRepository.save(place)).thenThrow(new RuntimeException("DB down"));
+        when(placeRepository.writeEnrichment(place)).thenThrow(new RuntimeException("DB down"));
         String line = """
                 {"custom_id":"place_1","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"{\\"tags\\":[\\"사찰\\"]}"}]}}}""";
 
@@ -518,15 +562,87 @@ class BatchEnrichSchedulerTest {
     }
 
     @Test
-    @DisplayName("병렬: 기존 batchId를 재사용할 때는 한 묶음씩만 처리한다")
-    void enrich_resumeBatchId_disablesParallel() {
-        ReflectionTestUtils.setField(scheduler, "parallelChunks", 5);
-        ReflectionTestUtils.setField(scheduler, "resumeBatchId", "msgbatch_x");
-        when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class))).thenReturn(List.of());
+    @DisplayName("재반영: 끝난 배치들의 결과만 custom_id로 장소를 읽어 반영하고, 새 보강은 하지 않는다")
+    void enrich_resumeBatchIds_appliesResultsByCustomId() {
+        ReflectionTestUtils.setField(scheduler, "resumeBatchId", "msgbatch_a, msgbatch_b");
+        Place place = createPlace(7L, "센소지", "관광", "아사쿠사", "일본");
+        BatchEnrichScheduler spied = spy(scheduler);
+        String jsonl = """
+                {"custom_id":"place_7","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"{\\"tags\\":[\\"사찰\\"]}"}]}}}""";
+        doReturn(jsonl).when(spied).fetchResults("msgbatch_a");
+        doReturn(null).when(spied).fetchResults("msgbatch_b");
+        when(placeRepository.findAllById(List.of(7L))).thenReturn(List.of(place));
+
+        assertThatThrownBy(spied::enrich).isInstanceOf(BatchStageFailed.class).hasMessageContaining("배치 1개");
+
+        verify(placeRepository).writeEnrichment(place);
+        verify(placeRepository, never()).findEnrichTargets(anyCollection(), any(Pageable.class));
+        verify(spied, never()).processChunk(anyList());
+    }
+
+    @Test
+    @DisplayName("재반영: 그 사이 보강된 행은 옛 결과로 덮지 않고, 실패 횟수도 올리지 않는다")
+    void resume_skipsAlreadyEnrichedAndDoesNotCountAttempts() {
+        Place done = createPlace(7L, "센소지", "관광", "아사쿠사", "일본");
+        done.enrichWith(List.of("사찰"), "이미 보강됨", List.of("morning"));
+        Place pending = createPlace(8L, "메이지신궁", "관광", "하라주쿠", "일본");
+        BatchEnrichScheduler spied = spy(scheduler);
+        String jsonl = String.join("\n",
+                "{\"custom_id\":\"place_7\",\"result\":{\"type\":\"succeeded\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"{}\"}]}}}",
+                "{\"custom_id\":\"place_8\",\"result\":{\"type\":\"succeeded\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"깨짐\"}]}}}");
+        doReturn(jsonl).when(spied).fetchResults("b1");
+        when(placeRepository.findAllById(List.of(7L, 8L))).thenReturn(List.of(done, pending));
+
+        assertThatThrownBy(() -> spied.resume(List.of("b1"))).isInstanceOf(BatchStageFailed.class);
+
+        verify(placeRepository, never()).writeEnrichment(done);
+        verify(placeRepository, never()).incrementEnrichAttempts(anyCollection());
+    }
+
+    @Test
+    @DisplayName("보강 시간 상한이 지나면 새 묶음을 내지 않는다")
+    void enrich_stopsAtDeadline() {
+        ReflectionTestUtils.setField(scheduler, "maxDuration", java.time.Duration.ZERO);
 
         scheduler.enrich();
 
-        verify(placeRepository).findEnrichTargets(anyCollection(), eq(PageRequest.of(0, 1000)));
+        verify(placeRepository, never()).findEnrichTargets(anyCollection(), any(Pageable.class));
+    }
+
+    @Test
+    @DisplayName("결과 대기 시간 초과는 연속 실패 중단에 세지 않는다(API 키 오류가 아니다)")
+    void enrich_pollTimeouts_doNotAbort() {
+        BatchEnrichScheduler spied = spy(scheduler);
+        doAnswer(inv -> {
+            List<Place> chunk = inv.getArgument(0);
+            return new BatchEnrichScheduler.ChunkResult(0, chunk.size(), chunk.stream().map(Place::getId).toList(), false);
+        }).when(spied).processChunk(anyList());
+        java.util.concurrent.atomic.AtomicLong nextId = new java.util.concurrent.atomic.AtomicLong();
+        when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class)))
+                .thenAnswer(inv -> nextId.get() < 5
+                        ? List.of(createPlace(nextId.incrementAndGet(), "장소", "관광", "제주", "한국"))
+                        : List.of());
+
+        assertThatThrownBy(spied::enrich).isInstanceOf(BatchStageFailed.class);
+
+        verify(spied, times(5)).processChunk(anyList());
+    }
+
+    @Test
+    @DisplayName("429는 Retry-After(초)만큼 기다리되 2분을 넘기지 않는다. 다른 상태는 0이다")
+    @SuppressWarnings("unchecked")
+    void retryAfter() {
+        java.net.http.HttpResponse<String> limited = mock(java.net.http.HttpResponse.class);
+        when(limited.statusCode()).thenReturn(429);
+        when(limited.headers()).thenReturn(
+                java.net.http.HttpHeaders.of(java.util.Map.of("retry-after", List.of("30")), (a, b) -> true),
+                java.net.http.HttpHeaders.of(java.util.Map.of("retry-after", List.of("900")), (a, b) -> true));
+        java.net.http.HttpResponse<String> server = mock(java.net.http.HttpResponse.class);
+        when(server.statusCode()).thenReturn(503);
+
+        assertThat(BatchEnrichScheduler.retryAfterMs(limited)).isEqualTo(30_000);
+        assertThat(BatchEnrichScheduler.retryAfterMs(limited)).isEqualTo(120_000);
+        assertThat(BatchEnrichScheduler.retryAfterMs(server)).isZero();
     }
 
     @Test
@@ -545,6 +661,87 @@ class BatchEnrichSchedulerTest {
         assertThatThrownBy(() -> spied.enrich()).isInstanceOf(BatchStageFailed.class);
 
         verify(spied, times(BatchEnrichScheduler.MAX_CONSECUTIVE_FAILED_CHUNKS)).processChunk(anyList());
+    }
+
+    private Place overseas(String name, String category, String nameKo) {
+        return Place.builder()
+                .id(11L).name(name).nameKo(nameKo).address("京都府京都市東山区清水1丁目294")
+                .latitude(BigDecimal.valueOf(34.9949)).longitude(BigDecimal.valueOf(135.7850))
+                .category(category).region("Kyoto").country("JP")
+                .savedAt(OffsetDateTime.now()).active(true)
+                .build();
+    }
+
+    private static final String TEMPLE = "Community and Government > Spiritual Center > Buddhist Temple";
+    private static final String RAMEN = "Dining and Drinking > Restaurant > Asian Restaurant > Japanese Restaurant > Ramen Restaurant";
+
+    @Test
+    @DisplayName("해외 관광지 프롬프트: 국가·여행지·주소, 현지 통화 입장료, 비어 있으면 name_ko를 묻는다")
+    void buildEnrichPrompt_overseasAttraction() {
+        String prompt = scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, null));
+
+        assertThat(prompt).contains("- 국가: 일본", "- 여행지: 교토 (Kyoto)", "- 주소: 京都府",
+                "\"admission_fee_local\"", "입장료(엔", "\"name_ko\"", "외래어 표기법");
+        assertThat(prompt).doesNotContain("\"admission_fee\"", "성산일출봉");
+        assertThat(scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, "기요미즈데라")))
+                .doesNotContain("\"name_ko\"", "외래어 표기법");
+    }
+
+    @Test
+    @DisplayName("한국 장소 프롬프트는 그대로다(원화 입장료, name_ko 없음)")
+    void buildEnrichPrompt_koreaUnchanged() {
+        Place place = createPlace(1L, "성산일출봉", "Landmarks and Outdoors > Mountain", "Jeju", "KR");
+
+        assertThat(scheduler.buildEnrichPrompt(place))
+                .contains("\"admission_fee\"", "성산일출봉 5000")
+                .doesNotContain("name_ko", "admission_fee_local", "- 주소:");
+    }
+
+    @Test
+    @DisplayName("해외 관광지 결과: 현지 통화 입장료·통화·name_ko를 기록하고 원화 입장료는 쓰지 않는다")
+    void applyEnrichment_overseasAttraction() {
+        Place place = overseas("清水寺", TEMPLE, null);
+        String content = """
+                {"name_ko":"기요미즈데라","tags":["사찰"],"description":"교토의 절","recommended_time_slots":["morning"],
+                 "recommended_duration_minutes":60,"admission_fee":3000,"admission_fee_local":400,"place_role":"SIGHT"}""";
+
+        assertThat(scheduler.applyEnrichment(place, content)).isTrue();
+        assertThat(place.getAdmissionFeeLocal()).isEqualTo(400);
+        assertThat(place.getAdmissionCurrency()).isEqualTo("JPY");
+        assertThat(place.getAdmissionFee()).isNull();
+        assertThat(place.getNameKo()).isEqualTo("기요미즈데라");
+        assertThat(place.getPlaceRole()).isEqualTo("SIGHT");
+    }
+
+    @Test
+    @DisplayName("해외 결과의 name_ko는 이미 있는 이름(Wikidata·보정표)을 덮지 않는다")
+    void applyEnrichment_overseasKeepsExistingNameKo() {
+        Place place = overseas("金閣寺", TEMPLE, "금각사");
+
+        scheduler.applyEnrichment(place, "{\"name_ko\":\"로쿠온지\",\"tags\":[\"사찰\"]}");
+
+        assertThat(place.getNameKo()).isEqualTo("금각사");
+    }
+
+    @Test
+    @DisplayName("해외 식당 결과: 요리 이름으로 음식 종류를 정하고 name_ko를 채운다")
+    void applyEnrichment_overseasDining() {
+        Place place = overseas("一蘭 祇園店", RAMEN, null);
+        String content = "{\"name_ko\":\"이치란 기온점\",\"tags\":[\"돈코츠라멘\",\"일식\"],\"recommended_time_slots\":[\"evening\"]}";
+
+        assertThat(scheduler.applyEnrichment(place, content)).isTrue();
+        assertThat(place.getCuisine()).isEqualTo("NOODLE");
+        assertThat(place.getNameKo()).isEqualTo("이치란 기온점");
+        assertThat(place.getPlaceRole()).isEqualTo("MEAL");
+    }
+
+    @Test
+    @DisplayName("해외 식당 프롬프트: 국가·여행지·주소와 해외 요리 예시, 비어 있으면 name_ko를 묻는다")
+    void buildEnrichPrompt_overseasDining() {
+        String prompt = scheduler.buildEnrichPrompt(overseas("一蘭 祇園店", RAMEN, null));
+
+        assertThat(prompt).contains("- 국가: 일본", "- 여행지: 교토 (Kyoto)", "훠궈", "\"name_ko\"", "도쿄·상하이 같은 지역명");
+        assertThat(prompt).doesNotContain("서울·부산 같은 지역명");
     }
 
     private Place createPlace(Long id, String name, String category, String region, String country) {

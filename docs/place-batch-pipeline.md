@@ -106,7 +106,16 @@ Step Functions (월 1회)
         Wikidata 매칭을 아직 거치지 않은 행(wikidata_matched_at IS NULL)은 다음 실행으로 미룸
         (인기도 없이 보강하면 유명 식당이 설명 없이 완료된다. 매칭 실패 지역·국가 범위 밖 신규 행이 여기 걸린다.
         미룬 건수는 "Wikidata 매칭 전이라 보강을 미룬 장소 N건" 로그),
+        응답이 3번 실패한 행(enrich_attempts ≥ 3)도 제외("보강 응답이 3번 실패해 제외된 장소 N건" 로그). 장소 탓인
+        실패만 센다: 응답이 JSON이 아닌 경우와 성공이 있는 묶음의 요청 오류(invalid_request_error). 만료·취소,
+        일시 오류(overloaded·api_error), 성공 0건 묶음의 오류(모델명 등 묶음 전체 장애), 결과 누락, 저장·코드 오류는
+        세지 않는다. 원문 이름·카테고리가 바뀌면 0으로 돌아간다.
         이번 실행에서 실패한 id는 쿼리에서 제외. 연속 3개 청크가 전부 실패하면 중단(API 키 오류 등).
+        결과 대기 시간 초과(batch.enrich.max-poll-duration, 기본 24h)·전부 만료된 묶음은 중단 횟수에 세지 않는다.
+        결과 다운로드 실패는 센다(batchId를 로그에 남겨 resume으로 다시 반영). 이번 실행 실패가 2만 건을 넘으면 멈춘다.
+        상태 조회가 429 아닌 4xx(없는 batchId·키 오류)면 바로 실패. 제출·상태 조회의 429는 Retry-After만큼 기다려 재시도.
+        batch.enrich.max-duration(기본 10h)이 보강 단계 전체(결과 대기 포함) 상한이다. 지나면 새 묶음을 내지 않고
+        기다리던 묶음도 끊는다(Step Functions 36h 안에 임베딩 단계까지 돌게). 나라 적재 단독 실행은 늘린다.
         (BATCH_ENRICH_REGIONS="Jeju,..."로 지역 스코프 가능 — 비우면 전체. 운영은 비워서 전 지역)
         → Anthropic Batch API(Haiku 5.5, thinking off, 50% 할인) 제출 → 폴링 → 결과 JSON 파싱
         → tags/description/recommended_time_slots 갱신
@@ -117,16 +126,43 @@ Step Functions (월 1회)
           총칭("Dining and Drinking > Restaurant")일 때만 모델이 이름을 보고 업종을 고른다.
           설명은 Wikidata에 잡힌 곳(sitelinks > 0)만 받는다(모델이 동네 식당을 모른다). 체류시간은 업종 기본값,
           입장료는 넣지 않는다. 출력은 평균 40토큰대로 관광지 프롬프트(240토큰)의 1/5 수준(입력은 규칙이 길어 더 많다)
-        → 성공분은 resetEmbeddings()로 embedding=NULL 처리 → 다음 단계에서 재임베딩
+        → 해외 장소(country JP·CN·TW·VN, OverseasEnrichment)는 같은 항목에 더해:
+          · 프롬프트에 국가·여행지(한국어 이름)·주소
+          · name_ko가 비어 있으면 한국어 표시 이름을 묻는다(한국 통용명 우선, 없으면 외래어 표기법 발음 + 일반 명사는
+            한국어, 지명은 뜻으로 옮기지 않음, 지점명은 "○○점"). 이미 있는 name_ko(Wikidata·보정표)는 덮지 않는다.
+            저장한 이름은 다시 묻지 않아 검증한다: 괄호 병기는 떼고, 한자·가나가 남거나 "없음"·자리표시자면 버린다
+          · 관광지 입장료는 현지 통화 금액(admission_fee_local) + 통화(admission_currency), admission_fee(원)는 비움.
+            통화별로 있을 수 없는 금액(천 단위로 줄인 동, 원화로 적은 엔)은 버린다
+          · 식당 태그는 한국에서 부르는 요리 이름(라멘·훠궈·쌀국수…), 음식 종류는 요리 이름 → MEAT·SEAFOOD·NOODLE·SOUP
+          · 그 장소의 나라·여행지 이름도 지역명 태그로 지운다(다른 나라 이름은 음식 태그라 남긴다)
+          한국 장소 프롬프트는 그대로다
+        → 결과는 보강 컬럼만 쓴다(writeEnrichment). 엔티티째 저장하면 제출~결과 사이(최대 하루)에 바뀐 컬럼을
+          그때 읽은 값으로 되돌린다
+        → 성공분은 바로 재임베딩, 실패분만 embedding=NULL → 다음 단계에서 재임베딩
           (임베딩 텍스트가 tags/description을 포함하므로 재임베딩 없이는 검색에 미반영)
+        → 결과 반영만 다시 할 때: BATCH_ENRICH_RESUME_BATCH_ID="msgbatch_a,msgbatch_b" — 결과의 custom_id로 장소를
+          읽어 반영하고 새 보강은 하지 않는다(재제출·재과금 없음, Anthropic 결과 보관 29일). 그 사이 보강된 행은
+          덮지 않고(v2는 속성 버전 기준) 실패 횟수도 올리지 않는다
         ※ recommended_time_slots는 RouteOptimizer.timePreference()가 소비 —
           야간 골프장 같은 시간대 부적합 배치 방지
+  [3/4-이름] NameKoOverrideJob.run()  (batch.name-ko-overrides.enabled, 기본 true)
+        name-ko-overrides.tsv(키: Wikidata QID 또는 "국가코드:원문 이름")의 한국어 이름으로 name_ko를 덮는다.
+        QID 키는 식음료 행에 적용하지 않는다(체인 항목이 여러 지점에 붙어 있다). 체인은 "국가코드:원문 이름"으로 적는다.
+        Wikidata 한국어 라벨이 정식명이라 한국 여행자가 쓰는 이름과 다른 곳(로쿠온지 → 금각사)을 적는다.
+        표만 고치면 재보강 없이 다음 배치에 반영. 바뀐 행은 embedding=NULL
   [4/4] EmbeddingBatchJob.execute()
         embedding IS NULL AND active=true 인 장소를 100건씩 페이징 조회
-        → EmbeddingTextBuilder.buildText() (name+category+tags+description+region 결합)
+        → EmbeddingTextBuilder.buildText() (name+name_ko+category+tags+description+region 결합)
         → EmbeddingService.embedBatch() (OpenAI text-embedding-3-small, 1536차원)
         → PgVectorPlaceSearchService.storeBatch() (JDBC batchUpdate, ::vector 캐스팅)
         ※ 순서 주의: enrich가 임베딩보다 먼저다 — 같은 실행 안에서 보강 내용이 임베딩에 반영되도록.
+        ※ 미임베딩이 batch.embedding.ann-rebuild-min-pending(기본 20만) 이상이면 HNSW 인덱스를 내렸다가 끝나고
+          다시 만든다(maintenance_work_mem = VECTOR_ANN_BUILD_MEMORY, 기본 1GB — DB 메모리의 1/4 이하로. RDS를
+          줄이면 이 값도 줄인다).
+          나라 하나 적재는 인덱스를 둔 채 넣어 운영 검색이 느려지지 않는다.
+        ※ name_ko가 원문 이름과 같으면 임베딩 텍스트에 넣지 않는다. Wikidata가 name_ko를 채우면 보강이 끝난 행만
+          임베딩을 다시 만든다(보강 전인 행은 보강 결과 반영 때 다시 만들어진다)
+          OpenAI 429는 retry-after(-ms)만큼 기다려 재시도
 ```
 
 ### 규모와 비용 (2026-10 실측, 한국 12개 도시)

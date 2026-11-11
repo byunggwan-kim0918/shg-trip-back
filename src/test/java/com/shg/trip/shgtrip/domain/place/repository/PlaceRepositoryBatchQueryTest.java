@@ -256,6 +256,133 @@ class PlaceRepositoryBatchQueryTest {
         assertThat(placeRepository.findById(b.getId()).orElseThrow().getNameKo()).isNull();
     }
 
+    @Test
+    @DisplayName("보강 결과는 보강 컬럼만 쓰고(배열·null 포함), 다른 컬럼과 이미 있는 name_ko는 그대로 둔다")
+    void writeEnrichment_targetedColumns() {
+        Place p = save("清水寺", "Community and Government > Spiritual Center > Buddhist Temple", 77, false);
+        OffsetDateTime candidateAt = OffsetDateTime.parse("2026-11-01T00:00:00Z");
+        em.createNativeQuery("UPDATE places SET last_candidate_at = ?, name_ko = '기요미즈데라' WHERE id = ?")
+                .setParameter(1, candidateAt).setParameter(2, p.getId()).executeUpdate();
+        em.clear();
+
+        Place enriched = placeRepository.findById(p.getId()).orElseThrow();
+        enriched.enrichWith(List.of("사찰", "전망"), "교토의 절", List.of("morning", "afternoon"), null, null);
+        enriched.recordAdmissionLocal(400, "JPY");
+        enriched.assignRole("SIGHT", null);
+        int changed = placeRepository.writeEnrichment(enriched);
+        em.clear();
+
+        Object[] row = (Object[]) em.createNativeQuery("""
+                SELECT array_to_string(tags, '|'), description, array_to_string(recommended_time_slots, '|'),
+                       recommended_duration_minutes, admission_fee, admission_fee_local, admission_currency,
+                       place_role, cuisine, name_ko, enriched_at IS NOT NULL, last_candidate_at = ?, wikidata_sitelinks
+                  FROM places WHERE id = ?
+                """).setParameter(1, candidateAt).setParameter(2, p.getId()).getSingleResult();
+        assertThat(changed).isEqualTo(1);
+        assertThat(row).containsExactly("사찰|전망", "교토의 절", "morning|afternoon", null, null, 400, "JPY",
+                "SIGHT", null, "기요미즈데라", true, true, 77);
+    }
+
+    @Test
+    @DisplayName("보강 실패 3회인 행은 대상에서 빠지고, 원문 이름이 바뀌면 횟수가 0으로 돌아간다")
+    void enrichAttempts_excludeAndResetOnRename() {
+        Place p = save("실패 명소", "Landmarks and Outdoors > Mountain", 999_999, false);
+        placeRepository.incrementEnrichAttempts(List.of(p.getId()));
+        placeRepository.incrementEnrichAttempts(List.of(p.getId()));
+        assertThat(placeRepository.findEnrichTargetsInRegions(List.of(REGION), List.of(-1L), PageRequest.of(0, 50)))
+                .extracting(Place::getId).contains(p.getId());
+        placeRepository.incrementEnrichAttempts(List.of(p.getId()));
+        em.clear();
+        assertThat(placeRepository.findEnrichTargetsInRegions(List.of(REGION), List.of(-1L), PageRequest.of(0, 50)))
+                .extracting(Place::getId).doesNotContain(p.getId());
+
+        upsert("zz-fsq-attempts", "饭店");
+        em.createNativeQuery("UPDATE places SET enrich_attempts = 3, wikidata_matched_at = now() WHERE fsq_place_id = 'zz-fsq-attempts'")
+                .executeUpdate();
+        upsert("zz-fsq-attempts", "新饭店");
+        em.flush();
+        em.clear();
+        Number attempts = (Number) em.createNativeQuery(
+                "SELECT enrich_attempts FROM places WHERE fsq_place_id = 'zz-fsq-attempts'").getSingleResult();
+        assertThat(attempts.intValue()).isZero();
+    }
+
+    @Test
+    @DisplayName("보정표는 QID나 국가·원문 이름으로 name_ko를 덮고, 바뀐 행만 임베딩을 지운다")
+    void overrideNameKo() {
+        Place byQid = save("鹿苑寺", "Community and Government > Spiritual Center > Buddhist Temple", 57, false);
+        Place byName = save("金閣寺", "Community and Government > Spiritual Center > Buddhist Temple", null, false);
+        em.createNativeQuery("UPDATE places SET wikidata_id = 'Q9999996', name_ko = '로쿠온지', country = 'JP', "
+                        + "embedding = array_fill(0.1, ARRAY[768])::halfvec WHERE id IN (?, ?)")
+                .setParameter(1, byQid.getId()).setParameter(2, byName.getId()).executeUpdate();
+        em.createNativeQuery("UPDATE places SET wikidata_id = NULL WHERE id = ?")
+                .setParameter(1, byName.getId()).executeUpdate();
+
+        int qidChanged = placeRepository.overrideNameKoByQid("Q9999996", "금각사");
+        int again = placeRepository.overrideNameKoByQid("Q9999996", "금각사");
+        int nameChanged = placeRepository.overrideNameKoByName("JP", "金閣寺", "금각사");
+        em.clear();
+
+        assertThat(qidChanged).isEqualTo(1);
+        assertThat(again).isZero();
+        assertThat(nameChanged).isEqualTo(1);
+        assertThat(placeRepository.findById(byQid.getId()).orElseThrow().getNameKo()).isEqualTo("금각사");
+        Object embeddingCleared = em.createNativeQuery("SELECT embedding IS NULL FROM places WHERE id = ?")
+                .setParameter(1, byName.getId()).getSingleResult();
+        assertThat(embeddingCleared).isEqualTo(true);
+    }
+
+    @Test
+    @DisplayName("보강 결과 쓰기는 태그·설명·시간대가 null이어도 된다")
+    void writeEnrichment_nullArraysAndText() {
+        Place p = save("새 명소", "Landmarks and Outdoors > Park", 3, false);
+        em.clear();
+        Place loaded = placeRepository.findById(p.getId()).orElseThrow();
+        loaded.assignRole("SIGHT", null);
+
+        int changed = placeRepository.writeEnrichmentColumns(loaded.getId(), null, null, null, null, null, null, null,
+                "SIGHT", null, null, OffsetDateTime.now());
+        em.clear();
+
+        Object[] row = (Object[]) em.createNativeQuery(
+                        "SELECT tags IS NULL, description IS NULL, recommended_time_slots IS NULL, place_role FROM places WHERE id = ?")
+                .setParameter(1, p.getId()).getSingleResult();
+        assertThat(changed).isEqualTo(1);
+        assertThat(row).containsExactly(true, true, true, "SIGHT");
+    }
+
+    @Test
+    @DisplayName("QID 보정은 식당 행을 건드리지 않는다(체인 항목이 여러 지점에 붙어 있다)")
+    void overrideNameKoByQid_skipsDining() {
+        Place shop = save("鼎泰豐 信義店", "Dining and Drinking > Restaurant > Chinese Restaurant", 20, false);
+        em.createNativeQuery("UPDATE places SET wikidata_id = 'Q9999997', name_ko = '딘타이펑 신이점' WHERE id = ?")
+                .setParameter(1, shop.getId()).executeUpdate();
+
+        int changed = placeRepository.overrideNameKoByQid("Q9999997", "딘타이펑");
+        em.clear();
+
+        assertThat(changed).isZero();
+        assertThat(placeRepository.findById(shop.getId()).orElseThrow().getNameKo()).isEqualTo("딘타이펑 신이점");
+    }
+
+    @Test
+    @DisplayName("Wikidata 한국어 라벨 채움은 보강이 끝난 행만 임베딩을 다시 만든다")
+    void fillNameKo_resetsEmbeddingOnlyWhenEnriched() {
+        Place enriched = save("外滩", "Landmarks and Outdoors > Historic and Protected Site", 40, true);
+        Place pending = save("豫园", "Landmarks and Outdoors > Garden", 30, false);
+        em.createNativeQuery("UPDATE places SET embedding = array_fill(0.1, ARRAY[768])::halfvec WHERE id IN (?, ?)")
+                .setParameter(1, enriched.getId()).setParameter(2, pending.getId()).executeUpdate();
+
+        placeRepository.fillNameKo(enriched.getId(), "와이탄");
+        placeRepository.fillNameKo(pending.getId(), "예원");
+        em.clear();
+
+        assertThat(em.createNativeQuery("SELECT embedding IS NULL FROM places WHERE id = ?")
+                .setParameter(1, enriched.getId()).getSingleResult()).isEqualTo(true);
+        assertThat(em.createNativeQuery("SELECT embedding IS NULL FROM places WHERE id = ?")
+                .setParameter(1, pending.getId()).getSingleResult()).isEqualTo(false);
+    }
+
     private void upsert(String fsqId, String name) {
         placeRepository.upsertFoursquarePlace(fsqId, name, "", BigDecimal.valueOf(31.23), BigDecimal.valueOf(121.47),
                 "CN", REGION, "Dining and Drinking > Restaurant", "{}", "", null);

@@ -94,12 +94,14 @@ public class OpenAIEmbeddingService implements EmbeddingService {
                     return parseEmbeddingsResponse(response.body(), inputs.size());
                 }
 
-                if (isServerError(response.statusCode())) {
-                    log.warn("OpenAI API 서버 에러 (HTTP {}), 재시도 {}/{}",
+                if (isServerError(response.statusCode()) || response.statusCode() == 429) {
+                    log.warn("OpenAI API 일시 오류 (HTTP {}), 재시도 {}/{}",
                             response.statusCode(), attempt + 1, MAX_RETRIES);
                     lastException = new IOException(
-                            "OpenAI API 서버 에러: HTTP " + response.statusCode());
-                    sleepWithBackoff(attempt);
+                            "OpenAI API 일시 오류: HTTP " + response.statusCode());
+                    if (attempt < MAX_RETRIES - 1) {
+                        sleep(Math.max(INITIAL_BACKOFF_MS * (1L << attempt), retryAfterMs(response)));
+                    }
                     continue;
                 }
 
@@ -180,11 +182,33 @@ public class OpenAIEmbeddingService implements EmbeddingService {
     }
 
     private void sleepWithBackoff(int attempt) {
+        sleep(INITIAL_BACKOFF_MS * (1L << attempt));
+    }
+
+    private void sleep(long millis) {
         try {
-            long sleepMs = INITIAL_BACKOFF_MS * (1L << attempt);
-            Thread.sleep(sleepMs);
+            Thread.sleep(millis);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
     }
+
+    /**
+     * 429의 retry-after-ms·retry-after. 같은 서비스가 웹 검색 질의 임베딩도 맡아 상한을 짧게 둔다.
+     */
+    static long retryAfterMs(HttpResponse<String> response) {
+        java.net.http.HttpHeaders headers = response.headers();
+        if (response.statusCode() != 429 || headers == null) return 0;
+        try {
+            var ms = headers.firstValue("retry-after-ms");
+            if (ms.isPresent()) return Math.min(Long.parseLong(ms.get().trim()), MAX_RETRY_AFTER_MS);
+            var sec = headers.firstValue("retry-after");
+            if (sec.isPresent()) return Math.min(Long.parseLong(sec.get().trim()) * 1000, MAX_RETRY_AFTER_MS);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+        return 0;
+    }
+
+    private static final long MAX_RETRY_AFTER_MS = 20_000;
 }
