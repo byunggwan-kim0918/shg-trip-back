@@ -3,6 +3,16 @@
 > Claude AI로 여행 일정을 자동 생성하는 shg-trip 서비스의 Spring Boot 백엔드.
 > 목적지·기간·테마·예산을 입력하면 AI가 동선·시간·테마를 고려한 하루 단위 일정과 차선책을 만들어 SSE로 실시간 전송합니다.
 
+**Live**: [myshgtrip.com](https://myshgtrip.com) · **Frontend**: [shg-trip-front](https://github.com/byunggwan-kim0918/shg-trip-front)
+
+<p align="center">
+  <a href="https://myshgtrip.com"><img src="docs/images/landing.png" width="100%" alt="SHG trip 메인 — 한 문장으로 여행 일정 만들기"></a>
+</p>
+<p align="center">
+  <img src="docs/images/trips.png" width="49%" alt="도시별 추천 코스 목록">
+  <img src="docs/images/course.png" width="49%" alt="코스 상세 — 기간·이동 수단·총 이동·예상 비용 요약">
+</p>
+
 전체 서비스 스펙과 상세 아키텍처는 프로젝트 루트의 [CLAUDE.md](../CLAUDE.md), 백엔드 세부 규칙은 [CLAUDE_BACKEND.md](CLAUDE_BACKEND.md)를 참조하세요.
 
 ## 기술 스택
@@ -272,3 +282,7 @@ Refresh Token은 관계형 DB가 아닌 Redis(Valkey)에 저장됩니다(TTL 7�
 - Service는 기본 `@Transactional(readOnly = true)`, 변경 메서드에만 `@Transactional`
 - Entity 직접 반환 금지 — 반드시 DTO로 변환
 - DB 변경은 `src/main/resources/db/migration/V{n}__{설명}.sql` 추가 (기존 마이그레이션 수정 금지)
+
+## License
+
+All rights reserved — 포트폴리오·참고 목적으로만 공개합니다. 자세한 내용은 [LICENSE.md](LICENSE.md)를 참고하세요.
