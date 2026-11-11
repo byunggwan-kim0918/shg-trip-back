@@ -28,7 +28,8 @@ class OptimizedClaudeAIServicePropertyTest {
                 "claude-haiku-4-5-20250610", "claude-sonnet-4-20250514", 64000);
         ObjectMapper objectMapper = new ObjectMapper();
         fallbackService = mock(ClaudeAIService.class);
-        service = new OptimizedClaudeAIService(anthropicClient, properties, objectMapper, fallbackService);
+        service = new OptimizedClaudeAIService(anthropicClient, properties, objectMapper, fallbackService,
+                com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath());
     }
 
     /**

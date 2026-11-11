@@ -19,11 +19,14 @@
   - 상위 도시로 올리지 마세요. "해운대" → "해운대", "홍대" → "홍대", "신주쿠" → "신주쿠"
   - 상위 도시 입력: "부산" → "부산", "도쿄" → "도쿄"
 - country는 반드시 ISO 3166-1 alpha-2 코드로 반환합니다 (예: KR, JP, US, TH, VN, FR, IT, ES, DE, GB, AU, CN, TW).
-- regions는 DB 장소 데이터 매칭용 영어 상위 도시명으로 반환합니다. Foursquare 데이터 표준을 따릅니다.
+- regions는 DB 장소 데이터 매칭용 영어 이름으로 반환합니다.
   - 한국 도시: Seoul, Busan, Jeju, Incheon, Daegu, Daejeon, Gwangju, Suwon, Gangneung, Gyeongju, Jeonju, Yeosu
-  - 일본 도시: Tokyo, Osaka, Kyoto, Fukuoka, Sapporo, Nagoya, Kobe, Yokohama, Nara, Okinawa
-  - 기타: 해당 국가 공식 영어 표기 도시명 사용
-  - 하위 구역은 상위 도시명으로 매핑합니다: 해운대/남포동/서면 → Busan, 홍대/강남/이태원 → Seoul, 신주쿠/시부야/아키하바라 → Tokyo
+  - 해외 여행지(괄호 안은 한국어 이름과 관문, 관문이 없으면 상위 여행지). 이 목록에 있으면 목록의 영어 이름을 그대로 씁니다:
+{overseasDestinations}
+  - 목록에 없는 해외 도시: 해당 국가 공식 영어 표기 도시명 사용
+  - 하위 구역은 상위 도시명으로 매핑합니다: 해운대/남포동/서면 → Busan, 홍대/강남/이태원 → Seoul, 신주쿠/시부야/아키하바라 → Tokyo, 와이탄/난징루 → Shanghai
+  - 근교 여행지가 목록에 따로 있으면 그 이름을 씁니다: 지우펀 → Jiufen, 하코네 → Hakone, 만리장성 바다링 → Badaling.
+    도시와 근교를 함께 가면 둘 다 넣습니다(타이베이와 지우펀 → ["Taipei", "Jiufen"]).
 - 오타·약어라면 가장 유력한 실제 장소로 정규화하세요. 단, **어떤 실존 장소로도 볼 수 없으면**(섹션 2-c) valid=false(INVALID_DESTINATION)로 응답합니다.
 
 ### 2. 현실성 검증
@@ -63,7 +66,7 @@
 
 | 조건 | 처리 |
 |------|------|
-| `country != "KR"` (해외) | 항상 AIRPORT. arrivalHub/departureHub = 해당 도시 주요 공항명 |
+| `country != "KR"` (해외) | arrivalHub/departureHub = 위 여행지 목록의 관문 영어 이름 그대로. 공항이면 AIRPORT, 역이면 TRAIN_STATION. 관문이 없는 근교 여행지는 괄호 안 상위 여행지의 관문 |
 | 국내 섬 지역 (제주, 울릉도 등) | AIRPORT 또는 FERRY |
 | `description`에 "비행기"/"KTX"/"고속버스" 명시 | 해당 교통수단의 허브 타입 |
 | 국내 육지 + 교통수단 미명시 | null (차량 이동 간주) |
@@ -170,8 +173,8 @@ description(요청 문장)에서 누구와 가는지 추론합니다. 문장에 
   "budgetRange": "MEDIUM",
   "seasonContext": "4월 벚꽃 시즌, 관광객 많음",
   "transportationHub": {
-    "arrivalHub": "나리타 국제공항",
-    "departureHub": "나리타 국제공항",
+    "arrivalHub": "Narita International Airport",
+    "departureHub": "Narita International Airport",
     "hubType": "AIRPORT"
   },
   "categorySearchQueries": {

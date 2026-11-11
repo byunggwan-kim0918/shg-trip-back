@@ -523,14 +523,18 @@ public class WikidataSitelinksJob {
      * 대상 지역이 0개인 실행이 성공으로 끝나고, 그 나라 신규 행은 보강을 기다리기만 한다.
      */
     static List<String> countryScope(List<String> raw, Destinations destinations) {
+        return countryScope(raw, destinations, "batch.wikidata.countries");
+    }
+
+    static List<String> countryScope(List<String> raw, Destinations destinations, String property) {
         List<String> codes = trimmed(raw).stream().map(c -> c.toUpperCase(Locale.ROOT)).distinct().toList();
-        if (codes.isEmpty()) throw new BatchStageFailed("batch.wikidata.countries가 비어 있다(전 국가는 ALL)");
+        if (codes.isEmpty()) throw new BatchStageFailed(property + "가 비어 있다(전 국가는 ALL)");
         if (codes.contains("ALL")) return List.of();
         Set<String> known = new HashSet<>();
         known.add(DOMESTIC_COUNTRY);
         destinations.all().forEach(d -> known.add(d.country()));
         List<String> unknown = codes.stream().filter(c -> !known.contains(c)).toList();
-        if (!unknown.isEmpty()) throw new BatchStageFailed("batch.wikidata.countries에 모르는 국가 코드: " + unknown);
+        if (!unknown.isEmpty()) throw new BatchStageFailed(property + "에 모르는 국가 코드: " + unknown);
         return codes;
     }
 

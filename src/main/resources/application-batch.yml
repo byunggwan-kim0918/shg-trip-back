@@ -117,6 +117,10 @@ batch:
     max-duration: ${BATCH_ENRICH_MAX_DURATION:PT10H}
     # 끝난 배치 결과만 다시 반영(쉼표 구분 batchId, 재제출 없음). 지정하면 새 보강은 하지 않는다
     resume-batch-id: ${BATCH_ENRICH_RESUME_BATCH_ID:}
+  gateways:
+    # 해외 여행지 관문 공항·역(destinations.json gateways)을 장소로 적재(외부 호출 없음)
+    enabled: ${BATCH_GATEWAYS_ENABLED:true}
+    countries: ${BATCH_GATEWAYS_COUNTRIES:ALL}
   name-ko-overrides:
     # 한국어 표시 이름 보정표(name-ko-overrides.tsv) 적용(외부 호출 없음)
     enabled: ${BATCH_NAME_KO_OVERRIDES_ENABLED:true}

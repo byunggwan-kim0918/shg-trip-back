@@ -39,7 +39,8 @@ class OptimizedClaudeAIServiceTest {
         ObjectMapper objectMapper = new ObjectMapper();
         properties = new AnthropicProperties("claude-haiku-4-5-20250610", "claude-sonnet-4-20250514", 64000);
         lenient().when(anthropicClient.messages()).thenReturn(messageService);
-        service = new OptimizedClaudeAIService(anthropicClient, properties, objectMapper, fallbackService);
+        service = new OptimizedClaudeAIService(anthropicClient, properties, objectMapper, fallbackService,
+                com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath());
     }
 
     private ItineraryGenerateRequest createRequest() {
@@ -157,6 +158,28 @@ class OptimizedClaudeAIServiceTest {
         assertThat(result.enrichedInput().regionAllocation()).containsKey("3-4");
         assertThat(result.enrichedInput().regionAllocation().get("3-4"))
                 .containsExactly("아사쿠사", "우에노");
+    }
+
+    @Test
+    @DisplayName("해외 regions는 여행지 표준명으로 바꾸고, 일차별 배분은 하위 구역을 남기며 문자열 값도 받는다")
+    void parseEnrichResponse_canonicalizesOverseasRegions() {
+        String responseJson = """
+                {
+                  "valid": true,
+                  "normalizedDestination": "호찌민",
+                  "country": "VN",
+                  "regions": ["Saigon", "호찌민", "Cu Chi"],
+                  "searchTags": ["관광"],
+                  "regionAllocation": {"1-2": ["호찌민", "District 1"], "3": "cu chi"}
+                }
+                """;
+
+        EnrichmentResult result = service.parseEnrichResponse(responseJson, createRequest());
+
+        assertThat(result.valid()).isTrue();
+        assertThat(result.enrichedInput().regions()).containsExactly("Ho Chi Minh City", "Cu Chi");
+        assertThat(result.enrichedInput().regionAllocation().get("1-2")).containsExactly("Ho Chi Minh City", "District 1");
+        assertThat(result.enrichedInput().regionAllocation().get("3")).containsExactly("Cu Chi");
     }
 
     @Test

@@ -132,6 +132,12 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     );
 
 
+    boolean existsBySourceAndRegionAndName(String source, String region, String name);
+
+    /** 해외 여행지 관문(공항·역). 배치가 destinations.json gateways로 넣는다. */
+    @Query("SELECT p FROM Place p WHERE p.region IN :regions AND p.source = 'gateway' AND p.active = true ORDER BY p.id")
+    List<Place> findGatewaysByRegions(@Param("regions") List<String> regions);
+
     /** 숙소 후보 보완용. region 목록 내 Lodging 카테고리 장소를 평점 순으로 준다. */
     @Query("""
             SELECT p FROM Place p

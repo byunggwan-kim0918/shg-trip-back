@@ -90,8 +90,9 @@ public final class ItineraryScorer {
             checkHard(day, daySteps, first, last, limits, in.startDate(), byName, violations, in.lastDayHubDeadline());
 
             double dayKm = 0;
-            for (StepData s : daySteps) {
-                if (s.transportationDistance() != null) {
+            for (int i = 0; i < daySteps.size(); i++) {
+                StepData s = daySteps.get(i);
+                if (s.transportationDistance() != null && !InvariantChecker.isOverseasHubTransfer(daySteps, i, first, last)) {
                     dayKm += s.transportationDistance().doubleValue() / GeoUtils.ROAD_DISTANCE_FACTOR;
                 }
             }
@@ -177,8 +178,9 @@ public final class ItineraryScorer {
         if (last && hubDeadline != null && endsAtHub && dayEnd > hubDeadline) {
             violations.add("day" + day + " 사용자 출발 시각 초과");
         }
-        for (StepData s : daySteps) {
-            if (s.transportationDistance() != null
+        for (int i = 0; i < daySteps.size(); i++) {
+            StepData s = daySteps.get(i);
+            if (s.transportationDistance() != null && !InvariantChecker.isOverseasHubTransfer(daySteps, i, first, last)
                     && s.transportationDistance().doubleValue() / GeoUtils.ROAD_DISTANCE_FACTOR > limits[0]) {
                 violations.add("day" + day + " 구간 상한 초과(" + name(s) + ")");
             }

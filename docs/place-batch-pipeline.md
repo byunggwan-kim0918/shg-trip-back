@@ -63,6 +63,11 @@ Step Functions (월 1회)
           (수원 31-13, 강릉 32-1, 경주 35-2, 전주 37-12, 여수 38-13) — 기본값이 12개 도시 전부
         → 대상×타입당 최대 1000건, name+region 중복 스킵, source='tourapi', 대표이미지(firstimage) 저장
         → 필요 env: BATCH_TOURAPI_ENABLED=true, TOUR_API_SERVICE_KEY(data.go.kr, URL 인코딩된 키)
+  [1/4-관문] GatewaySeeder.seed()  (batch.gateways.enabled, 기본 true)
+        destinations.json gateways(공항·기차역)를 그 여행지 장소로 넣는다(source='gateway', place_role TRANSIT)
+        → 관문 공항은 대개 여행지 반경 밖(나리타 57km, 간사이 38km, 푸둥 33km)이라 FSQ 추출에 들어오지 않는다
+        → 범위는 BATCH_GATEWAYS_COUNTRIES(기본 ALL). 같은 여행지·이름의 관문 행이 있으면 건너뛴다
+        → 생성 경로가 요청 여행지의 관문을 후보 끝에 붙인다(관문 없는 근교 여행지는 상위 여행지의 관문)
   [1/4-명소] WikidataLandmarkSeeder.seed()  (batch.wikidata.landmarks.enabled=true일 때만)
         지역 대표 명소(사찰·궁·박물관·해변·산 등)를 Wikidata에서 받아 없는 것만 적재
         → 한국: 지역 bbox, 언어판 min-sitelinks(5, 지방 도시는 min-sitelinks-by-region) 이상
@@ -189,6 +194,7 @@ Step Functions (월 1회)
 | 마이그레이션 | `db/migration/V19__add_embedding_columns.sql` (embedding 컬럼+HNSW 인덱스), `V23__create_place_seeding_history.sql`, `V24__remove_places_unique_constraint.sql` |
 | 인기도 매칭 | `domain/place/batch/WikidataSitelinksJob.java` (Wikidata SPARQL, CC0·무인증), 해외 이름 키 `OverseasNameKeys.java` |
 | 대표 명소 적재 | `domain/place/batch/WikidataLandmarkSeeder.java` |
+| 해외 관문 적재 | `domain/place/batch/GatewaySeeder.java` |
 | 해외 여행지 | `src/main/resources/destinations.json` → `domain/place/destination/Destinations.java` (추출기와 같은 파일·배정 규칙) |
 | FSQ 추출 | `fsq-extractor/extract.py` (+ `test_extract.py`) |
 | 설정 | `application-batch.yml` (`batch.foursquare.chunk-size=1000`, `batch.embedding.batch-size=100`, `batch.enrich.chunk-size=1000`, `batch.enrich.enabled` 기본 false, `anthropic.batch.model=claude-haiku-5-5`) |

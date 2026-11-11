@@ -54,8 +54,9 @@ final class InvariantChecker {
 
             double total = 0;
             double maxLeg = 0;
-            for (StepData step : daySteps) {
-                if (step.transportationDistance() == null) continue;
+            for (int s = 0; s < daySteps.size(); s++) {
+                StepData step = daySteps.get(s);
+                if (step.transportationDistance() == null || isOverseasHubTransfer(daySteps, s, i == 0, lastDay)) continue;
                 // 저장된 이동거리는 도로 환산값이라 예산과 같은 직선 단위로 되돌려 비교한다.
                 double straight = step.transportationDistance().doubleValue() / GeoUtils.ROAD_DISTANCE_FACTOR;
                 total += straight;
@@ -80,6 +81,24 @@ final class InvariantChecker {
                     missesDeparture(daySteps, candidates, day)));
         }
         return result;
+    }
+
+    /**
+     * 첫날 해외 도착 허브에서 나오는 구간과 마지막 날 출발 허브로 가는 구간. 해외 관문 공항은 시내에서 30~60km라
+     * 이 구간을 거리 예산에 넣으면 모든 해외 일정의 도착·출발일이 거리 초과가 된다. RouteOptimizer 거리 예산과 기준이 같아야 한다.
+     */
+    static boolean isOverseasHubTransfer(List<StepData> daySteps, int i, boolean firstDay, boolean lastDay) {
+        if (lastDay && i == daySteps.size() - 1 && isOverseasHub(daySteps.get(i))) return true;
+        return firstDay && i == 1 && isOverseasHub(daySteps.get(0));
+    }
+
+    private static boolean isOverseasHub(StepData step) {
+        return step.place() != null && isOverseasHub(step.place().country(), step.place().category());
+    }
+
+    static boolean isOverseasHub(String country, String category) {
+        return country != null && !country.isBlank() && !"KR".equalsIgnoreCase(country.trim())
+                && "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(category));
     }
 
     /**

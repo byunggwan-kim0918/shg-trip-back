@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.*;
@@ -14,6 +15,7 @@ import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -52,6 +54,20 @@ public class OptimizedGenerationExecutor {
     private final PlaceRepository placeRepository;
     private final PlaceRegionValidator placeRegionValidator;
     private final GenerationTraceRecorder traceRecorder;
+    private final Destinations destinations;
+
+    /**
+     * 일정을 만들어 주는 국가. 한국은 늘 포함한다. 장소 적재·검증을 마친 나라만 넣는다. 덜 적재된 나라로 만들면
+     * 후보가 성겨 같은 장소만 도는 일정이 나온다.
+     */
+    @Value("${planning.enabled-countries:KR,JP}")
+    private List<String> enabledCountries = List.of("KR", "JP");
+
+    /** 한국 운전면허(국제운전면허 포함)로 운전할 수 없는 나라. 자동차 요청은 택시·차량 호출로 본다. */
+    private static final Set<String> NO_KOREAN_LICENSE_COUNTRIES = Set.of("CN", "VN");
+
+    /** 공항 부지 안 POI는 공항 대표 좌표에서 2~3km까지 떨어진다. 서로 다른 두 공항이 이 거리 안에 있지는 않다. */
+    private static final double SAME_AIRPORT_KM = 3.0;
 
     /** 보완 숙소가 기존 후보 median 중심점에서 이 거리(km)를 넘으면 지역 오태깅으로 보고 제외한다. */
     private static final double MAX_ACCOMMODATION_RADIUS_KM = 100.0;
@@ -82,10 +98,20 @@ public class OptimizedGenerationExecutor {
             }
 
             VectorEnrichedInput.CompanionType chosen = VectorEnrichedInput.companionOf(request.companion());
-            VectorEnrichedInput enrichedInput = enrichResult.enrichedInput().withCompanion(chosen,
+            VectorEnrichedInput withCompanion = enrichResult.enrichedInput().withCompanion(chosen,
                     request.partySize() != null ? request.partySize() : VectorEnrichedInput.defaultPartySize(chosen));
+            boolean carWithoutLicense = isCarWithoutKoreanLicense(withCompanion);
+            VectorEnrichedInput enrichedInput = carWithoutLicense ? withCompanion.withTransportPref("any") : withCompanion;
             long days = ChronoUnit.DAYS.between(enrichedInput.startDate(), enrichedInput.endDate()) + 1;
             stageMark = logStage("enrich", stageMark);
+
+            if (!isEnabledCountry(enrichedInput.country())) {
+                log.info("OptimizedGeneration 중단 (jobId={}, reason=country_not_enabled, country={})",
+                        jobId, enrichedInput.country());
+                sendSseError(emitter, ErrorCode.INSUFFICIENT_PLACE_DATA.getCode(),
+                        notEnabledMessage(enrichedInput.country()));
+                return;
+            }
 
             // [20%] 카테고리별 벡터 검색
             if (cancellationRegistry.isCancelled(jobId)) return;
@@ -95,6 +121,10 @@ public class OptimizedGenerationExecutor {
                     () -> vectorSearchQueryService.search(enrichedInput));
 
             List<String> pickNotices = new ArrayList<>();
+            if (carWithoutLicense) {
+                pickNotices.add(Destinations.countryNameKo(enrichedInput.country().trim().toUpperCase(Locale.ROOT))
+                        + "은 한국 운전면허로 운전할 수 없어 택시·차량 호출로 다니는 기준으로 짰어요.");
+            }
             List<String> unresolvedNames = new ArrayList<>();
             List<Place> selectedPlaces = new ArrayList<>(resolveSelectedPlaces(request, pickNotices));
             // DB 조회뿐이지만 느려질 때 프록시가 끊지 않게 heartbeat로 감싼다.
@@ -118,6 +148,13 @@ public class OptimizedGenerationExecutor {
             }
             FallbackDecider.PoolQuality poolQuality = fallbackDecider.assess(candidates, days);
 
+            if (poolQuality == FallbackDecider.PoolQuality.FALLBACK && isOverseas(enrichedInput.country())) {
+                // fallback은 모델이 지은 장소 이름을 이름·주소로 DB에서 찾는데, 해외 장소는 표기가 달라 거의 찾지 못한다.
+                log.info("OptimizedGeneration 중단 (jobId={}, reason=overseas_sparse, regions={})",
+                        jobId, enrichedInput.regions());
+                sendSseError(emitter, ErrorCode.INSUFFICIENT_PLACE_DATA.getCode(), sparseOverseasMessage(enrichedInput));
+                return;
+            }
             if (poolQuality == FallbackDecider.PoolQuality.FALLBACK) {
                 sendSseEvent(emitter, "FALLBACK", 30, "Fallback 경로로 일정을 생성합니다...");
                 log.info("OptimizedGeneration → Fallback (jobId={}, reason=insufficient_candidates)", jobId);
@@ -153,11 +190,11 @@ public class OptimizedGenerationExecutor {
             final List<String> ferryTokens = FerryAreaFilter.activeTokens(enrichedInput.ferryOnlyAreas(),
                     enrichedInput.description(), request.customPlaceNames(), candidates);
             // 다인실 숙소를 뺀 뒤에 보완 여부를 판단하고, 보완 숙소도 같은 필터를 거친다(두 번째 exclude).
-            final List<PlaceCandidate> enrichedCandidates = dedupePhysicalCandidates(
+            final List<PlaceCandidate> enrichedCandidates = appendGateways(dedupePhysicalCandidates(
                     FerryAreaFilter.exclude(ensureAccommodationCandidates(
                             excludeDormLodging(FerryAreaFilter.exclude(enrichCandidatesFromDb(candidates),
                                     ferryTokens), enrichedInput),
-                            enrichedInput.regions(), enrichedInput), ferryTokens));
+                            enrichedInput.regions(), enrichedInput), ferryTokens)), enrichedInput.regions());
             stageMark = logStage("sync", stageMark);
 
             // [50%] Call 1: Sonnet selectPlaces
@@ -940,19 +977,96 @@ public class OptimizedGenerationExecutor {
         List<PlaceCandidate> result = new ArrayList<>(candidates);
         int nextIndex = candidates.size() + 1;
         for (Place hotel : saneHotels) {
-            result.add(new PlaceCandidate(
-                    nextIndex++, hotel.getId(), hotel.getName(), hotel.getAddress(),
-                    hotel.getCategory(), hotel.getTags(), hotel.getRegion(), hotel.getCountry(),
-                    hotel.getLatitude(), hotel.getLongitude(), hotel.getDescription(),
-                    hotel.getRating(), 0.0, null, hotel.getOpeningHours(),
-                    hotel.getRecommendedTimeSlots(), hotel.getRecommendedDurationMinutes(),
-                    false, hotel.getAdmissionFee(),
-                    PlaceCategoryConstants.extractSubRegion(hotel.getAddress()),
-                    hotel.getUserRatingCount(), hotel.getWikidataSitelinks(),
-                    hotel.getPlaceRole(), hotel.getCuisine(), false, null, hotel.getAttributes()
-            ));
+            result.add(toCandidate(hotel, nextIndex++));
         }
         return result;
+    }
+
+    private static PlaceCandidate toCandidate(Place place, int index) {
+        return new PlaceCandidate(
+                index, place.getId(), place.getName(), place.getAddress(),
+                place.getCategory(), place.getTags(), place.getRegion(), place.getCountry(),
+                place.getLatitude(), place.getLongitude(), place.getDescription(),
+                place.getRating(), 0.0, null, place.getOpeningHours(),
+                place.getRecommendedTimeSlots(), place.getRecommendedDurationMinutes(),
+                false, place.getAdmissionFee(),
+                PlaceCategoryConstants.extractSubRegion(place.getAddress()),
+                place.getUserRatingCount(), place.getWikidataSitelinks(),
+                place.getPlaceRole(), place.getCuisine(), false, null, place.getAttributes());
+    }
+
+    /**
+     * 해외 여행지의 관문(공항·역, source='gateway')을 후보에 넣는다. 관문 공항은 대개 여행지 반경 밖이라 지역 검색에
+     * 잡히지 않고, 없으면 도착·출발 허브가 시내 역으로 대신 잡힌다.
+     */
+    List<PlaceCandidate> appendGateways(List<PlaceCandidate> candidates, List<String> regions) {
+        if (regions == null || regions.isEmpty()) return candidates;
+        List<String> gatewayRegions = regions.stream().map(destinations::gatewayRegion).distinct().toList();
+        List<Place> gateways = placeRepository.findGatewaysByRegions(gatewayRegions);
+        if (gateways.isEmpty()) return candidates;
+        Set<String> known = knownKeys(candidates);
+        List<PlaceCandidate> result = new ArrayList<>(candidates);
+        for (Place gateway : gateways) {
+            PlaceCandidate c = toCandidate(gateway, result.size() + 1);
+            if (hasNearbyAirport(candidates, c) || !addIfNew(known, c)) continue;
+            result.add(c);
+        }
+        if (result.size() > candidates.size()) {
+            log.info("관문 후보 추가: {}", result.subList(candidates.size(), result.size()).stream()
+                    .map(PlaceCandidate::name).toList());
+        }
+        return result;
+    }
+
+    /** 같은 공항의 FSQ 행은 관문과 좌표가 수백 m 달라 이름·좌표 키로 걸리지 않는다. */
+    private static boolean hasNearbyAirport(List<PlaceCandidate> candidates, PlaceCandidate gateway) {
+        if (!isAirport(gateway) || gateway.latitude() == null || gateway.longitude() == null) return false;
+        return candidates.stream().anyMatch(c -> isAirport(c) && c.latitude() != null && c.longitude() != null
+                && GeoUtils.haversine(c.latitude().doubleValue(), c.longitude().doubleValue(),
+                        gateway.latitude().doubleValue(), gateway.longitude().doubleValue()) <= SAME_AIRPORT_KM);
+    }
+
+    private static boolean isAirport(PlaceCandidate c) {
+        return c.category() != null && c.category().toLowerCase(Locale.ROOT).contains("airport")
+                && "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category()));
+    }
+
+    /** 국가를 모르면(enrich 실패로 legacy 경로) 막지 않는다. */
+    boolean isEnabledCountry(String country) {
+        if (country == null || country.isBlank() || "KR".equalsIgnoreCase(country)) return true;
+        return enabledCountries.stream().anyMatch(c -> c.trim().equalsIgnoreCase(country.trim()));
+    }
+
+    static boolean isCarWithoutKoreanLicense(VectorEnrichedInput input) {
+        return "car".equals(input.transportPref()) && input.country() != null
+                && NO_KOREAN_LICENSE_COUNTRIES.contains(input.country().trim().toUpperCase(Locale.ROOT));
+    }
+
+    private static boolean isOverseas(String country) {
+        return country != null && !country.isBlank() && !"KR".equalsIgnoreCase(country);
+    }
+
+    String notEnabledMessage(String country) {
+        String enabled = enabledCountries.stream().map(String::trim).filter(c -> !c.isEmpty())
+                .map(Destinations::countryNameKo).distinct().collect(Collectors.joining("·"));
+        String name = Destinations.countryNameKo(country);
+        String subject = name.equals(country) ? "이 여행지는" : name + " 여행지는";
+        return subject + " 아직 준비 중이에요. 지금은 " + enabled + " 여행지로 일정을 만들 수 있어요.";
+    }
+
+    /** 근교 여행지만으로 장소가 부족하면 상위 도시와 묶어 다시 요청하도록 안내한다. */
+    String sparseOverseasMessage(VectorEnrichedInput input) {
+        if (input.regions() != null) {
+            for (String region : input.regions()) {
+                var parent = destinations.find(region).map(d -> d.parent()).flatMap(destinations::find);
+                if (parent.isPresent() && !input.regions().contains(parent.get().name())) {
+                    String child = destinations.find(region).map(d -> d.nameKo()).orElse(region);
+                    return "'" + child + "'만으로는 장소가 적어 일정을 만들기 어려워요. '" + parent.get().nameKo()
+                            + "'까지 함께 넣어 다시 요청해 주세요.";
+                }
+            }
+        }
+        return ErrorCode.INSUFFICIENT_PLACE_DATA.getMessage();
     }
 
     /**

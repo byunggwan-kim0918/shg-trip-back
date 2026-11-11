@@ -59,6 +59,22 @@ class ItineraryScorerTest {
     }
 
     @Test
+    @DisplayName("해외 관문 공항 구간은 구간 상한·하루 거리에서 빼고, 국내 공항 구간은 센다")
+    void overseasHubTransferNotCounted() {
+        String airport = "Travel and Transportation > Transport Hub > Airport";
+
+        ScoreReport overseas = scorer.score(new ItineraryScorer.Input(List.of(
+                stepIn(1, 1, "10:00", "10:30", "Narita International Airport", airport, null, null, "JP"),
+                stepIn(2, 1, "12:00", "13:00", "식당", RESTAURANT, 80, 120.0, "JP")), "normal", "car", null, null, null));
+        ScoreReport domestic = scorer.score(new ItineraryScorer.Input(List.of(
+                stepIn(1, 1, "10:00", "10:30", "공항", airport, null, null, "KR"),
+                stepIn(2, 1, "12:00", "13:00", "식당", RESTAURANT, 80, 120.0, "KR")), "normal", "car", null, null, null));
+
+        assertThat(overseas.violations()).noneMatch(v -> v.contains("구간 상한 초과"));
+        assertThat(domestic.violations()).anyMatch(v -> v.contains("구간 상한 초과"));
+    }
+
+    @Test
     @DisplayName("휴무 요일에 넣은 장소는 하드 위반 — 후보에 영업시간이 있을 때만 판정")
     void closedDayIsHardViolation() {
         LocalDate monday = LocalDate.of(2026, 11, 2);
@@ -108,7 +124,12 @@ class ItineraryScorerTest {
 
     private static StepData step(int order, int day, String start, String end, String name, String category,
                                  Integer travelMin, Double km) {
-        return new StepData(order, day, start, end, new PlaceData(name, null, category, "Jeju", "KR"),
+        return stepIn(order, day, start, end, name, category, travelMin, km, "KR");
+    }
+
+    private static StepData stepIn(int order, int day, String start, String end, String name, String category,
+                                   Integer travelMin, Double km, String country) {
+        return new StepData(order, day, start, end, new PlaceData(name, null, category, "Jeju", country),
                 List.of(), travelMin == null ? null : "CAR", travelMin,
                 km == null ? null : BigDecimal.valueOf(km), null, null, null);
     }

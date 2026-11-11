@@ -18,7 +18,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PlaceRegionValidatorTest {
 
-    private final PlaceRegionValidator validator = new PlaceRegionValidator();
+    private final PlaceRegionValidator validator =
+            new PlaceRegionValidator(com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath());
 
     private Place place(String name, String region) {
         return place(name, region, "KR");
@@ -93,12 +94,26 @@ class PlaceRegionValidatorTest {
     }
 
     @Test
-    @DisplayName("해외(country != KR)는 place.region 포맷 미정의라 검증 스킵")
-    void skipsWhenOverseas() {
+    @DisplayName("해외도 여행지가 다른 장소는 거절한다")
+    void rejectsOverseasMismatch() {
         var enriched = enriched("도쿄", List.of("Tokyo"), "JP", null);
-        var places = List.of(place("어떤장소", "Seoul", "JP"));
+        var places = List.of(place("어떤장소", "Osaka", "JP"));
 
-        assertThatCode(() -> validator.validate(places, enriched)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> validator.validate(places, enriched)).isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    @DisplayName("해외는 근교·상위 여행지 장소를 허용한다(타이베이 여행의 지우펀, 하코네 여행의 도쿄)")
+    void allowsOverseasNearbyDestinations() {
+        assertThatCode(() -> validator.validate(List.of(place("九份老街", "Jiufen", "TW")),
+                enriched("타이베이", List.of("Taipei"), "TW", null))).doesNotThrowAnyException();
+        assertThatCode(() -> validator.validate(List.of(place("東京駅", "Tokyo", "JP")),
+                enriched("하코네", List.of("Hakone"), "JP", null))).doesNotThrowAnyException();
+        // 교토·나라는 둘 다 오사카 근교라 서로 허용한다
+        assertThatCode(() -> validator.validate(List.of(place("奈良公園", "Nara", "JP")),
+                enriched("교토", List.of("Kyoto"), "JP", null))).doesNotThrowAnyException();
+        assertThatCode(() -> validator.validate(List.of(place("城崎温泉", "Kinosaki", "JP")),
+                enriched("나라", List.of("Nara"), "JP", null))).doesNotThrowAnyException();
     }
 
     @Test
