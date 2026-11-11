@@ -23,6 +23,10 @@ class OverseasEnrichmentTest {
         assertThat(OverseasEnrichment.isOverseas("JP")).isTrue();
         assertThat(OverseasEnrichment.isOverseas("KR")).isFalse();
         assertThat(OverseasEnrichment.isOverseas("일본")).isFalse();
+        // 보강이 받는 통화마다 원화 환율이 있어야 입장료가 일정 비용에 들어간다
+        assertThat(OverseasEnrichment.COUNTRIES.values()).allSatisfy(c ->
+                assertThat(com.shg.trip.shgtrip.domain.place.destination.KrwRates.toWon(1_000, c.currency().code()))
+                        .as(c.currency().code()).isNotNull());
     }
 
     @Test

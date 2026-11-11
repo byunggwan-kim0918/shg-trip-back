@@ -286,7 +286,7 @@ public class VectorSearchQueryService {
                     r.region(), r.country(), r.latitude(), r.longitude(), r.description(),
                     r.rating(), r.similarityScore(), null, null, null, null, false, null,
                     PlaceCategoryConstants.extractSubRegion(r.address()), r.userRatingCount(),
-                    r.wikidataSitelinks(), r.placeRole(), r.cuisine(), false, null, r.attributes());
+                    r.wikidataSitelinks(), r.placeRole(), r.cuisine(), false, null, r.attributes(), r.nameKo());
             if (CandidatePolicy.roleOf(c) == CandidatePolicy.Role.NOT_VISITABLE) continue;
             result.add(c);
             index++;
@@ -659,7 +659,9 @@ public class VectorSearchQueryService {
         // 식당 "광안리유가횟집"이 있다고 광안리해수욕장을 말한 게 해결되지는 않는다.
         List<String> knownNames = already.stream()
                 .filter(r -> "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(r.category())))
-                .map(r -> placeName(r.name())).toList();
+                .flatMap(r -> java.util.stream.Stream.of(placeName(r.name()), placeName(r.nameKo())))
+                .filter(n -> !n.isEmpty())
+                .toList();
         Set<String> knownQids = already.stream().map(VectorSearchResult::wikidataId).filter(Objects::nonNull)
                 .collect(Collectors.toSet());
 
@@ -668,7 +670,7 @@ public class VectorSearchQueryService {
                 NAMED_SCAN_LIMIT)) {
             if (!"ATTRACTION".equals(PlaceCategoryConstants.majorCategory(r.category()))
                     || PlaceCategoryConstants.isAdministrativeZone(r.name())) continue;
-            String mention = mentionedPrefix(placeName(r.name()), text);
+            String mention = mentionOf(r, text);
             if (mention == null || destination.contains(mention)) continue;
             // 언어판 내림차순이라 같은 이름을 먼저 가진 쪽이 대표 명소다.
             byMention.putIfAbsent(mention, r);
@@ -686,6 +688,13 @@ public class VectorSearchQueryService {
             log.info("요청 문장에 나온 명소 추가: {}", out.stream().map(VectorSearchResult::name).toList());
         }
         return out;
+    }
+
+    /** 해외 명소는 원문 이름("浅草寺")이 한국어 문장에 나오지 않아 한국어 이름("센소지")으로도 본다. */
+    private static String mentionOf(VectorSearchResult r, String text) {
+        String byName = mentionedPrefix(placeName(r.name()), text);
+        if (byName != null || r.nameKo() == null) return byName;
+        return mentionedPrefix(placeName(r.nameKo()), text);
     }
 
     /** 이름의 앞부분 중 문장에 나오는 가장 긴 것. 너무 짧으면 null. */
@@ -844,7 +853,8 @@ public class VectorSearchQueryService {
                     r.cuisine(),
                     false,
                     null,
-                    r.attributes()
+                    r.attributes(),
+                    r.nameKo()
             ));
         }
         if (!results.isEmpty()) {

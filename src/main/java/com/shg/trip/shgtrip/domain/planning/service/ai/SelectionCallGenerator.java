@@ -256,7 +256,7 @@ public class SelectionCallGenerator {
                 hasVia = true;
             }
             sb.append(candidate.index()).append(" | ")
-                    .append(candidate.name()).append(" | ")
+                    .append(candidate.promptName()).append(" | ")
                     // 이름과 태그만으로는 흑돼지집인지 카페인지 알 수 없어 같은 종류 끼니가 반복된다.
                     .append(roleLabel(candidate)).append(summarizeCategory(candidate.category())).append(" | ")
                     .append(formatRating(candidate.rating(), candidate.wikidataSitelinks())).append(" | ")

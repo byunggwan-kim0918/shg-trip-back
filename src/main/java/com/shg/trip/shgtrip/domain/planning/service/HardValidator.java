@@ -83,8 +83,10 @@ public class HardValidator {
             if (step.place() != null && step.place().name() != null && !step.place().name().isBlank()
                     && !isAccommodationStep(step) && !isTransitHubStep(step)) {
                 String placeName = step.place().name();
+                // 주소 없는 체인은 지점마다 이름이 같아 후보 id가 있으면 id로 같은 장소인지 본다.
+                String placeKey = step.place().placeId() != null ? "id:" + step.place().placeId() : placeName;
                 visitedPlacesByDay.computeIfAbsent(step.dayNumber(), k -> new HashSet<>());
-                if (!visitedPlacesByDay.get(step.dayNumber()).add(placeName)) {
+                if (!visitedPlacesByDay.get(step.dayNumber()).add(placeKey)) {
                     errors.add(prefix + String.format("같은 날(%d일차) '%s'가 중복 방문됩니다.",
                             step.dayNumber(), placeName));
                 }

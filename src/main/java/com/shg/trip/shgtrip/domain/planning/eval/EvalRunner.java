@@ -7,6 +7,7 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
+import com.shg.trip.shgtrip.domain.place.destination.KrwRates;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
@@ -198,7 +199,8 @@ public class EvalRunner implements CommandLineRunner {
                 .map(s -> {
                     Place p = s.getPlace();
                     PlaceData place = p == null ? null
-                            : new PlaceData(p.getName(), p.getAddress(), p.getCategory(), p.getRegion(), p.getCountry());
+                            : new PlaceData(p.getName(), p.getAddress(), p.getCategory(), p.getRegion(), p.getCountry(),
+                                    null, null, p.getId(), p.getNameKo());
                     return new StepData(s.getStepOrder(), s.getDayNumber(), s.getStartTime(), s.getEndTime(), place,
                             List.of(), s.getTransportationMode(), s.getTransportationDuration(),
                             s.getTransportationDistance(), s.getTransportationCost(), s.getNotes(),
@@ -231,8 +233,9 @@ public class EvalRunner implements CommandLineRunner {
             out.add(new PlaceCandidate(index++, p.getId(), p.getName(), p.getAddress(), p.getCategory(), p.getTags(),
                     p.getRegion(), p.getCountry(), p.getLatitude(), p.getLongitude(), p.getDescription(),
                     p.getRating(), 0, p.getPriceLevel(), p.getOpeningHours(), p.getRecommendedTimeSlots(),
-                    p.getRecommendedDurationMinutes(), false, p.getAdmissionFee(), null, p.getUserRatingCount(),
-                    p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine(), false, null, p.getAttributes()));
+                    p.getRecommendedDurationMinutes(), false, KrwRates.admissionWon(p), null, p.getUserRatingCount(),
+                    p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine(), false, null, p.getAttributes(),
+                    p.getNameKo()));
         }
         return out;
     }

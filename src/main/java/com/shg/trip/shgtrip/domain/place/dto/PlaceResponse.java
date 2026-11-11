@@ -18,7 +18,8 @@ public record PlaceResponse(
         String openingHours,
         String imageUrl,
         String region,
-        OffsetDateTime savedAt
+        OffsetDateTime savedAt,
+        String nameKo
 ) {
     public static PlaceResponse from(Place place) {
         return new PlaceResponse(
@@ -34,7 +35,8 @@ public record PlaceResponse(
                 place.getOpeningHours(),
                 place.getImageUrl(),
                 place.getRegion(),
-                place.getSavedAt()
+                place.getSavedAt(),
+                place.getNameKo()
         );
     }
 }

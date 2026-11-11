@@ -55,14 +55,14 @@ public class ItineraryDataMapper {
     }
 
     /**
-     * @param referenceCoord 후보 장소 좌표의 median 중심점. null이면 일정에 든 장소들의
-     *                       median을 자체 기준으로 쓴다.
+     * @param referenceCenters 여행지별 후보 좌표 median 중심점. 장소는 가장 가까운 중심점에서 잰다(도쿄+오사카 일정).
+     *                         null이나 빈 목록이면 일정에 든 장소들의 median을 자체 기준으로 쓴다.
      */
     public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId,
-                              boolean alreadyOptimized, double[] referenceCoord) {
+                              boolean alreadyOptimized, List<double[]> referenceCenters) {
         Map<String, PlaceData> uniquePlaces = collectUniquePlaces(data);
 
-        Map<String, Place> placeCache = batchResolvePlaces(uniquePlaces, referenceCoord);
+        Map<String, Place> placeCache = batchResolvePlaces(uniquePlaces, referenceCenters);
 
         List<StepData> optimizedSteps;
         if (alreadyOptimized) {
@@ -126,42 +126,59 @@ public class ItineraryDataMapper {
 
     private void addToMap(Map<String, PlaceData> map, AlternativeData alt) {
         if (alt == null || alt.name() == null) return;
-        map.putIfAbsent(altKey(alt), new PlaceData(alt.name(), alt.address(), alt.category(), alt.region(), alt.country()));
+        map.putIfAbsent(altKey(alt), new PlaceData(alt.name(), alt.address(), alt.category(), alt.region(),
+                alt.country(), null, null, alt.placeId(), alt.nameKo()));
     }
 
+    /** 주소 없는 체인 지점은 이름+주소가 같아 id가 있으면 id로 구분한다. */
     private String placeKey(PlaceData pd) {
-        return pd.name() + "|" + (pd.address() != null ? pd.address() : "");
+        return key(pd.placeId(), pd.name(), pd.address());
     }
 
     private String altKey(AlternativeData alt) {
-        return alt.name() + "|" + (alt.address() != null ? alt.address() : "");
+        return key(alt.placeId(), alt.name(), alt.address());
+    }
+
+    private static String key(Long placeId, String name, String address) {
+        if (placeId != null) return "id:" + placeId;
+        return name + "|" + (address != null ? address : "");
     }
 
     /** 못 찾았거나 너무 먼 장소는 캐시에 넣지 않는다. 호출자가 그 스텝을 버린다. 신선도는 적재 배치의 책임이다. */
     private Map<String, Place> batchResolvePlaces(Map<String, PlaceData> uniquePlaces,
-                                                  double[] referenceCoord) {
+                                                  List<double[]> referenceCenters) {
+        List<Long> ids = uniquePlaces.values().stream().map(PlaceData::placeId).filter(Objects::nonNull)
+                .distinct().toList();
+        // 후보로 고른 장소는 그사이 배치가 비활성으로 돌렸어도 그 장소다. 이름+주소로 다시 찾으면 다른 지점이 붙는다.
+        Map<Long, Place> byId = new HashMap<>();
+        if (!ids.isEmpty()) {
+            placeRepository.findAllById(ids).forEach(p -> byId.put(p.getId(), p));
+        }
+
         // 거리 판정은 기준 좌표가 정해진 뒤에 해야 하므로 조회만 먼저 한다.
         Map<String, Place> found = new LinkedHashMap<>();
         List<String> unresolved = new ArrayList<>();
         for (Map.Entry<String, PlaceData> entry : uniquePlaces.entrySet()) {
             PlaceData pd = entry.getValue();
-            Optional<Place> hit = placeRepository.findByNameAndAddress(pd.name(), pd.address());
-            if (hit.isEmpty()) {
+            Place hit = pd.placeId() != null ? byId.get(pd.placeId()) : null;
+            if (hit == null) hit = placeRepository.findByNameAndAddress(pd.name(), pd.address()).orElse(null);
+            if (hit == null) {
                 unresolved.add(pd.name());
             } else {
-                found.put(entry.getKey(), hit.get());
+                found.put(entry.getKey(), hit);
             }
         }
 
         // 호출자가 준 기준은 후보 수십 건의 median이고, 자체 median은 일정 장소 몇 개짜리라 약하다.
-        boolean selfDerivedReference = referenceCoord == null;
-        double[] destinationCoord = selfDerivedReference ? medianOf(found.values()) : referenceCoord;
+        boolean selfDerivedReference = referenceCenters == null || referenceCenters.isEmpty();
+        List<double[]> centers = selfDerivedReference
+                ? Stream.ofNullable(medianOf(found.values())).toList() : referenceCenters;
 
         // 과반이 걸리면 기준 좌표 쪽을 의심해야 하므로 아직 버리지 않고 추리기만 한다.
         List<String> farKeys = new ArrayList<>();
         for (Map.Entry<String, Place> entry : found.entrySet()) {
             Place place = entry.getValue();
-            if (isFarFromDestination(place.getLatitude(), place.getLongitude(), destinationCoord)) {
+            if (isFarFromDestination(place.getLatitude(), place.getLongitude(), centers)) {
                 farKeys.add(entry.getKey());
             }
         }
@@ -206,12 +223,12 @@ public class ItineraryDataMapper {
         return new double[]{GeoUtils.median(lats), GeoUtils.median(lngs)};
     }
 
-    /** destinationCoord/좌표가 없거나 (0,0) fallback 마커면 false. */
-    private boolean isFarFromDestination(BigDecimal lat, BigDecimal lng, double[] destinationCoord) {
-        if (destinationCoord == null || lat == null || lng == null) return false;
+    /** 모든 중심점에서 멀어야 true. 중심점·좌표가 없거나 (0,0) fallback 마커면 false. */
+    private boolean isFarFromDestination(BigDecimal lat, BigDecimal lng, List<double[]> centers) {
+        if (centers.isEmpty() || lat == null || lng == null) return false;
         if (BigDecimal.ZERO.compareTo(lat) == 0 && BigDecimal.ZERO.compareTo(lng) == 0) return false;
-        double distKm = GeoUtils.haversine(destinationCoord[0], destinationCoord[1], lat.doubleValue(), lng.doubleValue());
-        return distKm > DESTINATION_DISTANCE_THRESHOLD_KM;
+        return centers.stream().allMatch(c ->
+                GeoUtils.haversine(c[0], c[1], lat.doubleValue(), lng.doubleValue()) > DESTINATION_DISTANCE_THRESHOLD_KM);
     }
 
     /**

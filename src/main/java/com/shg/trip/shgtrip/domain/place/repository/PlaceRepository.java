@@ -52,7 +52,8 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             WHERE p.active = true
               AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
               AND NOT (p.latitude = 0 AND p.longitude = 0)
-              AND LOWER(p.name) LIKE LOWER(CONCAT('%', :name, '%'))
+              AND (LOWER(p.name) LIKE LOWER(CONCAT('%', :name, '%'))
+                OR LOWER(p.nameKo) LIKE LOWER(CONCAT('%', :name, '%')))
             ORDER BY (6371 * acos(
                 cos(radians(:lat)) * cos(radians(p.latitude)) *
                 cos(radians(p.longitude) - radians(:lng)) +
@@ -70,7 +71,8 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             WHERE p.active = true
               AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
               AND NOT (p.latitude = 0 AND p.longitude = 0)
-              AND LOWER(p.name) LIKE LOWER(CONCAT('%', :name, '%'))
+              AND (LOWER(p.name) LIKE LOWER(CONCAT('%', :name, '%'))
+                OR LOWER(p.nameKo) LIKE LOWER(CONCAT('%', :name, '%')))
             ORDER BY LENGTH(p.name), p.id
             """)
     List<Place> findActiveByNameLike(@Param("name") String name, Pageable pageable);
@@ -88,13 +90,16 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND (:category IS NULL OR p.category = :category)
               AND (LOWER(p.name) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+                OR LOWER(p.nameKo) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
                 OR LOWER(p.address) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
                 OR LOWER(p.description) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')
             ORDER BY CASE
-                       WHEN LOWER(p.name) = :exact THEN 0
+                       WHEN LOWER(p.name) = :exact OR LOWER(p.nameKo) = :exact THEN 0
                        WHEN LOWER(p.name) LIKE CONCAT(:keyword, ' (%') ESCAPE '\\' THEN 0
-                       WHEN LOWER(p.name) LIKE CONCAT(:keyword, '%') ESCAPE '\\' THEN 1
-                       WHEN LOWER(p.name) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' THEN 2
+                       WHEN LOWER(p.name) LIKE CONCAT(:keyword, '%') ESCAPE '\\'
+                         OR LOWER(p.nameKo) LIKE CONCAT(:keyword, '%') ESCAPE '\\' THEN 1
+                       WHEN LOWER(p.name) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+                         OR LOWER(p.nameKo) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\' THEN 2
                        ELSE 3
                      END,
                      p.wikidataSitelinks DESC NULLS LAST,
@@ -108,6 +113,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND (:category IS NULL OR p.category = :category)
               AND (LOWER(p.name) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+                OR LOWER(p.nameKo) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
                 OR LOWER(p.address) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
                 OR LOWER(p.description) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')
             """)
