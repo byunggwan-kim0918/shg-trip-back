@@ -13,7 +13,8 @@ public final class EmbeddingTextBuilder {
     }
 
     /**
-     * 형식: "[name] [category] [tags joined by space] [description] [region]". null이거나 빈 필드는 건너뛴다.
+     * 형식: "[name] [name_ko] [category] [tags joined by space] [description] [region]". null이거나 빈 필드는 건너뛴다.
+     * 해외 장소는 원문 이름만으로는 한국어 질의("센소지")와 가까워지지 않아 name_ko를 함께 넣는다.
      *
      * @throws IllegalArgumentException place가 null이거나 name이 null/빈 값인 경우
      */
@@ -29,6 +30,7 @@ public final class EmbeddingTextBuilder {
 
         String combined = Stream.of(
                         place.getName(),
+                        place.getNameKo() == null || place.getNameKo().equals(place.getName()) ? null : place.getNameKo(),
                         place.getCategory(),
                         tagsText,
                         place.getDescription(),

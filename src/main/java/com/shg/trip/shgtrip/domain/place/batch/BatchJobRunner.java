@@ -26,6 +26,7 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     private final BatchEnrichScheduler batchEnrichScheduler;
     private final WikidataSitelinksJob wikidataSitelinksJob;
     private final WikidataLandmarkSeeder wikidataLandmarkSeeder;
+    private final NameKoOverrideJob nameKoOverrideJob;
     private final PlaceRoleBackfillJob placeRoleBackfillJob;
     private final TourApiDetailJob tourApiDetailJob;
     private final ApplicationContext context;
@@ -57,6 +58,10 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     /** 임베딩만 채우는 재실행에서는 끈다. 52,000행 upsert에 20분 이상 걸리고 얻는 게 없다. */
     @Value("${batch.foursquare.enabled:true}")
     private boolean foursquareEnabled;
+
+    /** 보강·Wikidata 매칭 뒤, 임베딩 전에 돌아야 보정한 이름이 같은 실행의 임베딩에 들어간다. */
+    @Value("${batch.name-ko-overrides.enabled:true}")
+    private boolean nameKoOverridesEnabled;
 
     /** 보강 전에 돌아야 비방문 장소가 보강 대상에서 빠진다. */
     @Value("${batch.role-backfill.enabled:true}")
@@ -114,6 +119,11 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
             stage("[3/4] 배치 보강", batchEnrichScheduler::enrich);
         } else {
             log.info("[3/4] 태그/설명 배치 보강 건너뜀 (batch.enrich.enabled=false)");
+        }
+
+        if (nameKoOverridesEnabled) {
+            log.info("[3/4-이름] 한국어 이름 보정표 적용 시작");
+            stage("[3/4-이름] 한국어 이름 보정표 적용", nameKoOverrideJob::run);
         }
 
         log.info("[4/4] 임베딩 배치 생성 시작");

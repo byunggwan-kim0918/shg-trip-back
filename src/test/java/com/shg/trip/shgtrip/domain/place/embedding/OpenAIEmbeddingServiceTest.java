@@ -244,4 +244,23 @@ class OpenAIEmbeddingServiceTest {
             assertThat(results.get(1)).containsExactly(0.5f, 0.6f);
         }
     }
+
+    @Test
+    @DisplayName("429는 retry-after-ms, 없으면 retry-after(초)를 따르되 20초를 넘기지 않는다")
+    @SuppressWarnings("unchecked")
+    void retryAfter() {
+        HttpResponse<String> limited = mock(HttpResponse.class);
+        when(limited.statusCode()).thenReturn(429);
+        when(limited.headers()).thenReturn(
+                java.net.http.HttpHeaders.of(java.util.Map.of("retry-after-ms", List.of("1500")), (a, b) -> true),
+                java.net.http.HttpHeaders.of(java.util.Map.of("retry-after", List.of("3")), (a, b) -> true),
+                java.net.http.HttpHeaders.of(java.util.Map.of("retry-after", List.of("600")), (a, b) -> true));
+        HttpResponse<String> server = mock(HttpResponse.class);
+        when(server.statusCode()).thenReturn(500);
+
+        assertThat(OpenAIEmbeddingService.retryAfterMs(limited)).isEqualTo(1500);
+        assertThat(OpenAIEmbeddingService.retryAfterMs(limited)).isEqualTo(3000);
+        assertThat(OpenAIEmbeddingService.retryAfterMs(limited)).isEqualTo(20_000);
+        assertThat(OpenAIEmbeddingService.retryAfterMs(server)).isZero();
+    }
 }

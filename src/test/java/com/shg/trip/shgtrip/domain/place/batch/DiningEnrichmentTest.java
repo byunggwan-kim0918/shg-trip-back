@@ -261,4 +261,25 @@ class DiningEnrichmentTest {
 
         assertThat(prompt).contains("업종: 미정", "\"venue\"", "\"description\"", "기존 설명: 칼국수 전문점");
     }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("해외 장소는 그 장소의 나라·여행지 이름만 태그에서 지운다")
+    void overseasOwnRegionNames() {
+        java.util.Set<String> kyoto = java.util.Set.of("일본", "japan", "교토", "kyoto");
+        org.assertj.core.api.Assertions.assertThat(
+                        DiningEnrichment.finalizeTags(Venue.MEAL, java.util.List.of("쌀국수", "베트남", "교토", "Kyoto", "일본"), kyoto))
+                .containsExactly("식당", "쌀국수", "베트남");
+        org.assertj.core.api.Assertions.assertThat(DiningEnrichment.isRegionName("도쿄")).isFalse();
+    }
+
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("한국 식당 프롬프트는 해외 문맥 없이 그대로다")
+    void koreanDiningPromptUnchanged() {
+        String prompt = DiningEnrichment.buildPrompt("한본새", "Dining and Drinking > Restaurant", null, null, false);
+
+        org.assertj.core.api.Assertions.assertThat(prompt)
+                .isEqualTo(DiningEnrichment.buildPrompt("한본새", "Dining and Drinking > Restaurant", null, null, false, null, false))
+                .contains("서울·부산 같은 지역명")
+                .doesNotContain("name_ko", "- 국가:", "해외 예");
+    }
 }

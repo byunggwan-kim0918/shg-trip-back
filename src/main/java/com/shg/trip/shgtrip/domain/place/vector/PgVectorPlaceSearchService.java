@@ -123,12 +123,29 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         log.info("근사 검색 인덱스 제거");
     }
 
+    /**
+     * 그래프가 maintenance_work_mem(기본 64MB)을 넘으면 디스크로 넘겨 빌드가 수십 배 느려져 이 연결에서만 올린다.
+     * DB 인스턴스 메모리의 1/4을 넘기면 빌드 중 DB가 메모리 부족으로 재시작된다.
+     */
     @Override
     public void createAnnIndex() {
         long start = System.currentTimeMillis();
-        jdbcTemplate.execute(ANN_INDEX_DDL);
+        jdbcTemplate.execute((org.springframework.jdbc.core.ConnectionCallback<Void>) con -> {
+            try (java.sql.Statement st = con.createStatement()) {
+                st.execute("SET maintenance_work_mem = '" + annBuildMemory + "'");
+                try {
+                    st.execute(ANN_INDEX_DDL);
+                } finally {
+                    st.execute("RESET maintenance_work_mem");
+                }
+            }
+            return null;
+        });
         log.info("근사 검색 인덱스 생성 {}ms", System.currentTimeMillis() - start);
     }
+
+    @org.springframework.beans.factory.annotation.Value("${vector.ann-build-memory:1GB}")
+    private String annBuildMemory = "1GB";
 
     @Override
     @Transactional

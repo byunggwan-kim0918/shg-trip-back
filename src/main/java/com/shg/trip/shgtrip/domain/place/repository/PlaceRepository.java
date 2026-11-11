@@ -236,17 +236,22 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /**
      * 비어 있는 한국어 표시 이름을 Wikidata 한국어 라벨로 채운다. 라벨이 정식명("로쿠온지")인 곳이 있어
-     * 보강·보정표가 이미 정한 이름은 덮지 않는다.
+     * 보강·보정표가 이미 정한 이름은 덮지 않는다. 보강이 끝난 행은 임베딩을 다시 만든다. 보강 전인 행은 보강 결과를
+     * 반영할 때 다시 만들어지므로 그때까지 검색에 남겨 둔다.
      */
     @Modifying
-    @Query(value = "UPDATE places SET name_ko = :nameKo WHERE id = :id AND name_ko IS NULL", nativeQuery = true)
+    @Query(value = """
+            UPDATE places SET name_ko = :nameKo,
+                   embedding = CASE WHEN enriched_at IS NOT NULL THEN NULL ELSE embedding END
+             WHERE id = :id AND name_ko IS NULL
+            """, nativeQuery = true)
     int fillNameKo(@Param("id") long id, @Param("nameKo") String nameKo);
 
     /**
      * 해외 Wikidata 명소 행의 이름·여행지를 지금 규칙(현지 라벨, 가장 가까운 여행지)에 맞추고 비어 있는
      * 한국어 이름을 채운다({@link #fillNameKo}와 같은 이유로 덮지 않는다). 주소가 적재 때 만든 "이름, 지역" 꼴이면
-     * 같이 바꾼다(SET의 name·region은 바꾸기 전 값이다). 임베딩은 이름·지역이 바뀔 때만 지운다. 지우면 다음 임베딩
-     * 단계까지 검색 후보에서 빠진다.
+     * 같이 바꾼다(SET의 name·region은 바꾸기 전 값이다). 임베딩은 이름·지역이 바뀔 때와, 보강이 끝난 행에
+     * name_ko가 새로 채워질 때만 지운다({@link #fillNameKo}와 같은 규칙). 지우면 다음 임베딩 단계까지 검색 후보에서 빠진다.
      *
      * @return 바뀐 행 수(이미 같으면 0)
      */
@@ -256,7 +261,10 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             UPDATE places
                SET name = :name, name_ko = COALESCE(name_ko, CAST(:nameKo AS varchar)), region = :region,
                    address = CASE WHEN address = name || ', ' || region THEN :name || ', ' || :region ELSE address END,
-                   embedding = CASE WHEN name <> :name OR region IS DISTINCT FROM :region THEN NULL ELSE embedding END
+                   embedding = CASE WHEN name <> :name OR region IS DISTINCT FROM :region
+                                         OR (name_ko IS NULL AND CAST(:nameKo AS varchar) IS NOT NULL
+                                             AND enriched_at IS NOT NULL)
+                                    THEN NULL ELSE embedding END
              WHERE source = 'wikidata' AND source_url = :sourceUrl
                AND (name <> :name OR region IS DISTINCT FROM :region
                     OR (name_ko IS NULL AND CAST(:nameKo AS varchar) IS NOT NULL))
@@ -277,6 +285,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * 보강 대상: 미보강(enriched_at IS NULL)·활성. BatchEnrichScheduler가 첫 페이지만 반복 조회한다.
      * 카테고리만으로 비방문(NOT_VISITABLE)이 확정된 곳은 보강해도 일정에 안 나오므로 뺀다.
      * Wikidata 매칭을 아직 거치지 않은 행도 뺀다. 인기도 없이 보강하면 유명 식당이 설명 없이 보강 완료로 남는다.
+     * 응답이 3번 실패한 행(enrich_attempts)도 뺀다. 매 실행 같은 행을 다시 사는 비용만 든다.
      *
      * <p><b>순서</b>: 유명한 곳(Wikidata sitelinks) → 식당·카페가 아닌 곳 → id. 보강은 하루 가까이 걸릴 수
      * 있어서, 중간에 끊겨도 일정에 자주 나오는 곳은 끝나 있게 한다.
@@ -288,6 +297,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             SELECT p FROM Place p
             WHERE p.enrichedAt IS NULL AND p.active = true
               AND p.wikidataMatchedAt IS NOT NULL
+              AND p.enrichAttempts < 3
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND p.id NOT IN :excludedIds
             ORDER BY COALESCE(p.wikidataSitelinks, 0) DESC,
@@ -303,6 +313,83 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND (place_role IS NULL OR place_role <> 'NOT_VISITABLE')
             """, nativeQuery = true)
     long countEnrichWaitingForWikidata();
+
+    /**
+     * 보강 컬럼만 쓴다. 엔티티째 저장하면 결과를 기다린 동안(최대 하루) 바뀐 컬럼을 그때 읽은 값으로 되돌린다.
+     * 배열은 chr(31)로 이은 문자열로 받고, name_ko는 비어 있을 때만 채운다(Wikidata 라벨·보정표 우선).
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places SET
+                tags = string_to_array(CAST(:tags AS text), chr(31)),
+                description = CAST(:description AS text),
+                recommended_time_slots = string_to_array(CAST(:slots AS text), chr(31)),
+                recommended_duration_minutes = CAST(:duration AS integer),
+                admission_fee = CAST(:fee AS integer),
+                admission_fee_local = CAST(:feeLocal AS integer),
+                admission_currency = CAST(:currency AS varchar),
+                place_role = CAST(:role AS varchar),
+                cuisine = CAST(:cuisine AS varchar),
+                name_ko = COALESCE(name_ko, CAST(:nameKo AS varchar)),
+                enriched_at = CAST(:enrichedAt AS timestamptz),
+                updated_at = now()
+             WHERE id = :id
+            """, nativeQuery = true)
+    int writeEnrichmentColumns(@Param("id") long id, @Param("tags") String tags,
+                               @Param("description") String description, @Param("slots") String slots,
+                               @Param("duration") Integer duration, @Param("fee") Integer fee,
+                               @Param("feeLocal") Integer feeLocal, @Param("currency") String currency,
+                               @Param("role") String role, @Param("cuisine") String cuisine,
+                               @Param("nameKo") String nameKo, @Param("enrichedAt") OffsetDateTime enrichedAt);
+
+    String ARRAY_SEPARATOR = "\u001f";
+
+    default int writeEnrichment(Place p) {
+        return writeEnrichmentColumns(p.getId(), joinArray(p.getTags()), p.getDescription(),
+                joinArray(p.getRecommendedTimeSlots()), p.getRecommendedDurationMinutes(), p.getAdmissionFee(),
+                p.getAdmissionFeeLocal(), p.getAdmissionCurrency(), p.getPlaceRole(), p.getCuisine(), p.getNameKo(),
+                p.getEnrichedAt());
+    }
+
+    private static String joinArray(List<String> values) {
+        return values == null ? null : String.join(ARRAY_SEPARATOR, values);
+    }
+
+    /** 보강 응답이 3번 실패해 대상에서 빠진 활성 미보강 행 수. */
+    @Query(value = "SELECT count(*) FROM places WHERE active = true AND enriched_at IS NULL AND enrich_attempts >= 3",
+            nativeQuery = true)
+    long countEnrichExhausted();
+
+    /** 장소 탓인 보강 실패만 센다(BatchEnrichScheduler.applyResults). */
+    @Modifying
+    @Transactional
+    @Query(value = "UPDATE places SET enrich_attempts = enrich_attempts + 1 WHERE id IN (:ids)", nativeQuery = true)
+    int incrementEnrichAttempts(@Param("ids") Collection<Long> ids);
+
+    /**
+     * 보정표 한국어 이름(QID 기준). 바뀐 행은 임베딩을 다시 만든다(임베딩 텍스트에 name_ko가 들어간다).
+     * 식음료 행은 뺀다. 체인 항목은 지점명을 뗀 이름으로 여러 지점에 붙어 있어 지점 이름이 모두 같아진다.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places SET name_ko = :nameKo, embedding = NULL
+             WHERE (wikidata_id = :qid OR (source = 'wikidata' AND source_url = 'https://www.wikidata.org/wiki/' || :qid))
+               AND category NOT LIKE 'Dining and Drinking%'
+               AND name_ko IS DISTINCT FROM :nameKo
+            """, nativeQuery = true)
+    int overrideNameKoByQid(@Param("qid") String qid, @Param("nameKo") String nameKo);
+
+    /** 보정표 한국어 이름(국가·원문 이름 기준). Wikidata에 연결되지 않은 장소용. */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places SET name_ko = :nameKo, embedding = NULL
+             WHERE country = :country AND name = :name AND name_ko IS DISTINCT FROM :nameKo
+            """, nativeQuery = true)
+    int overrideNameKoByName(@Param("country") String country, @Param("name") String name,
+                             @Param("nameKo") String nameKo);
 
     /**
      * 역할 미확정 활성 장소의 (id, name, category)를 id 순으로 준다. {@code PlaceRoleBackfillJob}이 keyset 페이지로 읽는다.
@@ -408,6 +495,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             SELECT p FROM Place p
             WHERE p.enrichedAt IS NULL AND p.active = true
               AND p.wikidataMatchedAt IS NOT NULL
+              AND p.enrichAttempts < 3
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND p.region IN :regions
               AND p.id NOT IN :excludedIds
@@ -648,6 +736,9 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 enriched_at = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
                                         OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
                                    THEN NULL ELSE places.enriched_at END,
+                enrich_attempts = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                                            OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
+                                       THEN 0 ELSE places.enrich_attempts END,
                 name_ko = CASE WHEN places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name
                                THEN NULL ELSE places.name_ko END,
                 active = CASE WHEN places.deactivated_reason = 'stale' THEN true ELSE places.active END,

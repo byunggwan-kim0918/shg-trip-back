@@ -46,7 +46,12 @@ public class EmbeddingBatchJob {
 
     private int apiFailures;
 
-    private static final long ANN_REBUILD_MIN_PENDING = 10_000;
+    /**
+     * 미임베딩이 이만큼 이상이면 근사 검색 인덱스를 내렸다가 끝나고 다시 만든다. 내린 동안 운영 검색이 전수 비교로
+     * 느려지므로 나라 하나 적재(수만~십수만 건)는 인덱스를 둔 채 넣고, 전량 재임베딩만 내린다.
+     */
+    @Value("${batch.embedding.ann-rebuild-min-pending:200000}")
+    private long annRebuildMinPending;
 
     /**
      * 매번 첫 페이지를 다시 조회하며 이번 실행의 실패 ID를 거른다. 성공한 만큼 남은 건수가 줄어
@@ -73,7 +78,7 @@ public class EmbeddingBatchJob {
                     break;
                 }
                 // 행마다 인덱스를 갱신하면 전량 적재가 몇 배 느려져 내렸다가 끝나고 한 번에 만든다.
-                if (!indexDropped && page.getTotalElements() >= ANN_REBUILD_MIN_PENDING) {
+                if (!indexDropped && page.getTotalElements() >= annRebuildMinPending) {
                     placeVectorSearchService.dropAnnIndex();
                     indexDropped = true;
                 }

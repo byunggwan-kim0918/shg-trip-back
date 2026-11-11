@@ -71,7 +71,6 @@ anthropic:
     model: claude-haiku-5-5
     max-tokens-per-request: 1024
     poll-interval-ms: 10000
-    max-poll-duration-ms: 3600000
 
 # --- Google Places API 설정 (사전채움 배치가 사용) ---
 
@@ -96,6 +95,8 @@ batch:
   embedding:
     batch-size: 100
     regions: ${BATCH_EMBEDDING_REGIONS:}   # 비우면 전 지역. 로컬 확인용으로 지역을 좁힐 때 (예: Jeju,Seoul,Busan)
+    # 미임베딩이 이만큼 이상일 때만 근사 검색 인덱스를 내렸다가 다시 만든다(내린 동안 운영 검색이 느려진다)
+    ann-rebuild-min-pending: ${BATCH_EMBEDDING_ANN_REBUILD_MIN_PENDING:200000}
   enrich:
     chunk-size: 1000
     # LLM 보강 실행 여부 (기본 false — 초기엔 임베딩만 수행)
@@ -110,6 +111,15 @@ batch:
     max-per-region: ${BATCH_ENRICH_MAX_PER_REGION:0}
     # 동시에 제출하는 Batch API 묶음 수(묶음당 chunk-size건)
     parallel-chunks: ${BATCH_ENRICH_PARALLEL_CHUNKS:5}
+    # 묶음 결과 대기 상한. Batch API는 최대 24시간 걸린다
+    max-poll-duration: ${BATCH_ENRICH_MAX_POLL_DURATION:PT24H}
+    # 이 시간이 지나면 새 묶음을 내지 않는다(Step Functions 36h 안에 임베딩까지). 나라 적재 단독 실행은 늘린다
+    max-duration: ${BATCH_ENRICH_MAX_DURATION:PT10H}
+    # 끝난 배치 결과만 다시 반영(쉼표 구분 batchId, 재제출 없음). 지정하면 새 보강은 하지 않는다
+    resume-batch-id: ${BATCH_ENRICH_RESUME_BATCH_ID:}
+  name-ko-overrides:
+    # 한국어 표시 이름 보정표(name-ko-overrides.tsv) 적용(외부 호출 없음)
+    enabled: ${BATCH_NAME_KO_OVERRIDES_ENABLED:true}
   role-backfill:
     # 카테고리로 확정되는 비방문 장소에 place_role=NOT_VISITABLE 기록(외부 호출 없음)
     enabled: ${BATCH_ROLE_BACKFILL_ENABLED:true}
@@ -157,6 +167,10 @@ batch:
       min-sitelinks-by-region: ${BATCH_WIKIDATA_LANDMARKS_MIN_SITELINKS_BY_REGION:Gangneung:2,Gyeongju:2,Jeonju:2,Yeosu:2}
       # 해외 경관·단일 명소 여행지(destinations.json kind가 city가 아닌 곳)의 기준
       min-sitelinks-scenic: ${BATCH_WIKIDATA_LANDMARKS_MIN_SITELINKS_SCENIC:2}
+
+# 근사 검색 인덱스 재생성 메모리. DB 인스턴스 메모리의 1/4 이하로 둔다(4GB → 1GB)
+vector:
+  ann-build-memory: ${VECTOR_ANN_BUILD_MEMORY:1GB}
 
 # --- AWS S3 설정 (배치에서 Foursquare CSV 읽기) ---
 cloud:
