@@ -33,8 +33,22 @@ public record VectorSearchResult(
     /** Wikidata 항목 id(Q…). null이면 미매칭. 출처별 중복 행 판정에 쓴다. */
     String wikidataId,
     /** 보강 속성. null이면 미보강. */
-    PlaceAttributes attributes
+    PlaceAttributes attributes,
+    /** 한국어 표시 이름(해외 장소). null이면 name을 쓴다. */
+    String nameKo
 ) {
+    /** 한국어 이름 없이 생성하는 호환 생성자. */
+    public VectorSearchResult(Long placeId, String name, String address, String category,
+                              List<String> tags, String region, String country,
+                              BigDecimal latitude, BigDecimal longitude, String description,
+                              BigDecimal rating, Integer userRatingCount, Integer wikidataSitelinks,
+                              double similarityScore, String placeRole, String cuisine, String wikidataId,
+                              PlaceAttributes attributes) {
+        this(placeId, name, address, category, tags, region, country, latitude, longitude,
+                description, rating, userRatingCount, wikidataSitelinks, similarityScore, placeRole, cuisine,
+                wikidataId, attributes, null);
+    }
+
     /** 속성 없이 생성하는 호환 생성자. */
     public VectorSearchResult(Long placeId, String name, String address, String category,
                               List<String> tags, String region, String country,

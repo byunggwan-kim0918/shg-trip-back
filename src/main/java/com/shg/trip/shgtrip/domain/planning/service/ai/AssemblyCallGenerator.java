@@ -160,7 +160,7 @@ public class AssemblyCallGenerator {
             // 날짜·요일이 없으면 모델이 11:30 점심을 "아침을 깨우고"로 쓴다.
             appendDayDate(sb, input, step.dayNumber());
             sb.append(" ").append(step.startTime()).append("-").append(step.endTime()).append(" ")
-                    .append(step.place().name())
+                    .append(step.place().displayName())
                     .append(" (").append(displayRegion(step)).append(")");
             // 같은 시각이라도 "점심 식사"와 "숙소 체크인"은 문장이 달라야 해서 슬롯 역할을 명시한다.
             String role = slotRole(step);

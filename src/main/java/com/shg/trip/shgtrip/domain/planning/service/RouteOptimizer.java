@@ -2743,7 +2743,7 @@ public class RouteOptimizer {
     private Integer pickNamedHub(List<PlaceCandidate> candidates, String hubName, Integer current) {
         PlaceCandidate best = candidates.stream()
                 .filter(c -> "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category())))
-                .filter(c -> PlaceCategoryConstants.hasTransitNameSignal(c.name()))
+                .filter(this::hasTransitName)
                 .max(Comparator.comparingDouble(c -> hubScore(c, hubName)))
                 .orElse(null);
         if (best == null) return null;
@@ -2756,13 +2756,18 @@ public class RouteOptimizer {
         return best.index();
     }
 
-    /** 허브 적합도: enrich 허브 이름 일치(+1000) > 부속시설 아님(+500) > rating. */
+    /** 해외 허브는 원문 이름("成田国際空港")에 한국어 허브 신호가 없어 한국어 이름도 본다. */
+    private boolean hasTransitName(PlaceCandidate c) {
+        return PlaceCategoryConstants.hasTransitNameSignal(c.name())
+                || PlaceCategoryConstants.hasTransitNameSignal(c.nameKo());
+    }
+
+    /** 허브 적합도: enrich 허브 이름 일치(+1000, 원문·한국어 이름) > 부속시설 아님(+500) > rating. */
     private double hubScore(PlaceCandidate c, String hubName) {
         double score = 0;
-        if (hubName != null && !hubName.isBlank() && c.name() != null) {
-            String a = normalizeName(c.name());
-            String b = normalizeName(hubName);
-            if (!a.isEmpty() && !b.isEmpty() && (a.contains(b) || b.contains(a))) score += 1000;
+        if (hubName != null && !hubName.isBlank()
+                && (namesOverlap(c.name(), hubName) || namesOverlap(c.nameKo(), hubName))) {
+            score += 1000;
         }
         if (!PlaceCategoryConstants.isHubSubFacility(c.name())) score += 500;
         if (c.rating() != null) score += c.rating().doubleValue();
@@ -2771,6 +2776,12 @@ public class RouteOptimizer {
 
     private String normalizeName(String name) {
         return name == null ? "" : name.toLowerCase().replaceAll("\\s+", "");
+    }
+
+    private boolean namesOverlap(String placeName, String hubName) {
+        String a = normalizeName(placeName);
+        String b = normalizeName(hubName);
+        return !a.isEmpty() && !b.isEmpty() && (a.contains(b) || b.contains(a));
     }
 
     /**
@@ -2981,7 +2992,7 @@ public class RouteOptimizer {
         if (hubIndex == null) return null;
         PlaceCandidate c = byIndex(candidates, hubIndex);
         if (c == null) return hubIndex;
-        if (PlaceCategoryConstants.hasTransitNameSignal(c.name())) return hubIndex;
+        if (hasTransitName(c)) return hubIndex;
         if (!day.placeIndices.contains(hubIndex)) day.placeIndices.add(hubIndex);
         log.info("허브 오분류 강등: day={} {} → 일반 방문지", day.dayNumber, c.name());
         return null;
@@ -3179,7 +3190,7 @@ public class RouteOptimizer {
         return candidates.stream()
                 .filter(c -> "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category())))
                 // 오적재된 비허브가 도착 허브로 쓰이지 않게 이름에 허브 신호가 있는 것만 받는다.
-                .filter(c -> PlaceCategoryConstants.hasTransitNameSignal(c.name()))
+                .filter(this::hasTransitName)
                 .filter(c -> !used.contains(c.index()))
                 .max(Comparator
                         .comparingInt((PlaceCandidate c) -> PlaceCategoryConstants.isHubSubFacility(c.name()) ? 0 : 1)
@@ -5196,7 +5207,7 @@ public class RouteOptimizer {
                 .forEach(c -> {
                     if (result.size() >= 3 || !seen.add(altKey(c))) return;
                     result.add(new AlternativeData(c.name(), c.address(), c.category(), c.region(),
-                            c.country(), null, estimateCost(c)));
+                            c.country(), null, estimateCost(c), c.placeId(), c.nameKo()));
                 });
     }
 
@@ -5315,7 +5326,7 @@ public class RouteOptimizer {
     private PlaceData toPlaceData(PlaceCandidate c) {
         // subRegion/description은 저장에 쓰이지 않고 story 생성(Haiku) 컨텍스트로만 전달된다.
         return new PlaceData(c.name(), c.address(), c.category(), c.region(), c.country(),
-                c.subRegion(), c.description());
+                c.subRegion(), c.description(), c.placeId(), c.nameKo());
     }
 
     /** 하루 거리 예산에 넣을 좌표. 해외 관문은 null이다({@link InvariantChecker#isOverseasHubTransfer}와 같은 기준). */

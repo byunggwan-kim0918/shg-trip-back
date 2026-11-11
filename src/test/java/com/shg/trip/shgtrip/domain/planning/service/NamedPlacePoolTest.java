@@ -67,6 +67,37 @@ class NamedPlacePoolTest {
     }
 
     @Test
+    @DisplayName("해외 명소는 원문 이름이 문장에 없어도 한국어 이름으로 말한 것을 알아본다")
+    void addsOverseasAttractionMentionedByKoreanName() {
+        given(embeddingService.embedBatch(anyList())).willAnswer(inv -> {
+            List<float[]> v = new ArrayList<>();
+            for (int i = 0; i < ((List<?>) inv.getArgument(0)).size(); i++) v.add(new float[]{0.1f});
+            return v;
+        });
+        given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willReturn(List.of());
+        given(placeVectorSearchService.findPopular(any(), anyString(), anyList(), anyInt())).willReturn(List.of(
+                tokyo(1, "東京スカイツリー", "도쿄 스카이트리", 40),
+                tokyo(2, "浅草寺", "센소지", 30),
+                tokyo(3, "明治神宮", "메이지 신궁", 25)));
+        VectorEnrichedInput tokyo = new VectorEnrichedInput(
+                "도쿄", List.of("culture"), List.of("attraction"), "normal", "any", BigDecimal.valueOf(900000),
+                LocalDate.of(2026, 11, 28), LocalDate.of(2026, 11, 30), "센소지는 꼭 가고 싶어요.", null,
+                "도쿄", "JP", List.of("Tokyo"), List.of("문화"), null, "MEDIUM", "늦가을", "", null, null);
+
+        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService)
+                .search(tokyo);
+
+        assertThat(result).extracting(PlaceCandidate::name).containsExactly("浅草寺");
+        assertThat(result.get(0).nameKo()).isEqualTo("센소지");
+    }
+
+    private static VectorSearchResult tokyo(long id, String name, String nameKo, int sitelinks) {
+        return new VectorSearchResult(id, name, "東京都", "Spiritual Center > Buddhist Temple", List.of(), "Tokyo", "JP",
+                BigDecimal.valueOf(35.71), BigDecimal.valueOf(139.79), null, null, null, sitelinks, 0.3,
+                null, null, null, null, nameKo);
+    }
+
+    @Test
     @DisplayName("같은 말로 시작하는 식당이 이미 후보에 있어도 명소는 들어간다")
     void restaurantDoesNotCoverMention() {
         given(embeddingService.embedBatch(anyList())).willAnswer(inv -> {

@@ -321,6 +321,42 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("저장 단계 기준점은 여행지별 후보 중앙점이고, 표본이 모자라면 전체 중앙점 하나다")
+    void regionCenters_perRegionMedian() {
+        List<PlaceCandidate> tokyoOsaka = new java.util.ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            tokyoOsaka.add(new PlaceCandidate(i + 1, (long) i + 1, "t" + i, "", "x", List.of(), "Tokyo", "JP",
+                    BigDecimal.valueOf(35.68 + i * 0.01), BigDecimal.valueOf(139.76), null, null, 0.5));
+            tokyoOsaka.add(new PlaceCandidate(i + 11, (long) i + 11, "o" + i, "", "x", List.of(), "Osaka", "JP",
+                    BigDecimal.valueOf(34.69 + i * 0.01), BigDecimal.valueOf(135.50), null, null, 0.5));
+        }
+
+        List<double[]> centers = executor.regionCenters(tokyoOsaka);
+
+        assertThat(centers).hasSize(2);
+        assertThat(centers.get(0)[1]).isEqualTo(139.76);
+        assertThat(centers.get(1)[1]).isEqualTo(135.50);
+        assertThat(executor.regionCenters(tokyoOsaka.subList(0, 4))).hasSize(1);
+        assertThat(executor.regionCenters(tokyoOsaka.subList(0, 2))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("자유입력 장소는 여러 여행지 중 가장 가까운 중심에서 재고, 모든 중심에서 멀면 찾지 못한 것으로 본다")
+    void findCustomPlaceInDb_usesNearestOfManyCenters() {
+        double[] tokyo = {35.68, 139.76};
+        double[] osaka = {34.69, 135.50};
+        com.shg.trip.shgtrip.domain.place.entity.Place dotonbori = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                .id(7L).name("道頓堀").nameKo("도톤보리").address("大阪市中央区")
+                .latitude(new BigDecimal("34.6687")).longitude(new BigDecimal("135.5013"))
+                .category("Landmarks and Outdoors").region("Osaka").country("JP").build();
+        when(placeRepository.findActiveByNameLikeNearest(eq("도톤보리"), anyDouble(), anyDouble(), any()))
+                .thenReturn(List.of(dotonbori));
+
+        assertThat(executor.findCustomPlaceInDb("도톤보리", List.of(tokyo, osaka))).contains(dotonbori);
+        assertThat(executor.findCustomPlaceInDb("도톤보리", List.of(tokyo))).isEmpty();
+    }
+
+    @Test
     @DisplayName("관문 없는 근교 여행지는 상위 여행지의 관문을 붙인다(호이안 → 다낭)")
     void appendGateways_usesParentGatewaysForNearbyDestinations() {
         when(placeRepository.findGatewaysByRegions(List.of("Da Nang", "Taipei"))).thenReturn(List.of());

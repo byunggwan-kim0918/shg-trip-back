@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
+import com.shg.trip.shgtrip.domain.place.destination.KrwRates;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.*;
@@ -133,7 +134,7 @@ public class OptimizedGenerationExecutor {
             placeRegionValidator.validate(selectedPlaces, enrichedInput); // 불일치 시 BusinessException → SSE error
             List<PlaceCandidate> candidates = mergeSelectedPlaces(candidatesRaw, selectedPlaces);
             // 후보 수십 건의 median이라 저장 단계의 오매칭 거리 판정 기준으로 쓴다.
-            final double[] destinationReference = candidateMedianCenter(candidates);
+            final List<double[]> destinationReference = regionCenters(candidates);
             stageMark = logStage("search", stageMark);
 
             // [25%] Fallback/컴팩트 분기 판단
@@ -310,8 +311,7 @@ public class OptimizedGenerationExecutor {
         for (StepData s : steps) {
             List<AlternativeData> alts = s.alternatives() == null ? null : s.alternatives().stream()
                     .map(a -> isPerPersonCost(a.category()) && a.estimatedCost() != null
-                            ? new AlternativeData(a.name(), a.address(), a.category(), a.region(), a.country(),
-                                    a.notes(), a.estimatedCost().multiply(factor))
+                            ? a.withEstimatedCost(a.estimatedCost().multiply(factor))
                             : a)
                     .toList();
             BigDecimal cost = s.place() != null && isPerPersonCost(s.place().category()) && s.estimatedCost() != null
@@ -528,7 +528,7 @@ public class OptimizedGenerationExecutor {
         return candidates.stream().map(c -> {
             Place place = c.placeId() != null ? placeMap.get(c.placeId()) : null;
             if (place == null) return c;
-            // 저장 단계가 (name,address)로 조회하므로 프롬프트·스텝·저장이 같은 DB 값을 봐야 한다.
+            // 저장 단계가 id로 못 찾으면 (name,address)로 조회하므로 프롬프트·스텝·저장이 같은 DB 값을 봐야 한다.
             return new PlaceCandidate(
                     c.index(), c.placeId(),
                     place.getName() != null ? place.getName() : c.name(),
@@ -543,7 +543,7 @@ public class OptimizedGenerationExecutor {
                     place.getRecommendedTimeSlots(),
                     place.getRecommendedDurationMinutes(),
                     c.userSelected(),
-                    place.getAdmissionFee(),
+                    KrwRates.admissionWon(place),
                     // DB 주소로 세부지역을 다시 뽑고, 실패하면 기존 값을 유지한다.
                     subRegionOrKeep(place.getAddress(), c.subRegion()),
                     place.getUserRatingCount() != null ? place.getUserRatingCount() : c.userRatingCount(),
@@ -552,7 +552,8 @@ public class OptimizedGenerationExecutor {
                     place.getPlaceRole() != null ? place.getPlaceRole() : c.placeRole(),
                     place.getCuisine() != null ? place.getCuisine() : c.cuisine(),
                     false, null,
-                    place.getAttributes() != null ? place.getAttributes() : c.attributes()
+                    place.getAttributes() != null ? place.getAttributes() : c.attributes(),
+                    place.getNameKo() != null ? place.getNameKo() : c.nameKo()
             );
         }).collect(Collectors.toList());
     }
@@ -765,8 +766,8 @@ public class OptimizedGenerationExecutor {
                 .collect(Collectors.toSet());
         List<String> missing = candidates.stream()
                 .filter(PlaceCandidate::userSelected)
-                .map(PlaceCandidate::name)
-                .filter(name -> !stepNames.contains(normalize(name)))
+                .filter(c -> !stepNames.contains(normalize(c.name())))
+                .map(PlaceCandidate::displayName)
                 .distinct()
                 .toList();
         missing.forEach(name -> log.error("사용자 필수 장소가 최종 일정에서 누락 (결정론적 로직 버그): {}", name));
@@ -803,7 +804,7 @@ public class OptimizedGenerationExecutor {
         List<String> names = request.customPlaceNames();
         if (names == null || names.isEmpty()) return List.of();
 
-        double[] center = candidateMedianCenter(candidatesRaw);
+        List<double[]> centers = regionCenters(candidatesRaw);
 
         List<Place> resolved = new ArrayList<>();
         List<String> failed = new ArrayList<>();
@@ -812,7 +813,7 @@ public class OptimizedGenerationExecutor {
             if (raw == null || raw.isBlank()) continue;
             String name = raw.trim();
             try {
-                Optional<Place> match = findCustomPlaceInDb(name, center);
+                Optional<Place> match = findCustomPlaceInDb(name, centers);
                 if (match.isEmpty()) {
                     failed.add(name);
                     continue;
@@ -838,35 +839,60 @@ public class OptimizedGenerationExecutor {
         return resolved;
     }
 
-    /** 이름 부분일치 중 여행지 중심에 가장 가까운 하나(상한 {@value #CUSTOM_PLACE_SEARCH_LIMIT}건). */
-    private Optional<Place> findCustomPlaceInDb(String name, double[] center) {
+    /**
+     * 이름 부분일치 중 여행지 중심에 가장 가까운 하나(중심마다 상한 {@value #CUSTOM_PLACE_SEARCH_LIMIT}건).
+     * 여러 여행지 일정은 여행지마다 중심이 있어 가장 가까운 중심에서 잰다.
+     */
+    Optional<Place> findCustomPlaceInDb(String name, List<double[]> centers) {
         // 중심점을 모르면 이름이 가장 짧은(가장 타이트한) 결과를 쓴다.
-        if (center == null) {
+        if (centers.isEmpty()) {
             List<Place> byName = placeRepository.findActiveByNameLike(
                     name, PageRequest.of(0, CUSTOM_PLACE_SEARCH_LIMIT));
             return byName.isEmpty() ? Optional.empty() : Optional.of(byName.get(0));
         }
 
-        // 이름 길이순으로 자르면 전국에 수백 건인 이름에서 여행지 안의 지점이 상한 밖으로 밀려난다.
-        List<Place> matches = placeRepository.findActiveByNameLikeNearest(
-                name, center[0], center[1], PageRequest.of(0, CUSTOM_PLACE_SEARCH_LIMIT));
-        if (matches.isEmpty()) return Optional.empty();
-
         Place best = null;
         double bestDist = MAX_ACCOMMODATION_RADIUS_KM;
-        for (Place p : matches) {
-            double d = GeoUtils.haversine(center,
-                    new double[]{p.getLatitude().doubleValue(), p.getLongitude().doubleValue()});
-            if (d < bestDist) {
-                bestDist = d;
-                best = p;
+        int matched = 0;
+        for (double[] center : centers) {
+            // 이름 길이순으로 자르면 전국에 수백 건인 이름에서 여행지 안의 지점이 상한 밖으로 밀려난다.
+            List<Place> matches = placeRepository.findActiveByNameLikeNearest(
+                    name, center[0], center[1], PageRequest.of(0, CUSTOM_PLACE_SEARCH_LIMIT));
+            matched += matches.size();
+            for (Place p : matches) {
+                double d = GeoUtils.haversine(center,
+                        new double[]{p.getLatitude().doubleValue(), p.getLongitude().doubleValue()});
+                if (d < bestDist) {
+                    bestDist = d;
+                    best = p;
+                }
             }
         }
-        if (best == null) {
+        if (best == null && matched > 0) {
             log.info("자유입력 '{}' DB 매칭 {}건이 모두 여행지 중심에서 {}km 초과 — 동명 타지역으로 보고 제외",
-                    name, matches.size(), (long) MAX_ACCOMMODATION_RADIUS_KM);
+                    name, matched, (long) MAX_ACCOMMODATION_RADIUS_KM);
         }
         return Optional.ofNullable(best);
+    }
+
+    /**
+     * 여행지(region)별 후보 median 중심점. 전체 median 하나로 재면 도쿄+오사카 일정에서 한쪽 도시 장소가 전부 멀다.
+     * 표본이 부족한 여행지는 빼고, 모두 부족하면 전체 median 하나다.
+     */
+    List<double[]> regionCenters(List<PlaceCandidate> candidates) {
+        Map<String, List<PlaceCandidate>> byRegion = candidates.stream()
+                .collect(Collectors.groupingBy(c -> c.region() == null ? "" : c.region(),
+                        LinkedHashMap::new, Collectors.toList()));
+        List<double[]> centers = new ArrayList<>();
+        for (List<PlaceCandidate> group : byRegion.values()) {
+            double[] center = candidateMedianCenter(group);
+            if (center != null) centers.add(center);
+        }
+        if (centers.isEmpty()) {
+            double[] all = candidateMedianCenter(candidates);
+            if (all != null) centers.add(all);
+        }
+        return centers;
     }
 
     /** 후보들의 region 무관 전체 median 중심점. 표본 부족 시 null. */
@@ -926,9 +952,10 @@ public class OptimizedGenerationExecutor {
                     index++, p.getId(), p.getName(), p.getAddress(), p.getCategory(),
                     p.getTags(), p.getRegion(), p.getCountry(), p.getLatitude(), p.getLongitude(),
                     p.getDescription(), p.getRating(), 1.0, p.getPriceLevel(), p.getOpeningHours(),
-                    p.getRecommendedTimeSlots(), p.getRecommendedDurationMinutes(), true, p.getAdmissionFee(),
+                    p.getRecommendedTimeSlots(), p.getRecommendedDurationMinutes(), true, KrwRates.admissionWon(p),
                     PlaceCategoryConstants.extractSubRegion(p.getAddress()), p.getUserRatingCount(),
-                    p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine(), false, null, p.getAttributes()));
+                    p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine(), false, null, p.getAttributes(),
+                    p.getNameKo()));
         }
         for (PlaceCandidate c : candidates) {
             PlaceCandidate reindexed = reindexCandidate(c, index++);
@@ -989,10 +1016,10 @@ public class OptimizedGenerationExecutor {
                 place.getLatitude(), place.getLongitude(), place.getDescription(),
                 place.getRating(), 0.0, null, place.getOpeningHours(),
                 place.getRecommendedTimeSlots(), place.getRecommendedDurationMinutes(),
-                false, place.getAdmissionFee(),
+                false, KrwRates.admissionWon(place),
                 PlaceCategoryConstants.extractSubRegion(place.getAddress()),
                 place.getUserRatingCount(), place.getWikidataSitelinks(),
-                place.getPlaceRole(), place.getCuisine(), false, null, place.getAttributes());
+                place.getPlaceRole(), place.getCuisine(), false, null, place.getAttributes(), place.getNameKo());
     }
 
     /**
@@ -1154,6 +1181,7 @@ public class OptimizedGenerationExecutor {
                     if (name == null) return;
                     Map<String, String> info = new HashMap<>();
                     info.put("name", name);
+                    info.put("nameKo", s.place().nameKo());
                     info.put("startTime", s.startTime());
                     info.put("category", s.place() != null ? s.place().category() : null);
                     byDay.computeIfAbsent(s.dayNumber(), k -> new ArrayList<>()).add(info);

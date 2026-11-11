@@ -10,7 +10,7 @@ public record PlaceCandidate(
         int index,              // 1-based 인덱스 번호
         Long placeId,
         String name,
-        String address,         // 저장 시 name과 함께 DB Place 조회 키로 쓴다
+        String address,         // placeId로 못 찾을 때 name과 함께 저장 조회 키로 쓴다
         String category,
         List<String> tags,
         String region,
@@ -33,8 +33,25 @@ public record PlaceCandidate(
         String cuisine,         // 음식 종류(MEAL만), null=미상
         boolean intentProtected,// 요청 의도의 핵심 장소. 거리·교체·유형 트림에서 빼되 영업시간·휴무 가드는 그대로
         String intentTime,      // 요청 의도의 시간대(morning/evening), null=의도 없음
-        PlaceAttributes attributes // 보강 속성, null이면 판정 함수가 카테고리·이름으로 추정
+        PlaceAttributes attributes, // 보강 속성, null이면 판정 함수가 카테고리·이름으로 추정
+        String nameKo           // 해외 장소의 한국어 이름, null이면 name을 쓴다. 표시용이라 조회 키로 쓰지 않는다
 ) {
+    public PlaceCandidate(int index, Long placeId, String name, String address,
+                          String category, List<String> tags, String region, String country,
+                          BigDecimal latitude, BigDecimal longitude, String description,
+                          BigDecimal rating, double similarityScore,
+                          Integer priceLevel, String openingHours,
+                          List<String> recommendedTimeSlots, Integer recommendedDurationMinutes,
+                          boolean userSelected, Integer admissionFee, String subRegion,
+                          Integer userRatingCount, Integer wikidataSitelinks, String placeRole, String cuisine,
+                          boolean intentProtected, String intentTime, PlaceAttributes attributes) {
+        this(index, placeId, name, address, category, tags, region, country,
+                latitude, longitude, description, rating, similarityScore,
+                priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
+                userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
+                intentProtected, intentTime, attributes, null);
+    }
+
     public PlaceCandidate(int index, Long placeId, String name, String address,
                           String category, List<String> tags, String region, String country,
                           BigDecimal latitude, BigDecimal longitude, String description,
@@ -160,7 +177,7 @@ public record PlaceCandidate(
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes, true,
                 admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                intentProtected, intentTime, attributes);
+                intentProtected, intentTime, attributes, nameKo);
     }
 
     public PlaceCandidate withIntent(boolean protect, String time) {
@@ -168,7 +185,7 @@ public record PlaceCandidate(
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
                 userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                protect, time, attributes);
+                protect, time, attributes, nameKo);
     }
 
     /** 인덱스만 바꾼 사본. 의도 필드는 싣지 않는다(의도는 스케줄 직전에만 실린다). */
@@ -177,7 +194,7 @@ public record PlaceCandidate(
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
                 userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                false, null, attributes);
+                false, null, attributes, nameKo);
     }
 
     /** DB에서 다시 읽은 속성·영업시간만 바꾼 사본(평가 재채점용). */
@@ -186,7 +203,7 @@ public record PlaceCandidate(
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, newOpeningHours, recommendedTimeSlots, recommendedDurationMinutes,
                 userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                intentProtected, intentTime, newAttributes);
+                intentProtected, intentTime, newAttributes, nameKo);
     }
 
     /** 사용자 필수이거나 요청 의도의 핵심이면 트림·교체·이월에서 빼지 않는다. */
@@ -201,7 +218,7 @@ public record PlaceCandidate(
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
                 userSelected, admissionFee, newSubRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                intentProtected, intentTime, attributes);
+                intentProtected, intentTime, attributes, nameKo);
     }
 
     /**
@@ -224,6 +241,20 @@ public record PlaceCandidate(
         }
         return com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants
                 .isMealPlace(name, category, tags);
+    }
+
+    /** 화면·스토리에 쓰는 이름. 한국어 이름이 있으면 그것이다. */
+    public String displayName() {
+        return hasDistinctNameKo() ? nameKo : name;
+    }
+
+    /** 선택 프롬프트용 이름. 원문을 함께 줘야 모델이 같은 이름의 다른 장소와 구분한다("센소지 (浅草寺)"). */
+    public String promptName() {
+        return hasDistinctNameKo() ? nameKo + " (" + name + ")" : name;
+    }
+
+    private boolean hasDistinctNameKo() {
+        return nameKo != null && !nameKo.isBlank() && !nameKo.equals(name);
     }
 
     /** 표시·프롬프트용 지역 라벨: 세부지역 우선, 없으면 상위 region. */

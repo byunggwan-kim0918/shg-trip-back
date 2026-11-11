@@ -1043,6 +1043,36 @@ class RouteOptimizerTest {
                 .contains("Far Park");
     }
 
+    @Test
+    @DisplayName("원문 이름에 허브 신호가 없는 해외 공항도 한국어 이름으로 허브를 맞춘다")
+    void repairAndSchedule_matchesOverseasHubByKoreanName() {
+        String airport = "Travel and Transportation > Transport Hub > Airport";
+        PlaceCandidate narita = withNameKo(overseas(place(1, "成田国際空港", airport, 35.772, 140.3929, "Tokyo")),
+                "나리타 국제공항");
+        List<PlaceCandidate> candidates = List.of(
+                narita,
+                overseas(place(2, "Lunch", "Dining and Drinking > Restaurant", 35.682, 139.768, "Tokyo")),
+                overseas(place(3, "Hotel", "Travel and Transportation > Lodging > Hotel", 35.684, 139.769, "Tokyo")));
+        SelectionOutput selection = new SelectionOutput("concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(2), 3, null)), List.of(), List.of());
+        com.shg.trip.shgtrip.domain.planning.dto.TransportationHub hub =
+                new com.shg.trip.shgtrip.domain.planning.dto.TransportationHub("나리타 국제공항", null, "AIRPORT");
+
+        List<StepData> steps = routeOptimizer.repairAndSchedule(
+                selection, candidates, "relaxed", "any", null, List.of(), hub, false);
+
+        assertThat(steps.get(0).place().name()).isEqualTo("成田国際空港");
+        assertThat(steps.get(0).place().nameKo()).isEqualTo("나리타 국제공항");
+    }
+
+    private static PlaceCandidate withNameKo(PlaceCandidate c, String nameKo) {
+        return new PlaceCandidate(c.index(), c.placeId(), c.name(), c.address(), c.category(), c.tags(), c.region(),
+                c.country(), c.latitude(), c.longitude(), c.description(), c.rating(), c.similarityScore(),
+                c.priceLevel(), c.openingHours(), c.recommendedTimeSlots(), c.recommendedDurationMinutes(),
+                c.userSelected(), c.admissionFee(), c.subRegion(), c.userRatingCount(), c.wikidataSitelinks(),
+                c.placeRole(), c.cuisine(), false, null, c.attributes(), nameKo);
+    }
+
     private static PlaceCandidate overseas(PlaceCandidate c) {
         return new PlaceCandidate(c.index(), c.placeId(), c.name(), c.address(), c.category(), c.tags(), c.region(),
                 "JP", c.latitude(), c.longitude(), c.description(), c.rating(), c.similarityScore());

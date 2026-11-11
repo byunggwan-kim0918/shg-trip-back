@@ -17,7 +17,8 @@ public record PlaceResponse(
         Integer priceLevel,
         String openingHours,
         String imageUrl,
-        String description
+        String description,
+        String nameKo
 ) {
     public static PlaceResponse from(Place place) {
         if (place == null) return null;
@@ -27,7 +28,7 @@ public record PlaceResponse(
                 place.getCategory(), place.getRegion(), place.getCountry(),
                 place.getRating(), place.getPriceLevel(),
                 place.getOpeningHours(), place.getImageUrl(),
-                place.getDescription()
+                place.getDescription(), place.getNameKo()
         );
     }
 }

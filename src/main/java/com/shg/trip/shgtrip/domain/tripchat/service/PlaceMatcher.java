@@ -1,5 +1,7 @@
 package com.shg.trip.shgtrip.domain.tripchat.service;
 
+import com.shg.trip.shgtrip.domain.place.destination.Destination;
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.dto.PlaceResponse;
 import com.shg.trip.shgtrip.domain.place.service.PlaceService;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
@@ -34,6 +36,7 @@ public class PlaceMatcher {
             "숙소", "전망대", "투어", "체험", "온천", "스파", "사찰", "성당", "거리", "골목", "케이블카");
 
     private final PlaceService placeService;
+    private final Destinations destinations;
 
     public static String key(DraftField field, String text) {
         return field.name() + "|" + TextNormalizer.key(text);
@@ -71,9 +74,11 @@ public class PlaceMatcher {
         if (query.length() < 2 || isGeneric(query)) return java.util.Optional.empty();
         try {
             for (PlaceResponse p : placeService.searchPlaces(name.strip(), PageRequest.of(0, SEARCH_SIZE))) {
-                if (!sameName(TextNormalizer.key(p.name()), query)) continue;
-                if (destination != null && !inDestination(p.address(), destination)) continue;
-                return java.util.Optional.of(new PlaceMatch(p.id(), p.name(),
+                if (!sameName(TextNormalizer.key(p.name()), query)
+                        && !sameName(TextNormalizer.key(p.nameKo()), query)) continue;
+                if (destination != null && !matchesDestination(p, destination)) continue;
+                String shown = p.nameKo() != null && !p.nameKo().isBlank() ? p.nameKo() : p.name();
+                return java.util.Optional.of(new PlaceMatch(p.id(), shown,
                         PlaceCategoryConstants.majorCategory(p.category())));
             }
         } catch (Exception e) {
@@ -93,6 +98,14 @@ public class PlaceMatcher {
             if (query.endsWith(suffix) && query.length() - suffix.length() < 2) return true;
         }
         return false;
+    }
+
+    /** 해외 여행지는 주소가 현지어라 이름 대신 장소 region이 같은 여행지 묶음(교토·나라는 오사카)인지 본다. */
+    boolean matchesDestination(PlaceResponse p, String destination) {
+        java.util.Optional<Destination> overseas = destinations.resolve(destination);
+        if (overseas.isEmpty()) return inDestination(p.address(), destination);
+        return p.region() != null
+                && destinations.rootOf(p.region()).equals(destinations.rootOf(overseas.get().name()));
     }
 
     /** 주소에 여행지 이름이 있어야 한다. "제주도"·"부산시"처럼 붙은 행정 단위는 떼고 본다. */

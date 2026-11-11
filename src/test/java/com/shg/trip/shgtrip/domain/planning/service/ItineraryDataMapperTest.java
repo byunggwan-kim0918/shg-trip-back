@@ -38,7 +38,7 @@ import static org.mockito.Mockito.*;
  *
  * <p>살아남은 안전장치는 거리 검증이다. 실사례: 제주 일정인데 DB에 같은 이름+주소로 캐시된
  * 서울 장소(약 450km)가 좌표로 채택돼 지도에 서울이 찍혔다. 기준점은 이제 후보 좌표의
- * median(referenceCoord) 하나뿐이다 — Redis 캐시는 쓰기 경로가 사라져 함께 제거됐다.
+ * median(referenceCenters)뿐이다 — Redis 캐시는 쓰기 경로가 사라져 함께 제거됐다.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -87,6 +87,78 @@ class ItineraryDataMapperTest {
                 List.of(step(1, name, address)));
     }
 
+    private Place placeWithId(long id, String name, double lat, double lng, boolean active) {
+        Place p = Place.builder()
+                .id(id).name(name).address("")
+                .latitude(BigDecimal.valueOf(lat)).longitude(BigDecimal.valueOf(lng))
+                .category("Dining and Drinking > Cafe").region("Tokyo").country("JP")
+                .source("foursquare").savedAt(OffsetDateTime.now())
+                .build();
+        if (!active) p.deactivate();
+        return p;
+    }
+
+    private StepData stepWithId(int order, String name, long placeId, List<AlternativeData> alternatives) {
+        return new StepData(order, 1, "09:00", "10:00",
+                new PlaceData(name, "", "Dining and Drinking > Cafe", "Tokyo", "JP", null, null, placeId, null),
+                alternatives, null, null, null, null, null, BigDecimal.ZERO);
+    }
+
+    private static final double[] TOKYO = {35.68, 139.76};
+    private static final double[] OSAKA = {34.69, 135.50};
+
+    @Test
+    @DisplayName("placeId가 있으면 id로 찾아, 주소 없는 같은 이름 체인 지점을 각자 저장한다")
+    void resolvesByPlaceIdSoChainBranchesStaySeparate() {
+        Place shinjuku = placeWithId(10L, "星巴克", 35.69, 139.70, true);
+        Place shibuya = placeWithId(11L, "星巴克", 35.66, 139.70, true);
+        Place altBranch = placeWithId(12L, "星巴克", 35.67, 139.71, true);
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of(shinjuku, shibuya, altBranch));
+        AlternativeData alt = new AlternativeData("星巴克", "", "Dining and Drinking > Cafe", "Tokyo", "JP",
+                null, null, 12L, null);
+        ItineraryData data = new ItineraryData("도쿄", "도쿄", BigDecimal.ZERO, List.of(),
+                List.of(stepWithId(1, "星巴克", 10L, List.of(alt)), stepWithId(2, "星巴克", 11L, List.of())));
+
+        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true, List.of(TOKYO));
+
+        assertThat(itinerary.getSteps()).extracting(st -> st.getPlace().getId()).containsExactly(10L, 11L);
+        assertThat(itinerary.getSteps().get(0).getAlternatives()).extracting(a -> a.getPlace().getId())
+                .containsExactly(12L);
+        verify(placeRepository, never()).findByNameAndAddress(any(), any());
+    }
+
+    @Test
+    @DisplayName("후보로 고른 장소는 그사이 비활성이 됐어도 그 장소로 저장하고, 행이 없을 때만 이름+주소로 찾는다")
+    void keepsInactiveIdHitAndFallsBackOnlyWhenRowMissing() {
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of(placeWithId(10L, "星巴克", 35.69, 139.70, false)));
+        when(placeRepository.findByNameAndAddress("星巴克", ""))
+                .thenReturn(Optional.of(placeWithId(20L, "星巴克", 35.68, 139.76, true)));
+        ItineraryData data = new ItineraryData("도쿄", "도쿄", BigDecimal.ZERO, List.of(), List.of(
+                stepWithId(1, "星巴克", 10L, List.of()),
+                stepWithId(2, "星巴克", 99L, List.of())));
+
+        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true, List.of(TOKYO));
+
+        assertThat(itinerary.getSteps()).extracting(st -> st.getPlace().getId()).containsExactly(10L, 20L);
+    }
+
+    @Test
+    @DisplayName("여러 여행지 일정은 가장 가까운 여행지 중심에서 재고, 모든 중심에서 멀어야 버린다")
+    void multiCityKeepsPlacesNearAnyCenter() {
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of(
+                placeWithId(1L, "도쿄 카페", 35.69, 139.70, true),
+                placeWithId(2L, "오사카 카페", 34.70, 135.49, true),
+                placeWithId(3L, "삿포로 카페", 43.06, 141.35, true)));
+        ItineraryData data = new ItineraryData("도쿄·오사카", "도쿄", BigDecimal.ZERO, List.of(), List.of(
+                stepWithId(1, "도쿄 카페", 1L, List.of()),
+                stepWithId(2, "오사카 카페", 2L, List.of()),
+                stepWithId(3, "삿포로 카페", 3L, List.of())));
+
+        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true, List.of(TOKYO, OSAKA));
+
+        assertThat(itinerary.getSteps()).extracting(st -> st.getPlace().getId()).containsExactly(1L, 2L);
+    }
+
     @Test
     @DisplayName("DB 장소가 여행지 근처면 그대로 채택한다")
     void acceptsNearbyDbPlace() {
@@ -94,7 +166,7 @@ class ItineraryDataMapperTest {
                 .thenReturn(Optional.of(placeAt("캐시장소", "addr-3", JEJU_LAT + 0.01, JEJU_LNG + 0.01)));
 
         Itinerary itinerary = mapper.toEntity(
-                oneStep("캐시장소", "addr-3"), jejuInput(), 1L, true, JEJU_CENTER);
+                oneStep("캐시장소", "addr-3"), jejuInput(), 1L, true, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps()).hasSize(1);
         assertThat(itinerary.getSteps().get(0).getPlace().getName()).isEqualTo("캐시장소");
@@ -108,7 +180,7 @@ class ItineraryDataMapperTest {
                 .thenReturn(Optional.of(placeAt("착한장소", "addr-1", SEOUL_LAT, SEOUL_LNG)));
 
         Itinerary itinerary = mapper.toEntity(
-                oneStep("착한장소", "addr-1"), jejuInput(), 1L, true, JEJU_CENTER);
+                oneStep("착한장소", "addr-1"), jejuInput(), 1L, true, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps()).isEmpty();
         verify(placeRepository, never()).save(any(Place.class));
@@ -132,7 +204,7 @@ class ItineraryDataMapperTest {
                 .thenReturn(Optional.empty());
 
         Itinerary itinerary = mapper.toEntity(
-                oneStep("DB에없는곳", "addr-9"), jejuInput(), 1L, true, JEJU_CENTER);
+                oneStep("DB에없는곳", "addr-9"), jejuInput(), 1L, true, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps()).isEmpty();
         // 과거엔 여기서 latitude=0, longitude=0, address="주소 미확인" 행을 저장했다
@@ -150,7 +222,7 @@ class ItineraryDataMapperTest {
         ItineraryData data = new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(),
                 List.of(step(1, "있는곳", "addr-a"), step(2, "없는곳", "addr-b")));
 
-        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true, JEJU_CENTER);
+        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps()).hasSize(1);
         assertThat(itinerary.getSteps().get(0).getPlace().getName()).isEqualTo("있는곳");
@@ -159,7 +231,7 @@ class ItineraryDataMapperTest {
     @Test
     @DisplayName("기준 좌표를 안 넘겨도 해소된 장소들의 median으로 거리 가드가 동작한다")
     void fallsBackToMedianOfResolvedPlaces() {
-        // Fallback 경로(ItineraryGenerationExecutor)는 referenceCoord를 넘기지 않는다.
+        // Fallback 경로(ItineraryGenerationExecutor)는 referenceCenters를 넘기지 않는다.
         // 예전엔 Redis 캐시/Google 검색이 기준을 만들어 줬지만 둘 다 사라졌다. 자체 median이
         // 없으면 "제주 일정에 서울 좌표" 오매칭 가드가 통째로 꺼진다.
         for (int i = 0; i < MEDIAN_SAMPLE; i++) {
@@ -177,7 +249,7 @@ class ItineraryDataMapperTest {
         steps.add(step(MEDIAN_SAMPLE + 1, "서울장소", "zz"));
         ItineraryData data = new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(), steps);
 
-        // referenceCoord 없이 호출 — median이 제주로 잡혀 서울 장소만 걸러져야 한다
+        // referenceCenters 없이 호출 — median이 제주로 잡혀 서울 장소만 걸러져야 한다
         Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true);
 
         assertThat(itinerary.getSteps()).hasSize(MEDIAN_SAMPLE);
@@ -228,7 +300,7 @@ class ItineraryDataMapperTest {
 
         Itinerary itinerary = mapper.toEntity(
                 new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(), List.of(s)),
-                jejuInput(), 1L, true, JEJU_CENTER);
+                jejuInput(), 1L, true, List.of(JEJU_CENTER));
 
         var alts = itinerary.getSteps().get(0).getAlternatives();
         assertThat(alts).hasSize(1);
@@ -254,7 +326,7 @@ class ItineraryDataMapperTest {
 
         Itinerary itinerary = mapper.toEntity(
                 new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(), List.of(dropped, kept)),
-                jejuInput(), 1L, true, JEJU_CENTER);
+                jejuInput(), 1L, true, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps()).hasSize(1);
         ItineraryStep only = itinerary.getSteps().get(0);
@@ -269,7 +341,7 @@ class ItineraryDataMapperTest {
         when(placeRepository.findByNameAndAddress("장소", "addr-4"))
                 .thenReturn(Optional.of(placeAt("장소", "addr-4", JEJU_LAT, JEJU_LNG)));
 
-        mapper.toEntity(oneStep("장소", "addr-4"), jejuInput(), 1L, true, JEJU_CENTER);
+        mapper.toEntity(oneStep("장소", "addr-4"), jejuInput(), 1L, true, List.of(JEJU_CENTER));
 
         verify(placeRepository, never()).save(any(Place.class));
         verify(placeRepository, never()).saveAll(any());

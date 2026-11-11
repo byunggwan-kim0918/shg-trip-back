@@ -66,4 +66,17 @@ class SelectionPromptFameTest {
         assertThat(message).contains("미매칭장소 | [관광] Tourist Attraction | ⭐4.5 |");
         assertThat(message).contains("평점 · 인기도");
     }
+
+    @Test
+    @DisplayName("해외 후보 줄은 한국어 이름 뒤에 원문 이름을 붙인다")
+    void overseasCandidateLineShowsKoreanAndOriginalName() {
+        PlaceCandidate c = candidate(1, "浅草寺", 4.5, 40);
+        PlaceCandidate sensoji = new PlaceCandidate(c.index(), c.placeId(), c.name(), c.address(), c.category(),
+                c.tags(), "Tokyo", "JP", c.latitude(), c.longitude(), c.description(), c.rating(), c.similarityScore(),
+                null, null, null, null, false, null, null, null, 40, null, null, false, null, null, "센소지");
+
+        String message = generator.buildUserMessage(input(), List.of(sensoji), 4);
+
+        assertThat(message).contains("1 | 센소지 (浅草寺) | [관광]");
+    }
 }

@@ -48,6 +48,19 @@ class HardValidatorTest {
     }
 
     @Test
+    @DisplayName("같은 날 같은 이름이라도 후보 id가 다른 체인 지점은 중복이 아니고, 같은 id는 중복이다")
+    void validate_sameNameDifferentPlaceIds_passes() {
+        PlaceData shinjuku = new PlaceData("コメダ珈琲店", "", "Cafe", "Tokyo", "JP", null, null, 10L, null);
+        PlaceData shibuya = new PlaceData("コメダ珈琲店", "", "Cafe", "Tokyo", "JP", null, null, 11L, null);
+        StepData first = new StepData(1, 1, "09:00", "10:00", shinjuku, List.of(), "WALK", 10, null, null, null, null);
+        StepData second = new StepData(2, 1, "15:00", "16:00", shibuya, List.of(), "WALK", 10, null, null, null, null);
+        StepData again = new StepData(2, 1, "15:00", "16:00", shinjuku, List.of(), "WALK", 10, null, null, null, null);
+
+        assertThat(validator.validate(itinerary(List.of(first, second))).valid()).isTrue();
+        assertThat(validator.validate(itinerary(List.of(first, again))).valid()).isFalse();
+    }
+
+    @Test
     @DisplayName("null ItineraryData는 실패한다")
     void validate_nullData_fails() {
         HardValidationResult result = validator.validate(null);

@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.tripchat.service;
 
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.dto.PlaceResponse;
 import com.shg.trip.shgtrip.domain.place.service.PlaceService;
 import com.shg.trip.shgtrip.domain.tripchat.model.DraftField;
@@ -21,7 +22,12 @@ import static org.mockito.Mockito.when;
 class PlaceMatcherTest {
 
     private static PlaceResponse place(long id, String name, String address, String category) {
-        return new PlaceResponse(id, name, address, null, null, category, null, null, null, null, null, null, null);
+        return new PlaceResponse(id, name, address, null, null, category, null, null, null, null, null, null, null, null);
+    }
+
+    private static PlaceResponse overseas(long id, String name, String nameKo, String region, String category) {
+        return new PlaceResponse(id, name, "東京都", null, null, category, null, null, null, null, null, region, null,
+                nameKo);
     }
 
     @Test
@@ -34,7 +40,7 @@ class PlaceMatcherTest {
         when(placeService.searchPlaces(eq("파라다이스 호텔"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
                 place(3, "파라다이스 호텔 부산", "부산광역시 해운대구", "Travel and Transportation > Lodging > Hotel"))));
 
-        Map<String, PlaceMatch> matches = new PlaceMatcher(placeService).match(Events.of()
+        Map<String, PlaceMatch> matches = new PlaceMatcher(placeService, Destinations.fromClasspath()).match(Events.of()
                 .user(DraftField.DESTINATION, "부산")
                 .user(DraftField.MUST_VISIT, "블루라인파크")
                 .user(DraftField.LODGING_STATE, "booked")
@@ -44,6 +50,24 @@ class PlaceMatcherTest {
         PlaceMatch lodging = matches.get(PlaceMatcher.key(DraftField.LODGING, "파라다이스 호텔"));
         assertThat(lodging.placeId()).isEqualTo(3L);
         assertThat(lodging.major()).isEqualTo("LODGING");
+    }
+
+    @Test
+    @DisplayName("해외 장소는 한국어 이름으로 맞추고, 주소 대신 같은 여행지 묶음인지 본다")
+    void matchesOverseasByKoreanNameAndRegion() {
+        PlaceService placeService = mock(PlaceService.class);
+        when(placeService.searchPlaces(eq("센소지"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
+                overseas(1, "浅草寺", "센소지", "Osaka", "Spiritual Center > Buddhist Temple"),
+                overseas(2, "浅草寺", "센소지", "Tokyo", "Spiritual Center > Buddhist Temple"))));
+        when(placeService.searchPlaces(eq("도다이지"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
+                overseas(3, "東大寺", "도다이지", "Nara", "Spiritual Center > Buddhist Temple"))));
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+
+        PlaceMatch sensoji = matcher.find("센소지", "도쿄").orElseThrow();
+        assertThat(sensoji.placeId()).isEqualTo(2L);
+        assertThat(sensoji.name()).isEqualTo("센소지");
+        assertThat(matcher.find("도다이지", "교토")).get().extracting(PlaceMatch::placeId).isEqualTo(3L);
+        assertThat(matcher.find("도다이지", "도쿄")).isEmpty();
     }
 
     @Test
@@ -60,7 +84,7 @@ class PlaceMatcherTest {
     @DisplayName("야시장·박물관처럼 일반 명사만 남는 이름은 조회하지 않는다")
     void genericNamesAreNotSearched() {
         PlaceService placeService = mock(PlaceService.class);
-        PlaceMatcher matcher = new PlaceMatcher(placeService);
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
 
         assertThat(matcher.find("야시장", "부산")).isEmpty();
         assertThat(matcher.find("박물관", "부산")).isEmpty();
