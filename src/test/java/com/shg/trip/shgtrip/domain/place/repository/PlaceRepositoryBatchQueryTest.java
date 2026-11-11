@@ -54,7 +54,7 @@ class PlaceRepositoryBatchQueryTest {
                 .country("KR")
                 .source("test")
                 .build();
-        if (sitelinks != null) p.markWikidataMatch("Q1", sitelinks);
+        p.markWikidataMatch(sitelinks == null ? null : "Q1", sitelinks);
         Place saved = placeRepository.saveAndFlush(p);
         if (enriched) {
             em.createNativeQuery("UPDATE places SET enriched_at = now() WHERE id = ?")
@@ -125,6 +125,135 @@ class PlaceRepositoryBatchQueryTest {
                 List.of(failed.getId()), PageRequest.of(0, 50));
 
         assertThat(targets).extracting(Place::getId).doesNotContain(failed.getId());
+    }
+
+    @Test
+    @DisplayName("Wikidata 매칭을 아직 거치지 않은 행은 보강 대상이 아니다")
+    void findEnrichTargets_waitsForWikidata() {
+        Place seen = save("명소", "Landmarks and Outdoors > Mountain", 999_999, false);
+        Place unseen = save("새 명소", "Landmarks and Outdoors > Mountain", 999_998, false);
+        em.createNativeQuery("UPDATE places SET wikidata_matched_at = NULL WHERE id = ?")
+                .setParameter(1, unseen.getId()).executeUpdate();
+
+        assertThat(placeRepository.findEnrichTargets(List.of(-1L), PageRequest.of(0, 50)))
+                .extracting(Place::getId).contains(seen.getId()).doesNotContain(unseen.getId());
+        assertThat(placeRepository.findEnrichTargetsInRegions(List.of(REGION), List.of(-1L), PageRequest.of(0, 50)))
+                .extracting(Place::getId).containsExactly(seen.getId());
+    }
+
+    @Test
+    @DisplayName("명소 행은 출처 URL로 이름·한국어 이름·지역·적재 때 만든 주소를 맞추고, QID 목록에 남는다")
+    void refreshWikidataLandmark_renamesBySourceUrl() {
+        Place lm = placeRepository.saveAndFlush(Place.builder()
+                .name("기요미즈데라").address("기요미즈데라, ZZ_OLD")
+                .latitude(BigDecimal.valueOf(34.9949)).longitude(BigDecimal.valueOf(135.7850))
+                .category("Community and Government > Spiritual Center > Buddhist Temple")
+                .region("ZZ_OLD").country("JP").source("wikidata")
+                .sourceUrl("https://www.wikidata.org/wiki/Q9999991").build());
+        em.createNativeQuery("UPDATE places SET embedding = array_fill(0.1, ARRAY[768])::halfvec WHERE id = ?")
+                .setParameter(1, lm.getId()).executeUpdate();
+
+        int changed = placeRepository.refreshWikidataLandmark(
+                "https://www.wikidata.org/wiki/Q9999991", "清水寺", "기요미즈데라", REGION);
+        int again = placeRepository.refreshWikidataLandmark(
+                "https://www.wikidata.org/wiki/Q9999991", "清水寺", "키요미즈데라", REGION);
+        em.clear();
+
+        Object[] row = (Object[]) em.createNativeQuery(
+                        "SELECT name, name_ko, region, address, embedding IS NULL FROM places WHERE id = ?")
+                .setParameter(1, lm.getId()).getSingleResult();
+        assertThat(changed).isEqualTo(1);
+        assertThat(again).isZero();
+        assertThat(row).containsExactly("清水寺", "기요미즈데라", REGION, "清水寺, " + REGION, true);
+        // 인기도 매칭이 wikidata_id를 비워도 재적재 방지 목록에 남는다
+        assertThat(placeRepository.findAllWikidataIds()).contains("Q9999991");
+    }
+
+    @Test
+    @DisplayName("한국어 이름만 채울 때는 임베딩을 지우지 않는다")
+    void refreshWikidataLandmark_keepsEmbeddingWhenOnlyNameKoFills() {
+        Place lm = placeRepository.saveAndFlush(Place.builder()
+                .name("清水寺").address("清水寺, " + REGION)
+                .latitude(BigDecimal.valueOf(34.9949)).longitude(BigDecimal.valueOf(135.7850))
+                .category("Community and Government > Spiritual Center > Buddhist Temple")
+                .region(REGION).country("JP").source("wikidata")
+                .sourceUrl("https://www.wikidata.org/wiki/Q9999993").build());
+        em.createNativeQuery("UPDATE places SET embedding = array_fill(0.1, ARRAY[768])::halfvec WHERE id = ?")
+                .setParameter(1, lm.getId()).executeUpdate();
+
+        int changed = placeRepository.refreshWikidataLandmark(
+                "https://www.wikidata.org/wiki/Q9999993", "清水寺", "기요미즈데라", REGION);
+        em.clear();
+
+        Object[] row = (Object[]) em.createNativeQuery("SELECT name_ko, embedding IS NULL FROM places WHERE id = ?")
+                .setParameter(1, lm.getId()).getSingleResult();
+        assertThat(changed).isEqualTo(1);
+        assertThat(row).containsExactly("기요미즈데라", false);
+    }
+
+    @Test
+    @DisplayName("해외 명소 적재의 기존 QID는 활성 행의 wikidata_id와 명소 적재 행만 본다")
+    void findKnownLandmarkQids_ignoresInactiveForeignRows() {
+        Place stale = save("추출에서 빠진 행", "Landmarks and Outdoors > Park", 5, false);
+        em.createNativeQuery("UPDATE places SET wikidata_id = 'Q9999994', active = false WHERE id = ?")
+                .setParameter(1, stale.getId()).executeUpdate();
+        Place offLandmark = placeRepository.saveAndFlush(Place.builder()
+                .name("끈 명소").address("끈 명소, " + REGION)
+                .latitude(BigDecimal.valueOf(34.0)).longitude(BigDecimal.valueOf(135.0))
+                .category("Landmarks and Outdoors > Park").region(REGION).country("JP").source("wikidata")
+                .sourceUrl("https://www.wikidata.org/wiki/Q9999995").active(false).build());
+
+        List<String> known = placeRepository.findKnownLandmarkQids();
+
+        assertThat(known).contains("Q9999995").doesNotContain("Q9999994");
+        assertThat(offLandmark.getId()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("한국어 라벨이 없으면(null) 이름만 맞추고 name_ko와 직접 적은 주소는 그대로 둔다")
+    void refreshWikidataLandmark_nullNameKo() {
+        Place lm = placeRepository.saveAndFlush(Place.builder()
+                .name("오사카 성").address("1-1 Osakajo, Chuo-ku")
+                .latitude(BigDecimal.valueOf(34.6873)).longitude(BigDecimal.valueOf(135.5262))
+                .category("Landmarks and Outdoors > Historic and Protected Site > Castle")
+                .region(REGION).country("JP").source("wikidata")
+                .sourceUrl("https://www.wikidata.org/wiki/Q9999992").build());
+
+        int changed = placeRepository.refreshWikidataLandmark(
+                "https://www.wikidata.org/wiki/Q9999992", "大阪城", null, REGION);
+        em.clear();
+
+        Object[] row = (Object[]) em.createNativeQuery("SELECT name, name_ko, address FROM places WHERE id = ?")
+                .setParameter(1, lm.getId()).getSingleResult();
+        assertThat(changed).isEqualTo(1);
+        assertThat(row).containsExactly("大阪城", null, "1-1 Osakajo, Chuo-ku");
+    }
+
+    @Test
+    @DisplayName("Wikidata 매칭 대기 건수는 보강 대상에서 빠진 행만 센다")
+    void countEnrichWaitingForWikidata_countsUnseen() {
+        long before = placeRepository.countEnrichWaitingForWikidata();
+        Place unseen = save("새 명소", "Landmarks and Outdoors > Mountain", null, false);
+        save("본 명소", "Landmarks and Outdoors > Mountain", 3, false);
+        em.createNativeQuery("UPDATE places SET wikidata_matched_at = NULL WHERE id = ?")
+                .setParameter(1, unseen.getId()).executeUpdate();
+
+        assertThat(placeRepository.countEnrichWaitingForWikidata()).isEqualTo(before + 1);
+    }
+
+    @Test
+    @DisplayName("한국어 이름은 비어 있는 그 행만 채우고, 이미 있는 이름은 덮지 않는다")
+    void fillNameKo_onlyWhenEmpty() {
+        Place a = save("外滩", "Landmarks and Outdoors > Historic and Protected Site", null, false);
+        Place b = save("豫园", "Landmarks and Outdoors > Garden", null, false);
+
+        placeRepository.fillNameKo(a.getId(), "와이탄");
+        int overwritten = placeRepository.fillNameKo(a.getId(), "외탄");
+        em.clear();
+
+        assertThat(overwritten).isZero();
+        assertThat(placeRepository.findById(a.getId()).orElseThrow().getNameKo()).isEqualTo("와이탄");
+        assertThat(placeRepository.findById(b.getId()).orElseThrow().getNameKo()).isNull();
     }
 
     private void upsert(String fsqId, String name) {

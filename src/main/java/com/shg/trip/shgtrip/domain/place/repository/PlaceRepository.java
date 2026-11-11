@@ -210,9 +210,59 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             """, nativeQuery = true)
     int resetWikidataForRegion(@Param("region") String region);
 
-    /** 이미 DB에 있는 Wikidata 항목 id(활성·비활성 모두). 명소 적재의 재실행 중복 방지용. */
-    @Query(value = "SELECT DISTINCT wikidata_id FROM places WHERE wikidata_id IS NOT NULL", nativeQuery = true)
+    /**
+     * 이미 DB에 있는 Wikidata 항목 id(활성·비활성 모두). 명소 적재의 재실행 중복 방지용.
+     * 인기도 매칭이 지역을 다시 계산하며 wikidata_id를 비울 수 있어, 명소 적재 행은 출처 URL의 id도 본다.
+     */
+    @Query(value = """
+            SELECT wikidata_id FROM places WHERE wikidata_id IS NOT NULL
+            UNION
+            SELECT substring(source_url FROM 'Q[0-9]+$') FROM places
+             WHERE source = 'wikidata' AND source_url ~ 'Q[0-9]+$'
+            """, nativeQuery = true)
     List<String> findAllWikidataIds();
+
+    /**
+     * 해외 명소 적재가 "이미 있다"고 볼 Wikidata 항목 id. 활성 행의 wikidata_id와 명소 적재 행(상태 무관)의 출처 id다.
+     * 비활성 FSQ 행의 wikidata_id까지 보면 그 행이 추출에서 빠진 뒤로 명소가 다시 들어오지 못한다.
+     */
+    @Query(value = """
+            SELECT wikidata_id FROM places WHERE wikidata_id IS NOT NULL AND active = true
+            UNION
+            SELECT substring(source_url FROM 'Q[0-9]+$') FROM places
+             WHERE source = 'wikidata' AND source_url ~ 'Q[0-9]+$'
+            """, nativeQuery = true)
+    List<String> findKnownLandmarkQids();
+
+    /**
+     * 비어 있는 한국어 표시 이름을 Wikidata 한국어 라벨로 채운다. 라벨이 정식명("로쿠온지")인 곳이 있어
+     * 보강·보정표가 이미 정한 이름은 덮지 않는다.
+     */
+    @Modifying
+    @Query(value = "UPDATE places SET name_ko = :nameKo WHERE id = :id AND name_ko IS NULL", nativeQuery = true)
+    int fillNameKo(@Param("id") long id, @Param("nameKo") String nameKo);
+
+    /**
+     * 해외 Wikidata 명소 행의 이름·여행지를 지금 규칙(현지 라벨, 가장 가까운 여행지)에 맞추고 비어 있는
+     * 한국어 이름을 채운다({@link #fillNameKo}와 같은 이유로 덮지 않는다). 주소가 적재 때 만든 "이름, 지역" 꼴이면
+     * 같이 바꾼다(SET의 name·region은 바꾸기 전 값이다). 임베딩은 이름·지역이 바뀔 때만 지운다. 지우면 다음 임베딩
+     * 단계까지 검색 후보에서 빠진다.
+     *
+     * @return 바뀐 행 수(이미 같으면 0)
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places
+               SET name = :name, name_ko = COALESCE(name_ko, CAST(:nameKo AS varchar)), region = :region,
+                   address = CASE WHEN address = name || ', ' || region THEN :name || ', ' || :region ELSE address END,
+                   embedding = CASE WHEN name <> :name OR region IS DISTINCT FROM :region THEN NULL ELSE embedding END
+             WHERE source = 'wikidata' AND source_url = :sourceUrl
+               AND (name <> :name OR region IS DISTINCT FROM :region
+                    OR (name_ko IS NULL AND CAST(:nameKo AS varchar) IS NOT NULL))
+            """, nativeQuery = true)
+    int refreshWikidataLandmark(@Param("sourceUrl") String sourceUrl, @Param("name") String name,
+                                @Param("nameKo") String nameKo, @Param("region") String region);
 
     @Modifying
     @Query(value = """
@@ -226,6 +276,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     /**
      * 보강 대상: 미보강(enriched_at IS NULL)·활성. BatchEnrichScheduler가 첫 페이지만 반복 조회한다.
      * 카테고리만으로 비방문(NOT_VISITABLE)이 확정된 곳은 보강해도 일정에 안 나오므로 뺀다.
+     * Wikidata 매칭을 아직 거치지 않은 행도 뺀다. 인기도 없이 보강하면 유명 식당이 설명 없이 보강 완료로 남는다.
      *
      * <p><b>순서</b>: 유명한 곳(Wikidata sitelinks) → 식당·카페가 아닌 곳 → id. 보강은 하루 가까이 걸릴 수
      * 있어서, 중간에 끊겨도 일정에 자주 나오는 곳은 끝나 있게 한다.
@@ -236,6 +287,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     @Query("""
             SELECT p FROM Place p
             WHERE p.enrichedAt IS NULL AND p.active = true
+              AND p.wikidataMatchedAt IS NOT NULL
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND p.id NOT IN :excludedIds
             ORDER BY COALESCE(p.wikidataSitelinks, 0) DESC,
@@ -243,6 +295,14 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                      p.id
             """)
     List<Place> findEnrichTargets(@Param("excludedIds") Collection<Long> excludedIds, Pageable pageable);
+
+    /** Wikidata 매칭을 기다리느라 {@link #findEnrichTargets}에서 빠진 행 수. */
+    @Query(value = """
+            SELECT count(*) FROM places
+            WHERE enriched_at IS NULL AND active = true AND wikidata_matched_at IS NULL
+              AND (place_role IS NULL OR place_role <> 'NOT_VISITABLE')
+            """, nativeQuery = true)
+    long countEnrichWaitingForWikidata();
 
     /**
      * 역할 미확정 활성 장소의 (id, name, category)를 id 순으로 준다. {@code PlaceRoleBackfillJob}이 keyset 페이지로 읽는다.
@@ -347,6 +407,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     @Query("""
             SELECT p FROM Place p
             WHERE p.enrichedAt IS NULL AND p.active = true
+              AND p.wikidataMatchedAt IS NOT NULL
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND p.region IN :regions
               AND p.id NOT IN :excludedIds
