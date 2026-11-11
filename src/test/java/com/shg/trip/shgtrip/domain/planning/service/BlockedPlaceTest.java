@@ -35,6 +35,18 @@ class BlockedPlaceTest {
     }
 
     @Test
+    @DisplayName("해외의 북한 국영 식당은 막고, 한국의 평양냉면집은 막지 않는다")
+    void blocksNorthKoreanRestaurantsOverseasOnly() {
+        assertThat(CandidatePolicy.isBlocked("平壤高丽馆", "CN")).isTrue();
+        assertThat(CandidatePolicy.isBlocked("玉流館", "CN")).isTrue();
+        assertThat(CandidatePolicy.isBlocked("Pyongyang Restaurant", "VN")).isTrue();
+        assertThat(CandidatePolicy.isBlocked("평양관", "CN")).isTrue();
+        assertThat(CandidatePolicy.isBlocked("평양면옥", "KR")).isFalse();
+        assertThat(CandidatePolicy.isBlocked("평양면옥", null)).isFalse();
+        assertThat(CandidatePolicy.isBlocked("靖国神社", null)).isTrue();
+    }
+
+    @Test
     @DisplayName("사용자가 직접 고른 장소와 이름이 비슷한 다른 장소는 막지 않는다")
     void keepsUserSelectedAndUnrelated() {
         assertThat(CandidatePolicy.roleOf(cand("야스쿠니 신사", "SIGHT", true))).isEqualTo(CandidatePolicy.Role.SIGHT);

@@ -37,17 +37,24 @@ public final class PlaceCategoryConstants {
     /**
      * 교통시설 이름 판정. 부분 문자열로 보면 "Sports Complex"("port")·"역사박물관"("역")이 허브가 되므로
      * 한 글자 키워드는 경계 조건을, 영문은 단어 경계를 붙인다. "항"은 관광 어항이 많아 넣지 않는다.
+     * 중국어 역은 "北京南站"처럼 이름 끝의 "站"으로 드러나고, 주유소(加油站)·사이트(网站)·택배 거점(驿站)은 뺀다.
      */
     private static final java.util.regex.Pattern TRANSIT_FACILITY_NAME = java.util.regex.Pattern.compile(
             "공항|터미널|여객|선착장|부두|도선|카페리|페리"
             + "|[가-힣]역(?![사원전])"                       // 서울역 O / 역사박물관·역원 X
             + "|\\bairport\\b|\\bterminal\\b|\\bferry\\b|\\bpier\\b"
-            + "|\\b(?:train|bus|subway|metro|railway)?\\s*station\\b",
-            java.util.regex.Pattern.CASE_INSENSITIVE);
+            + "|\\b(?:train|bus|subway|metro|railway)?\\s*station\\b"
+            + "|空港|ターミナル|フェリー|(?<!道の)駅(?!前)"        // 道の駅는 휴게소, 駅前○○는 역 앞 가게
+            + "|机场|機場|航站楼|航廈|火车站|火車站|高铁站|高鐵站|车站|車站|地铁站|捷運|客运站|客運站|码头|碼頭"
+            + "|(?<!加油|充电|充電|服务|服務|网|網|驿|驛|气象|氣象|工作)站(?=$|[\\s(（])"
+            + "|sân bay|bến xe|bến phà|(?<!\\S)(?-i:Ga)\\s",      // "Ga Hà Nội" O / "Gà rán" X
+            java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
 
     /** 여객시설임이 이름에 드러나는 신호. 관광 스텝이 될 수 없어 방문 후보에서 뺀다. 시딩·검증·동선이 같은 목록을 본다. */
     private static final java.util.regex.Pattern PASSENGER_FACILITY_NAME = java.util.regex.Pattern.compile(
-            "여객|터미널|대합실|선착장|부두|도선|카페리", java.util.regex.Pattern.CASE_INSENSITIVE);
+            "여객|터미널|대합실|선착장|부두|도선|카페리"
+            + "|ターミナル|航站楼|航廈|客运站|客運站|bến xe",
+            java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
 
     /**
      * 허브 본체가 아닌 부속 시설 POI 신호. Foursquare에 "Immigration Check"·"주차장" 같은 하위 POI가
@@ -55,7 +62,10 @@ public final class PlaceCategoryConstants {
      */
     private static final Set<String> HUB_SUB_FACILITY_KEYWORDS = Set.of(
             "immigration", "check-in", "checkin", "security", "gate", "counter",
-            "baggage", "lounge", "parking", "주차", "수하물", "출입국", "심사", "탑승구"
+            "baggage", "lounge", "parking", "주차", "수하물", "출입국", "심사", "탑승구",
+            "駐車場", "手荷物", "保安検査", "出国審査", "入国審査", "ラウンジ", "搭乗口",
+            "停车场", "停車場", "行李", "安检", "安檢", "登机口", "登機門", "值机", "出入境", "贵宾室", "貴賓室",
+            "bãi đỗ xe", "bãi giữ xe", "hành lý", "phòng chờ"
     );
 
     /** 야간 방문이 부적합한 야외/주간 성격 카테고리 신호 (일몰 전 버킷에만 배치). */
@@ -359,7 +369,9 @@ public final class PlaceCategoryConstants {
     /** 카페 자리로 쓰면 안 되는 편의점·휴게소 이름 신호(FSQ Snack Place 혼입). */
     private static final List<String> CONVENIENCE_NAMES = List.of(
             "휴게소", "편의점", "7~11", "세븐일레븐", "GS25", "CU ", "이마트24", "미니스톱", "7-Eleven", "FamilyMart",
-            "ファミリーマート", "ローソン", "Lawson");
+            "ファミリーマート", "ローソン", "Lawson", "セブン-イレブン", "セブンイレブン", "ミニストップ",
+            // "全家福"(가족사진)은 흔한 식당 이름이라 "全家便利"로만 본다.
+            "7-ELEVEN", "7-11", "全家便利", "罗森", "羅森", "便利蜂", "美宜佳", "OK超商", "萊爾富", "Circle K");
 
     private static boolean looksLikeRestaurantByTags(List<String> tags) {
         if (tags == null || tags.isEmpty()) return false;
@@ -498,8 +510,13 @@ public final class PlaceCategoryConstants {
         if (category != null) sb.append(category).append(' ');
         if (tags != null) tags.forEach(t -> sb.append(t).append(' '));
         String combined = sb.toString().toLowerCase();
+        if (PEDESTRIAN_STREET_KEYWORDS.stream().anyMatch(combined::contains)) return false;
         return VIA_ROUTE_KEYWORDS.stream().anyMatch(combined::contains);
     }
+
+    /** 걸어서 둘러보는 상점가. 영문 이름에 "Road"가 들어가도("Nanjing Road Pedestrian Street") 지나가는 길이 아니다. */
+    private static final Set<String> PEDESTRIAN_STREET_KEYWORDS = Set.of(
+            "步行街", "歩行者天国", "pedestrian", "walking street", "phố đi bộ");
 
     /**
      * 주소에서 세부지역(시/군/구 단위) 토큰을 추출한다. region 컬럼이 상위 도시명뿐이라 Sonnet이 day를
@@ -589,6 +606,7 @@ public final class PlaceCategoryConstants {
             "restaurant", "dining and drinking",
             // 한국의 "Korean Restaurant"처럼 나라 단위 리프는 종류가 아니라서, 한 종류로 세면 해물탕집과 국숫집이 같이 상한에 걸린다.
             "korean restaurant", "japanese restaurant", "asian restaurant",
+            "chinese restaurant", "taiwanese restaurant", "vietnamese restaurant",
             "기타", "other", "general"
     );
 
@@ -603,42 +621,57 @@ public final class PlaceCategoryConstants {
         // 여행자에게 흑돼지 구이와 한우 구이는 같은 고기 끼니라 돼지·소를 한 종류로 센다.
         SUB_TYPE_KEYWORDS.put("meat", List.of("흑돼지", "돼지", "삼겹", "오겹", "돈가", "뒷고기",
                 "족발", "보쌈", "pork", "한우", "소고기", "갈비", "불고기", "스테이크",
-                "야키니쿠", "beef", "steak", "焼肉"));
-        SUB_TYPE_KEYWORDS.put("chicken", List.of("치킨", "닭", "chicken"));
+                "야키니쿠", "beef", "steak", "焼肉", "とんかつ", "烤肉", "烧烤", "燒烤", "牛排", "thịt nướng"));
+        SUB_TYPE_KEYWORDS.put("chicken", List.of("치킨", "닭", "chicken", "焼鳥", "やきとり", "鸡", "雞", "gà"));
         SUB_TYPE_KEYWORDS.put("seafood", List.of("해물", "해산물", "회", "물회", "전복", "갈치",
-                "고등어", "조개", "장어", "seafood", "sushi", "초밥"));
+                "고등어", "조개", "장어", "seafood", "sushi", "초밥", "寿司", "鮨", "刺身", "海鲜", "海鮮", "壽司",
+                "hải sản"));
+        // "面"·"麵" 한 글자는 빵(面包·麵包)에도 쓰여 요리 이름으로만 본다. "mì"는 반미(bánh mì)에 걸린다.
         SUB_TYPE_KEYWORDS.put("noodle", List.of("국수", "면", "라멘", "우동", "소바", "짜장",
-                "칼국수", "noodle", "ramen", "udon"));
-        SUB_TYPE_KEYWORDS.put("soup", List.of("탕", "국밥", "찌개", "전골", "곰탕", "감자탕"));
+                "칼국수", "noodle", "ramen", "udon", "ラーメン", "うどん", "そば", "蕎麦", "拉面", "拉麵",
+                "面馆", "麵館", "牛肉面", "牛肉麵", "米粉", "河粉", "phở", "bún"));
+        SUB_TYPE_KEYWORDS.put("soup", List.of("탕", "국밥", "찌개", "전골", "곰탕", "감자탕",
+                "火锅", "火鍋", "麻辣烫", "麻辣燙", "しゃぶしゃぶ", "もつ鍋", "lẩu"));
         SUB_TYPE_KEYWORDS.put("bakery", List.of("베이커리", "제과", "빵", "케이크", "디저트",
-                "bakery", "patisserie", "dessert"));
+                "bakery", "patisserie", "dessert", "ベーカリー", "パン屋", "スイーツ", "面包", "麵包", "蛋糕", "甜品"));
         SUB_TYPE_KEYWORDS.put("cafe_drink", List.of("카페", "커피", "로스터", "티하우스",
-                "cafe", "coffee", "roaster"));
+                "cafe", "coffee", "roaster", "カフェ", "コーヒー", "珈琲", "咖啡", "茶馆", "茶館", "cà phê"));
         // ── 지형·시설 유형 ──
-        SUB_TYPE_KEYWORDS.put("waterfall", List.of("폭포", "waterfall", "falls", "滝"));
-        SUB_TYPE_KEYWORDS.put("beach", List.of("해수욕장", "해변", "바닷가", "beach", "浜", "ビーチ"));
-        SUB_TYPE_KEYWORDS.put("cave", List.of("동굴", "굴사", "cave", "grotto", "洞窟"));
-        SUB_TYPE_KEYWORDS.put("hill", List.of("오름", "등산", "hiking", "mountain", "hill", "peak", "oreum", "岳", "山"));
-        SUB_TYPE_KEYWORDS.put("trail", List.of("둘레길", "올레", "산책로", "트레일", "trail", "promenade", "walkway", "遊歩道"));
-        SUB_TYPE_KEYWORDS.put("park", List.of("공원", "수목원", "정원", "park", "garden", "arboretum", "公園", "庭園"));
+        SUB_TYPE_KEYWORDS.put("waterfall", List.of("폭포", "waterfall", "falls", "滝", "瀑布", "thác"));
+        SUB_TYPE_KEYWORDS.put("beach", List.of("해수욕장", "해변", "바닷가", "beach", "浜", "ビーチ",
+                "海滩", "海灘", "沙滩", "沙灘", "bãi biển"));
+        SUB_TYPE_KEYWORDS.put("cave", List.of("동굴", "굴사", "cave", "grotto", "洞窟", "洞穴", "溶洞", "鍾乳洞"));
+        SUB_TYPE_KEYWORDS.put("hill", List.of("오름", "등산", "hiking", "mountain", "hill", "peak", "oreum", "岳", "山",
+                "峰", "núi"));
+        SUB_TYPE_KEYWORDS.put("trail", List.of("둘레길", "올레", "산책로", "트레일", "trail", "promenade", "walkway", "遊歩道",
+                "步道", "栈道", "棧道"));
+        SUB_TYPE_KEYWORDS.put("park", List.of("공원", "수목원", "정원", "park", "garden", "arboretum", "公園", "庭園",
+                "公园", "植物园", "植物園", "công viên"));
+        // "hồ"(호수)는 호찌민(Hồ Chí Minh)에 걸려 넣지 않는다.
         SUB_TYPE_KEYWORDS.put("lake", List.of("호수", "저수지", "lake", "pond", "湖"));
-        SUB_TYPE_KEYWORDS.put("island", List.of("island", "islet", "島"));
+        SUB_TYPE_KEYWORDS.put("island", List.of("island", "islet", "島", "岛", "đảo"));
         // 항구는 총칭 리프로 들어오는 경우가 많아 유형만 부여한다. 관광 어항은 방문지로 유지된다.
-        SUB_TYPE_KEYWORDS.put("harbor", List.of("항구", "포구", "harbor", "harbour", "marina", "wharf", "港"));
-        SUB_TYPE_KEYWORDS.put("viewpoint", List.of("전망", "뷰포인트", "observatory", "observation", "lookout", "展望"));
-        SUB_TYPE_KEYWORDS.put("tower", List.of("타워", "tower", "塔"));
+        SUB_TYPE_KEYWORDS.put("harbor", List.of("항구", "포구", "harbor", "harbour", "marina", "wharf", "港",
+                "码头", "碼頭"));
+        SUB_TYPE_KEYWORDS.put("viewpoint", List.of("전망", "뷰포인트", "observatory", "observation", "lookout", "展望",
+                "观景台", "觀景台"));
+        SUB_TYPE_KEYWORDS.put("tower", List.of("타워", "tower", "塔", "tháp"));
+        // "神宮"은 궁궐 키워드 "宮"보다 먼저 신사로 잡아야 한다(明治神宮).
         SUB_TYPE_KEYWORDS.put("temple", List.of("사찰", "암자", "temple", "shrine", "성당", "교회", "cathedral",
-                "church", "monastery", "寺", "神社"));
-        SUB_TYPE_KEYWORDS.put("palace", List.of("궁궐", "고궁", "palace", "fortress", "성곽", "宮", "城"));
+                "church", "monastery", "寺", "神社", "神宮", "庙", "廟", "教堂", "chùa", "đền"));
+        SUB_TYPE_KEYWORDS.put("palace", List.of("궁궐", "고궁", "palace", "fortress", "성곽", "宮", "城", "故宫"));
         SUB_TYPE_KEYWORDS.put("museum", List.of("박물관", "미술관", "전시관", "기념관", "museum", "gallery",
-                "exhibition", "博物館", "美術館"));
-        SUB_TYPE_KEYWORDS.put("market", List.of("시장", "장터", "market", "bazaar", "市場", "商店街"));
+                "exhibition", "博物館", "美術館", "博物馆", "美术馆", "纪念馆", "紀念館", "bảo tàng"));
+        SUB_TYPE_KEYWORDS.put("market", List.of("시장", "장터", "market", "bazaar", "市場", "商店街", "市场", "夜市",
+                "chợ"));
         SUB_TYPE_KEYWORDS.put("theme_park", List.of("테마파크", "놀이공원", "워터파크", "theme park", "amusement",
-                "water park", "遊園地"));
-        SUB_TYPE_KEYWORDS.put("spa", List.of("온천", "스파", "찜질", "사우나", "spa", "onsen", "hot spring", "温泉"));
+                "water park", "遊園地", "テーマパーク", "游乐园", "遊樂園", "乐园", "樂園"));
+        SUB_TYPE_KEYWORDS.put("spa", List.of("온천", "스파", "찜질", "사우나", "spa", "onsen", "hot spring", "温泉",
+                "溫泉"));
         SUB_TYPE_KEYWORDS.put("shopping", List.of("백화점", "면세점", "쇼핑몰", "아울렛", "mall", "department store",
-                "outlet", "百貨店"));
-        SUB_TYPE_KEYWORDS.put("street", List.of("골목", "먹자", "거리", "street", "alley", "district", "通り", "横丁"));
+                "outlet", "百貨店", "アウトレット", "商场", "商場", "购物中心", "購物中心", "百货", "百貨", "免税店", "免稅店"));
+        SUB_TYPE_KEYWORDS.put("street", List.of("골목", "먹자", "거리", "street", "alley", "district", "通り", "横丁",
+                "老街", "步行街", "phố cổ"));
     }
 
     /** 이름 접미사로만 판정하는 유형. 부분 문자열로 보면 오탐이 잦은 한 글자들이다. */
@@ -655,8 +688,10 @@ public final class PlaceCategoryConstants {
      * 검색 단계나 Sonnet 메인 선택에 걸면 주소가 짧은 서울·오사카 후보 절반이 날아간다.
      * 평점 보유율이 낮아 평점 하한은 넣지 않는다.
      */
-    public static boolean isVisitableEntity(String name, String address) {
+    public static boolean isVisitableEntity(String name, String address, String country) {
         if (isAdministrativeZone(name)) return false;
+        // 해외 FSQ 행은 주소가 비거나 "台北市"처럼 짧은 정상 장소가 많아 주소 규칙을 한국 행에만 건다.
+        if (country != null && !country.isBlank() && !"KR".equalsIgnoreCase(country.trim())) return true;
         String addr = address == null ? "" : address.trim();
         if (addr.length() < MIN_USABLE_ADDRESS_LENGTH) return false;
         return !BROAD_ONLY_ADDRESSES.contains(addr);
@@ -716,13 +751,24 @@ public final class PlaceCategoryConstants {
 
         String haystack = haystack(name, tags, description);
         if (!haystack.isBlank()) {
+            // 식당 "城下町"이 궁궐로, 명소 "면세점"이 면 요리로 세지 않게 대분류에 맞는 유형만 본다.
+            boolean dining = isDiningMajor(category);
             for (Map.Entry<String, List<String>> entry : SUB_TYPE_KEYWORDS.entrySet()) {
+                if (FOOD_SUB_TYPES.contains(entry.getKey()) != dining) continue;
                 if (entry.getValue().stream().anyMatch(haystack::contains)) return entry.getKey();
             }
-            String inferred = inferByNameSuffix(name);
+            String inferred = dining ? null : inferByNameSuffix(name);
             if (inferred != null) return inferred;
         }
         return leaf;
+    }
+
+    private static final Set<String> FOOD_SUB_TYPES = Set.of(
+            "meat", "chicken", "seafood", "noodle", "soup", "bakery", "cafe_drink");
+
+    private static boolean isDiningMajor(String category) {
+        String major = majorCategory(category);
+        return "DINING".equals(major) || "CAFE".equals(major);
     }
 
     /**
@@ -835,7 +881,8 @@ public final class PlaceCategoryConstants {
         if (lower.contains("streets") || lower.contains("food street") || lower.contains("district")
                 || lower.contains("alleys") || lower.contains(" area") || lower.contains("商店街")
                 || lower.contains("横丁") || lower.contains("골목") || lower.contains("먹자")
-                || lower.contains("음식거리") || lower.contains("맛집거리")) {
+                || lower.contains("음식거리") || lower.contains("맛집거리")
+                || lower.contains("美食街") || lower.contains("小吃街") || lower.contains("phố ẩm thực")) {
             return true;
         }
         for (String token : lower.split("\\s+")) {

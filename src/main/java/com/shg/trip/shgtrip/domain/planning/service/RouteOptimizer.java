@@ -834,7 +834,7 @@ public class RouteOptimizer {
         Set<Integer> visited = new HashSet<>(day.placeIndices);
         PlaceCandidate best = candidates.stream()
                 .filter(c -> "LODGING".equals(PlaceCategoryConstants.majorCategory(c.category())))
-                .filter(c -> PlaceCategoryConstants.isVisitableEntity(c.name(), c.address()))
+                .filter(c -> PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country()))
                 .filter(c -> !visited.contains(c.index()))   // 방문지로 쓰인 숙소는 이중 등장 방지
                 .min(Comparator.comparingDouble(c -> centroid == null || coordsOf(c) == null
                         ? Double.MAX_VALUE : haversine(centroid, coordsOf(c))))
@@ -1046,7 +1046,7 @@ public class RouteOptimizer {
                                java.util.function.Predicate<PlaceCandidate> openOnDay, InvariantMemo memo) {
         Integer pick = pickNearbyCandidate(candidates, spare, usedIndices, anchor,
                 openOnDay.and(PlaceCandidate::mealEligible)
-                        .and(c -> PlaceCategoryConstants.isVisitableEntity(c.name(), c.address())));
+                        .and(c -> PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country())));
         // 실패 로그는 완화 단계를 전부 소진한 호출부가 남긴다. 여기서 찍으면 L1 실패마다 보충 실패로 보인다.
         if (pick == null) return false;
 
@@ -1720,7 +1720,7 @@ public class RouteOptimizer {
         // 역할 판정은 CandidatePolicy 한 곳에서 한다. 경로마다 따로 거르면 한 경로로 비방문지가 샌다.
         if (!CandidatePolicy.roleOf(c).isFillable()) return false;
         // 행정 지정 구역·주소 불명 레코드는 어떤 보충 경로로도 넣지 않는다(공용 게이트).
-        if (!PlaceCategoryConstants.isVisitableEntity(c.name(), c.address())) return false;
+        if (!PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country())) return false;
         if (PlaceCategoryConstants.isViaRoute(c.attributes(), c.name(), c.category(), c.tags())) return false;
         // 선택 단계에서 뺀 집합 POI를 최종 패스가 활동으로 되살리지 않게 자동 보충에서도 뺀다.
         if (PlaceCategoryConstants.isAggregatePoi(c.name(), c.category())) return false;
@@ -2762,6 +2762,10 @@ public class RouteOptimizer {
                 || PlaceCategoryConstants.hasTransitNameSignal(c.nameKo());
     }
 
+    private static boolean isHubSubFacility(PlaceCandidate c) {
+        return PlaceCategoryConstants.isHubSubFacility(c.name()) || PlaceCategoryConstants.isHubSubFacility(c.nameKo());
+    }
+
     /** 허브 적합도: enrich 허브 이름 일치(+1000, 원문·한국어 이름) > 부속시설 아님(+500) > rating. */
     private double hubScore(PlaceCandidate c, String hubName) {
         double score = 0;
@@ -2769,7 +2773,7 @@ public class RouteOptimizer {
                 && (namesOverlap(c.name(), hubName) || namesOverlap(c.nameKo(), hubName))) {
             score += 1000;
         }
-        if (!PlaceCategoryConstants.isHubSubFacility(c.name())) score += 500;
+        if (!isHubSubFacility(c)) score += 500;
         if (c.rating() != null) score += c.rating().doubleValue();
         return score;
     }
@@ -3193,7 +3197,7 @@ public class RouteOptimizer {
                 .filter(this::hasTransitName)
                 .filter(c -> !used.contains(c.index()))
                 .max(Comparator
-                        .comparingInt((PlaceCandidate c) -> PlaceCategoryConstants.isHubSubFacility(c.name()) ? 0 : 1)
+                        .comparingInt((PlaceCandidate c) -> isHubSubFacility(c) ? 0 : 1)
                         .thenComparing(c -> c.rating() != null ? c.rating() : BigDecimal.ZERO))
                 .map(PlaceCandidate::index)
                 .orElse(null);
@@ -4359,7 +4363,7 @@ public class RouteOptimizer {
     private boolean isSubstituteFor(PlaceCandidate target, PlaceCandidate c) {
         if (target == null || c == null || !CandidatePolicy.sameRole(target, c)) return false;
         if (CandidatePolicy.roleOf(c) == CandidatePolicy.Role.LODGING) {
-            return PlaceCategoryConstants.isVisitableEntity(c.name(), c.address());
+            return PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country());
         }
         return isVisitableFill(c) && (!target.mealEligible() || c.mealEligible());
     }
@@ -5254,12 +5258,19 @@ public class RouteOptimizer {
         return na.equals(nb) || na.contains(nb) || nb.contains(na);
     }
 
-    /** 지점 표기를 떼어 체인 몸통만 남긴다("... 서면점", "... 제주본점", "... 2호점"). */
-    private String stripBranchSuffix(String name) {
-        String n = name.replaceAll("\\s+", "");
-        n = n.replaceAll("[가-힣A-Za-z0-9]{0,6}(본점|지점|[0-9]+호점|점)$", "");
-        return n;
+    /** 지점 표기를 떼어 체인 몸통만 남긴다("흑본오겹 함덕점", "... 2호점", "星巴克(人民广场店)", "一蘭 渋谷店"). */
+    static String stripBranchSuffix(String name) {
+        String n = name.strip().replaceAll("\\s*[(（][^()（）]*[店점][)）]$", "");
+        String[] tokens = n.split("\\s+");
+        if (tokens.length > 1 && BRANCH_TOKEN.matcher(tokens[tokens.length - 1]).matches()) {
+            return String.join("", java.util.Arrays.copyOf(tokens, tokens.length - 1));
+        }
+        // 공백 없이 붙은 "흑본오겹함덕점"은 몸통 경계를 알 수 없어 그대로 둔다. 몸통만 있는 쪽과는 포함 관계로 맞는다.
+        return String.join("", tokens);
     }
+
+    private static final java.util.regex.Pattern BRANCH_TOKEN =
+            java.util.regex.Pattern.compile(".*(본점|지점|[0-9]+호점|점|店)");
 
     private double subCategorySimilarity(PlaceCandidate a, PlaceCandidate b) {
         double s = 0;

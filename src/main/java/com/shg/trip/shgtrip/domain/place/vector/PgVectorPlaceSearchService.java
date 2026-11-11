@@ -23,6 +23,9 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
      */
     private static final int HNSW_EF_SEARCH = 200;
 
+    /** iterative_scan이 읽는 튜플 상한. 기본값(2만)은 전체 행이 늘수록 작은 지역의 필터 통과분을 다 찾기 전에 멈춘다. */
+    private static final int HNSW_MAX_SCAN_TUPLES = 100_000;
+
     /**
      * 인기도 시딩 갈래의 상·하한. 유사도 갈래와 비슷한 규모로 두어 한쪽이 윈도를 독식하지 않게 한다.
      * 제주 관광지 기준 12건이면 sitelinks 상위를 모두 담는다.
@@ -173,6 +176,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         try {
             jdbcTemplate.execute("SET LOCAL hnsw.ef_search = " + HNSW_EF_SEARCH);
             jdbcTemplate.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'");
+            jdbcTemplate.execute("SET LOCAL hnsw.max_scan_tuples = " + HNSW_MAX_SCAN_TUPLES);
         } catch (Exception e) {
             log.warn("HNSW 검색 파라미터 설정 실패 (기본값으로 진행): {}", e.getMessage());
         }

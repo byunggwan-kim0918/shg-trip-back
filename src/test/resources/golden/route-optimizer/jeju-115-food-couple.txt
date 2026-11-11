@@ -1,6 +1,6 @@
 -- metrics --
-  스텝 24 / 숙소 3곳 / 총이동 402km
-  연속중복 0 / 최대공백 127분 / 늦은시작 0일 / 안내 1건
+  스텝 24 / 숙소 3곳 / 총이동 393km
+  연속중복 0 / 최대공백 126분 / 늦은시작 0일 / 안내 0건
 == day 1 ==
   #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: - -분 -km -원
@@ -100,23 +100,22 @@
       이동: CAR 77분 51.18km 15353원
       비용: 5000원 / 메모: -
       대안: 제주목 관아 | Landmarks and Outdoors > Tourist Attraction | 0원
-  #21 12:23-13:33  가시아방국수 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
-      이동: CAR 6분 3.94km 1181원
+  #21 12:30-13:40  섬소나이 우도본점 | Dining and Drinking > Restaurant | 제주시 | Jeju
+      이동: CAR 13분 8.14km 2441원
       비용: 13000원 / 메모: -
-      대안: 해녀의 부엌 | Dining and Drinking > Restaurant | 13000원
-      대안: 소섬전복 | Dining and Drinking > Restaurant | 13000원
+      대안: 가시아방국수 | Dining and Drinking > Restaurant | 13000원
       대안: 흑본오겹 함덕점 | Dining and Drinking > Restaurant | 13000원
-  #22 13:53-15:23  별방진 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
-      이동: CAR 20분 13.32km 3997원
-      비용: 0원 / 메모: -
-  #23 17:30-18:40  섬소나이 우도본점 | Dining and Drinking > Restaurant | 제주시 | Jeju
+      대안: 소섬전복 | Dining and Drinking > Restaurant | 13000원
+  #22 13:54-15:24  별방진 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
       이동: CAR 14분 8.99km 2696원
-      비용: 13000원 / 메모: -
-      대안: 올래국수 | Dining and Drinking > Restaurant | 13000원
-      대안: 흑돈가 제주 | Dining and Drinking > Restaurant | 13000원
-      대안: 감따남 | Dining and Drinking > Restaurant | 13000원
-  #24 20:05-21:35  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
-      이동: CAR 85분 56.04km 16812원
       비용: 0원 / 메모: -
--- notices (1) --
-  4일차 이동이 133km로 다소 깁니다.
+  #23 17:30-18:40  해녀의 부엌 | Dining and Drinking > Restaurant | 제주시 | Jeju
+      이동: CAR 8분 5.31km 1594원
+      비용: 13000원 / 메모: -
+      대안: 영육일삼 | Dining and Drinking > Restaurant | 13000원
+      대안: 도두해녀의집 | Dining and Drinking > Restaurant | 13000원
+      대안: 바다속고등어쌈밥 | Dining and Drinking > Restaurant | 13000원
+  #24 19:56-21:26  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
+      이동: CAR 76분 50.58km 15175원
+      비용: 0원 / 메모: -
+-- notices (0) --

@@ -562,7 +562,7 @@ public class OptimizedGenerationExecutor {
      * 물리적으로 같은 장소의 중복 레코드를 1개만 남긴다. 같은 장소가 여러 스텝·대안에 반복되지 않게
      * Sonnet 선택 이전에 한다. RouteOptimizer.byIndex가 위치 기반이라 1-based 인덱스를 다시 연속 부여한다.
      */
-    private List<PlaceCandidate> dedupePhysicalCandidates(List<PlaceCandidate> candidates) {
+    List<PlaceCandidate> dedupePhysicalCandidates(List<PlaceCandidate> candidates) {
         Map<String, List<PlaceCandidate>> groups = new LinkedHashMap<>();
         for (PlaceCandidate c : candidates) {
             groups.computeIfAbsent(physicalKey(c), k -> new ArrayList<>()).add(c);
@@ -641,7 +641,7 @@ public class OptimizedGenerationExecutor {
         PlaceCandidate rep = group.stream()
                 .max(Comparator
                         .comparingInt((PlaceCandidate c) -> isTrustedCategory(c) ? 1 : 0)
-                        // 한/영 중복("성읍랜드" vs "Sungeup Land")은 한국 사용자에게 보일 한글명 레코드를 대표로 둔다.
+                        // 한/영 중복("성읍랜드" vs "Sungeup Land")은 한국 사용자에게 보일 한글명(해외는 한국어 이름) 레코드를 대표로 둔다.
                         .thenComparingInt(c -> hasKoreanName(c) ? 1 : 0)
                         .thenComparing(c -> c.rating() != null ? c.rating() : BigDecimal.ZERO)
                         .thenComparingInt(c -> hasValidCoords(c) ? 1 : 0))
@@ -705,14 +705,16 @@ public class OptimizedGenerationExecutor {
     }
 
     private boolean hasKoreanName(PlaceCandidate c) {
+        if (c.nameKo() != null && !c.nameKo().isBlank()) return true;
         return c.name() != null && c.name().codePoints()
                 .anyMatch(cp -> Character.UnicodeScript.of(cp) == Character.UnicodeScript.HANGUL);
     }
 
-    /** TRANSIT_HUB로 분류됐으나 이름에 허브 신호가 없으면 오분류로 본다. */
+    /** TRANSIT_HUB로 분류됐으나 이름(원문·한국어)에 허브 신호가 없으면 오분류로 본다. */
     private boolean isTrustedCategory(PlaceCandidate c) {
         boolean isHub = "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category()));
-        return !(isHub && !PlaceCategoryConstants.hasTransitNameSignal(c.name()));
+        return !(isHub && !PlaceCategoryConstants.hasTransitNameSignal(c.name())
+                && !PlaceCategoryConstants.hasTransitNameSignal(c.nameKo()));
     }
 
     /**
