@@ -136,6 +136,10 @@ public class BatchEnrichScheduler {
                 maxPerRegion > 0 ? maxPerRegion : "무제한");
         if (attributeMode()) {
             log.info("속성 보강 대상 {}건", placeRepository.countAttributeTargetsInRegions(regions));
+        } else {
+            long waiting = placeRepository.countEnrichWaitingForWikidata();
+            // batch.wikidata.countries 밖 국가, 한국 50곳 미만 지역, 좌표·지역 없는 행은 계속 기다려 로그로 드러낸다(지역 무관 전체 건수).
+            if (waiting > 0) log.warn("Wikidata 매칭 전이라 보강을 미룬 장소 {}건", waiting);
         }
 
         int[] totals = new int[3];

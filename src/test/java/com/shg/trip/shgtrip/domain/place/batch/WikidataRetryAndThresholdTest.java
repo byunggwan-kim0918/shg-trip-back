@@ -40,6 +40,23 @@ class WikidataRetryAndThresholdTest {
     }
 
     @Test
+    @DisplayName("429의 Retry-After(초)를 따르되 2분을 넘기지 않고, 없거나 잘못 적혔으면 0이다")
+    @SuppressWarnings("unchecked")
+    void retryAfter() {
+        HttpResponse<String> response = mock(HttpResponse.class);
+        when(response.headers()).thenReturn(
+                java.net.http.HttpHeaders.of(java.util.Map.of("Retry-After", java.util.List.of("30")), (a, b) -> true),
+                java.net.http.HttpHeaders.of(java.util.Map.of("Retry-After", java.util.List.of("600")), (a, b) -> true),
+                java.net.http.HttpHeaders.of(java.util.Map.of("Retry-After", java.util.List.of("soon")), (a, b) -> true),
+                java.net.http.HttpHeaders.of(java.util.Map.of(), (a, b) -> true));
+
+        assertThat(WikidataSitelinksJob.retryAfterMs(response)).isEqualTo(30_000);
+        assertThat(WikidataSitelinksJob.retryAfterMs(response)).isEqualTo(120_000);
+        assertThat(WikidataSitelinksJob.retryAfterMs(response)).isZero();
+        assertThat(WikidataSitelinksJob.retryAfterMs(response)).isZero();
+    }
+
+    @Test
     @DisplayName("지역별 언어판 기준이 있으면 그 값을, 없거나 잘못 적혔으면 기본값을 쓴다")
     void thresholdByRegion() {
         String byRegion = "Gyeongju:2, Jeonju:2,Yeosu:x";

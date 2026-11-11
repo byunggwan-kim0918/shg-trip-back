@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.place.batch.WikidataSitelinksJob.Assignment;
 import com.shg.trip.shgtrip.domain.place.batch.WikidataSitelinksJob.Candidate;
 import com.shg.trip.shgtrip.domain.place.batch.WikidataSitelinksJob.WikidataItem;
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -37,7 +38,7 @@ class WikidataSitelinksJobTest {
     @BeforeEach
     void setUp() {
         job = new WikidataSitelinksJob(mock(PlaceRepository.class), new ObjectMapper(),
-                mock(PlatformTransactionManager.class));
+                mock(PlatformTransactionManager.class), Destinations.fromClasspath());
     }
 
     private Candidate place(long id, String name, double lat, double lon, String category) {
@@ -531,6 +532,340 @@ class WikidataSitelinksJobTest {
             assertThat(tower.food()).isFalse();
             assertThat(tower.names()).containsExactly("YTN서울타워", "N서울타워", "남산서울타워");
             assertThat(restaurant.food()).isTrue();
+        }
+    }
+
+    @Nested
+    @DisplayName("assignOverseas")
+    class OverseasMatching {
+
+        private static final String TEMPLE = "Community and Government > Spiritual Center > Buddhist Temple";
+        private static final String MARKET = "Retail > Market";
+        private static final String INFO = "Travel and Transportation > Rest Area";
+        private static final String CLUB = "Arts and Entertainment > Music Venue > Rock Club";
+        private static final String FISH_SHOP = "Retail > Food and Beverage Retail > Fish Market";
+
+        private WikidataItem overseasItem(String id, int sitelinks, double lat, double lon,
+                                          Map<String, String> labels, List<String> aliases,
+                                          boolean food, boolean settlement) {
+            return new WikidataItem(id, labels.values().iterator().next(), aliases, sitelinks,
+                    List.of(new WikidataSitelinksJob.Point(lat, lon)), food, labels, settlement, java.util.Set.of());
+        }
+
+        private Map<Long, String> assignOverseas(List<Candidate> places, List<WikidataItem> items) {
+            return WikidataSitelinksJob.assignOverseas(places, items).stream()
+                    .collect(Collectors.toMap(Assignment::placeId, a -> a.item().id()));
+        }
+
+        @Test
+        @DisplayName("괄호 속 영문을 뗀 현지 이름이 그 나라 라벨과 같으면 이름 전체 일치로 붙는다")
+        void matchesLocalLabel() {
+            var item = overseasItem("Q1", 60, 35.7148, 139.7967,
+                    Map.of("ja", "浅草寺", "en", "Sensō-ji", "ko", "센소지"), List.of(), false, false);
+            var result = WikidataSitelinksJob.assignOverseas(
+                    List.of(place(1, "浅草寺 (Senso-ji Temple)", 35.7147, 139.7966, TEMPLE)), List.of(item));
+
+            assertThat(result).singleElement().satisfies(a -> {
+                assertThat(a.placeId()).isEqualTo(1L);
+                assertThat(a.exact()).isTrue();
+                assertThat(a.item().koLabel()).isEqualTo("센소지");
+            });
+        }
+
+        @Test
+        @DisplayName("라벨이 정식 이름이고 통칭이 별칭인 명소도 붙는다")
+        void matchesAliasInAnyLanguage() {
+            var item = overseasItem("Q2", 57, 35.0394, 135.7292,
+                    Map.of("ja", "鹿苑寺", "en", "Kinkaku-ji"), List.of("金閣寺"), false, false);
+
+            assertThat(assignOverseas(List.of(place(1, "金閣寺", 35.0393, 135.7293, TEMPLE)), List.of(item)))
+                    .containsEntry(1L, "Q2");
+        }
+
+        @Test
+        @DisplayName("병기 이름은 뒤 묶음이 같은 항목의 다른 언어 이름일 때 첫 묶음으로 붙는다")
+        void matchesBilingualName() {
+            var bund = overseasItem("Q3", 40, 31.2400, 121.4900,
+                    Map.of("zh-hans", "外滩", "en", "The Bund"), List.of(), false, false);
+            var ryoanji = overseasItem("Q31", 32, 35.0345, 135.7182,
+                    Map.of("ja", "龍安寺", "en", "Ryōan-ji"), List.of(), false, false);
+
+            var result = WikidataSitelinksJob.assignOverseas(List.of(
+                    place(1, "外滩 The Bund", 31.2401, 121.4901, LANDMARK),
+                    place(2, "龍安寺 Ryoan-ji Temple", 35.0344, 135.7181, TEMPLE)), List.of(bund, ryoanji));
+
+            assertThat(result).extracting(Assignment::placeId).containsExactlyInAnyOrder(1L, 2L);
+            assertThat(result).allSatisfy(a -> assertThat(a.exact()).isFalse());
+        }
+
+        @Test
+        @DisplayName("명소·동네 이름 뒤에 시설명이 붙은 행은 그 명소에 붙지 않는다")
+        void facilityNamedAfterLandmarkNotMatched() {
+            var kuromon = overseasItem("Q10855506", 3, 34.6655, 135.5067,
+                    Map.of("ja", "黒門市場", "en", "Kuromon Market"), List.of(), false, false);
+            var amemura = overseasItem("Q4745722", 8, 34.6727, 135.4985,
+                    Map.of("ja", "アメリカ村", "en", "Amerikamura"), List.of(), false, false);
+
+            assertThat(assignOverseas(List.of(
+                    place(1, "黒門市場 Information Center", 34.6656, 135.5068, INFO),
+                    place(2, "アメリカ村 CLAPPER", 34.6728, 135.4986, CLUB),
+                    place(3, "黒門市場 鮮魚店", 34.6654, 135.5066, FISH_SHOP)), List.of(kuromon, amemura)))
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("발음 구별 기호 없이 적은 베트남 이름도 붙는다")
+        void matchesVietnameseWithoutDiacritics() {
+            var item = overseasItem("Q4", 25, 10.7725, 106.6980,
+                    Map.of("vi", "Chợ Bến Thành", "en", "Bến Thành Market"), List.of(), false, false);
+
+            assertThat(assignOverseas(List.of(
+                    place(1, "Ben Thanh Market", 10.7724, 106.6981, MARKET),
+                    place(2, "Chợ Bến Thành", 10.7726, 106.6979, MARKET)), List.of(item)))
+                    .containsOnlyKeys(1L, 2L);
+        }
+
+        @Test
+        @DisplayName("도시·행정구역 항목은 이름이 같은 행에도 붙지 않는다")
+        void settlementItemsNotMatched() {
+            var tokyo = overseasItem("Q1490", 300, 35.6895, 139.6917,
+                    Map.of("ja", "東京都", "en", "Tokyo"), List.of("東京"), false, true);
+
+            assertThat(assignOverseas(List.of(place(1, "TOKYO", 35.6890, 139.6920, LANDMARK)), List.of(tokyo)))
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("하위 시설은 본체 항목을 가져가지 않는다")
+        void subFacilityNotMatched() {
+            var tower = overseasItem("Q5", 69, 35.6586, 139.7454,
+                    Map.of("ja", "東京タワー", "en", "Tokyo Tower"), List.of(), false, false);
+
+            assertThat(assignOverseas(List.of(place(1, "東京タワー展望台", 35.6586, 139.7454, LANDMARK)), List.of(tower)))
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("지점명을 뗀 식당 이름은 식음료 항목(체인)에만 붙는다")
+        void restaurantBranchMatchesFoodItem() {
+            var ichiran = overseasItem("Q6", 12, 33.5900, 130.3990,
+                    Map.of("ja", "一蘭", "ko", "이치란"), List.of(), true, false);
+
+            var result = WikidataSitelinksJob.assignOverseas(
+                    List.of(place(1, "一蘭 天神西通り店", 33.5910, 130.3980, RESTAURANT)), List.of(ichiran));
+
+            assertThat(result).singleElement().satisfies(a -> assertThat(a.exact()).isFalse());
+        }
+
+        @Test
+        @DisplayName("병기 뒤 묶음이 항목 이름 + 분류어가 아닌 딸린 시설은 본체에 붙지 않는다")
+        void bilingualFacilityNotMatched() {
+            var todaiji = overseasItem("Q193072", 44, 34.6890, 135.8398,
+                    Map.of("ja", "東大寺", "en", "Tōdai-ji"), List.of("Todaiji"), false, false);
+            var tower = overseasItem("Q183536", 69, 35.6586, 139.7454,
+                    Map.of("ja", "東京タワー", "en", "Tokyo Tower"), List.of(), false, false);
+
+            assertThat(assignOverseas(List.of(
+                    place(1, "東大寺 Todaiji Nandaimon", 34.6880, 135.8399, LANDMARK),
+                    place(2, "東京タワー Tokyo Tower Main Deck", 35.6586, 139.7454, LANDMARK)), List.of(todaiji, tower)))
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("한 장소가 여러 키로 걸리면 이름 전체 일치로 기록한다")
+        void exactKeyPreferred() {
+            var item = overseasItem("Q7", 20, 35.0, 135.0,
+                    Map.of("ja", "仁和寺", "en", "Ninna-ji"), List.of("仁和寺 Ninna-ji Temple"), false, false);
+
+            assertThat(WikidataSitelinksJob.assignOverseas(
+                    List.of(place(1, "仁和寺 Ninna-ji Temple", 35.0, 135.0, TEMPLE)), List.of(item)))
+                    .singleElement().satisfies(a -> assertThat(a.exact()).isTrue());
+        }
+
+        @Test
+        @DisplayName("한국 지역 규칙은 그대로다: 한자 이름 행은 한국어 라벨 항목에 붙지 않는다")
+        void koreanRulesUnchanged() {
+            var item = overseasItem("Q8", 50, 35.7148, 139.7967,
+                    Map.of("ja", "浅草寺", "ko", "센소지"), List.of(), false, false).withLabel("센소지");
+
+            assertThat(WikidataSitelinksJob.assign(
+                    List.of(place(1, "浅草寺", 35.7147, 139.7966, TEMPLE)), List.of(item))).isEmpty();
+        }
+    }
+
+    @Nested
+    @DisplayName("해외 기록·범위")
+    class OverseasWriteAndScope {
+
+        private final PlaceRepository repository = mock(PlaceRepository.class);
+        private final WikidataSitelinksJob scoped = new WikidataSitelinksJob(repository, new ObjectMapper(),
+                mock(PlatformTransactionManager.class), Destinations.fromClasspath());
+
+        private Assignment assignment(long placeId, String koLabel, boolean exact) {
+            var item = new WikidataItem("Q" + placeId, "x", List.of(), 10, List.of(new WikidataSitelinksJob.Point(0, 0)),
+                    false, koLabel == null ? Map.of() : Map.of("ko", koLabel), false, java.util.Set.of());
+            return new Assignment(placeId, item, exact);
+        }
+
+        @Test
+        @DisplayName("해외는 이름 전체가 같은 매칭만 한국어 라벨로 name_ko를 채운다")
+        void fillsNameKoOnlyForExactOverseasMatches() {
+            scoped.writeAssignments("Osaka", List.of(
+                    assignment(1, "구로몬 시장", true),
+                    assignment(2, "와이탄", false),
+                    assignment(3, null, true)), true);
+
+            org.mockito.Mockito.verify(repository).resetWikidataForRegion("Osaka");
+            org.mockito.Mockito.verify(repository, org.mockito.Mockito.times(3))
+                    .updateWikidataMatch(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
+                            org.mockito.ArgumentMatchers.anyInt());
+            org.mockito.Mockito.verify(repository).fillNameKo(1L, "구로몬 시장");
+            org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).fillNameKo(
+                    org.mockito.ArgumentMatchers.eq(2L), org.mockito.ArgumentMatchers.anyString());
+        }
+
+        @Test
+        @DisplayName("한국 지역은 name_ko를 쓰지 않는다")
+        void koreaNeverWritesNameKo() {
+            scoped.writeAssignments("Seoul", List.of(assignment(1, "경복궁", true)), false);
+
+            org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).fillNameKo(
+                    org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString());
+        }
+
+        @Test
+        @DisplayName("한국 지역은 장소 좌표 상자, 해외 지역은 여행지 반경 상자로 범위를 잡고 국가·지역 설정을 지킨다")
+        void regionBoxesRespectScope() {
+            org.mockito.Mockito.when(repository.findRegionBoundingBoxes(org.mockito.ArgumentMatchers.anyInt()))
+                    .thenReturn(List.of(
+                            new Object[]{"Seoul", 37.4, 126.8, 37.7, 127.2, 50000L},
+                            new Object[]{"Osaka", 34.6, 135.4, 34.8, 135.6, 4000L}));
+
+            var all = scoped.loadRegionBoxes(List.of()).stream().map(WikidataSitelinksJob.RegionBox::region).toList();
+            assertThat(all).contains("Seoul", "Osaka", "Shanghai", "Jiufen").doesNotHaveDuplicates();
+            // 해외 지역은 백분위 상자가 아니라 여행지 반경 상자로 한 번만 잡힌다
+            assertThat(scoped.loadRegionBoxes(List.of()).stream().filter(b -> b.region().equals("Osaka")).findFirst()
+                    .orElseThrow().maxLat()).isGreaterThan(34.8);
+
+            assertThat(scoped.loadRegionBoxes(List.of("KR")))
+                    .extracting(WikidataSitelinksJob.RegionBox::region).containsExactly("Seoul");
+            assertThat(scoped.loadRegionBoxes(List.of("TW")))
+                    .extracting(WikidataSitelinksJob.RegionBox::region).contains("Taipei", "Jiufen").doesNotContain("Seoul", "Osaka");
+
+            org.springframework.test.util.ReflectionTestUtils.setField(scoped, "targetRegions", List.of("Jiufen", "Seoul"));
+            assertThat(scoped.loadRegionBoxes(List.of()))
+                    .extracting(WikidataSitelinksJob.RegionBox::region).containsExactlyInAnyOrder("Seoul", "Jiufen");
+        }
+
+        @Test
+        @DisplayName("국가 설정은 대소문자를 가리지 않고, ALL은 전 국가, 빈 값·모르는 코드는 실패다")
+        void countryScope() {
+            var ds = Destinations.fromClasspath();
+            assertThat(WikidataSitelinksJob.countryScope(List.of(" jp", "CN "), ds)).containsExactly("JP", "CN");
+            assertThat(WikidataSitelinksJob.countryScope(List.of("all"), ds)).isEmpty();
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> WikidataSitelinksJob.countryScope(List.of(" "), ds))
+                    .isInstanceOf(BatchStageFailed.class).hasMessageContaining("ALL");
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> WikidataSitelinksJob.countryScope(List.of("JP", "HK"), ds))
+                    .isInstanceOf(BatchStageFailed.class).hasMessageContaining("HK");
+        }
+    }
+
+    @Nested
+    @DisplayName("해외 조회")
+    class OverseasQuery {
+
+        @Test
+        @DisplayName("언어별 라벨, 도시 여부(인구가 있고 섬·관광지 분류가 아님), 국가를 항목별로 모은다")
+        void parsesLabelsSettlementAndCountry() throws Exception {
+            String json = """
+                    {"results":{"bindings":[
+                      {"item":{"value":"http://www.wikidata.org/entity/Q1"},"label":{"xml:lang":"ja","value":"浅草寺"}},
+                      {"item":{"value":"http://www.wikidata.org/entity/Q1"},"label":{"xml:lang":"ko","value":"센소지"}},
+                      {"item":{"value":"http://www.wikidata.org/entity/Q1"},"alias":{"xml:lang":"en","value":"Asakusa Kannon"}},
+                      {"item":{"value":"http://www.wikidata.org/entity/Q1"},"country":{"value":"http://www.wikidata.org/entity/Q17"}},
+                      {"item":{"value":"http://www.wikidata.org/entity/Q1490"},"label":{"xml:lang":"en","value":"Tokyo"}},
+                      {"item":{"value":"http://www.wikidata.org/entity/Q1490"},"pop":{"value":"14000000"}},
+                      {"item":{"value":"http://www.wikidata.org/entity/Q989803"},"pop":{"value":"354"}},
+                      {"item":{"value":"http://www.wikidata.org/entity/Q989803"},"placeLike":{"value":"http://www.wikidata.org/entity/Q23442"}},
+                      {"item":{"value":"http://www.wikidata.org/entity/Q781255"},"pop":{"value":"65211"}},
+                      {"item":{"value":"http://www.wikidata.org/entity/Q781255"},"placeLike":{"value":"http://www.wikidata.org/entity/Q570116"}}
+                    ]}}
+                    """;
+            Map<String, WikidataSitelinksJob.ItemDetail> details = job.parseDetails(json);
+
+            assertThat(details.get("Q1").labels()).containsEntry("ja", "浅草寺").containsEntry("ko", "센소지");
+            assertThat(details.get("Q1").aliases()).containsExactly("Asakusa Kannon");
+            assertThat(details.get("Q1").countries()).containsExactly("Q17");
+            assertThat(details.get("Q1").settlement()).isFalse();
+            assertThat(details.get("Q1490").settlement()).isTrue();
+            // 에노시마(섬)·시탕(AAAAA 관광지 고진): 인구가 있지만 명소다
+            assertThat(details.get("Q989803").settlement()).isFalse();
+            assertThat(details.get("Q781255").settlement()).isFalse();
+        }
+
+        @Test
+        @DisplayName("해외 조회는 라벨 서비스를 부르지 않고, 한국 조회는 그대로 부른다")
+        void labelServiceOnlyForKorea() {
+            var box = new WikidataSitelinksJob.RegionBox("Tokyo", 35.4, 139.5, 35.9, 140.0);
+            assertThat(WikidataSitelinksJob.buildSparql(box, false)).doesNotContain("wikibase:label", "?itemLabel");
+            assertThat(WikidataSitelinksJob.buildSparql(box))
+                    .contains("?itemLabel ?sitelinks", "wikibase:language \"ko,ja,en\"");
+        }
+
+        @Test
+        @DisplayName("여행지 반경 상자를 한 변 0.25도 이하 격자로 나눠 빈틈 없이 덮는다")
+        void tilesCoverCircleBox() {
+            var tokyo = Destinations.fromClasspath().find("Tokyo").orElseThrow();
+            var box = WikidataSitelinksJob.circleBox(tokyo);
+            var tiles = WikidataSitelinksJob.tiles(box, 0.25);
+
+            assertThat(tiles).allSatisfy(t -> {
+                assertThat(t.maxLat() - t.minLat()).isLessThanOrEqualTo(0.25);
+                assertThat(t.maxLon() - t.minLon()).isLessThanOrEqualTo(0.25);
+            });
+            assertThat(tiles.stream().mapToDouble(WikidataSitelinksJob.RegionBox::minLat).min().orElseThrow())
+                    .isEqualTo(box.minLat());
+            assertThat(tiles.stream().mapToDouble(WikidataSitelinksJob.RegionBox::maxLon).max().orElseThrow())
+                    .isCloseTo(box.maxLon(), org.assertj.core.data.Offset.offset(1e-9));
+            assertThat(box.minLat()).isLessThan(tokyo.lat() - tokyo.radiusKm() / 111.0);
+        }
+
+        @Test
+        @DisplayName("격자 경계에 걸쳐 두 번 온 항목은 좌표를 합친다")
+        void mergesPointsAcrossTiles() {
+            var a = item("Q1", "x", 10, 35.0, 135.0);
+            var b = item("Q1", "x", 10, 35.3, 135.0);
+
+            assertThat(a.withPointsOf(b).points()).hasSize(2);
+            assertThat(a.withPointsOf(a).points()).hasSize(1);
+        }
+
+        @Test
+        @DisplayName("이름 조회에 상세가 없는 항목은 라벨 없이 남아 아무 장소에도 붙지 않는다")
+        void itemWithoutDetailKeepsNoNames() throws Exception {
+            String json = """
+                    {"results":{"bindings":[
+                      {"item":{"value":"http://www.wikidata.org/entity/Q1"},"label":{"xml:lang":"ja","value":"浅草寺"}}
+                    ]}}
+                    """;
+            var items = WikidataSitelinksJob.withNames(
+                    List.of(item("Q1", "", 50, 35.7148, 139.7967), item("Q2", "", 40, 35.7148, 139.7967)),
+                    java.util.Set.of(), "JP", query -> json, new ObjectMapper());
+
+            assertThat(items).extracting(WikidataItem::label).containsExactly("浅草寺", "");
+            assertThat(WikidataSitelinksJob.assignOverseas(
+                    List.of(place(1, "浅草寺", 35.7147, 139.7966, LANDMARK)), items))
+                    .singleElement().extracting(a -> a.item().id()).isEqualTo("Q1");
+        }
+
+        @Test
+        @DisplayName("이름 조회는 받는 언어만 걸러 라벨·별칭·분류·인구·섬/관광지·국가를 UNION으로 묻는다")
+        void namesQuery() {
+            String sparql = WikidataSitelinksJob.buildNamesSparql(List.of(item("Q1", "x", 1, 0, 0)));
+            assertThat(sparql).contains("wd:Q1", "rdfs:label", "skos:altLabel", "wdt:P1082",
+                    "wdt:P31/wdt:P279? ?placeLike", "wd:Q23442 wd:Q570116", "wdt:P17", "\"zh-hant\"", "\"vi\"");
+            assertThat(sparql).doesNotContain("P279*");
         }
     }
 }

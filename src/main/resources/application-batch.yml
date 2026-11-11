@@ -145,6 +145,9 @@ batch:
   wikidata:
     enabled: ${BATCH_WIKIDATA_ENABLED:false}
     regions: ${BATCH_WIKIDATA_REGIONS:}          # 비우면 장소 수 기준 전 지역
+    # 적재를 마친 국가만 둔다(KR·JP·CN·VN·TW, 전 국가는 ALL). 넓히면 FSQ 적재 전인 나라의 명소가 먼저 들어오고
+    # 해외 명소 행 이름이 현지어로 바뀐다. 빈 값·모르는 코드는 단계 실패
+    countries: ${BATCH_WIKIDATA_COUNTRIES:KR}
     landmarks:
       # 지역 대표 명소(사찰·궁·박물관·해변·산 등, 언어판 min-sitelinks 이상)를 Wikidata에서 적재.
       # 기존 장소와 이름이 겹치고 2km 안이면 넣지 않는다(WikidataLandmarkSeeder).
@@ -152,6 +155,8 @@ batch:
       min-sitelinks: ${BATCH_WIKIDATA_LANDMARKS_MIN_SITELINKS:5}
       # 지방 도시는 대표 명소도 언어판이 적다. 형식 "Region:기준,…"
       min-sitelinks-by-region: ${BATCH_WIKIDATA_LANDMARKS_MIN_SITELINKS_BY_REGION:Gangneung:2,Gyeongju:2,Jeonju:2,Yeosu:2}
+      # 해외 경관·단일 명소 여행지(destinations.json kind가 city가 아닌 곳)의 기준
+      min-sitelinks-scenic: ${BATCH_WIKIDATA_LANDMARKS_MIN_SITELINKS_SCENIC:2}
 
 # --- AWS S3 설정 (배치에서 Foursquare CSV 읽기) ---
 cloud:

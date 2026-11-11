@@ -63,6 +63,16 @@ Step Functions (월 1회)
           (수원 31-13, 강릉 32-1, 경주 35-2, 전주 37-12, 여수 38-13) — 기본값이 12개 도시 전부
         → 대상×타입당 최대 1000건, name+region 중복 스킵, source='tourapi', 대표이미지(firstimage) 저장
         → 필요 env: BATCH_TOURAPI_ENABLED=true, TOUR_API_SERVICE_KEY(data.go.kr, URL 인코딩된 키)
+  [1/4-명소] WikidataLandmarkSeeder.seed()  (batch.wikidata.landmarks.enabled=true일 때만)
+        지역 대표 명소(사찰·궁·박물관·해변·산 등)를 Wikidata에서 받아 없는 것만 적재
+        → 한국: 지역 bbox, 언어판 min-sitelinks(5, 지방 도시는 min-sitelinks-by-region) 이상
+        → 해외(destinations.json): 여행지 반경 조회, 도시 5·경관 여행지 min-sitelinks-scenic(2) 이상.
+          도시·행정구역 항목(인구가 있고 섬·관광지 분류가 아님)·국가(P17)가 다른 항목(샤먼 반경의 진먼 섬) 제외,
+          중국은 홍콩·마카오 안 항목을 따로 물어 제외.
+          반경이 겹치면 추출기와 같은 규칙(거리/반경 최소, 좌표가 여러 개면 그 값이 가장 작은 좌표)으로 한 여행지에만 넣는다.
+          이미 있는지는 인기도 매칭과 같은 이름 조건으로 본다(활성 행의 QID, 명소 적재 행의 QID 포함)
+          name = 현지 라벨(일본 ja, 중국 간체, 대만 번체, 베트남 vi), name_ko = 한국어 라벨.
+          이미 있는 QID의 명소 행은 이름·여행지를 이 규칙에 맞추고 비어 있는 name_ko를 채운다
   [2/4] WikidataSitelinksJob.run()  (batch.wikidata.enabled=true일 때만 — 운영 ecs.tf에서 켬)
         지역 bbox(장소 좌표 2~98 백분위 + 여유 0.05도)당 SPARQL 1회(언어판 1개 이상 항목만)
         + 항목 300개씩 한국어 별칭·분류(P31) 조회 + 실행당 식음료 분류 목록 1회. 일시 오류는 3회 재시도.
@@ -73,13 +83,29 @@ Step Functions (월 1회)
           · 식음료 분류 항목은 식당 행에만, 나머지는 식당이 아닌 행에만(한식당 "창덕궁"이 궁궐 점수를 못 가져간다)
           · 행정구역 행(States and Municipalities, 동·구·시 등으로 끝나는 Foursquare 행)·버스 정류장은 받지 않는다
           · 같은 이름의 소스별 중복 행에는 카테고리 등급(명소 > 숙소·상점·교통)이 가장 좋은 행 전부에 붙인다
+        → 해외 지역(destinations.json)은 규칙이 다르다:
+          · 범위는 여행지 반경(0.25도 격자로 나눠 조회), 장소 수 하한 없음
+          · 항목의 ko·ja·zh(간체·번체)·en·vi 라벨·별칭 전체와 장소 이름 전체가 같아야 붙는다(앞부분 묶음 없음).
+            장소 이름의 괄호 속 병기는 뗀다
+          · 문자 종류가 바뀌는 이름("外滩 The Bund")은 뒤 묶음이 같은 항목 이름 그대로이거나 이름 + 분류어(temple·shrine·
+            market·park 등)일 때만 첫 묶음으로 붙는다("龍安寺 Ryoan-ji Temple"은 붙고 "東大寺 Todaiji Nandaimon"은 안 붙음)
+          · 끝 지점명 단어(…店·…門市)를 뗀 이름은 식음료 항목(체인)에만 붙는다("一蘭 天神西通り店" → 一蘭, "黒門市場 鮮魚店"은 안 붙음)
+          · 도시·행정구역 항목(인구가 있고 섬·관광지 분류가 아님)은 붙이지 않는다. 에노시마(섬)·시탕(AAAAA 관광지 고진)은 붙는다
+          · 이름 전체가 같은 항목만 한국어 라벨로 비어 있는 name_ko를 채운다(채운 이름은 매칭이 바뀌어도 남는다)
         지역 전체를 0으로 덮고 매칭분만 쓰는 걸 한 트랜잭션으로 매번 전량 재계산. 조회가 하나라도 실패하면 그 지역은 지난 값 유지.
+        BATCH_WIKIDATA_REGIONS·BATCH_WIKIDATA_COUNTRIES로 범위를 좁힌다(명소 적재도 같은 설정).
+        국가 기본값은 KR — 나라를 적재할 때마다 늘린다(EXTRACT_COUNTRIES와 같이). 대소문자 무관, ALL은 전 국가,
+        빈 값·모르는 코드는 단계 실패. 일본을 넣으면 기존 일본 명소 행 이름이 현지어로 바뀌므로 name_ko를 화면·프롬프트에
+        쓰는 배포 뒤에 넣는다. WDQS 429는 Retry-After만큼 기다려 재시도.
         ※ 보강보다 먼저 돈다 — 보강이 인기도 순으로 처리하려면 필요
   [3/4] BatchEnrichScheduler.enrich()  (batch.enrich.enabled=true일 때만)
         ※ 환경 규약: 운영(AWS)은 상시 ON(terraform/ecs.tf batch task에
           BATCH_ENRICH_ENABLED=true 고정) → 임베딩 전 항상 보강. 로컬은 기본값 false →
           enrich 없이 적재(비용·시간 절약). enriched_at IS NULL 게이트라 신규 유입분만 증분 보강.
         enriched_at IS NULL AND active=true 인 장소를 1000건씩 조회 — 인기도 → 비식당 → id 순,
+        Wikidata 매칭을 아직 거치지 않은 행(wikidata_matched_at IS NULL)은 다음 실행으로 미룸
+        (인기도 없이 보강하면 유명 식당이 설명 없이 완료된다. 매칭 실패 지역·국가 범위 밖 신규 행이 여기 걸린다.
+        미룬 건수는 "Wikidata 매칭 전이라 보강을 미룬 장소 N건" 로그),
         이번 실행에서 실패한 id는 쿼리에서 제외. 연속 3개 청크가 전부 실패하면 중단(API 키 오류 등).
         (BATCH_ENRICH_REGIONS="Jeju,..."로 지역 스코프 가능 — 비우면 전체. 운영은 비워서 전 지역)
         → Anthropic Batch API(Haiku 5.5, thinking off, 50% 할인) 제출 → 폴링 → 결과 JSON 파싱
@@ -125,7 +151,9 @@ Step Functions (월 1회)
 | 벡터 저장/검색 추상화 | `domain/place/vector/PlaceVectorSearchService.java` (interface) → `PgVectorPlaceSearchService.java` (구현체, JdbcTemplate + pgvector `<=>`) |
 | 태그/설명 보강 | `domain/place/batch/BatchEnrichScheduler.java` (Anthropic Batch API 직접 HTTP 호출, SDK 미사용) |
 | 마이그레이션 | `db/migration/V19__add_embedding_columns.sql` (embedding 컬럼+HNSW 인덱스), `V23__create_place_seeding_history.sql`, `V24__remove_places_unique_constraint.sql` |
-| 인기도 매칭 | `domain/place/batch/WikidataSitelinksJob.java` (Wikidata SPARQL, CC0·무인증) |
+| 인기도 매칭 | `domain/place/batch/WikidataSitelinksJob.java` (Wikidata SPARQL, CC0·무인증), 해외 이름 키 `OverseasNameKeys.java` |
+| 대표 명소 적재 | `domain/place/batch/WikidataLandmarkSeeder.java` |
+| 해외 여행지 | `src/main/resources/destinations.json` → `domain/place/destination/Destinations.java` (추출기와 같은 파일·배정 규칙) |
 | FSQ 추출 | `fsq-extractor/extract.py` (+ `test_extract.py`) |
 | 설정 | `application-batch.yml` (`batch.foursquare.chunk-size=1000`, `batch.embedding.batch-size=100`, `batch.enrich.chunk-size=1000`, `batch.enrich.enabled` 기본 false, `anthropic.batch.model=claude-haiku-5-5`) |
 
