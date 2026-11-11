@@ -6,7 +6,7 @@
 **Live**: [myshgtrip.com](https://myshgtrip.com) · **Frontend**: [shg-trip-front](https://github.com/byunggwan-kim0918/shg-trip-front)
 
 <p align="center">
-  <a href="https://myshgtrip.com"><img src="docs/images/landing.png" width="100%" alt="SHG trip 메인 — 한 문장으로 여행 일정 만들기"></a>
+  <a href="https://myshgtrip.com"><img src="docs/images/landing.png" width="100%" alt="SHG trip 메인 화면"></a>
 </p>
 <p align="center">
   <img src="docs/images/trips.png" width="49%" alt="도시별 추천 코스 목록">
