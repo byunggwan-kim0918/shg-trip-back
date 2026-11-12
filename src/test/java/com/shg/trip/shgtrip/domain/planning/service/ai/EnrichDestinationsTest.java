@@ -24,9 +24,8 @@ class EnrichDestinationsTest {
         assertThat(lines.lines()).hasSize(4).allSatisfy(l -> assertThat(l).startsWith("    - "));
         assertThat(lines).contains("    - 일본: ", "    - 중국: ", "    - 베트남: ", "    - 대만: ");
         assertThat(lines).contains("Tokyo(도쿄; 관문 Haneda Airport / Narita International Airport)");
-        assertThat(lines).contains("Jiufen(지우펀; 상위 Taipei)", "Hoi An(호이안; 상위 Da Nang)", "Matsumoto(마쓰모토)");
-        destinations.all().stream().filter(d -> d.gateways().isEmpty() && d.parent() != null).forEach(d ->
-                assertThat(destinations.gatewayRegion(d.name())).as(d.name()).isEqualTo(d.parent()));
+        assertThat(lines).contains("Jiufen(지우펀; 상위 Taipei)", "Hoi An(호이안; 상위 Da Nang)",
+                "Kinosaki(기노사키; 상위 Osaka)", "Matsumoto(마쓰모토; 관문 Chubu Centrair International Airport)");
     }
 
     @Test

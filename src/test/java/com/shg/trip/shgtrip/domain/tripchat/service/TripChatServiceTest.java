@@ -1,5 +1,7 @@
 package com.shg.trip.shgtrip.domain.tripchat.service;
 
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
+import com.shg.trip.shgtrip.domain.planning.service.PlanningCountries;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
@@ -79,7 +81,8 @@ class TripChatServiceTest {
         Clock clock = Clock.fixed(Instant.parse("2026-11-10T01:00:00Z"), ZoneId.of("Asia/Seoul"));
         service = new TripChatService(repository, interpreter, placeMatcher, generationPolicyService,
                 travelPlannerService, activeUserGuard, Validation.buildDefaultValidatorFactory().getValidator(), om,
-                new TransactionTemplate(new NoResourceTransactionManager()), clock);
+                new TransactionTemplate(new NoResourceTransactionManager()), clock,
+                new PlanningCountries(List.of("KR", "JP"), Destinations.fromClasspath()));
 
         lenient().when(repository.saveAndFlush(any())).thenAnswer(inv -> {
             if (failNextSave) {
@@ -143,6 +146,25 @@ class TripChatServiceTest {
         assertThat(r.question().lead()).isEqualTo("부산 여행을 생각하고 있군요.");
         assertThat(r.lastExchange().answer()).isEqualTo("부산 11월 20일부터 25일까지 남자친구랑 둘이");
         assertThat(r.back()).isEqualTo("CITY");
+        assertThat(row(r, Slot.DATES)).isEqualTo("11월 20일(금) ~ 25일(수) · 5박 6일");
+    }
+
+    @Test
+    @DisplayName("열지 않은 나라의 여행지면 바로 준비 중이라고 알리고 여행지만 다시 묻는다")
+    void closedCountryDestinationIsAskedAgain() {
+        TripChatResponse start = service.create(USER, "req-1");
+        given(interpreter.interpret(anyString(), eq("상하이 11월 20일부터 25일까지")))
+                .willReturn(result(new Interpretation(List.of(
+                        upd("DESTINATION", "상하이", "user", "상하이"),
+                        upd("START_DATE", "2026-11-20", "user", "11월 20일부터 25일까지"),
+                        upd("END_DATE", "2026-11-25", "user", "11월 20일부터 25일까지")), "answered", null, false)));
+
+        TripChatResponse r = answer(start, "상하이 11월 20일부터 25일까지");
+
+        assertThat(r.status()).isEqualTo("ASKING");
+        assertThat(r.question().slot()).isEqualTo("CITY");
+        assertThat(r.question().lead())
+                .isEqualTo("중국 여행지는 아직 준비 중이에요. 지금은 한국·일본 여행지로 일정을 만들 수 있어요.");
         assertThat(row(r, Slot.DATES)).isEqualTo("11월 20일(금) ~ 25일(수) · 5박 6일");
     }
 

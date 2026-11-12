@@ -64,10 +64,11 @@ Step Functions (월 1회)
         → 대상×타입당 최대 1000건, name+region 중복 스킵, source='tourapi', 대표이미지(firstimage) 저장
         → 필요 env: BATCH_TOURAPI_ENABLED=true, TOUR_API_SERVICE_KEY(data.go.kr, URL 인코딩된 키)
   [1/4-관문] GatewaySeeder.seed()  (batch.gateways.enabled, 기본 true)
-        destinations.json gateways(공항·기차역)를 그 여행지 장소로 넣는다(source='gateway', place_role TRANSIT)
+        destinations.json gateways(국제선 공항)를 그 여행지 장소로 넣는다(source='gateway', place_role TRANSIT)
         → 관문 공항은 대개 여행지 반경 밖(나리타 57km, 간사이 38km, 푸둥 33km)이라 FSQ 추출에 들어오지 않는다
         → 범위는 BATCH_GATEWAYS_COUNTRIES(기본 ALL). 같은 여행지·이름의 관문 행이 있으면 건너뛴다
-        → 생성 경로가 요청 여행지의 관문을 후보 끝에 붙인다(관문 없는 근교 여행지는 상위 여행지의 관문)
+        → 생성 경로가 요청 여행지의 관문을 후보 끝에 붙인다(관문 없는 근교 여행지는 관문이 있는 상위 여행지까지 올라간다)
+        → 목록에서 뺀 관문(역·국내선 공항)의 DB 행은 남아 있어도 후보에 붙이지 않는다
   [1/4-명소] WikidataLandmarkSeeder.seed()  (batch.wikidata.landmarks.enabled=true일 때만)
         지역 대표 명소(사찰·궁·박물관·해변·산 등)를 Wikidata에서 받아 없는 것만 적재
         → 한국: 지역 bbox, 언어판 min-sitelinks(5, 지방 도시는 min-sitelinks-by-region) 이상

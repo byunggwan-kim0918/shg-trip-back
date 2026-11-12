@@ -46,8 +46,22 @@ public final class PlaceProminence {
     /** 평점조차 없을 때의 평점비. "모른다"를 "나쁘다"로 단정하지 않는다. */
     private static final double NEUTRAL_RATING_RATIO = 0.7;
 
+    /** 알려진 정도(0~2)를 맞추는 언어판 수. 2는 가이드북 대표 명소·맛집이라 "인기도 높음"(3 이상) 눈금에 둔다. */
+    private static final int[] FAME_SITELINKS = {0, 2, 8};
+
     public static double of(PlaceCandidate c) {
-        return c == null ? 0.0 : of(c.rating(), c.userRatingCount(), c.wikidataSitelinks());
+        return c == null ? 0.0
+                : of(c.rating(), c.userRatingCount(), effectiveSitelinks(c.wikidataSitelinks(), c.travelerFame()));
+    }
+
+    /**
+     * 순위와 선택 프롬프트가 보는 언어판 수. 알려진 정도를 언어판 수로 바꿔 큰 쪽을 쓴다. 언어판이 없는 해외 식당은
+     * 이 값이 없으면 미쉐린·노포와 평범한 식당이 같은 인기도가 된다.
+     */
+    public static Integer effectiveSitelinks(Integer sitelinks, Short travelerFame) {
+        if (travelerFame == null || travelerFame < 0 || travelerFame >= FAME_SITELINKS.length) return sitelinks;
+        int byFame = FAME_SITELINKS[travelerFame];
+        return sitelinks == null ? byFame : Math.max(sitelinks, byFame);
     }
 
     /**

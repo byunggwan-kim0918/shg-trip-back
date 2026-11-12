@@ -286,7 +286,8 @@ public class VectorSearchQueryService {
                     r.region(), r.country(), r.latitude(), r.longitude(), r.description(),
                     r.rating(), r.similarityScore(), null, null, null, null, false, null,
                     PlaceCategoryConstants.extractSubRegion(r.address()), r.userRatingCount(),
-                    r.wikidataSitelinks(), r.placeRole(), r.cuisine(), false, null, r.attributes(), r.nameKo());
+                    r.wikidataSitelinks(), r.placeRole(), r.cuisine(), false, null, r.attributes(), r.nameKo(),
+                    r.travelerFame());
             if (CandidatePolicy.roleOf(c) == CandidatePolicy.Role.NOT_VISITABLE) continue;
             result.add(c);
             index++;
@@ -464,7 +465,7 @@ public class VectorSearchQueryService {
      */
     private double neutralProminence(List<VectorSearchResult> candidates) {
         if (candidates.isEmpty()) return NEUTRAL_RATING_RATIO;
-        long known = candidates.stream().filter(r -> r.wikidataSitelinks() != null).count();
+        long known = candidates.stream().filter(r -> sitelinksOf(r) != null).count();
         double coverage = (double) known / candidates.size();
         return NEUTRAL_RATING_RATIO - (NEUTRAL_RATING_RATIO - UNKNOWN_FLOOR_RATIO) * coverage;
     }
@@ -495,10 +496,15 @@ public class VectorSearchQueryService {
      * 여기서는 미매칭만 슬롯 커버리지 기반 중립값으로 바꾼다.
      */
     private double prominence(VectorSearchResult r, double neutralProminence) {
-        if (r.wikidataSitelinks() == null && r.userRatingCount() == null) {
+        Integer sitelinks = sitelinksOf(r);
+        if (sitelinks == null && r.userRatingCount() == null) {
             return neutralProminence;
         }
-        return PlaceProminence.of(r.rating(), r.userRatingCount(), r.wikidataSitelinks());
+        return PlaceProminence.of(r.rating(), r.userRatingCount(), sitelinks);
+    }
+
+    private static Integer sitelinksOf(VectorSearchResult r) {
+        return PlaceProminence.effectiveSitelinks(r.wikidataSitelinks(), r.travelerFame());
     }
 
     private boolean matchesLabel(VectorSearchResult r, List<String> labelTokens) {
@@ -854,7 +860,8 @@ public class VectorSearchQueryService {
                     false,
                     null,
                     r.attributes(),
-                    r.nameKo()
+                    r.nameKo(),
+                    r.travelerFame()
             ));
         }
         if (!results.isEmpty()) {

@@ -235,7 +235,7 @@ public class EvalRunner implements CommandLineRunner {
                     p.getRating(), 0, p.getPriceLevel(), p.getOpeningHours(), p.getRecommendedTimeSlots(),
                     p.getRecommendedDurationMinutes(), false, KrwRates.admissionWon(p), null, p.getUserRatingCount(),
                     p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine(), false, null, p.getAttributes(),
-                    p.getNameKo()));
+                    p.getNameKo(), p.getTravelerFame()));
         }
         return out;
     }

@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 import software.amazon.awssdk.services.s3.S3Client;
@@ -39,6 +40,9 @@ class PlaceNameKoQueryTest {
     @Autowired
     PlaceVectorSearchService placeVectorSearchService;
 
+    @Autowired
+    JdbcTemplate jdbcTemplate;
+
     private Place saveSensoji() {
         Place p = Place.builder()
                 .name("浅草寺").nameKo("센소지").address("東京都台東区浅草2-3-1")
@@ -64,16 +68,18 @@ class PlaceNameKoQueryTest {
     }
 
     @Test
-    @DisplayName("벡터 검색 결과에 한국어 이름이 실린다")
+    @DisplayName("벡터 검색 결과에 한국어 이름과 알려진 정도가 실린다")
     void vectorSearchCarriesNameKo() {
         Long id = saveSensoji().getId();
+        jdbcTemplate.update("UPDATE places SET traveler_fame = 2 WHERE id = ?", id);
         float[] vector = new float[EMBEDDING_DIMENSIONS];
         Arrays.fill(vector, 0.01f);
         placeVectorSearchService.store(id, vector);
 
         List<VectorSearchResult> popular = placeVectorSearchService.findPopular(vector, "JP", List.of(REGION), 5);
 
-        assertThat(popular).extracting(VectorSearchResult::placeId, VectorSearchResult::nameKo)
-                .containsExactly(org.assertj.core.groups.Tuple.tuple(id, "센소지"));
+        assertThat(popular).extracting(VectorSearchResult::placeId, VectorSearchResult::nameKo,
+                        VectorSearchResult::travelerFame)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(id, "센소지", (short) 2));
     }
 }

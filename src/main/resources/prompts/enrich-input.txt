@@ -66,7 +66,7 @@
 
 | 조건 | 처리 |
 |------|------|
-| `country != "KR"` (해외) | arrivalHub/departureHub = 위 여행지 목록의 관문 영어 이름 그대로. 공항이면 AIRPORT, 역이면 TRAIN_STATION. 관문이 없는 근교 여행지는 괄호 안 상위 여행지의 관문 |
+| `country != "KR"` (해외) | arrivalHub/departureHub = 위 여행지 목록의 관문 영어 이름 그대로, hubType은 AIRPORT. 관문이 없는 근교 여행지는 괄호 안 상위 여행지의 관문 |
 | 국내 섬 지역 (제주, 울릉도 등) | AIRPORT 또는 FERRY |
 | `description`에 "비행기"/"KTX"/"고속버스" 명시 | 해당 교통수단의 허브 타입 |
 | 국내 육지 + 교통수단 미명시 | null (차량 이동 간주) |

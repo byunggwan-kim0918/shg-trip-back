@@ -3747,7 +3747,9 @@ public class RouteOptimizer {
         double[] a = coordsOf(prev);
         double[] b = coordsOf(cand);
         if (a == null || b == null) return null;
-        GeoUtils.TransportLeg leg = GeoUtils.estimateLeg(a, b, transportPref, MAX_REASONABLE_LEG_KM);
+        boolean hubTransfer = PlaceCategoryConstants.isOverseasHub(prev.country(), prev.category())
+                || PlaceCategoryConstants.isOverseasHub(cand.country(), cand.category());
+        GeoUtils.TransportLeg leg = GeoUtils.estimateLeg(a, b, transportPref, MAX_REASONABLE_LEG_KM, hubTransfer);
         if (leg == null) {
             log.warn("RouteOptimizer: 비현실적 구간거리 {}km (day={}, {} → {}) — 교통정보 생략",
                     String.format("%.1f", haversine(a, b)), dayNumber, prev.name(), cand.name());
@@ -5342,7 +5344,7 @@ public class RouteOptimizer {
 
     /** 하루 거리 예산에 넣을 좌표. 해외 관문은 null이다({@link InvariantChecker#isOverseasHubTransfer}와 같은 기준). */
     private double[] budgetCoords(PlaceCandidate c) {
-        return c != null && InvariantChecker.isOverseasHub(c.country(), c.category()) ? null : coordsOf(c);
+        return c != null && PlaceCategoryConstants.isOverseasHub(c.country(), c.category()) ? null : coordsOf(c);
     }
 
     private double[] coordsOf(PlaceCandidate c) {

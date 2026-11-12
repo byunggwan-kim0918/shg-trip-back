@@ -37,7 +37,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
             SELECT p.id, p.name, p.address, p.category, p.tags, p.region, p.country,
                    p.latitude, p.longitude, p.description, p.rating, p.user_rating_count,
                    p.wikidata_sitelinks, p.place_role, p.cuisine, p.wikidata_id,
-                   p.attributes::text AS attributes, p.name_ko,
+                   p.attributes::text AS attributes, p.name_ko, p.traveler_fame,
                    1 - (p.embedding <=> ?::halfvec) AS similarity_score
             FROM places p
             """;
@@ -345,6 +345,8 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         // getInt가 NULL을 0으로 돌려주므로 wasNull 없이는 "아직 안 봤음"과 "봐도 없음"이 섞인다.
         int sitelinksRaw = rs.getInt("wikidata_sitelinks");
         Integer wikidataSitelinks = rs.wasNull() ? null : sitelinksRaw;
+        short fameRaw = rs.getShort("traveler_fame");
+        Short travelerFame = rs.wasNull() ? null : fameRaw;
 
         return new VectorSearchResult(
                 rs.getLong("id"),
@@ -365,7 +367,8 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                 rs.getString("cuisine"),
                 rs.getString("wikidata_id"),
                 com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes.fromJson(rs.getString("attributes")),
-                rs.getString("name_ko")
+                rs.getString("name_ko"),
+                travelerFame
         );
     }
 

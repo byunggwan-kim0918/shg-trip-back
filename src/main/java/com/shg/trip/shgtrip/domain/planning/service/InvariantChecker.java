@@ -93,12 +93,8 @@ final class InvariantChecker {
     }
 
     private static boolean isOverseasHub(StepData step) {
-        return step.place() != null && isOverseasHub(step.place().country(), step.place().category());
-    }
-
-    static boolean isOverseasHub(String country, String category) {
-        return country != null && !country.isBlank() && !"KR".equalsIgnoreCase(country.trim())
-                && "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(category));
+        return step.place() != null
+                && PlaceCategoryConstants.isOverseasHub(step.place().country(), step.place().category());
     }
 
     /**

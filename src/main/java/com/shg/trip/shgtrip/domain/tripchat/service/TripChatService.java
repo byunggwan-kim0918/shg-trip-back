@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationPolicyService;
+import com.shg.trip.shgtrip.domain.planning.service.PlanningCountries;
 import com.shg.trip.shgtrip.domain.planning.service.TravelPlannerService;
 import com.shg.trip.shgtrip.domain.tripchat.dto.TripChatAnswerRequest;
 import com.shg.trip.shgtrip.domain.tripchat.dto.TripChatResponse;
@@ -79,6 +80,7 @@ public class TripChatService {
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
+    private final PlanningCountries planningCountries;
 
     public TripChatResponse current(Long userId) {
         return inTx(() -> repository.findActive(userId).map(session -> {
@@ -270,8 +272,10 @@ public class TripChatService {
             if (session.getStatus() == TripChatStatus.ASKING) {
                 throw new BusinessException(ErrorCode.INVALID_INPUT, "대화를 마친 뒤 확인 화면에서 만들 수 있어요.");
             }
-            TripRequestMapper.Result mapping = TripRequestMapper.map(DraftFolder.fold(st.getEvents()),
-                    st.getMatches(), today());
+            Draft draft = DraftFolder.fold(st.getEvents());
+            Optional<String> closed = closedDestination(draft);
+            if (closed.isPresent()) throw new BusinessException(ErrorCode.VALIDATION_FAILED, closed.get());
+            TripRequestMapper.Result mapping = TripRequestMapper.map(draft, st.getMatches(), today());
             if (!mapping.ready()) {
                 throw new BusinessException(ErrorCode.VALIDATION_FAILED, mapping.blockers().get(0).description());
             }
@@ -361,6 +365,15 @@ public class TripChatService {
     private void advance(TripChatSession session, ChatState st, OpenQuestion answered, Interpretation it,
                          String answerKind, boolean datesTouched, Matches matches) {
         Draft draft = DraftFolder.fold(st.getEvents());
+        Optional<String> closed = closedDestination(draft);
+        if (closed.isPresent()) {
+            // 나머지 질문을 다 받고 확인 단계에서야 막히지 않게 여행지를 지우고 바로 다시 묻는다.
+            clearSlot(st, Slot.CITY);
+            st.setResume(null);
+            open(st, QuestionBank.base(Slot.CITY, DraftFolder.fold(st.getEvents()), today(), closed.get()));
+            save(session, TripChatStatus.ASKING, st);
+            return;
+        }
         if (matches != null && matches.signature().equals(PlaceMatcher.signature(draft))) {
             st.setMatches(new LinkedHashMap<>(matches.byKey()));
             st.setMatchSignature(matches.signature());
@@ -375,6 +388,10 @@ public class TripChatService {
             open(st, d.question());
             save(session, TripChatStatus.ASKING, st);
         }
+    }
+
+    private Optional<String> closedDestination(Draft draft) {
+        return planningCountries.closedDestinationMessage(draft.value(DraftField.DESTINATION));
     }
 
     private static void clearSlot(ChatState st, Slot slot) {

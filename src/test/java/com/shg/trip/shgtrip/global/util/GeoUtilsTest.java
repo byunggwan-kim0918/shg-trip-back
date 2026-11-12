@@ -52,6 +52,21 @@ class GeoUtilsTest {
     }
 
     @Test
+    @DisplayName("해외 관문 공항 구간은 공항철도 속도·요금으로 잡고, 차량 여행은 유류 단가를 그대로 쓴다")
+    void estimateLeg_hubTransfer() {
+        double[] narita = {35.772, 140.3929};
+        double[] ueno = {35.7138, 139.7773};
+
+        GeoUtils.TransportLeg taxi = GeoUtils.estimateLeg(narita, ueno, "any", MAX_LEG);
+        GeoUtils.TransportLeg rail = GeoUtils.estimateLeg(narita, ueno, "any", MAX_LEG, true);
+        GeoUtils.TransportLeg car = GeoUtils.estimateLeg(narita, ueno, "car", MAX_LEG, true);
+
+        assertThat(rail.cost().longValue()).isBetween(15_000L, 25_000L).isLessThan(taxi.cost().longValue());
+        assertThat(rail.durationMin()).isBetween(60, 90).isLessThan(taxi.durationMin());
+        assertThat(car.cost()).isEqualTo(GeoUtils.estimateLeg(narita, ueno, "car", MAX_LEG).cost());
+    }
+
+    @Test
     @DisplayName("비현실 구간(상한 초과)은 null 반환")
     void estimateLeg_nullOverMaxLeg() {
         GeoUtils.TransportLeg leg = GeoUtils.estimateLeg(

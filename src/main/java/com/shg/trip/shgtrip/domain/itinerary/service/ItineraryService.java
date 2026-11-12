@@ -350,10 +350,12 @@ public class ItineraryService {
         if (GeoUtils.isZeroCoord(fromPlace.getLatitude(), fromPlace.getLongitude())
                 || GeoUtils.isZeroCoord(toPlace.getLatitude(), toPlace.getLongitude())) return null;
 
+        boolean hubTransfer = PlaceCategoryConstants.isOverseasHub(fromPlace.getCountry(), fromPlace.getCategory())
+                || PlaceCategoryConstants.isOverseasHub(toPlace.getCountry(), toPlace.getCategory());
         return GeoUtils.estimateLeg(
                 new double[]{fromPlace.getLatitude().doubleValue(), fromPlace.getLongitude().doubleValue()},
                 new double[]{toPlace.getLatitude().doubleValue(), toPlace.getLongitude().doubleValue()},
-                "any", MAX_REASONABLE_LEG_KM);
+                "any", MAX_REASONABLE_LEG_KM, hubTransfer);
     }
 
     /**
