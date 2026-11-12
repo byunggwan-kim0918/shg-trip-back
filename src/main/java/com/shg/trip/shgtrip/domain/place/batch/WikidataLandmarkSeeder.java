@@ -93,8 +93,32 @@ public class WikidataLandmarkSeeder {
             "Q848813", "Landmarks and Outdoors > Historic and Protected Site",           // 정자
             "Q276173", "Landmarks and Outdoors > Historic and Protected Site",           // 누각·파빌리온
             "Q23442", "Landmarks and Outdoors > Island",                                 // 섬
+            "Q23397", "Landmarks and Outdoors > Lake",                                   // 호수
+            "Q1962840", "Dining and Drinking > Night Market",                            // 야시장
             "Q330284", "Retail > Market",                                                // 시장
+            // 구역형 명소. 큰길·거리·동네 분류는 국도·철도·주택가까지 들어와 넣지 않는다.
+            "Q676050", "Landmarks and Outdoors > Historic and Protected Site",           // 구시가
+            "Q15243209", "Landmarks and Outdoors > Historic and Protected Site",         // 역사 지구
+            "Q1574228", "Landmarks and Outdoors > Historic and Protected Site",          // 하나마치
+            "Q21000333", "Landmarks and Outdoors > Pedestrian Plaza",                    // 쇼핑 거리
+            "Q62685721", "Landmarks and Outdoors > Pedestrian Plaza",                    // 보행자 거리
+            "Q1133961", "Landmarks and Outdoors > Pedestrian Plaza",                     // 상업지구
+            "Q66364404", "Landmarks and Outdoors > Pedestrian Plaza",                    // 번화가
+            "Q202509", "Landmarks and Outdoors > Pedestrian Plaza",                      // 차이나타운
+            "Q93338609", "Landmarks and Outdoors > Waterfront",                          // 보드워크
+            "Q174782", "Landmarks and Outdoors > Plaza",                                 // 광장
+            "Q1208212", "Landmarks and Outdoors > Plaza",                                // 보행자 교차로
             "Q570116", "Landmarks and Outdoors > Tourist Attraction");                   // 관광 명소
+
+    /**
+     * 분류로 잡히지 않는 대표 명소 → 적재할 분류({@link #CLASS_CATEGORY} 키). 분류가 큰길·거리뿐이거나 비어 있다.
+     * 언어판 수 기준도 보지 않는다.
+     */
+    static final Map<String, String> EXTRA_LANDMARKS = orderedMap(
+            "Q1009423", "Q21000333",    // 왕푸징(베이징)
+            "Q11334291", "Q62685721",   // 부이비엔 거리(호찌민)
+            "Q10878674", "Q62685721",   // 지우펀 옛거리
+            "Q107583845", "Q21000333"); // 나카미세(도쿄 아사쿠사)
 
     /** 홍콩(Q8646)·마카오(Q14773). 국가(P17)가 중국이라 국가 검사로는 걸러지지 않고, 여행지 목록에 없다. */
     static final List<String> EXCLUDED_AREAS = List.of("Q8646", "Q14773");
@@ -106,6 +130,7 @@ public class WikidataLandmarkSeeder {
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
     private final Destinations destinations;
+    private final Map<String, List<Landmark>> extraByCountry = new java.util.HashMap<>();
 
     /** 대상 지역. 비어 있으면 장소 수 기준 전 지역({@link WikidataSitelinksJob}과 같은 설정). */
     @Value("${batch.wikidata.regions:}")
@@ -194,8 +219,10 @@ public class WikidataLandmarkSeeder {
 
     private int seedDestination(Destination d, Set<String> knownQids) throws Exception {
         int threshold = minSitelinksFor(d.name(), minSitelinksByRegion, d.isCity() ? minSitelinks : minSitelinksScenic);
-        List<Landmark> found = withOverseasNames(parseOverseas(get(buildAroundSparql(d, threshold)), d.country()),
-                d.country());
+        List<Landmark> around = new ArrayList<>(parseOverseas(get(buildAroundSparql(d, threshold)), d.country()));
+        Set<String> aroundQids = around.stream().map(Landmark::qid).collect(java.util.stream.Collectors.toSet());
+        extraLandmarks(d.country()).stream().filter(lm -> !aroundQids.contains(lm.qid())).forEach(around::add);
+        List<Landmark> found = withOverseasNames(around, d.country());
         if (EXCLUDED_AREA_COUNTRY.equals(d.country())) {
             Set<String> excluded = inExcludedAreas(found);
             found = found.stream().filter(lm -> !excluded.contains(lm.qid())).toList();
@@ -462,6 +489,32 @@ public class WikidataLandmarkSeeder {
                   SERVICE wikibase:label { bd:serviceParam wikibase:language "ko,ja,en". }
                 }
                 """.formatted(minLon, minLat, maxLon, maxLat, classes, minSitelinks);
+    }
+
+    /** 나라마다 한 번 조회한다. 여행지 배정은 {@link #store}가 가장 가까운 여행지로 거른다. */
+    private List<Landmark> extraLandmarks(String country) throws Exception {
+        List<Landmark> cached = extraByCountry.get(country);
+        if (cached == null) {
+            cached = parseOverseas(get(buildExtraSparql()), country);
+            extraByCountry.put(country, cached);
+        }
+        return cached;
+    }
+
+    /** {@link #EXTRA_LANDMARKS} 항목을 지정한 분류로 받는다. 응답 형식은 {@link #buildAroundSparql}과 같다. */
+    static String buildExtraSparql() {
+        String pairs = EXTRA_LANDMARKS.entrySet().stream()
+                .map(e -> "(wd:" + e.getKey() + " wd:" + e.getValue() + ")")
+                .collect(java.util.stream.Collectors.joining(" "));
+        return """
+                SELECT ?item ?sitelinks ?lat ?lon ?cls ?addr WHERE {
+                  VALUES (?item ?cls) { %s }
+                  ?item wikibase:sitelinks ?sitelinks .
+                  ?item p:P625/psv:P625 ?cv .
+                  ?cv wikibase:geoLatitude ?lat ; wikibase:geoLongitude ?lon .
+                  OPTIONAL { ?item wdt:P6375 ?addr . }
+                }
+                """.formatted(pairs);
     }
 
     /**

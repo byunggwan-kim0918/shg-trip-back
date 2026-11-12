@@ -341,7 +341,7 @@ class PlaceRepositoryBatchQueryTest {
         loaded.assignRole("SIGHT", null);
 
         int changed = placeRepository.writeEnrichmentColumns(loaded.getId(), null, null, null, null, null, null, null,
-                "SIGHT", null, null, OffsetDateTime.now());
+                "SIGHT", null, null, null, OffsetDateTime.now());
         em.clear();
 
         Object[] row = (Object[]) em.createNativeQuery(
@@ -349,6 +349,38 @@ class PlaceRepositoryBatchQueryTest {
                 .setParameter(1, p.getId()).getSingleResult();
         assertThat(changed).isEqualTo(1);
         assertThat(row).containsExactly(true, true, true, "SIGHT");
+    }
+
+    @Test
+    @DisplayName("알려진 정도는 값이 있을 때만 쓰고, 없으면(한국 보강) 기존 값을 둔다")
+    void writeEnrichment_travelerFame() {
+        Place p = save("士林夜市", "Dining and Drinking > Night Market", 0, false);
+        em.clear();
+        Place loaded = placeRepository.findById(p.getId()).orElseThrow();
+        loaded.rateFame((short) 2);
+        placeRepository.writeEnrichment(loaded);
+        placeRepository.writeEnrichmentColumns(p.getId(), null, null, null, null, null, null, null,
+                "MARKET", null, null, null, OffsetDateTime.now());
+        em.clear();
+
+        Object fame = em.createNativeQuery("SELECT traveler_fame FROM places WHERE id = ?")
+                .setParameter(1, p.getId()).getSingleResult();
+        assertThat(((Number) fame).intValue()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("숙소 보완은 호텔 수영장·헬스장과 비방문 행을 고르지 않는다")
+    void findTopAccommodations_skipsHotelFacilities() {
+        Place hotel = save("호텔", "Travel and Transportation > Lodging > Hotel", null, false);
+        save("Swimming Pool", "Travel and Transportation > Lodging > Hotel > Hotel Pool", null, false);
+        save("Fitness Center", "Travel and Transportation > Lodging > Hotel > Hotel Gym", null, false);
+        Place marked = save("비방문 숙소", "Travel and Transportation > Lodging > Hotel", null, false);
+        em.createNativeQuery("UPDATE places SET place_role = 'NOT_VISITABLE' WHERE id = ?")
+                .setParameter(1, marked.getId()).executeUpdate();
+        em.clear();
+
+        assertThat(placeRepository.findTopAccommodationsByRegions(List.of(REGION), PageRequest.of(0, 10)))
+                .extracting(Place::getId).containsExactly(hotel.getId());
     }
 
     @Test

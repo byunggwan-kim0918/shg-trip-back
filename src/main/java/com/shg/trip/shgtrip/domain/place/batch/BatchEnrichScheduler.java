@@ -432,7 +432,7 @@ public class BatchEnrichScheduler {
 
     String buildEnrichPrompt(Place place) {
         boolean overseas = OverseasEnrichment.isOverseas(place.getCountry());
-        if (DiningEnrichment.isDining(place.getCategory())) {
+        if (DiningEnrichment.isDiningVenue(place.getCategory())) {
             return DiningEnrichment.buildPrompt(place.getName(), place.getCategory(), place.getDescription(),
                     DiningEnrichment.venueOf(place.getCategory()),
                     DiningEnrichment.isFamous(place.getWikidataSitelinks()),
@@ -500,7 +500,8 @@ public class BatchEnrichScheduler {
         sb.append("  \"recommended_duration_minutes\": 90,  // 평균 체류시간(분, 정수)\n");
         sb.append("  \"admission_fee_local\": 0,  // 입장료(").append(currency.label()).append(", 정수). ")
                 .append("무료면 0, 유료면 성인 1인 기준 실제 입장료\n");
-        sb.append("  \"place_role\": \"SIGHT\"  // 여행 일정에서의 역할(아래 목록 중 하나)\n");
+        sb.append("  \"place_role\": \"SIGHT\",  // 여행 일정에서의 역할(아래 목록 중 하나)\n");
+        sb.append("  \"traveler_fame\": 0  // 알려진 정도(0~2, 아래 규칙)\n");
         sb.append("}\n");
         sb.append("\n추천 시간대는 다음 중에서 선택: morning, afternoon, evening, night, all_day");
         sb.append("\n체류시간 가이드: 등산·트레킹 150~240 / 해변·시장 60 / 박물관·미술관 90 / 사찰·신사 60 / 테마파크 300");
@@ -509,6 +510,7 @@ public class BatchEnrichScheduler {
         sb.append("\nplace_role: SIGHT(명소·자연·유적·박물관·공원) / ACTIVITY(체험·레저·테마파크) / "
                 + "SHOPPING(쇼핑몰·백화점·쇼핑거리) / MARKET(전통시장·야시장) / LODGING(숙소) / TRANSIT(공항·역·터미널) / "
                 + "NOT_VISITABLE(여행자가 일부러 찾아갈 곳이 아님: 편의점·은행·병원·사무실·주차장·일반 매장·아파트·학교 등)");
+        sb.append("\n").append(OverseasEnrichment.fameRule());
         if (askNameKo) sb.append("\n").append(OverseasEnrichment.nameKoRule());
         return sb.toString();
     }
@@ -855,14 +857,16 @@ public class BatchEnrichScheduler {
             JsonNode root = objectMapper.readTree(json);
             boolean overseas = OverseasEnrichment.isOverseas(place.getCountry());
 
-            if (DiningEnrichment.isDining(place.getCategory())) {
+            if (DiningEnrichment.isDiningVenue(place.getCategory())) {
                 if (!root.isObject()) {
                     log.warn("식당 보강 응답이 JSON 객체가 아님 - placeId={}", place.getId());
                     return false;
                 }
+                Short fame = overseas ? OverseasEnrichment.fame(root.get("traveler_fame")) : null;
+                // Wikidata에 없는 유명 식당은 모델이 알려진 곳이라고 할 때만 설명을 받는다.
+                boolean describe = DiningEnrichment.isFamous(place.getWikidataSitelinks()) || (fame != null && fame >= 1);
                 DiningEnrichment.Result dining = DiningEnrichment.interpret(root,
-                        DiningEnrichment.venueOf(place.getCategory()),
-                        DiningEnrichment.isFamous(place.getWikidataSitelinks()),
+                        DiningEnrichment.venueOf(place.getCategory()), describe,
                         overseas ? OverseasEnrichment.ownRegionNames(place) : Set.of());
                 place.enrichWith(dining.tags(), dining.description(), dining.timeSlots(),
                         dining.durationMinutes(), null);
@@ -871,6 +875,7 @@ public class BatchEnrichScheduler {
                         : overseas ? OverseasEnrichment.cuisineOf(dining.tags(), place.getCategory())
                         : DiningEnrichment.cuisineOf(dining.tags(), place.getCategory());
                 place.assignRole(dining.placeRole(), cuisine);
+                place.rateFame(fame);
                 if (overseas) place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko")));
                 return true;
             }
@@ -919,6 +924,7 @@ public class BatchEnrichScheduler {
                 OverseasEnrichment.Currency currency = OverseasEnrichment.currencyOf(place.getCountry());
                 place.recordAdmissionLocal(OverseasEnrichment.admissionLocal(root.get("admission_fee_local"), currency),
                         currency.code());
+                place.rateFame(OverseasEnrichment.fame(root.get("traveler_fame")));
                 place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko")));
             }
             return true;

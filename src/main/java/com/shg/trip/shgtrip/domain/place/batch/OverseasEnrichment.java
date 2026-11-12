@@ -99,6 +99,24 @@ final class OverseasEnrichment {
                 - 한국어 이름만 적는다. 원문·괄호 병기·설명을 붙이지 않는다.""";
     }
 
+    /** traveler_fame 규칙. 관광지·식당 프롬프트가 같은 기준을 쓴다. */
+    static String fameRule() {
+        return """
+                traveler_fame은 한국인 여행자 사이에서 알려진 정도다.
+                - 2: 이 도시를 다루는 여행 가이드북·미쉐린 가이드에 실리거나, 이 도시에 가는 여행자 대부분이 들르는 곳\
+                (자금성, 센소지, 스린 야시장, 딘타이펑 신이 본점).
+                - 1: 현지에서 이름난 곳(오래된 노포, 지역 대표 맛집·명소, 여행 후기에 자주 나오는 곳).
+                - 0: 그 밖의 평범한 곳. 체인점은 본점·대표 지점만 1 이상이다.
+                - 이름·카테고리·주소만으로 확신할 수 없으면 0이다.""";
+    }
+
+    /** 0~2 정수만 받는다. 그 밖은 모름(null)이다. */
+    static Short fame(JsonNode node) {
+        if (node == null || !node.isIntegralNumber()) return null;
+        int v = node.asInt();
+        return v >= 0 && v <= 2 ? (short) v : null;
+    }
+
     /** 모델이 이름 대신 돌려주는 말. 한 번 저장되면 다시 묻지 않아 그대로 남는다. */
     private static final java.util.Set<String> NON_NAMES = java.util.Set.of(
             "한국어이름", "한국어표시이름", "없음", "미상", "알수없음", "모름", "해당없음", "이름없음", "null", "n/a");

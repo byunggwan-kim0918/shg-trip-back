@@ -442,8 +442,10 @@ public class WikidataSitelinksJob {
         return 0;
     }
 
+    /** 야시장 행은 비식음료 항목(야시장)과 맞춘다. FSQ는 야시장을 식음료 아래에 둔다. */
     static boolean isDiningRow(String category) {
-        return category != null && category.toLowerCase(Locale.ROOT).startsWith("dining and drinking");
+        return category != null && category.toLowerCase(Locale.ROOT).startsWith("dining and drinking")
+                && !DiningEnrichment.isNightMarket(category);
     }
 
     /**

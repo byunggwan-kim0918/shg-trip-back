@@ -55,6 +55,14 @@ class WikidataSitelinksJobTest {
                 .collect(Collectors.toMap(Assignment::placeId, a -> a.item().sitelinks()));
     }
 
+    @Test
+    @DisplayName("야시장 행은 식음료 아래 카테고리여도 식당 행으로 보지 않는다(야시장 항목은 비식음료 분류다)")
+    void nightMarketIsNotDiningRow() {
+        assertThat(WikidataSitelinksJob.isDiningRow("Dining and Drinking > Night Market")).isFalse();
+        assertThat(WikidataSitelinksJob.isDiningRow("Dining and Drinking > Restaurant")).isTrue();
+        assertThat(WikidataSitelinksJob.isDiningRow("Landmarks and Outdoors > Park")).isFalse();
+    }
+
     @Nested
     @DisplayName("assign")
     class Matching {
