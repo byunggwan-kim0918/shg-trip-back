@@ -5,6 +5,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * 후보 장소의 일정 속 역할을 정하는 단일 소스.
@@ -120,15 +121,31 @@ public final class CandidatePolicy {
             "평양", "옥류관", "류경", "平壤", "玉流馆", "玉流館", "柳京", "pyongyang", "okryu");
 
     /**
-     * 관광 대분류 안의 명시 목록과 키즈카페처럼 비방문이 확실해 DB에 영구 기록해도 되는 범위.
+     * 관광 대분류 안의 명시 목록, 키즈카페, 호텔 부대시설, 역 출구처럼 비방문이 확실해 DB에 영구 기록해도 되는 범위.
      * 그 밖의 추정은 기록하면 보강 대상에서 빠져 고쳐질 길이 없다.
      */
     public static boolean isCertainlyNotVisitable(String name, String category) {
         String lower = category == null ? "" : category.toLowerCase(Locale.ROOT);
         // 카페 업종으로 적재된 키즈카페는 관광 대분류가 아니어서 카페 휴식 자리에 들어간다.
         if (name != null && name.contains("키즈카페")) return true;
+        // 호텔 수영장·헬스장은 숙소 대분류라 거르지 않으면 일정의 숙소로 배정된다.
+        if (HOTEL_FACILITY_CATEGORIES.stream().anyMatch(lower::endsWith)) return true;
+        if (name != null && lower.contains("hotel bar") && HOTEL_LOUNGE_NAMES.contains(name.strip().toLowerCase(Locale.ROOT))) {
+            return true;
+        }
+        if (name != null && !lower.contains("lodging") && STATION_EXIT_NAME.matcher(name.strip()).matches()) return true;
         return "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(category)) && isLowValue(name, lower);
     }
+
+    private static final List<String> HOTEL_FACILITY_CATEGORIES = List.of("> hotel pool", "> hotel gym");
+
+    /** 호텔 바 중 이름이 투숙객 라운지 총칭인 곳. 이름이 있는 루프톱 바는 남긴다. */
+    private static final Set<String> HOTEL_LOUNGE_NAMES = Set.of(
+            "executive lounge", "club lounge", "executive club lounge", "executive club", "lobby lounge");
+
+    /** "西口"·"新宿駅東口" 같은 역 출구 이름. 구조물·광장 카테고리로 적재돼 명소 후보가 된다. */
+    private static final java.util.regex.Pattern STATION_EXIT_NAME = java.util.regex.Pattern.compile(
+            "(東|西|南|北|中央)(口|改札)|.{1,12}駅(東|西|南|北|中央|八条|新幹線)口");
 
     /**
      * 관광 대분류 안의 저가치 시설.

@@ -91,6 +91,16 @@ final class DiningEnrichment {
         return category != null && category.strip().toLowerCase(Locale.ROOT).startsWith(DINING_PREFIX);
     }
 
+    /** FSQ는 야시장을 식음료 아래에 둔다. 식당 프롬프트로 보강하면 끼니 역할을 받아 점심 자리에 들어간다. */
+    static boolean isNightMarket(String category) {
+        return category != null && category.toLowerCase(Locale.ROOT).contains("night market");
+    }
+
+    /** 식당 프롬프트로 보강할 업장. 야시장은 관광 프롬프트에서 시장 역할을 받는다. */
+    static boolean isDiningVenue(String category) {
+        return isDining(category) && !isNightMarket(category);
+    }
+
     /**
      * 카테고리로 업종을 정한다. null이면 총칭이거나 모르는 하위 분류라 모델에게 고르게 한다.
      *
@@ -135,7 +145,8 @@ final class DiningEnrichment {
     }
 
     /**
-     * @param overseasContext 해외 장소의 국가·여행지·주소 줄({@link OverseasEnrichment#contextLines}). 한국이면 null
+     * @param overseasContext 해외 장소의 국가·여행지·주소 줄({@link OverseasEnrichment#contextLines}). 한국이면 null.
+     *                        해외면 traveler_fame을 묻고, 유명하지 않아도 description을 조건부로 묻는다
      * @param askNameKo       name_ko를 함께 묻는다
      */
     static String buildPrompt(String name, String category, String existingDescription, Venue venue, boolean famous,
@@ -194,6 +205,12 @@ final class DiningEnrichment {
         if (famous) {
             sb.append(n++).append(". description에는 이 업장에 대해 널리 알려진 사실(역사·대표 메뉴)만 ")
                     .append("한국어 2문장 이내로 쓴다. 확실하지 않으면 null.\n");
+        } else if (overseas) {
+            sb.append(n++).append(". description은 traveler_fame이 1 이상일 때만 이 업장에 대해 널리 알려진 사실")
+                    .append("(역사·대표 메뉴)을 한국어 2문장 이내로 쓴다. 0이거나 확실하지 않으면 null.\n");
+        }
+        if (overseas) {
+            sb.append(n++).append(". ").append(OverseasEnrichment.fameRule().replace("\n", "\n   ")).append("\n");
         }
         if (askNameKo) {
             sb.append(n++).append(". ").append(OverseasEnrichment.nameKoRule().replace("\n", "\n   ")).append("\n");
@@ -204,7 +221,8 @@ final class DiningEnrichment {
         if (venue == null) sb.append("  \"venue\": \"식당\",\n");
         sb.append("  \"tags\": [\"칼국수\", \"면요리\"],\n");
         sb.append("  \"recommended_time_slots\": [\"afternoon\", \"evening\"]");
-        if (famous) sb.append(",\n  \"description\": null");
+        if (overseas) sb.append(",\n  \"traveler_fame\": 0");
+        if (famous || overseas) sb.append(",\n  \"description\": null");
         sb.append("\n}");
         return sb.toString();
     }

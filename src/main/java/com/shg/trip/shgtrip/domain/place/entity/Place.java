@@ -139,6 +139,10 @@ public class Place extends BaseTimeEntity {
     @Column(name = "enrich_attempts", insertable = false, updatable = false)
     private Short enrichAttempts;
 
+    /** 한국인 여행자 기준 알려진 정도(0~2, 해외 보강이 판단). 보강 결과를 쓰는 네이티브 UPDATE로만 저장한다. null은 모름. */
+    @Column(name = "traveler_fame", insertable = false, updatable = false)
+    private Short travelerFame;
+
     /**
      * 일정 속 역할(배치 보강으로 생성): MEAL, CAFE, BAR, SIGHT, ACTIVITY, SHOPPING, MARKET, LODGING,
      * TRANSIT, NOT_VISITABLE. 없으면 카테고리·이름 추정으로 대신한다(CandidatePolicy.roleOf).
@@ -266,6 +270,11 @@ public class Place extends BaseTimeEntity {
     /** 비어 있을 때만 채운다. Wikidata 한국어 라벨이나 보정표가 이미 정한 이름이 우선이다. */
     public void fillNameKo(String newNameKo) {
         if (this.nameKo == null && newNameKo != null && !newNameKo.isBlank()) this.nameKo = newNameKo;
+    }
+
+    /** null이면 기존 값을 둔다. */
+    public void rateFame(Short fame) {
+        if (fame != null) this.travelerFame = fame;
     }
 
     /** 0(무료)도 기록한다. 금액·통화가 없으면 기존 값을 둔다. */

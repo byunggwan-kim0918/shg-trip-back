@@ -144,11 +144,17 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     @Query("SELECT p FROM Place p WHERE p.region IN :regions AND p.source = 'gateway' AND p.active = true ORDER BY p.id")
     List<Place> findGatewaysByRegions(@Param("regions") List<String> regions);
 
-    /** 숙소 후보 보완용. region 목록 내 Lodging 카테고리 장소를 평점 순으로 준다. */
+    /**
+     * 숙소 후보 보완용. region 목록 내 Lodging 카테고리 장소를 평점 순으로 준다. 호텔 부대시설은
+     * {@code CandidatePolicy.isCertainlyNotVisitable}과 같은 기준으로 뺀다(보강이 LODGING 역할을 붙인 행도 있다).
+     */
     @Query("""
             SELECT p FROM Place p
             WHERE p.region IN :regions
               AND LOWER(p.category) LIKE '%lodging%'
+              AND LOWER(p.category) NOT LIKE '%> hotel pool'
+              AND LOWER(p.category) NOT LIKE '%> hotel gym'
+              AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND p.active = true
             ORDER BY p.rating DESC NULLS LAST
             """)
@@ -344,6 +350,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 place_role = CAST(:role AS varchar),
                 cuisine = CAST(:cuisine AS varchar),
                 name_ko = COALESCE(name_ko, CAST(:nameKo AS varchar)),
+                traveler_fame = COALESCE(CAST(:fame AS smallint), traveler_fame),
                 enriched_at = CAST(:enrichedAt AS timestamptz),
                 updated_at = now()
              WHERE id = :id
@@ -353,7 +360,8 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                                @Param("duration") Integer duration, @Param("fee") Integer fee,
                                @Param("feeLocal") Integer feeLocal, @Param("currency") String currency,
                                @Param("role") String role, @Param("cuisine") String cuisine,
-                               @Param("nameKo") String nameKo, @Param("enrichedAt") OffsetDateTime enrichedAt);
+                               @Param("nameKo") String nameKo, @Param("fame") Short fame,
+                               @Param("enrichedAt") OffsetDateTime enrichedAt);
 
     String ARRAY_SEPARATOR = "\u001f";
 
@@ -361,7 +369,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
         return writeEnrichmentColumns(p.getId(), joinArray(p.getTags()), p.getDescription(),
                 joinArray(p.getRecommendedTimeSlots()), p.getRecommendedDurationMinutes(), p.getAdmissionFee(),
                 p.getAdmissionFeeLocal(), p.getAdmissionCurrency(), p.getPlaceRole(), p.getCuisine(), p.getNameKo(),
-                p.getEnrichedAt());
+                p.getTravelerFame(), p.getEnrichedAt());
     }
 
     private static String joinArray(List<String> values) {

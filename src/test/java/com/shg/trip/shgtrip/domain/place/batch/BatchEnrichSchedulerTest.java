@@ -744,6 +744,49 @@ class BatchEnrichSchedulerTest {
         assertThat(prompt).doesNotContain("서울·부산 같은 지역명");
     }
 
+    @Test
+    @DisplayName("해외 프롬프트는 알려진 정도를 묻고, 식당은 유명하지 않아도 설명을 조건부로 묻는다")
+    void buildEnrichPrompt_overseasAsksFame() {
+        String attraction = scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, null));
+        String dining = scheduler.buildEnrichPrompt(overseas("一蘭 祇園店", RAMEN, null));
+
+        assertThat(attraction).contains("\"traveler_fame\"", "가이드북·미쉐린");
+        assertThat(dining).contains("\"traveler_fame\": 0", "traveler_fame이 1 이상일 때만", "\"description\": null");
+        assertThat(scheduler.buildEnrichPrompt(createPlace(1L, "성산일출봉", "Landmarks and Outdoors > Mountain", "Jeju", "KR")))
+                .doesNotContain("traveler_fame");
+    }
+
+    @Test
+    @DisplayName("해외 식당은 알려진 정도를 기록하고, 1 이상일 때만 설명을 받는다")
+    void applyEnrichment_overseasDiningFame() {
+        Place famous = overseas("一蘭 本社総本店", RAMEN, null);
+        Place plain = overseas("ラーメン太郎", RAMEN, null);
+        String famousJson = "{\"tags\":[\"라멘\"],\"traveler_fame\":2,\"description\":\"1960년 후쿠오카에서 시작한 돈코츠 라멘집.\"}";
+        String plainJson = "{\"tags\":[\"라멘\"],\"traveler_fame\":0,\"description\":\"지어낸 설명\"}";
+
+        scheduler.applyEnrichment(famous, famousJson);
+        scheduler.applyEnrichment(plain, plainJson);
+
+        assertThat(famous.getTravelerFame()).isEqualTo((short) 2);
+        assertThat(famous.getDescription()).startsWith("1960년");
+        assertThat(plain.getTravelerFame()).isEqualTo((short) 0);
+        assertThat(plain.getDescription()).isNull();
+    }
+
+    @Test
+    @DisplayName("야시장은 식당이 아니라 관광지 프롬프트로 보강해 시장 역할을 받는다")
+    void nightMarketUsesAttractionPrompt() {
+        Place market = overseas("士林夜市", "Dining and Drinking > Night Market", null);
+
+        assertThat(scheduler.buildEnrichPrompt(market)).contains("\"place_role\"", "MARKET(전통시장·야시장)")
+                .doesNotContain("venue");
+        scheduler.applyEnrichment(market,
+                "{\"tags\":[\"야시장\"],\"place_role\":\"MARKET\",\"traveler_fame\":2,\"recommended_time_slots\":[\"evening\",\"night\"]}");
+        assertThat(market.getPlaceRole()).isEqualTo("MARKET");
+        assertThat(market.getTravelerFame()).isEqualTo((short) 2);
+        assertThat(market.getCuisine()).isNull();
+    }
+
     private Place createPlace(Long id, String name, String category, String region, String country) {
         return Place.builder()
                 .id(id)

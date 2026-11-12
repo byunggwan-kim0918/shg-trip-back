@@ -145,6 +145,40 @@ class WikidataLandmarkSeederTest {
     }
 
     @Test
+    @DisplayName("구역형 명소 분류를 받고, 야시장은 시장보다 먼저 판정하며, 지정 목록의 분류는 모두 아는 분류다")
+    void areaClassesAndExtraLandmarks() {
+        assertThat(WikidataLandmarkSeeder.CLASS_CATEGORY).containsKeys(
+                "Q1133961", "Q21000333", "Q62685721", "Q676050", "Q66364404", "Q202509", "Q174782", "Q23397",
+                "Q1208212", "Q1574228", "Q93338609", "Q1962840");
+        assertThat(WikidataLandmarkSeeder.CLASS_CATEGORY).doesNotContainKeys("Q79007", "Q83620", "Q34442", "Q123705");
+        List<String> order = List.copyOf(WikidataLandmarkSeeder.CLASS_CATEGORY.keySet());
+        assertThat(order.indexOf("Q1962840")).isLessThan(order.indexOf("Q330284"));
+        assertThat(WikidataLandmarkSeeder.CLASS_CATEGORY.keySet())
+                .containsAll(WikidataLandmarkSeeder.EXTRA_LANDMARKS.values());
+        assertThat(WikidataLandmarkSeeder.buildExtraSparql())
+                .contains("VALUES (?item ?cls)", "(wd:Q10878674 wd:Q62685721)", "(wd:Q1009423 wd:Q21000333)")
+                .doesNotContain("FILTER(?sitelinks");
+    }
+
+    @Test
+    @DisplayName("지정 목록 응답은 반경 조회와 같은 형식이라 지정한 분류의 카테고리로 읽는다")
+    void parseExtraLandmark() throws Exception {
+        var seeder = new WikidataLandmarkSeeder(mock(PlaceRepository.class), new ObjectMapper(), DESTINATIONS);
+        String json = """
+                {"results":{"bindings":[
+                  {"item":{"value":"http://www.wikidata.org/entity/Q10878674"},"sitelinks":{"value":"3"},
+                   "lat":{"value":"25.1094"},"lon":{"value":"121.8452"},"cls":{"value":"http://www.wikidata.org/entity/Q62685721"}}
+                ]}}
+                """;
+
+        assertThat(seeder.parseOverseas(json, "TW")).singleElement().satisfies(lm -> {
+            assertThat(lm.category()).isEqualTo("Landmarks and Outdoors > Pedestrian Plaza");
+            assertThat(DESTINATIONS.nearest("TW", lm.lat(), lm.lon())).get()
+                    .extracting(com.shg.trip.shgtrip.domain.place.destination.Destination::name).isEqualTo("Jiufen");
+        });
+    }
+
+    @Test
     @DisplayName("반경 조회는 상위 행정구역을 따라가지 않고 라벨 서비스도 부르지 않는다")
     void aroundQueryIsLight() {
         var shenzhen = DESTINATIONS.find("Shenzhen").orElseThrow();

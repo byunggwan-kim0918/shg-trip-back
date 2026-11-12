@@ -67,6 +67,19 @@ class OverseasEnrichmentTest {
     }
 
     @Test
+    @DisplayName("알려진 정도는 0~2 정수만 받는다")
+    void fame() throws Exception {
+        ObjectMapper om = new ObjectMapper();
+        assertThat(OverseasEnrichment.fame(om.readTree("2"))).isEqualTo((short) 2);
+        assertThat(OverseasEnrichment.fame(om.readTree("0"))).isEqualTo((short) 0);
+        assertThat(OverseasEnrichment.fame(om.readTree("3"))).isNull();
+        assertThat(OverseasEnrichment.fame(om.readTree("-1"))).isNull();
+        assertThat(OverseasEnrichment.fame(om.readTree("1.5"))).isNull();
+        assertThat(OverseasEnrichment.fame(om.readTree("\"2\""))).isNull();
+        assertThat(OverseasEnrichment.fame(null)).isNull();
+    }
+
+    @Test
     @DisplayName("현지 통화 입장료는 그 통화로 있을 수 있는 금액만 받는다(0은 무료)")
     void admissionLocal() throws Exception {
         ObjectMapper om = new ObjectMapper();

@@ -47,6 +47,23 @@ class BlockedPlaceTest {
     }
 
     @Test
+    @DisplayName("호텔 수영장·헬스장, 이름이 투숙객 라운지 총칭인 호텔 바, 역 출구는 비방문이 확실하다")
+    void hotelFacilitiesAndStationExits() {
+        assertThat(CandidatePolicy.isCertainlyNotVisitable("Swimming Pool",
+                "Travel and Transportation > Lodging > Hotel > Hotel Pool")).isTrue();
+        assertThat(CandidatePolicy.isCertainlyNotVisitable("Fitness Center",
+                "Travel and Transportation > Lodging > Hotel > Hotel Gym")).isTrue();
+        assertThat(CandidatePolicy.isCertainlyNotVisitable("Executive Lounge", "Dining and Drinking > Bar > Hotel Bar")).isTrue();
+        assertThat(CandidatePolicy.isCertainlyNotVisitable("西口", "Landmarks and Outdoors > Structure")).isTrue();
+        assertThat(CandidatePolicy.isCertainlyNotVisitable("新宿駅東口", "Landmarks and Outdoors > Plaza")).isTrue();
+        // 진짜 숙소·이름 있는 루프톱 바·역·출구 이름이 들어간 공원은 남긴다
+        assertThat(CandidatePolicy.isCertainlyNotVisitable("Park Hyatt Tokyo", "Travel and Transportation > Lodging > Hotel")).isFalse();
+        assertThat(CandidatePolicy.isCertainlyNotVisitable("New York Bar", "Dining and Drinking > Bar > Hotel Bar")).isFalse();
+        assertThat(CandidatePolicy.isCertainlyNotVisitable("池袋西口公園", "Landmarks and Outdoors > Park")).isFalse();
+        assertThat(CandidatePolicy.isCertainlyNotVisitable("ホテル新宿駅東口", "Travel and Transportation > Lodging > Hotel")).isFalse();
+    }
+
+    @Test
     @DisplayName("사용자가 직접 고른 장소와 이름이 비슷한 다른 장소는 막지 않는다")
     void keepsUserSelectedAndUnrelated() {
         assertThat(CandidatePolicy.roleOf(cand("야스쿠니 신사", "SIGHT", true))).isEqualTo(CandidatePolicy.Role.SIGHT);
