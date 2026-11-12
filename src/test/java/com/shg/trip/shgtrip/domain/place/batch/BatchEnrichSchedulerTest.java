@@ -58,12 +58,12 @@ class BatchEnrichSchedulerTest {
     @Test
     @DisplayName("미보강 장소가 없으면 아무 작업도 수행하지 않는다")
     void enrich_noUnenrichedPlaces_doesNothing() {
-        when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class)))
+        when(placeRepository.findEnrichTargets(anyString(), anyCollection(), any(Pageable.class)))
                 .thenReturn(List.of());
 
         scheduler.enrich();
 
-        verify(placeRepository).findEnrichTargets(anyCollection(), any(Pageable.class));
+        verify(placeRepository).findEnrichTargets(anyString(), anyCollection(), any(Pageable.class));
         verify(placeRepository, never()).save(any(Place.class));
     }
 
@@ -484,13 +484,13 @@ class BatchEnrichSchedulerTest {
                 .when(spied).processChunk(List.of(place1));
         doReturn(new BatchEnrichScheduler.ChunkResult(1, 0, List.of()))
                 .when(spied).processChunk(List.of(place2));
-        when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class)))
+        when(placeRepository.findEnrichTargets(anyString(), anyCollection(), any(Pageable.class)))
                 .thenReturn(List.of(place1), List.of(place2), List.of());
 
         assertThatThrownBy(() -> spied.enrich()).isInstanceOf(BatchStageFailed.class);
 
-        verify(placeRepository, times(3)).findEnrichTargets(anyCollection(), any(Pageable.class));
-        verify(placeRepository, atLeastOnce()).findEnrichTargets(
+        verify(placeRepository, times(3)).findEnrichTargets(anyString(), anyCollection(), any(Pageable.class));
+        verify(placeRepository, atLeastOnce()).findEnrichTargets(anyString(),
                 argThat((java.util.Collection<Long> c) -> c.contains(1L)), any(Pageable.class));
     }
 
@@ -510,9 +510,9 @@ class BatchEnrichSchedulerTest {
         // 실패분(1, 2)이 제외 목록으로 넘어와야만 남은 장소(3)를 준다. 성공한 장소는 실제 DB에선
         // enriched_at이 찍혀 다음 조회에서 빠지므로 세 번째 조회는 빈 결과다.
         java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
-        when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class)))
+        when(placeRepository.findEnrichTargets(anyString(), anyCollection(), any(Pageable.class)))
                 .thenAnswer(inv -> {
-                    java.util.Collection<Long> excluded = inv.getArgument(0);
+                    java.util.Collection<Long> excluded = inv.getArgument(1);
                     return switch (calls.incrementAndGet()) {
                         case 1 -> List.of(failed1, failed2);
                         case 2 -> excluded.containsAll(List.of(1L, 2L)) ? List.of(ok) : List.of(failed1, failed2);
@@ -535,14 +535,31 @@ class BatchEnrichSchedulerTest {
         BatchEnrichScheduler spied = spy(scheduler);
         doReturn(new BatchEnrichScheduler.ChunkResult(1, 0, List.of())).when(spied).processChunk(List.of(place1));
         doReturn(new BatchEnrichScheduler.ChunkResult(1, 0, List.of())).when(spied).processChunk(List.of(place2));
-        when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class)))
+        when(placeRepository.findEnrichTargets(anyString(), anyCollection(), any(Pageable.class)))
                 .thenReturn(List.of(place1, place2), List.of());
 
         spied.enrich();
 
-        verify(placeRepository, times(2)).findEnrichTargets(anyCollection(), eq(PageRequest.of(0, 2)));
+        verify(placeRepository, times(2)).findEnrichTargets(anyString(), anyCollection(), eq(PageRequest.of(0, 2)));
         verify(spied).processChunk(List.of(place1));
         verify(spied).processChunk(List.of(place2));
+    }
+
+    @Test
+    @DisplayName("카테고리 접두어를 정하면 그 카테고리만 지역별 상한까지 보강 대상으로 조회한다")
+    void enrich_categoryPrefixScopesTargets() {
+        ReflectionTestUtils.setField(scheduler, "categoryPrefix", "Dining and Drinking");
+        ReflectionTestUtils.setField(scheduler, "enrichRegions", "Taipei,Kyoto");
+        ReflectionTestUtils.setField(scheduler, "maxPerRegion", 30);
+        when(placeRepository.findEnrichTargetsInRegions(anyList(), anyString(), anyCollection(), any(Pageable.class)))
+                .thenReturn(List.of());
+
+        scheduler.enrich();
+
+        verify(placeRepository).findEnrichTargetsInRegions(eq(List.of("Taipei")), eq("Dining and Drinking"),
+                anyCollection(), eq(PageRequest.of(0, 30)));
+        verify(placeRepository).findEnrichTargetsInRegions(eq(List.of("Kyoto")), eq("Dining and Drinking"),
+                anyCollection(), eq(PageRequest.of(0, 30)));
     }
 
     @Test
@@ -576,7 +593,7 @@ class BatchEnrichSchedulerTest {
         assertThatThrownBy(spied::enrich).isInstanceOf(BatchStageFailed.class).hasMessageContaining("배치 1개");
 
         verify(placeRepository).writeEnrichment(place);
-        verify(placeRepository, never()).findEnrichTargets(anyCollection(), any(Pageable.class));
+        verify(placeRepository, never()).findEnrichTargets(anyString(), anyCollection(), any(Pageable.class));
         verify(spied, never()).processChunk(anyList());
     }
 
@@ -606,7 +623,7 @@ class BatchEnrichSchedulerTest {
 
         scheduler.enrich();
 
-        verify(placeRepository, never()).findEnrichTargets(anyCollection(), any(Pageable.class));
+        verify(placeRepository, never()).findEnrichTargets(anyString(), anyCollection(), any(Pageable.class));
     }
 
     @Test
@@ -618,7 +635,7 @@ class BatchEnrichSchedulerTest {
             return new BatchEnrichScheduler.ChunkResult(0, chunk.size(), chunk.stream().map(Place::getId).toList(), false);
         }).when(spied).processChunk(anyList());
         java.util.concurrent.atomic.AtomicLong nextId = new java.util.concurrent.atomic.AtomicLong();
-        when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class)))
+        when(placeRepository.findEnrichTargets(anyString(), anyCollection(), any(Pageable.class)))
                 .thenAnswer(inv -> nextId.get() < 5
                         ? List.of(createPlace(nextId.incrementAndGet(), "장소", "관광", "제주", "한국"))
                         : List.of());
@@ -655,7 +672,7 @@ class BatchEnrichSchedulerTest {
                     chunk.stream().map(Place::getId).toList());
         }).when(spied).processChunk(anyList());
         java.util.concurrent.atomic.AtomicLong nextId = new java.util.concurrent.atomic.AtomicLong();
-        when(placeRepository.findEnrichTargets(anyCollection(), any(Pageable.class)))
+        when(placeRepository.findEnrichTargets(anyString(), anyCollection(), any(Pageable.class)))
                 .thenAnswer(inv -> List.of(createPlace(nextId.incrementAndGet(), "장소", "관광", "제주", "한국")));
 
         assertThatThrownBy(() -> spied.enrich()).isInstanceOf(BatchStageFailed.class);

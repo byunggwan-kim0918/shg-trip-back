@@ -110,10 +110,15 @@ class PlaceRepositoryBatchQueryTest {
         save("이미 보강됨", "Landmarks and Outdoors > Beach", 99, true);
 
         List<Place> targets = placeRepository.findEnrichTargetsInRegions(
-                List.of(REGION), List.of(failed.getId()), PageRequest.of(0, 10));
+                List.of(REGION), "", List.of(failed.getId()), PageRequest.of(0, 10));
 
         assertThat(targets).extracting(Place::getId)
                 .containsExactly(famous.getId(), park.getId(), restaurant.getId());
+        assertThat(placeRepository.findEnrichTargetsInRegions(
+                List.of(REGION), "Dining and Drinking", List.of(-1L), PageRequest.of(0, 10)))
+                .extracting(Place::getId).containsExactly(restaurant.getId());
+        assertThat(placeRepository.findEnrichTargets("Dining and Drinking", List.of(-1L), PageRequest.of(0, 500)))
+                .extracting(Place::getId).contains(restaurant.getId()).doesNotContain(park.getId(), famous.getId());
     }
 
     @Test
@@ -122,7 +127,7 @@ class PlaceRepositoryBatchQueryTest {
         Place failed = save("실패", "Landmarks and Outdoors > Beach", 999_999, false);
 
         List<Place> targets = placeRepository.findEnrichTargets(
-                List.of(failed.getId()), PageRequest.of(0, 50));
+                "", List.of(failed.getId()), PageRequest.of(0, 50));
 
         assertThat(targets).extracting(Place::getId).doesNotContain(failed.getId());
     }
@@ -135,9 +140,9 @@ class PlaceRepositoryBatchQueryTest {
         em.createNativeQuery("UPDATE places SET wikidata_matched_at = NULL WHERE id = ?")
                 .setParameter(1, unseen.getId()).executeUpdate();
 
-        assertThat(placeRepository.findEnrichTargets(List.of(-1L), PageRequest.of(0, 50)))
+        assertThat(placeRepository.findEnrichTargets("", List.of(-1L), PageRequest.of(0, 50)))
                 .extracting(Place::getId).contains(seen.getId()).doesNotContain(unseen.getId());
-        assertThat(placeRepository.findEnrichTargetsInRegions(List.of(REGION), List.of(-1L), PageRequest.of(0, 50)))
+        assertThat(placeRepository.findEnrichTargetsInRegions(List.of(REGION), "", List.of(-1L), PageRequest.of(0, 50)))
                 .extracting(Place::getId).containsExactly(seen.getId());
     }
 
@@ -289,11 +294,11 @@ class PlaceRepositoryBatchQueryTest {
         Place p = save("실패 명소", "Landmarks and Outdoors > Mountain", 999_999, false);
         placeRepository.incrementEnrichAttempts(List.of(p.getId()));
         placeRepository.incrementEnrichAttempts(List.of(p.getId()));
-        assertThat(placeRepository.findEnrichTargetsInRegions(List.of(REGION), List.of(-1L), PageRequest.of(0, 50)))
+        assertThat(placeRepository.findEnrichTargetsInRegions(List.of(REGION), "", List.of(-1L), PageRequest.of(0, 50)))
                 .extracting(Place::getId).contains(p.getId());
         placeRepository.incrementEnrichAttempts(List.of(p.getId()));
         em.clear();
-        assertThat(placeRepository.findEnrichTargetsInRegions(List.of(REGION), List.of(-1L), PageRequest.of(0, 50)))
+        assertThat(placeRepository.findEnrichTargetsInRegions(List.of(REGION), "", List.of(-1L), PageRequest.of(0, 50)))
                 .extracting(Place::getId).doesNotContain(p.getId());
 
         upsert("zz-fsq-attempts", "饭店");

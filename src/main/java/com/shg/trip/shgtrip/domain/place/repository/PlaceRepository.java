@@ -310,6 +310,8 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      *
      * <p><b>excludedIds</b>: 이번 실행에서 이미 실패한 장소. 메모리에서 거르면 실패가 한 페이지를 넘을 때
      * 남은 장소를 두고 끝나므로 쿼리에서 뺀다. 빈 컬렉션은 호출부가 -1 하나로 바꿔 넘긴다.
+     *
+     * @param categoryPrefix 카테고리 접두어(예: "Dining and Drinking"). 빈 문자열이면 전체다
      */
     @Query("""
             SELECT p FROM Place p
@@ -317,12 +319,14 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND p.wikidataMatchedAt IS NOT NULL
               AND p.enrichAttempts < 3
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
+              AND (:categoryPrefix = '' OR p.category LIKE CONCAT(:categoryPrefix, '%'))
               AND p.id NOT IN :excludedIds
             ORDER BY COALESCE(p.wikidataSitelinks, 0) DESC,
                      CASE WHEN p.category LIKE 'Dining and Drinking%' THEN 1 ELSE 0 END,
                      p.id
             """)
-    List<Place> findEnrichTargets(@Param("excludedIds") Collection<Long> excludedIds, Pageable pageable);
+    List<Place> findEnrichTargets(@Param("categoryPrefix") String categoryPrefix,
+                                  @Param("excludedIds") Collection<Long> excludedIds, Pageable pageable);
 
     /** Wikidata 매칭을 기다리느라 {@link #findEnrichTargets}에서 빠진 행 수. */
     @Query(value = """
@@ -518,12 +522,14 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND p.enrichAttempts < 3
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND p.region IN :regions
+              AND (:categoryPrefix = '' OR p.category LIKE CONCAT(:categoryPrefix, '%'))
               AND p.id NOT IN :excludedIds
             ORDER BY COALESCE(p.wikidataSitelinks, 0) DESC,
                      CASE WHEN p.category LIKE 'Dining and Drinking%' THEN 1 ELSE 0 END,
                      p.id
             """)
     List<Place> findEnrichTargetsInRegions(@Param("regions") List<String> regions,
+                                           @Param("categoryPrefix") String categoryPrefix,
                                            @Param("excludedIds") Collection<Long> excludedIds,
                                            Pageable pageable);
 

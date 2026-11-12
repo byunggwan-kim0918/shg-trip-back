@@ -25,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
@@ -198,7 +199,7 @@ class BatchEnrichSchedulerHttpTest {
         BatchEnrichScheduler spied = spy(scheduler);
         List<Long> many = LongStream.rangeClosed(1, BatchEnrichScheduler.MAX_EXCLUDED_IDS + 1).boxed().toList();
         doReturn(new BatchEnrichScheduler.ChunkResult(0, many.size(), many, false)).when(spied).processChunk(anyList());
-        when(repository.findEnrichTargets(anyCollection(), any(Pageable.class))).thenReturn(List.of(place(1)));
+        when(repository.findEnrichTargets(anyString(), anyCollection(), any(Pageable.class))).thenReturn(List.of(place(1)));
 
         assertThatThrownBy(spied::enrich).isInstanceOf(BatchStageFailed.class);
 
