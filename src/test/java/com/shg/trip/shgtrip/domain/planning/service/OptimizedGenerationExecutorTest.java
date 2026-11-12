@@ -390,6 +390,20 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("Wikidata 명소와 이름이 같은 항목 없는 행은 1km 안이면 같은 장소로 보고, 멀면 다른 장소로 둔다")
+    void dedupe_dropsSameNameRowNearWikidataItem() {
+        PlaceCandidate beach = twinCandidate(1, 31L, "My Khe Beach", "Landmarks and Outdoors > Beach", 16.0610, 108.2470, 7);
+        PlaceCandidate beachRow = twinCandidate(2, 32L, "My Khe Beach", "Landmarks and Outdoors > Beach", 16.0565, 108.2480, 0);
+        PlaceCandidate shrine = twinCandidate(3, 33L, "氷川神社", "Community and Government > Spiritual Center > Shrine",
+                35.8925, 139.5015, 12);
+        PlaceCandidate otherShrine = twinCandidate(4, 34L, "氷川神社", "Community and Government > Spiritual Center > Shrine",
+                35.9012, 139.5184, 0);
+
+        assertThat(executor.dedupePhysicalCandidates(List.of(beach, beachRow, shrine, otherShrine)))
+                .extracting(PlaceCandidate::placeId).containsExactly(31L, 33L, 34L);
+    }
+
+    @Test
     @DisplayName("구역 명소 이름으로 시작하는 가게는 그 구역 안 장소라 이중 표기 중복으로 보지 않는다")
     void dedupe_keepsVenueInsideAreaLandmark() {
         PlaceCandidate area = twinCandidate(1, 21L, "アメリカ村", "Landmarks and Outdoors > Pedestrian Plaza", 34.6719, 135.4986, 8);
