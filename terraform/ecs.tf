@@ -64,6 +64,8 @@ resource "aws_ecs_task_definition" "fsq_extractor" {
       { name = "S3_BUCKET", value = aws_s3_bucket.data.bucket },
       { name = "S3_PREFIX", value = "foursquare" },
       { name = "AWS_REGION", value = var.aws_region },
+      # 한국은 이 값과 무관하게 늘 추출한다.
+      { name = "EXTRACT_COUNTRIES", value = "JP,CN,VN,TW" },
     ]
 
     secrets = [{
@@ -118,6 +120,10 @@ resource "aws_ecs_task_definition" "batch" {
       # 그러면 벡터 검색의 인기도 갈래가 비어 대표 명소를 지켜줄 장치가 없다. 무료·무인증 API.
       { name = "BATCH_WIKIDATA_ENABLED", value = "true" },
       { name = "BATCH_WIKIDATA_LANDMARKS_ENABLED", value = "true" },
+      # 보강은 Wikidata 매칭을 거친 행만 대상이라 추출 국가가 여기 빠지면 그 나라 새 장소가 보강되지 않는다.
+      { name = "BATCH_WIKIDATA_COUNTRIES", value = "KR,JP,CN,VN,TW" },
+      # 꺼 두면 추출에서 빠진 폐업·오래된 장소가 계속 후보에 남는다.
+      { name = "BATCH_FOURSQUARE_DEACTIVATE_STALE", value = "true" },
     ]
 
     # 배치 프로필은 spring.config.import 미사용 → 개별 환경변수로 시크릿 주입 필요
@@ -175,6 +181,8 @@ resource "aws_ecs_task_definition" "app" {
       # 없으면 application.yml 기본값(shgtrip-data — 타인 소유 버킷)을 가리킨다.
       { name = "S3_BUCKET", value = aws_s3_bucket.data.bucket },
       { name = "CLOUDFRONT_DOMAIN", value = aws_cloudfront_distribution.images.domain_name },
+      # 장소 적재·검증을 마친 나라만 연다.
+      { name = "PLANNING_ENABLED_COUNTRIES", value = "KR,JP,CN,VN,TW" },
     ]
 
     logConfiguration = {
