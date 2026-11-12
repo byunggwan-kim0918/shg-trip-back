@@ -87,12 +87,16 @@ public class Destinations {
         return current;
     }
 
-    /** 관문(공항·역)을 찾을 여행지 이름. 관문이 없는 근교 여행지는 상위 여행지다(호이안 → 다낭). 목록에 없으면 그대로다. */
+    /** 관문 공항을 찾을 여행지 이름. 관문이 없으면 있는 곳까지 상위로 올라간다(기노사키 → 교토 → 오사카). 목록에 없으면 그대로다. */
     public String gatewayRegion(String region) {
-        return find(region)
-                .filter(d -> d.gateways().isEmpty() && d.parent() != null)
-                .map(Destination::parent)
-                .orElse(region);
+        String current = region;
+        Set<String> seen = new HashSet<>();
+        while (seen.add(current)) {
+            Optional<Destination> d = find(current);
+            if (d.isEmpty() || !d.get().gateways().isEmpty() || d.get().parent() == null) return current;
+            current = d.get().parent();
+        }
+        return current;
     }
 
     public boolean isOverseas(String region) {

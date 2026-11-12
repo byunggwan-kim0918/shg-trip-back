@@ -767,7 +767,7 @@ class BatchEnrichSchedulerTest {
         String attraction = scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, null));
         String dining = scheduler.buildEnrichPrompt(overseas("一蘭 祇園店", RAMEN, null));
 
-        assertThat(attraction).contains("\"traveler_fame\"", "가이드북·미쉐린");
+        assertThat(attraction).contains("\"traveler_fame\"", "미쉐린 스타 식당");
         assertThat(dining).contains("\"traveler_fame\": 0", "traveler_fame이 1 이상일 때만", "\"description\": null");
         assertThat(scheduler.buildEnrichPrompt(createPlace(1L, "성산일출봉", "Landmarks and Outdoors > Mountain", "Jeju", "KR")))
                 .doesNotContain("traveler_fame");

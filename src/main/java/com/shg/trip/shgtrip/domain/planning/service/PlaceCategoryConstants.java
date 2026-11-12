@@ -234,6 +234,12 @@ public final class PlaceCategoryConstants {
         return "OTHER";
     }
 
+    /** 해외 교통 허브. 관문 공항이 시내에서 30~60km라 이 허브를 오가는 구간은 거리 예산과 이동 추정을 따로 본다. */
+    public static boolean isOverseasHub(String country, String category) {
+        return country != null && !country.isBlank() && !"KR".equalsIgnoreCase(country.trim())
+                && "TRANSIT_HUB".equals(majorCategory(category));
+    }
+
     /** 여행자가 일부러 찾아가는 소매(시장·몰·백화점·기념품·면세·아울렛). 슈퍼·편의점·일반 매장은 아니다. */
     static boolean isTravelRetail(String lowerCategory) {
         if (NON_TRAVEL_RETAIL_PATTERNS.stream().anyMatch(lowerCategory::contains)) return false;

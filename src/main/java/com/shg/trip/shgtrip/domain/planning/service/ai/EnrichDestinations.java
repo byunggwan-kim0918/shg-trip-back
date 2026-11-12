@@ -31,14 +31,15 @@ final class EnrichDestinations {
         for (Destination d : destinations.all()) byCountry.computeIfAbsent(d.country(), k -> new ArrayList<>()).add(d);
         return byCountry.entrySet().stream()
                 .map(e -> "    - " + Destinations.countryNameKo(e.getKey()) + ": "
-                        + e.getValue().stream().map(EnrichDestinations::entry).collect(Collectors.joining(", ")))
+                        + e.getValue().stream().map(d -> entry(d, destinations)).collect(Collectors.joining(", ")))
                 .collect(Collectors.joining("\n"));
     }
 
-    private static String entry(Destination d) {
+    private static String entry(Destination d, Destinations destinations) {
+        String gatewayRegion = destinations.gatewayRegion(d.name());
         String hub = !d.gateways().isEmpty()
                 ? "; 관문 " + d.gateways().stream().map(Destination.Gateway::name).collect(Collectors.joining(" / "))
-                : d.parent() != null ? "; 상위 " + d.parent() : "";
+                : !gatewayRegion.equals(d.name()) ? "; 상위 " + gatewayRegion : "";
         return d.name() + "(" + d.nameKo() + hub + ")";
     }
 

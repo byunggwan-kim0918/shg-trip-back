@@ -35,8 +35,22 @@ public record VectorSearchResult(
     /** 보강 속성. null이면 미보강. */
     PlaceAttributes attributes,
     /** 한국어 표시 이름(해외 장소). null이면 name을 쓴다. */
-    String nameKo
+    String nameKo,
+    /** 알려진 정도(해외 장소 보강 산출, 0~2). null이면 미보강이거나 한국 장소다. */
+    Short travelerFame
 ) {
+    /** 알려진 정도 없이 생성하는 호환 생성자. */
+    public VectorSearchResult(Long placeId, String name, String address, String category,
+                              List<String> tags, String region, String country,
+                              BigDecimal latitude, BigDecimal longitude, String description,
+                              BigDecimal rating, Integer userRatingCount, Integer wikidataSitelinks,
+                              double similarityScore, String placeRole, String cuisine, String wikidataId,
+                              PlaceAttributes attributes, String nameKo) {
+        this(placeId, name, address, category, tags, region, country, latitude, longitude,
+                description, rating, userRatingCount, wikidataSitelinks, similarityScore, placeRole, cuisine,
+                wikidataId, attributes, nameKo, null);
+    }
+
     /** 한국어 이름 없이 생성하는 호환 생성자. */
     public VectorSearchResult(Long placeId, String name, String address, String category,
                               List<String> tags, String region, String country,
@@ -46,7 +60,7 @@ public record VectorSearchResult(
                               PlaceAttributes attributes) {
         this(placeId, name, address, category, tags, region, country, latitude, longitude,
                 description, rating, userRatingCount, wikidataSitelinks, similarityScore, placeRole, cuisine,
-                wikidataId, attributes, null);
+                wikidataId, attributes, (String) null);
     }
 
     /** 속성 없이 생성하는 호환 생성자. */

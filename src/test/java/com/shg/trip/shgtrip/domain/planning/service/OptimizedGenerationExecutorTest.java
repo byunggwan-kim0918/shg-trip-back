@@ -76,6 +76,7 @@ class OptimizedGenerationExecutorTest {
     void setUp() {
         ReflectionTestUtils.setField(executor, "destinations",
                 com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath());
+        enableCountries("KR", "JP");
         ScheduledFuture<?> noopFuture = mock(ScheduledFuture.class);
         doReturn(noopFuture).when(sseHeartbeatScheduler)
                 .scheduleAtFixedRate(any(Runnable.class), anyLong(), anyLong(), any());
@@ -247,7 +248,7 @@ class OptimizedGenerationExecutorTest {
     @DisplayName("해외는 후보가 부족해도 fallback으로 가지 않고 장소 부족으로 끝낸다(근교 여행지면 상위 도시 안내)")
     void execute_overseasSparse_doesNotFallback() throws IOException {
         VectorEnrichedInput jiufen = withCountry("TW", List.of("Jiufen"));
-        ReflectionTestUtils.setField(executor, "enabledCountries", List.of("KR", "JP", "TW"));
+        enableCountries("KR", "JP", "TW");
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(EnrichmentResult.success(jiufen));
         when(vectorSearchQueryService.search(any())).thenReturn(candidates);
@@ -277,15 +278,17 @@ class OptimizedGenerationExecutorTest {
         assertThat(sentError()).containsEntry("errorCode", "PLANNING_005")
                 .containsEntry("message", "중국 여행지는 아직 준비 중이에요. 지금은 한국·일본 여행지로 일정을 만들 수 있어요.");
         assertThat(emitter.isFinished()).isTrue();
-        assertThat(executor.notEnabledMessage("FR")).startsWith("이 여행지는 아직 준비 중이에요.");
-        assertThat(executor.isEnabledCountry("")).isTrue();
-        assertThat(executor.isEnabledCountry("kr")).isTrue();
+    }
+
+    private void enableCountries(String... countries) {
+        ReflectionTestUtils.setField(executor, "planningCountries", new PlanningCountries(List.of(countries),
+                com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath()));
     }
 
     @Test
     @DisplayName("한국 면허로 운전할 수 없는 나라(중국·베트남)의 자동차 요청은 택시·차량 호출 기준이라고 알린다")
     void execute_carWhereKoreanLicenseInvalid_addsNotice() {
-        ReflectionTestUtils.setField(executor, "enabledCountries", List.of("KR", "JP", "CN"));
+        enableCountries("KR", "JP", "CN");
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request))
                 .thenReturn(EnrichmentResult.success(withCountry("CN", List.of("Shanghai"), "car")));
@@ -379,6 +382,27 @@ class OptimizedGenerationExecutorTest {
         executor.appendGateways(candidates, List.of("Hoi An", "Da Nang", "Taipei", "Jiufen"));
 
         verify(placeRepository).findGatewaysByRegions(List.of("Da Nang", "Taipei"));
+    }
+
+    @Test
+    @DisplayName("관문 행이 DB에 남아 있어도 여행지 목록에서 뺀 관문(국내선 전용 공항)은 붙이지 않는다")
+    void appendGateways_skipsGatewaysNotListed() {
+        com.shg.trip.shgtrip.domain.place.entity.Place kix = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                .id(910L).name("Kansai International Airport").address("Kansai International Airport, Osaka")
+                .latitude(new BigDecimal("34.432")).longitude(new BigDecimal("135.2304"))
+                .category("Travel and Transportation > Transport Hub > Airport").region("Osaka").country("JP")
+                .source("gateway").placeRole("TRANSIT").build();
+        com.shg.trip.shgtrip.domain.place.entity.Place itami = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                .id(911L).name("Itami Airport").address("Itami Airport, Osaka")
+                .latitude(new BigDecimal("34.7855")).longitude(new BigDecimal("135.4382"))
+                .category("Travel and Transportation > Transport Hub > Airport").region("Osaka").country("JP")
+                .source("gateway").placeRole("TRANSIT").build();
+        when(placeRepository.findGatewaysByRegions(List.of("Osaka"))).thenReturn(List.of(kix, itami));
+
+        List<PlaceCandidate> result = executor.appendGateways(candidates, List.of("Kyoto"));
+
+        assertThat(result.subList(candidates.size(), result.size()))
+                .extracting(PlaceCandidate::name).containsExactly("Kansai International Airport");
     }
 
     @Test

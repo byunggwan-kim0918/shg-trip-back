@@ -57,6 +57,20 @@ public final class GeoUtils {
      * @return leg 추정. 좌표 불가/비현실 구간(maxLegKm 초과)이면 null
      */
     public static TransportLeg estimateLeg(double[] from, double[] to, String transportPref, double maxLegKm) {
+        return estimateLeg(from, to, transportPref, maxLegKm, false);
+    }
+
+    /** 공항 연결 구간 평균 속도(km/h, 도로 환산 거리 기준). 고속도로·공항철도라 시내 40km/h로 잡으면 도착일이 1시간 가까이 밀린다. */
+    private static final double HUB_TRANSFER_KMH = 60;
+    /** 공항 연결 구간 단가(원/km, 도로 환산). 나리타·간사이·타오위안 공항철도 요금 수준이다. */
+    private static final long HUB_TRANSFER_WON_PER_KM = 250L;
+
+    /**
+     * @param hubTransfer 해외 관문 공항을 오가는 구간이면 true. 택시 단가로 잡으면 나리타 편도가 6만 원이 된다.
+     *                    차량 여행은 유류 단가를 그대로 쓴다.
+     */
+    public static TransportLeg estimateLeg(double[] from, double[] to, String transportPref, double maxLegKm,
+                                           boolean hubTransfer) {
         if (from == null || to == null) return null;
         double dist = haversine(from, to);
         if (dist > maxLegKm) return null;
@@ -65,8 +79,9 @@ public final class GeoUtils {
         if (dist < 1.0) {
             return new TransportLeg("WALK", Math.max(1, (int) Math.ceil(roadKm * 15)), distanceKm, BigDecimal.ZERO);
         }
-        long wonPerKm = "car".equals(transportPref) ? 300L : 800L;
-        return new TransportLeg("CAR", (int) Math.ceil(roadKm / 40 * 60), distanceKm,
+        long wonPerKm = "car".equals(transportPref) ? 300L : hubTransfer ? HUB_TRANSFER_WON_PER_KM : 800L;
+        double kmh = hubTransfer ? HUB_TRANSFER_KMH : 40;
+        return new TransportLeg("CAR", (int) Math.ceil(roadKm / kmh * 60), distanceKm,
                 BigDecimal.valueOf(roadKm * wonPerKm).setScale(0, java.math.RoundingMode.HALF_UP));
     }
 }

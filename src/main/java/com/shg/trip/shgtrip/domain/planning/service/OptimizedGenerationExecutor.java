@@ -16,7 +16,6 @@ import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -56,13 +55,7 @@ public class OptimizedGenerationExecutor {
     private final PlaceRegionValidator placeRegionValidator;
     private final GenerationTraceRecorder traceRecorder;
     private final Destinations destinations;
-
-    /**
-     * 일정을 만들어 주는 국가. 한국은 늘 포함한다. 장소 적재·검증을 마친 나라만 넣는다. 덜 적재된 나라로 만들면
-     * 후보가 성겨 같은 장소만 도는 일정이 나온다.
-     */
-    @Value("${planning.enabled-countries:KR,JP}")
-    private List<String> enabledCountries = List.of("KR", "JP");
+    private final PlanningCountries planningCountries;
 
     /** 한국 운전면허(국제운전면허 포함)로 운전할 수 없는 나라. 자동차 요청은 택시·차량 호출로 본다. */
     private static final Set<String> NO_KOREAN_LICENSE_COUNTRIES = Set.of("CN", "VN");
@@ -106,11 +99,11 @@ public class OptimizedGenerationExecutor {
             long days = ChronoUnit.DAYS.between(enrichedInput.startDate(), enrichedInput.endDate()) + 1;
             stageMark = logStage("enrich", stageMark);
 
-            if (!isEnabledCountry(enrichedInput.country())) {
+            if (!planningCountries.isEnabled(enrichedInput.country())) {
                 log.info("OptimizedGeneration 중단 (jobId={}, reason=country_not_enabled, country={})",
                         jobId, enrichedInput.country());
                 sendSseError(emitter, ErrorCode.INSUFFICIENT_PLACE_DATA.getCode(),
-                        notEnabledMessage(enrichedInput.country()));
+                        planningCountries.notEnabledMessage(enrichedInput.country()));
                 return;
             }
 
@@ -553,7 +546,8 @@ public class OptimizedGenerationExecutor {
                     place.getCuisine() != null ? place.getCuisine() : c.cuisine(),
                     false, null,
                     place.getAttributes() != null ? place.getAttributes() : c.attributes(),
-                    place.getNameKo() != null ? place.getNameKo() : c.nameKo()
+                    place.getNameKo() != null ? place.getNameKo() : c.nameKo(),
+                    place.getTravelerFame() != null ? place.getTravelerFame() : c.travelerFame()
             );
         }).collect(Collectors.toList());
     }
@@ -957,7 +951,7 @@ public class OptimizedGenerationExecutor {
                     p.getRecommendedTimeSlots(), p.getRecommendedDurationMinutes(), true, KrwRates.admissionWon(p),
                     PlaceCategoryConstants.extractSubRegion(p.getAddress()), p.getUserRatingCount(),
                     p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine(), false, null, p.getAttributes(),
-                    p.getNameKo()));
+                    p.getNameKo(), p.getTravelerFame()));
         }
         for (PlaceCandidate c : candidates) {
             PlaceCandidate reindexed = reindexCandidate(c, index++);
@@ -1021,7 +1015,8 @@ public class OptimizedGenerationExecutor {
                 false, KrwRates.admissionWon(place),
                 PlaceCategoryConstants.extractSubRegion(place.getAddress()),
                 place.getUserRatingCount(), place.getWikidataSitelinks(),
-                place.getPlaceRole(), place.getCuisine(), false, null, place.getAttributes(), place.getNameKo());
+                place.getPlaceRole(), place.getCuisine(), false, null, place.getAttributes(), place.getNameKo(),
+                place.getTravelerFame());
     }
 
     /**
@@ -1031,7 +1026,10 @@ public class OptimizedGenerationExecutor {
     List<PlaceCandidate> appendGateways(List<PlaceCandidate> candidates, List<String> regions) {
         if (regions == null || regions.isEmpty()) return candidates;
         List<String> gatewayRegions = regions.stream().map(destinations::gatewayRegion).distinct().toList();
-        List<Place> gateways = placeRepository.findGatewaysByRegions(gatewayRegions);
+        // 목록에서 뺀 관문(국내선 전용 공항·역)도 DB 행은 남아 있어 목록에 있는 이름만 붙인다.
+        List<Place> gateways = placeRepository.findGatewaysByRegions(gatewayRegions).stream()
+                .filter(this::isListedGateway)
+                .toList();
         if (gateways.isEmpty()) return candidates;
         Set<String> known = knownKeys(candidates);
         List<PlaceCandidate> result = new ArrayList<>(candidates);
@@ -1047,6 +1045,12 @@ public class OptimizedGenerationExecutor {
         return result;
     }
 
+    private boolean isListedGateway(Place gateway) {
+        return destinations.find(gateway.getRegion())
+                .map(d -> d.gateways().stream().anyMatch(g -> g.name().equals(gateway.getName())))
+                .orElse(false);
+    }
+
     /** 같은 공항의 FSQ 행은 관문과 좌표가 수백 m 달라 이름·좌표 키로 걸리지 않는다. */
     private static boolean hasNearbyAirport(List<PlaceCandidate> candidates, PlaceCandidate gateway) {
         if (!isAirport(gateway) || gateway.latitude() == null || gateway.longitude() == null) return false;
@@ -1060,12 +1064,6 @@ public class OptimizedGenerationExecutor {
                 && "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category()));
     }
 
-    /** 국가를 모르면(enrich 실패로 legacy 경로) 막지 않는다. */
-    boolean isEnabledCountry(String country) {
-        if (country == null || country.isBlank() || "KR".equalsIgnoreCase(country)) return true;
-        return enabledCountries.stream().anyMatch(c -> c.trim().equalsIgnoreCase(country.trim()));
-    }
-
     static boolean isCarWithoutKoreanLicense(VectorEnrichedInput input) {
         return "car".equals(input.transportPref()) && input.country() != null
                 && NO_KOREAN_LICENSE_COUNTRIES.contains(input.country().trim().toUpperCase(Locale.ROOT));
@@ -1073,14 +1071,6 @@ public class OptimizedGenerationExecutor {
 
     private static boolean isOverseas(String country) {
         return country != null && !country.isBlank() && !"KR".equalsIgnoreCase(country);
-    }
-
-    String notEnabledMessage(String country) {
-        String enabled = enabledCountries.stream().map(String::trim).filter(c -> !c.isEmpty())
-                .map(Destinations::countryNameKo).distinct().collect(Collectors.joining("·"));
-        String name = Destinations.countryNameKo(country);
-        String subject = name.equals(country) ? "이 여행지는" : name + " 여행지는";
-        return subject + " 아직 준비 중이에요. 지금은 " + enabled + " 여행지로 일정을 만들 수 있어요.";
     }
 
     /** 근교 여행지만으로 장소가 부족하면 상위 도시와 묶어 다시 요청하도록 안내한다. */

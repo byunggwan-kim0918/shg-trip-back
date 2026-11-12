@@ -85,15 +85,25 @@ class DestinationsTest {
     }
 
     @Test
-    @DisplayName("관문 없는 근교 여행지는 상위 여행지에서 관문을 찾는다")
+    @DisplayName("관문 없는 근교 여행지는 관문이 있는 상위 여행지까지 올라가 관문을 찾는다")
     void gatewayRegion() {
         assertThat(destinations.gatewayRegion("Hoi An")).isEqualTo("Da Nang");
-        assertThat(destinations.gatewayRegion("Hakone")).isEqualTo("Hakone");
+        assertThat(destinations.gatewayRegion("Hakone")).isEqualTo("Tokyo");
+        assertThat(destinations.gatewayRegion("Kinosaki")).isEqualTo("Osaka");
+        assertThat(destinations.gatewayRegion("Kobe")).isEqualTo("Kobe");
         assertThat(destinations.gatewayRegion("Tokyo")).isEqualTo("Tokyo");
         assertThat(destinations.gatewayRegion("Busan")).isEqualTo("Busan");
         assertThat(destinations.all()).filteredOn(d -> d.gateways().isEmpty() && d.parent() != null)
                 .allSatisfy(d -> assertThat(destinations.find(destinations.gatewayRegion(d.name())))
                         .get().satisfies(p -> assertThat(p.gateways()).isNotEmpty()));
+    }
+
+    @Test
+    @DisplayName("해외 여행은 국제선으로 오가므로 모든 여행지의 관문은 공항이다")
+    void everyDestinationReachesAirport() {
+        assertThat(destinations.all()).allSatisfy(d -> assertThat(destinations.find(destinations.gatewayRegion(d.name())))
+                .as(d.name()).get().satisfies(g -> assertThat(g.gateways()).isNotEmpty()
+                        .allSatisfy(gw -> assertThat(gw.name()).contains("Airport"))));
     }
 
     @Test

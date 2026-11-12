@@ -20,9 +20,9 @@ class KrwRatesTest {
     @Test
     @DisplayName("현지 통화 입장료를 100원 단위 원화로 바꾸고, 0은 무료, 모르는 통화·금액은 null이다")
     void toWon() {
-        assertThat(KrwRates.toWon(500, "JPY")).isEqualTo(4_800);
-        assertThat(KrwRates.toWon(60, "CNY")).isEqualTo(11_700);
-        assertThat(KrwRates.toWon(150_000, "VND")).isEqualTo(8_300);
+        assertThat(KrwRates.toWon(500, "JPY")).isEqualTo(4_200);
+        assertThat(KrwRates.toWon(60, "CNY")).isEqualTo(12_200);
+        assertThat(KrwRates.toWon(150_000, "VND")).isEqualTo(8_000);
         assertThat(KrwRates.toWon(1, "VND")).isEqualTo(100);
         assertThat(KrwRates.toWon(0, "JPY")).isZero();
         assertThat(KrwRates.toWon(500, "USD")).isNull();
@@ -34,7 +34,7 @@ class KrwRatesTest {
     @DisplayName("원화 입장료가 있으면 그 값을, 없으면 현지 통화 환산값을 쓴다")
     void admissionWon() {
         assertThat(KrwRates.admissionWon(place(3_000, null, null))).isEqualTo(3_000);
-        assertThat(KrwRates.admissionWon(place(null, 500, "JPY"))).isEqualTo(4_800);
+        assertThat(KrwRates.admissionWon(place(null, 500, "JPY"))).isEqualTo(4_200);
         assertThat(KrwRates.admissionWon(place(null, null, null))).isNull();
         assertThat(KrwRates.admissionWon(null)).isNull();
     }

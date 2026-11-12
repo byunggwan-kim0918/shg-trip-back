@@ -7,6 +7,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.service.GeoCluster;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
+import com.shg.trip.shgtrip.domain.planning.service.PlaceProminence;
 import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
@@ -259,7 +260,8 @@ public class SelectionCallGenerator {
                     .append(candidate.promptName()).append(" | ")
                     // 이름과 태그만으로는 흑돼지집인지 카페인지 알 수 없어 같은 종류 끼니가 반복된다.
                     .append(roleLabel(candidate)).append(summarizeCategory(candidate.category())).append(" | ")
-                    .append(formatRating(candidate.rating(), candidate.wikidataSitelinks())).append(" | ")
+                    .append(formatRating(candidate.rating(), PlaceProminence.effectiveSitelinks(
+                            candidate.wikidataSitelinks(), candidate.travelerFame()))).append(" | ")
                     .append(formatTags(candidate.tags())).append(" | ");
             String zone = geo.labelByIndex().get(candidate.index());
             if (zone != null) sb.append(zone).append(" · ");
