@@ -28,6 +28,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -577,6 +578,7 @@ public class OptimizedGenerationExecutor {
             representatives.add(pickRepresentative(group));
         }
         representatives = dropStoresInsideVenue(representatives);
+        representatives = dropBilingualTwins(representatives);
 
         representatives.sort(Comparator.comparingInt(PlaceCandidate::index));
         List<PlaceCandidate> result = new ArrayList<>(representatives.size());
@@ -615,6 +617,55 @@ public class OptimizedGenerationExecutor {
                 && name.startsWith(compactName(v))
                 && GeoUtils.haversine(v.latitude().doubleValue(), v.longitude().doubleValue(),
                         c.latitude().doubleValue(), c.longitude().doubleValue()) <= STORE_INSIDE_VENUE_KM);
+    }
+
+    private static final double BILINGUAL_TWIN_KM = 1.0;
+    /** 영어 이름 꼬리. 괄호로 감싼 병기("東京ドームシティ (Tokyo Dome City)")도 받는다. */
+    private static final Pattern LATIN_TAIL = Pattern.compile("[\\s(（]+[A-Za-z0-9][A-Za-z0-9 .,'’&()（）/-]*");
+    /** 구역 명소 이름으로 시작하는 FSQ 행은 그 구역 안 가게("アメリカ村 Club DROP")다. */
+    private static final Set<String> AREA_LEAVES = Set.of("pedestrian plaza", "plaza");
+
+    /**
+     * Wikidata 명소 이름 뒤에 영어 이름만 붙은 FSQ 행("饒河街觀光夜市 Raohe St. Night Market")을 뺀다. 인기도 매칭은
+     * 영어 부분이 영어 라벨과 같아야 항목을 붙여 이 행은 항목 없이 남고, 이름 키도 달라 위 병합을 지나간다.
+     */
+    static List<PlaceCandidate> dropBilingualTwins(List<PlaceCandidate> candidates) {
+        List<PlaceCandidate> result = new ArrayList<>(candidates.size());
+        for (PlaceCandidate c : candidates) {
+            if (candidates.stream().anyMatch(item -> isBilingualTwin(c, item))) {
+                log.info("이중 표기 중복 제외: {}", c.name());
+            } else {
+                result.add(c);
+            }
+        }
+        return result;
+    }
+
+    static boolean isBilingualTwin(PlaceCandidate twin, PlaceCandidate item) {
+        if (twin == item || twin.userSelected() || !isWikidataItem(item) || isWikidataItem(twin)) return false;
+        if (twin.name() == null || item.name() == null || !Objects.equals(twin.region(), item.region())) return false;
+        String base = item.name().strip();
+        String name = twin.name().strip();
+        if (base.chars().allMatch(ch -> ch < 0x80) || !name.startsWith(base)
+                || !LATIN_TAIL.matcher(name.substring(base.length())).matches()) {
+            return false;
+        }
+        if (isAreaLeaf(item.category()) || !PlaceCategoryConstants.majorCategory(item.category())
+                .equals(PlaceCategoryConstants.majorCategory(twin.category()))) {
+            return false;
+        }
+        return hasCoords(twin) && hasCoords(item)
+                && GeoUtils.haversine(item.latitude().doubleValue(), item.longitude().doubleValue(),
+                        twin.latitude().doubleValue(), twin.longitude().doubleValue()) <= BILINGUAL_TWIN_KM;
+    }
+
+    private static boolean isWikidataItem(PlaceCandidate c) {
+        return c.wikidataSitelinks() != null && c.wikidataSitelinks() > 0;
+    }
+
+    private static boolean isAreaLeaf(String category) {
+        if (category == null) return false;
+        return AREA_LEAVES.contains(category.substring(category.lastIndexOf('>') + 1).strip().toLowerCase(Locale.ROOT));
     }
 
     private static boolean isRetail(PlaceCandidate c) {
@@ -712,7 +763,7 @@ public class OptimizedGenerationExecutor {
     }
 
     /**
-     * 덧붙인 후보 중 앞선 후보와 같은 위키데이터 항목이거나 다른 후보 건물 안 매장인 것을 뺀다.
+     * 덧붙인 후보 중 앞선 후보와 같은 위키데이터 항목이거나, 다른 후보 건물 안 매장이거나, 앞선 후보와 이중 표기 중복인 것을 뺀다.
      * 출처별 행·매장은 이름·좌표가 달라 addIfNew를 통과한다.
      * 덧붙인 후보는 선택에 없어 번호를 다시 매겨도 된다.
      */
@@ -733,6 +784,7 @@ public class OptimizedGenerationExecutor {
             String qid = qidById.get(c.placeId());
             if (qid != null && !seen.add(qid)) continue;
             if (isStoreInsideVenue(c, candidates)) continue;
+            if (result.stream().anyMatch(r -> isBilingualTwin(c, r) || isBilingualTwin(r, c))) continue;
             result.add(reindexCandidate(c, result.size() + 1));
         }
         if (result.size() < candidates.size()) {

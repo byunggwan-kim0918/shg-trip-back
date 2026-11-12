@@ -375,6 +375,39 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("Wikidata 명소 이름 뒤에 영어 이름만 붙은 가까운 같은 분류 행은 같은 장소로 보고 명소 행만 남긴다")
+    void dedupe_dropsBilingualTwinOfWikidataItem() {
+        PlaceCandidate item = twinCandidate(1, 11L, "饒河街觀光夜市", "Dining and Drinking > Night Market", 25.05017, 121.57264, 7);
+        PlaceCandidate twin = twinCandidate(2, 12L, "饒河街觀光夜市 Raohe St. Night Market",
+                "Dining and Drinking > Night Market", 25.05058, 121.57590, 0);
+        PlaceCandidate dome = twinCandidate(3, 13L, "東京ドームシティ", "Arts and Entertainment > Theme Park", 35.7056, 139.7519, 9);
+        PlaceCandidate domeTwin = twinCandidate(4, 14L, "東京ドームシティ (Tokyo Dome City)",
+                "Arts and Entertainment > Theme Park", 35.7050, 139.7525, 0);
+        PlaceCandidate hall = twinCandidate(5, 15L, "饒河街觀光夜市 美食區", "Dining and Drinking > Night Market", 25.0505, 121.5755, 0);
+
+        assertThat(executor.dedupePhysicalCandidates(List.of(item, twin, dome, domeTwin, hall)))
+                .extracting(PlaceCandidate::placeId).containsExactly(11L, 13L, 15L);
+    }
+
+    @Test
+    @DisplayName("구역 명소 이름으로 시작하는 가게는 그 구역 안 장소라 이중 표기 중복으로 보지 않는다")
+    void dedupe_keepsVenueInsideAreaLandmark() {
+        PlaceCandidate area = twinCandidate(1, 21L, "アメリカ村", "Landmarks and Outdoors > Pedestrian Plaza", 34.6719, 135.4986, 8);
+        PlaceCandidate club = twinCandidate(2, 22L, "アメリカ村 Club DROP",
+                "Arts and Entertainment > Performing Arts Venue > Music Venue > Rock Club", 34.6722, 135.4990, 0);
+
+        assertThat(executor.dedupePhysicalCandidates(List.of(area, club)))
+                .extracting(PlaceCandidate::placeId).containsExactly(21L, 22L);
+    }
+
+    private static PlaceCandidate twinCandidate(int index, long id, String name, String category,
+                                                double lat, double lng, int sitelinks) {
+        return new PlaceCandidate(index, id, name, "x", category, List.of(), "Taipei", "TW",
+                BigDecimal.valueOf(lat), BigDecimal.valueOf(lng), null, null, 0.5, null, null, null, null,
+                false, null, null, null, sitelinks, null, null, false, null, null, null);
+    }
+
+    @Test
     @DisplayName("관문 없는 근교 여행지는 상위 여행지의 관문을 붙인다(호이안 → 다낭)")
     void appendGateways_usesParentGatewaysForNearbyDestinations() {
         when(placeRepository.findGatewaysByRegions(List.of("Da Nang", "Taipei"))).thenReturn(List.of());
