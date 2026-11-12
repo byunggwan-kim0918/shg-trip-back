@@ -24,12 +24,12 @@ resource "aws_db_subnet_group" "main" {
   }
 }
 
-# TODO: 해외 장소 적재가 끝나면 db.t4g.medium으로 바꾼다. 벡터 인덱스가 1GB를 넘어 small(2GB)로는 못 담는다.
+# 벡터 인덱스가 1GB를 넘어 small(2GB)로는 못 담는다.
 resource "aws_db_instance" "main" {
   identifier            = "shgtrip-db"
   engine                = "postgres"
   engine_version        = "18"
-  instance_class        = "db.t3.medium"
+  instance_class        = "db.t4g.medium"
   allocated_storage     = 20
   max_allocated_storage = 50
   storage_type          = "gp3"
