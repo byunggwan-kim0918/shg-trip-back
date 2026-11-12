@@ -109,6 +109,8 @@ batch:
     regions: ${BATCH_ENRICH_REGIONS:}
     # 지역당 상한(0=무제한). 인기도 → 비식당 순으로 앞에서부터 자른다.
     max-per-region: ${BATCH_ENRICH_MAX_PER_REGION:0}
+    # 대상 카테고리 접두어(예: Dining and Drinking). 비우면 전체. 식당 견본 보강용
+    category-prefix: ${BATCH_ENRICH_CATEGORY_PREFIX:}
     # 동시에 제출하는 Batch API 묶음 수(묶음당 chunk-size건)
     parallel-chunks: ${BATCH_ENRICH_PARALLEL_CHUNKS:5}
     # 묶음 결과 대기 상한. Batch API는 최대 24시간 걸린다

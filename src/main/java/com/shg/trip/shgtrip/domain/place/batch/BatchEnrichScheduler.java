@@ -77,6 +77,10 @@ public class BatchEnrichScheduler {
     @Value("${batch.enrich.max-per-region:0}")
     private int maxPerRegion;
 
+    /** 보강 대상 카테고리 접두어(예: "Dining and Drinking"). 비면 전체다. 대상 순서가 명소 먼저라 식당 견본을 따로 뽑을 때 쓴다. */
+    @Value("${batch.enrich.category-prefix:}")
+    private String categoryPrefix = "";
+
     /**
      * 이미 제출·완료된 배치의 결과를 다시 적용할 때 쓰는 batchId.
      * Anthropic이 결과를 29일간 보관하므로, 결과 처리 단계에서만 실패한 경우 재제출(재과금) 없이
@@ -177,9 +181,9 @@ public class BatchEnrichScheduler {
             log.warn("속성 보강(v2)은 batch.enrich.regions가 필요합니다. 건너뜁니다.");
             return;
         }
-        log.info("BatchEnrichScheduler 시작 - mode={}, chunkSize={}, regions={}, maxPerRegion={}",
+        log.info("BatchEnrichScheduler 시작 - mode={}, chunkSize={}, regions={}, maxPerRegion={}, category={}",
                 attributeMode() ? "v2" : "v1", chunkSize, regions.isEmpty() ? "전체" : regions,
-                maxPerRegion > 0 ? maxPerRegion : "무제한");
+                maxPerRegion > 0 ? maxPerRegion : "무제한", categoryPrefix.isEmpty() ? "전체" : categoryPrefix);
         if (attributeMode()) {
             log.info("속성 보강 대상 {}건", placeRepository.countAttributeTargetsInRegions(regions));
         } else {
@@ -235,8 +239,9 @@ public class BatchEnrichScheduler {
             List<Place> places = attributeMode()
                     ? placeRepository.findAttributeTargetsInRegions(regions, excluded, PageRequest.of(0, pageSize))
                     : regions.isEmpty()
-                    ? placeRepository.findEnrichTargets(excluded, PageRequest.of(0, pageSize))
-                    : placeRepository.findEnrichTargetsInRegions(regions, excluded, PageRequest.of(0, pageSize));
+                    ? placeRepository.findEnrichTargets(categoryPrefix, excluded, PageRequest.of(0, pageSize))
+                    : placeRepository.findEnrichTargetsInRegions(regions, categoryPrefix, excluded,
+                    PageRequest.of(0, pageSize));
 
             if (places.isEmpty()) {
                 break;

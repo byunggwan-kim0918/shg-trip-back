@@ -126,6 +126,8 @@ Step Functions (월 1회)
         batch.enrich.max-duration(기본 10h)이 보강 단계 전체(결과 대기 포함) 상한이다. 지나면 새 묶음을 내지 않고
         기다리던 묶음도 끊는다(Step Functions 36h 안에 임베딩 단계까지 돌게). 나라 적재 단독 실행은 늘린다.
         (BATCH_ENRICH_REGIONS="Jeju,..."로 지역 스코프 가능 — 비우면 전체. 운영은 비워서 전 지역)
+        (BATCH_ENRICH_CATEGORY_PREFIX="Dining and Drinking"으로 카테고리 스코프 가능 — 대상 순서가 명소 먼저라 식당 견본을
+         따로 뽑을 때 쓴다. BATCH_ENRICH_MAX_PER_REGION은 지역 목록과 함께 써야 지역별로 센다)
         → Anthropic Batch API(Haiku 5.5, thinking off, 50% 할인) 제출 → 폴링 → 결과 JSON 파싱
         → tags/description/recommended_time_slots 갱신
         → 식당·카페·술집(카테고리 "Dining and Drinking …")은 DiningEnrichment 규칙:
