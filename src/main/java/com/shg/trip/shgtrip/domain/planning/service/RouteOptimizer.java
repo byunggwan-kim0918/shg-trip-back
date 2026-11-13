@@ -5050,13 +5050,12 @@ public class RouteOptimizer {
     }
 
     /**
-     * 세부 유형 반복 상한. 관광·카페는 {@code ceil(days/2) + TYPE_CAP_BASE}, 한 끼 식사는 {@code max(2, ceil(days/2))}다.
-     * 식사는 선택 프롬프트의 "같은 음식 3끼 이상 금지"에 맞춰 더 좁게 잡는다.
+     * 세부 유형 반복 상한. 관광·카페는 {@code ceil(days/2) + TYPE_CAP_BASE}, 한 끼 식사는 {@link ScheduleTuning#mealKindTripCap}이다.
+     * 판정({@link ItineraryRules})이 같은 끼니 상한을 써야 수리 결과를 다시 위반으로 잡지 않는다.
      */
     private int typeCapFor(PlaceCandidate c, int dayCount) {
-        int half = (int) Math.ceil(dayCount / 2.0);
-        if (c != null && c.mealEligible()) return Math.max(2, half);
-        return half + TYPE_CAP_BASE;
+        if (c != null && c.mealEligible()) return mealKindTripCap(dayCount);
+        return (int) Math.ceil(dayCount / 2.0) + TYPE_CAP_BASE;
     }
 
     /**

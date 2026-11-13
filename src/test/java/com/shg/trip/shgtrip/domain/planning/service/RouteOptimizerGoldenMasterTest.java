@@ -5,7 +5,9 @@ import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.TransportationHub;
+import com.shg.trip.shgtrip.domain.planning.eval.TraceFile;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
@@ -157,9 +159,21 @@ class RouteOptimizerGoldenMasterTest {
                 scenario.selection(), scenario.candidates(), scenario.pace(),
                 scenario.transportPref(), scenario.startDate(), scenario.themes(),
                 scenario.hub(), scenario.compactMode(), scenario.userCategories());
+        assertMatchesSnapshot(scenario.name(), result);
+    }
 
+    /** 운영 기록은 동행·도착·출발까지 담긴 생성 인자를 그대로 써야 당시 입력이 재현된다. */
+    @Test
+    @DisplayName("운영 기록 91(부산 5박 6일, 커플·여유·자동차)의 schedule() 출력이 고정 스냅샷과 완전히 일치한다")
+    void tracedScheduleMatchesSnapshot() throws IOException {
+        TraceFile trace = Itinerary91Fixture.load();
+        assertMatchesSnapshot("busan-91-relaxed-couple",
+                routeOptimizer.schedule(trace.selection(), trace.candidates(), trace.args()));
+    }
+
+    private static void assertMatchesSnapshot(String name, RouteOptimizer.ScheduleResult result) throws IOException {
         String actual = render(result);
-        Path snapshot = SNAPSHOT_DIR.resolve(scenario.name() + ".txt");
+        Path snapshot = SNAPSHOT_DIR.resolve(name + ".txt");
 
         if (Boolean.getBoolean("golden.update") || !Files.exists(snapshot)) {
             Files.createDirectories(SNAPSHOT_DIR);
@@ -177,7 +191,7 @@ class RouteOptimizerGoldenMasterTest {
                         %s 의 schedule() 출력이 스냅샷과 다릅니다.
                         구조 리팩터링 중이라면 이건 회귀입니다 — 되돌리세요.
                         의도한 동작 변경이라면 -Dgolden.update=true 로 갱신하고 diff를 리뷰하세요.""",
-                        scenario.name())
+                        name)
                 .isEqualTo(expected);
     }
 

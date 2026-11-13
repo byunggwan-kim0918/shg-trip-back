@@ -220,11 +220,13 @@ final class InvariantChecker {
     /** @param isMeal 끼니 장소 판정. 끼니를 고른 쪽({@link PlaceCandidate#mealEligible})과 같아야 한다 */
     static boolean hasMealInWindow(List<StepData> daySteps, int windowStart, int windowEnd,
                                    Predicate<StepData> isMeal) {
-        return daySteps.stream().anyMatch(s -> {
-            if (s.place() == null || !isMeal.test(s)) return false;
-            int start = toMinutesOrZero(s.startTime());
-            return start >= windowStart - 60 && start <= windowEnd;
-        });
+        return daySteps.stream().anyMatch(s -> s.place() != null && isMeal.test(s)
+                && inMealWindow(toMinutesOrZero(s.startTime()), windowStart, windowEnd));
+    }
+
+    /** 끼니 시간창은 시작 60분 전부터 본다. 끼니 유무와 끼니 종류 판정이 같은 창을 써야 한다. */
+    static boolean inMealWindow(int start, int windowStart, int windowEnd) {
+        return start >= windowStart - 60 && start <= windowEnd;
     }
 
     /** 그날 방문 목록에서만 찾는다. 전체 후보에서 찾으면 같은 이름의 다른 행이 잡힌다. */

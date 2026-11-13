@@ -5,7 +5,6 @@ import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -39,6 +38,15 @@ public final class ItineraryScorer {
             "prominence", 0.10,
             "intent", 0.10);
 
+    private static final ItineraryRules RULES = new ItineraryRules();
+
+    /** 하드 위반 수로 세는 규칙. 기준선(docs/eval-baseline.md)의 하드 위반과 같은 항목이어야 비교가 이어진다. */
+    private static final Set<ItineraryRules.Rule> SCORED_RULES = EnumSet.of(
+            ItineraryRules.Rule.LUNCH_MISSING, ItineraryRules.Rule.DINNER_MISSING,
+            ItineraryRules.Rule.NOT_ENDING_AT_LODGING, ItineraryRules.Rule.DEPARTURE_LATE,
+            ItineraryRules.Rule.DEPARTURE_MISSED, ItineraryRules.Rule.LEG_OVER_CAP,
+            ItineraryRules.Rule.CLOSED_DAY, ItineraryRules.Rule.OUTSIDE_HOURS);
+
     /** @param lastDayHubDeadline 사용자 출발 시각에서 정한 허브 도착 마감(분). 없으면 null(21:00 기준) */
     public record Input(
             List<StepData> steps,
@@ -59,16 +67,19 @@ public final class ItineraryScorer {
         List<StepData> steps = in.steps() == null ? List.of() : in.steps();
         String pace = in.pace() != null ? in.pace() : "normal";
         String transport = in.transportPref() != null ? in.transportPref() : "any";
-        Map<String, PlaceCandidate> byName = in.candidates() == null ? Map.of()
-                : in.candidates().stream().filter(c -> c.name() != null)
-                .collect(Collectors.toMap(PlaceCandidate::name, c -> c, (a, b) -> a));
+        CandidateLookup lookup = new CandidateLookup(in.candidates());
 
         TreeMap<Integer, List<StepData>> byDay = steps.stream()
                 .sorted(Comparator.comparingInt(StepData::dayNumber).thenComparingInt(StepData::stepOrder))
                 .collect(Collectors.groupingBy(StepData::dayNumber, TreeMap::new, Collectors.toList()));
         int dayCount = byDay.size();
 
-        List<String> violations = new ArrayList<>();
+        List<String> violations = RULES.evaluate(steps, in.candidates(), new ItineraryRules.Context(
+                        in.pace(), in.transportPref(), in.startDate(), 0, in.lastDayHubDeadline()))
+                .violations().stream()
+                .filter(v -> SCORED_RULES.contains(v.rule()))
+                .map(ItineraryRules.Violation::message)
+                .toList();
         List<String> estimated = new ArrayList<>();
         // 모르면 any(가장 좁은 상한)로 본다. 자동차 여행이면 구간 상한 위반이 과하게 잡힌다
         if (in.pace() == null) estimated.add("pace");
@@ -86,8 +97,6 @@ public final class ItineraryScorer {
             List<StepData> daySteps = entry.getValue();
             boolean first = day == byDay.firstKey();
             boolean last = day == byDay.lastKey();
-
-            checkHard(day, daySteps, first, last, limits, in.startDate(), byName, violations, in.lastDayHubDeadline());
 
             double dayKm = 0;
             for (int i = 0; i < daySteps.size(); i++) {
@@ -110,10 +119,10 @@ public final class ItineraryScorer {
                 idle += Math.max(0, gap - IDLE_GRACE_MINUTES);
             }
             double timeScore = 1 - Math.min(1.0, (double) idle / IDLE_ZERO_SCORE_MINUTES);
-            if (!last && lastActivityEnd(daySteps, byName) < EARLY_FINISH_MINUTES) timeScore *= 0.5;
+            if (!last && lookup.lastActivityEnd(daySteps) < EARLY_FINISH_MINUTES) timeScore *= 0.5;
             timeSum += timeScore;
 
-            long visits = daySteps.stream().filter(s -> roleOf(s, byName).isVisit()).count();
+            long visits = daySteps.stream().filter(s -> lookup.role(s).isVisit()).count();
             totalVisits += (int) visits;
             double target = visitTarget(pace) * (first || last ? 0.5 : 1.0);
             visitSum += Math.min(1.0, visits / target);
@@ -122,10 +131,10 @@ public final class ItineraryScorer {
         components.put("travel", dayCount == 0 ? 0 : travelSum / dayCount);
         components.put("timeUse", dayCount == 0 ? 0 : timeSum / dayCount);
         components.put("visits", dayCount == 0 ? 0 : visitSum / dayCount);
-        components.put("mealVariety", mealVariety(steps, byName));
-        components.put("lodging", lodgingScore(steps, byName, dayCount));
-        components.put("prominence", prominence(steps, byName, estimated));
-        components.put("intent", intent(in.selection(), in.candidates(), byDay, byName, estimated));
+        components.put("mealVariety", mealVariety(steps, lookup));
+        components.put("lodging", lodgingScore(steps, lookup, dayCount));
+        components.put("prominence", prominence(steps, lookup, estimated));
+        components.put("intent", intent(in.selection(), in.candidates(), byDay, estimated));
 
         double total = 0;
         for (Map.Entry<String, Double> w : WEIGHTS.entrySet()) {
@@ -137,68 +146,13 @@ public final class ItineraryScorer {
         metrics.put("totalStraightKm", totalKm);
         metrics.put("maxGapMinutes", maxGap);
         metrics.put("longGaps", longGaps);
-        metrics.put("lodgings", distinctLodgings(steps, byName));
+        metrics.put("lodgings", distinctLodgings(steps, lookup));
         if (in.selection() != null && in.candidates() != null) {
             metrics.put("selectionRetention", selectionRetention(in.selection(), in.candidates(), byDay));
         }
 
         return new ScoreReport(violations.size(), Math.round(total * 1000) / 10.0, components,
                 violations, estimated, metrics);
-    }
-
-    private void checkHard(int day, List<StepData> daySteps, boolean first, boolean last, double[] limits,
-                           LocalDate startDate, Map<String, PlaceCandidate> byName, List<String> violations, Integer hubDeadline) {
-        int dayStart = toMinutesOrZero(daySteps.get(0).startTime());
-        StepData lastStep = daySteps.get(daySteps.size() - 1);
-        // 최적화기는 출발 허브 도착 시각으로 마감·끼니를 맞춘다. 허브 체류가 끝나는 시각으로 보면
-        // 20시 도착이 마감 초과가 되고, 18시 도착이 저녁 없음이 된다
-        boolean endsAtHub = roleOf(lastStep, byName) == CandidatePolicy.Role.TRANSIT;
-        int dayEnd = toMinutesOrZero(endsAtHub ? lastStep.startTime() : lastStep.endTime());
-
-        // 오후 도착·오전 출발인 날은 그 끼니를 요구하지 않는다
-        java.util.function.Predicate<StepData> isMeal = s -> {
-            PlaceCandidate c = byName.get(name(s));
-            return c != null ? c.mealEligible()
-                    : PlaceCategoryConstants.isMealPlace(name(s), category(s));
-        };
-        if (dayStart <= LUNCH_START && dayEnd >= LUNCH_END
-                && !InvariantChecker.hasMealInWindow(daySteps, LUNCH_START, LUNCH_END, isMeal)) {
-            violations.add("day" + day + " 점심 없음");
-        }
-        if (dayStart <= DINNER_START && dayEnd >= DINNER_END
-                && !InvariantChecker.hasMealInWindow(daySteps, DINNER_START, DINNER_END, isMeal)) {
-            violations.add("day" + day + " 저녁 없음");
-        }
-        if (!last && roleOf(daySteps.get(daySteps.size() - 1), byName) != CandidatePolicy.Role.LODGING) {
-            violations.add("day" + day + " 숙소로 끝나지 않음");
-        }
-        if (last && dayEnd > DEPARTURE_HUB_LATEST_MINUTES) {
-            violations.add("day" + day + " 출발 마감 초과");
-        }
-        if (last && hubDeadline != null && endsAtHub && dayEnd > hubDeadline) {
-            violations.add("day" + day + " 사용자 출발 시각 초과");
-        }
-        for (int i = 0; i < daySteps.size(); i++) {
-            StepData s = daySteps.get(i);
-            if (s.transportationDistance() != null && !InvariantChecker.isOutsideDayBudget(daySteps, i, first, last)
-                    && s.transportationDistance().doubleValue() / GeoUtils.ROAD_DISTANCE_FACTOR > limits[0]) {
-                violations.add("day" + day + " 구간 상한 초과(" + name(s) + ")");
-            }
-        }
-        if (startDate == null) return;
-        DayOfWeek dow = startDate.plusDays(day - 1L).getDayOfWeek();
-        for (StepData s : daySteps) {
-            PlaceCandidate c = byName.get(name(s));
-            if (c == null || c.openingHours() == null || c.openingHours().isBlank()) continue;
-            CandidatePolicy.Role role = CandidatePolicy.roleOf(c);
-            if (role == CandidatePolicy.Role.LODGING || role == CandidatePolicy.Role.TRANSIT) continue;
-            if (OpeningHoursText.isClosedOnDay(c.openingHours(), dow)) {
-                violations.add("day" + day + " 휴무일 방문(" + c.name() + ")");
-            } else if (!OpeningHoursText.isOpenDuring(c.openingHours(), dow,
-                    toMinutesOrZero(s.startTime()), toMinutesOrZero(s.endTime()))) {
-                violations.add("day" + day + " 영업시간 밖(" + c.name() + ")");
-            }
-        }
     }
 
     /** 하루 상한의 60%까지 만점, 120%면 0점. */
@@ -209,26 +163,11 @@ public final class ItineraryScorer {
         return Math.max(0, 1 - (ratio - 0.6) / 0.6);
     }
 
-    private static int lastActivityEnd(List<StepData> daySteps, Map<String, PlaceCandidate> byName) {
-        return daySteps.stream()
-                .filter(s -> {
-                    CandidatePolicy.Role r = roleOf(s, byName);
-                    return r != CandidatePolicy.Role.LODGING && r != CandidatePolicy.Role.TRANSIT;
-                })
-                .mapToInt(s -> toMinutesOrZero(s.endTime()))
-                .max().orElse(0);
-    }
-
     /** 같은 음식 종류는 일정 전체에서 두 끼까지. */
-    private static double mealVariety(List<StepData> steps, Map<String, PlaceCandidate> byName) {
+    private static double mealVariety(List<StepData> steps, CandidateLookup lookup) {
         List<String> kinds = steps.stream()
-                .filter(s -> roleOf(s, byName) == CandidatePolicy.Role.MEAL)
-                .map(s -> {
-                    PlaceCandidate c = byName.get(name(s));
-                    return c != null
-                            ? CandidatePolicy.cuisineOf(c)
-                            : PlaceCategoryConstants.mealKind(name(s), s.place().nameKo(), category(s), null, null, null);
-                })
+                .filter(s -> lookup.role(s) == CandidatePolicy.Role.MEAL)
+                .map(lookup::mealKind)
                 .filter(Objects::nonNull)
                 .toList();
         if (kinds.isEmpty()) return 1;
@@ -237,31 +176,30 @@ public final class ItineraryScorer {
         return 1 - (double) excess / kinds.size();
     }
 
-    private static double lodgingScore(List<StepData> steps, Map<String, PlaceCandidate> byName, int dayCount) {
+    private static double lodgingScore(List<StepData> steps, CandidateLookup lookup, int dayCount) {
         int nights = Math.max(0, dayCount - 1);
         if (nights == 0) return 1;
         int cap = (int) Math.ceil((double) nights / NIGHTS_PER_LODGING);
-        long count = distinctLodgings(steps, byName);
+        long count = distinctLodgings(steps, lookup);
         if (count == 0) return 0;
         return count <= cap ? 1 : (double) cap / count;
     }
 
-    private static long distinctLodgings(List<StepData> steps, Map<String, PlaceCandidate> byName) {
+    private static long distinctLodgings(List<StepData> steps, CandidateLookup lookup) {
         return steps.stream()
-                .filter(s -> roleOf(s, byName) == CandidatePolicy.Role.LODGING)
-                .map(ItineraryScorer::name)
+                .filter(s -> lookup.role(s) == CandidatePolicy.Role.LODGING)
+                .map(CandidateLookup::name)
                 .distinct().count();
     }
 
-    private static double prominence(List<StepData> steps, Map<String, PlaceCandidate> byName,
-                                     List<String> estimated) {
-        if (byName.isEmpty()) {
+    private static double prominence(List<StepData> steps, CandidateLookup lookup, List<String> estimated) {
+        if (lookup.isEmpty()) {
             estimated.add("prominence");
             return 0.5;
         }
         return steps.stream()
-                .filter(s -> roleOf(s, byName).isVisit())
-                .map(s -> byName.get(name(s)))
+                .filter(s -> lookup.role(s).isVisit())
+                .map(lookup::of)
                 .filter(Objects::nonNull)
                 .mapToDouble(PlaceProminence::of)
                 .average().orElse(0.5);
@@ -269,14 +207,13 @@ public final class ItineraryScorer {
 
     /** timing 시간대 준수와 highlight 유지 비율. 의도가 없으면 1. */
     private static double intent(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                 Map<Integer, List<StepData>> byDay, Map<String, PlaceCandidate> byName,
-                                 List<String> estimated) {
+                                 Map<Integer, List<StepData>> byDay, List<String> estimated) {
         if (selection == null || candidates == null) {
             estimated.add("intent");
             return 0.5;
         }
         Map<String, StepData> placed = new HashMap<>();
-        byDay.values().forEach(list -> list.forEach(s -> placed.putIfAbsent(name(s), s)));
+        byDay.values().forEach(list -> list.forEach(s -> placed.putIfAbsent(CandidateLookup.name(s), s)));
 
         int asked = 0, kept = 0;
         if (selection.timing() != null) {
@@ -311,7 +248,7 @@ public final class ItineraryScorer {
         for (SelectionOutput.DayPlan d : selection.days()) {
             if (d.placeIndices() == null) continue;
             Set<String> namesThatDay = byDay.getOrDefault(d.dayNumber(), List.of()).stream()
-                    .map(ItineraryScorer::name).collect(Collectors.toSet());
+                    .map(CandidateLookup::name).collect(Collectors.toSet());
             for (Integer idx : d.placeIndices()) {
                 PlaceCandidate c = idx == null ? null : ScheduleTimes.byIndex(candidates, idx);
                 if (c == null || !CandidatePolicy.roleOf(c).isVisit()) continue;
@@ -320,19 +257,5 @@ public final class ItineraryScorer {
             }
         }
         return picked == 0 ? 1 : (double) sameDay / picked;
-    }
-
-    private static CandidatePolicy.Role roleOf(StepData s, Map<String, PlaceCandidate> byName) {
-        PlaceCandidate c = byName.get(name(s));
-        if (c != null) return CandidatePolicy.roleOf(c);
-        return CandidatePolicy.estimateRole(name(s), category(s), null);
-    }
-
-    private static String name(StepData s) {
-        return s.place() != null && s.place().name() != null ? s.place().name() : "";
-    }
-
-    private static String category(StepData s) {
-        return s.place() != null ? s.place().category() : null;
     }
 }

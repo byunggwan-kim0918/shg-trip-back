@@ -75,7 +75,7 @@ public class GenerationTrace {
     private GenerationTrace(Long itineraryId, String jobId, int traceVersion, String request,
                             String enrichedInput, String selectionRaw, String selectionFinal,
                             String candidates, String scheduleArgs, String models, Long totalMs,
-                            String generatedSteps) {
+                            String score, String generatedSteps) {
         this.itineraryId = itineraryId;
         this.jobId = jobId;
         this.traceVersion = traceVersion;
@@ -87,6 +87,7 @@ public class GenerationTrace {
         this.scheduleArgs = scheduleArgs;
         this.models = models;
         this.totalMs = totalMs;
+        this.score = score;
         this.generatedSteps = generatedSteps;
     }
 

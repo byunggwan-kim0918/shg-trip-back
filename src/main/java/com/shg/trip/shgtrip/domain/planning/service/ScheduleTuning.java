@@ -203,6 +203,14 @@ public final class ScheduleTuning {
     }
     /** 세부 유형 반복 상한 계산: ceil(days/2) + 1. */
     static final int TYPE_CAP_BASE = 1;
+
+    /** 한 음식 종류가 여행 전체에서 나올 수 있는 끼니 수. 선택 프롬프트는 같은 음식 2끼까지라 5일 이상 여행에서는 이 값이 더 느슨하다. */
+    static int mealKindTripCap(int dayCount) {
+        return Math.max(2, (int) Math.ceil(dayCount / 2.0));
+    }
+
+    /** 하루 카페·디저트·베이커리 방문 수 상한. 넘으면 쉬는 날이 아니라 카페를 옮겨 다니는 날이 된다. */
+    static final int CAFE_PER_DAY_CAP = 2;
     /** 경유형(해안도로·드라이브코스 등) 전체 일정 허용 개수. 방문지가 아니라 지나가는 구간이다. */
     static final int VIA_ROUTE_CAP = 1;
     /** 같은 대분류가 이 개수 이상 연속되면 중간을 다른 대분류로 교체한다. */
