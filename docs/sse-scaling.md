@@ -41,8 +41,9 @@ emitter는 옮길 수 없지만 **이벤트 내용은 옮길 수 있다.** 작�
 
 요청 경로가 브라우저 → 웹(Next.js BFF) → private ALB → 앱이라, ALB 쿠키(`AWSALB`)를 다시 보내는 클라이언트는 BFF 서버다.
 BFF 프록시는 세션·refresh 쿠키만 주고받아 sticky를 켜도 같은 인스턴스로 고정되지 않는다. BFF가 jobId별로 ALB 쿠키를
-보관하게 만들면 BFF가 ALB 동작에 묶인다. 그래서 타깃 그룹(`terraform/alb.tf`의 `aws_lb_target_group.app`)과 리스너의
-stickiness는 꺼 둔다(`enabled = false`).
+보관하게 만들면 BFF가 ALB 동작에 묶인다. 그래서 stickiness는 꺼 둔다. `terraform/alb.tf` 기준으로 앱 타깃 그룹
+(`aws_lb_target_group.app`)에는 stickiness 블록이 없어 기본값(꺼짐)이고, 이 그룹으로 보내는 private 리스너
+(`aws_lb_listener.private_http`)의 forward stickiness도 `enabled = false`다.
 
 ALB idle timeout은 60초다. 생성 중에는 30초마다 heartbeat를 보내(`OptimizedGenerationExecutor.executeWithHeartbeat`)
 연결이 끊기지 않는다.

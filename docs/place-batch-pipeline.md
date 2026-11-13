@@ -222,8 +222,8 @@ Step Functions (월 1회)
 ## 설계 특징 (검증됨)
 
 - **API 호출과 DB 트랜잭션이 분리되어 있음**: `EmbeddingBatchJob.processBatch()`는 `embedBatch()`(외부 HTTP, 트랜잭션 없음) 호출 후 별도로 `storeBatch()`(`@Transactional`, DB-only batchUpdate)를 호출 — 외부 API 응답 대기 중 DB 커넥션을 잡고 있지 않음.
-- **부분 실패 처리는 두 배치가 다름 (2026-07 코드 기준)**:
-  - `BatchEnrichScheduler`는 **건별로 처리**한다. `processResults()`가 JSONL 결과를 한 줄씩 파싱해 성공 건은 즉시 `placeRepository.save(place)`로 커밋하고, 실패 건만 `failedIds`에 담아 잔존시킨다. 청크 전체를 버리는 경우는 **제출/폴링/결과조회 HTTP 호출 자체가 실패**해 성공분이 애초에 없는 경우(`ChunkResult(0, size, allIds)`)로 한정된다. 제출·폴링은 `MAX_RETRIES=3` 지수 백오프도 갖췄다.
+- **부분 실패 처리는 두 배치가 다름 (2026-11 코드 기준)**:
+  - `BatchEnrichScheduler`는 **건별로 처리**한다. `processResults()`가 JSONL 결과를 한 줄씩 파싱해 성공 건은 즉시 `placeRepository.writeEnrichment(place)`(보강 컬럼만 바꾸는 UPDATE, 위 [3/4] 참고)로 커밋하고, 속성 보강 모드는 `writeAttributeClassification`으로 분류 컬럼만 쓴다. 성공분은 이어서 재임베딩하고 재임베딩에 실패한 것만 embedding을 비운다. 실패 건은 `failedIds`로 이번 실행에서 제외하고, 응답을 읽을 수 없거나 요청 오류인 장소는 `enrich_attempts`를 올린다. 청크 전체를 버리는 경우는 **제출/폴링/결과조회 HTTP 호출 자체가 실패**해 성공분이 애초에 없는 경우(`ChunkResult(0, size, allIds)`)로 한정된다. 제출·폴링은 `MAX_RETRIES=3` 지수 백오프도 갖췄다.
   - `EmbeddingBatchJob`은 **텍스트 생성 실패는 개별적으로 건너뛰지만**(`textBuildFailedIds`), OpenAI `embedBatch()` API 호출 자체가 (내부 재시도 3회 후에도) 실패하거나 응답 수가 불일치하면 그 배치(≤100건)를 통째로 실패 처리한다. 다음 실행 시 `embedding IS NULL` 조건으로 자동 재시도되므로 **데이터 누락은 없다**. 임베딩 API(text-embedding-3-small)는 단가가 매우 낮아 재요청 비용 영향도 미미하다.
 - **동시 실행 보호는 인프라(ECS 스케줄) 레벨에만 의존**: 코드 레벨 분산 락은 없음. `upsertFoursquarePlace`(upsert)와 `embedding IS NULL` 조건 필터 덕분에 두 잡이 겹쳐도 데이터가 깨지진 않지만(idempotent), API 호출이 중복돼 비용이 늘 수 있음. ECS 스케줄이 이전 태스크 종료 전에 재실행되지 않도록 보장하는지는 인프라 설정 확인 필요.
 - **SQL Injection 없음**: `PgVectorPlaceSearchService`가 `StringBuilder`로 SQL을 만들지만 모든 가변 값은 `?` 플레이스홀더 + `params.toArray()`로 바인딩됨. `upsertFoursquarePlace`도 `@Param` 네임드 파라미터 사용.
