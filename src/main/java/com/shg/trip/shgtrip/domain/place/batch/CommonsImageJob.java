@@ -52,6 +52,8 @@ public class CommonsImageJob {
     private static final int MAX_LICENSE_LENGTH = 100;
     /** 실패한 요청 묶음이나 파일 서버가 아닌 썸네일이 이 비율을 넘으면 단계 실패로 본다. */
     private static final double MAX_FAILED_RATIO = 0.2;
+    /** 매칭 단계가 지역 항목을 통째로 비우는 회귀면 공용 사진까지 지워지므로 이 비율을 넘으면 지우지 않고 멈춘다. */
+    private static final double MAX_STALE_RATIO = 0.2;
 
     private final PlaceRepository placeRepository;
     private final ObjectMapper objectMapper;
@@ -67,6 +69,7 @@ public class CommonsImageJob {
     record CommonsImage(String thumbUrl, String credit, String license, String pageUrl) {}
 
     public void run() {
+        clearStaleImages();
         List<PlaceRepository.ImageTarget> targets = placeRepository.findCommonsImageTargets().stream()
                 .filter(t -> t.getWikidataId() != null && QID.matcher(t.getWikidataId()).matches())
                 .toList();
@@ -118,7 +121,8 @@ public class CommonsImageJob {
                 continue;
             }
             for (Long id : idsByItem.get(entry.getKey())) {
-                saved += placeRepository.updateAttributedImage(id, url, image.credit(), image.license(), image.pageUrl());
+                saved += placeRepository.updateAttributedImage(id, url, image.credit(), image.license(), image.pageUrl(),
+                        entry.getKey());
             }
         }
         log.info("공용 사진 연결: 저장 {}곳, 대표 사진 있는 항목 {}개, 파일 정보·라이선스 없음 {}개, 파일 서버 아님 {}개, 실패 요청 {}/{}",
@@ -129,6 +133,17 @@ public class CommonsImageJob {
         if (foreignHost > fileByItem.size() * MAX_FAILED_RATIO) {
             throw new BatchStageFailed("파일 서버가 아닌 썸네일 " + foreignHost + "/" + fileByItem.size());
         }
+    }
+
+    /** 대상 조회보다 먼저 돌아야 지운 행이 이번 실행에서 새 항목의 사진으로 다시 채워진다. */
+    private void clearStaleImages() {
+        long stale = placeRepository.countStaleCommonsImages();
+        if (stale == 0) return;
+        long attached = placeRepository.countCommonsImages();
+        if (stale > attached * MAX_STALE_RATIO) {
+            throw new BatchStageFailed("Wikidata 항목이 바뀐 공용 사진이 너무 많아 지우지 않음 " + stale + "/" + attached);
+        }
+        log.info("Wikidata 항목이 바뀐 장소의 공용 사진 {}곳 지움", placeRepository.clearStaleCommonsImages());
     }
 
     /** 항목 → 대표 사진 파일 이름. 대표 사진이 여럿이면 이름순 첫 파일이라 실행마다 같다. */

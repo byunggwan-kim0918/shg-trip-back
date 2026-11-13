@@ -81,6 +81,54 @@ class PlaceRepositoryBatchQueryTest {
     }
 
     @Test
+    @DisplayName("공용 사진은 고른 항목을 남기고, 장소의 항목이 바뀌거나 빠진 행의 공용 사진만 지운다")
+    void clearStaleCommonsImages_onlyWhenItemChanged() {
+        Place same = save("항목 그대로", "Landmarks and Outdoors > Castle", 10, false);
+        Place changed = save("항목 바뀜", "Landmarks and Outdoors > Castle", 10, false);
+        Place unmatched = save("항목 빠짐", "Landmarks and Outdoors > Castle", 10, false);
+        Place tourApi = save("TourAPI 사진", "Landmarks and Outdoors > Castle", 10, false);
+        for (Place p : List.of(same, changed, unmatched)) {
+            placeRepository.updateAttributedImage(p.getId(), "https://thumb.wikimedia.org/x.jpg", "Kim", "CC BY 4.0",
+                    "https://commons.wikimedia.org/wiki/File:X.jpg", "Q1");
+        }
+        em.createNativeQuery("UPDATE places SET image_url = 'https://tong.visitkorea.or.kr/a.jpg', wikidata_id = 'Q9' WHERE id = ?")
+                .setParameter(1, tourApi.getId()).executeUpdate();
+        em.createNativeQuery("UPDATE places SET wikidata_id = 'Q2' WHERE id = ?")
+                .setParameter(1, changed.getId()).executeUpdate();
+        em.createNativeQuery("UPDATE places SET wikidata_id = NULL WHERE id = ?")
+                .setParameter(1, unmatched.getId()).executeUpdate();
+
+        assertThat(placeRepository.countStaleCommonsImages()).isGreaterThanOrEqualTo(2);
+        placeRepository.clearStaleCommonsImages();
+
+        assertThat(placeRepository.countStaleCommonsImages()).isZero();
+        assertThat(imageOf(same)).containsExactly("https://thumb.wikimedia.org/x.jpg", "Kim", "CC BY 4.0",
+                "https://commons.wikimedia.org/wiki/File:X.jpg", "Q1");
+        assertThat(imageOf(changed)).containsOnlyNulls();
+        assertThat(imageOf(unmatched)).containsOnlyNulls();
+        assertThat(imageOf(tourApi)).containsExactly("https://tong.visitkorea.or.kr/a.jpg", null, null, null, null);
+    }
+
+    @Test
+    @DisplayName("공용 사진은 장소의 지금 항목에서 고른 것만 쓴다")
+    void updateAttributedImage_requiresCurrentItem() {
+        Place p = save("항목 그사이 바뀜", "Landmarks and Outdoors > Castle", 10, false);
+
+        int written = placeRepository.updateAttributedImage(p.getId(), "https://thumb.wikimedia.org/x.jpg", "Kim",
+                "CC BY 4.0", "https://commons.wikimedia.org/wiki/File:X.jpg", "Q2");
+
+        assertThat(written).isZero();
+        assertThat(imageOf(p)).containsOnlyNulls();
+    }
+
+    private Object[] imageOf(Place p) {
+        return (Object[]) em.createNativeQuery("""
+                        SELECT image_url, image_credit, image_license, image_source_url, image_wikidata_id
+                          FROM places WHERE id = ?""")
+                .setParameter(1, p.getId()).getSingleResult();
+    }
+
+    @Test
     @DisplayName("지역 초기화는 전부 sitelinks 0으로 덮고, 매칭 갱신은 해당 행만 쓴다")
     void resetThenUpdate_overwritesRegion() {
         Place a = save("경복궁", "Landmarks and Outdoors > Castle", 60, false);

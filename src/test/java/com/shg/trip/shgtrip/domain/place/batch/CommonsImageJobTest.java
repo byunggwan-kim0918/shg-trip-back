@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.place.batch;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -8,6 +9,11 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class CommonsImageJobTest {
 
@@ -81,6 +87,30 @@ class CommonsImageJobTest {
                 "https://commons.wikimedia.org/w/resources/assets/file-type-icons/fileicon-ogg.png")).isNull();
         assertThat(CommonsImageJob.mediaUrl("https://upload.wikimedia.org.example.com/x.jpg")).isNull();
         assertThat(CommonsImageJob.mediaUrl("")).isNull();
+    }
+
+    @Test
+    @DisplayName("항목이 바뀐 공용 사진이 적으면 지우고 사진 없는 행으로 다시 고른다")
+    void clearsFewStaleImages() {
+        PlaceRepository repository = mock(PlaceRepository.class);
+        when(repository.countStaleCommonsImages()).thenReturn(30L);
+        when(repository.countCommonsImages()).thenReturn(15_000L);
+
+        new CommonsImageJob(repository, mapper).run();
+
+        verify(repository).clearStaleCommonsImages();
+        verify(repository).findCommonsImageTargets();
+    }
+
+    @Test
+    @DisplayName("항목이 바뀐 공용 사진이 20%를 넘으면 매칭 회귀로 보고 지우지 않은 채 단계 실패로 멈춘다")
+    void refusesMassClear() {
+        PlaceRepository repository = mock(PlaceRepository.class);
+        when(repository.countStaleCommonsImages()).thenReturn(4_000L);
+        when(repository.countCommonsImages()).thenReturn(15_000L);
+
+        assertThatThrownBy(() -> new CommonsImageJob(repository, mapper).run()).isInstanceOf(BatchStageFailed.class);
+        verify(repository, never()).clearStaleCommonsImages();
     }
 
     @Test

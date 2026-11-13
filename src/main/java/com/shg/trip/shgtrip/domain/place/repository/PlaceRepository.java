@@ -510,18 +510,39 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             """)
     List<ImageTarget> findCommonsImageTargets();
 
-    /** 사진이 그사이 채워진 행(TourAPI)은 덮지 않는다. */
+    /** 사진이 그사이 채워진 행(TourAPI)이나 항목이 바뀐 행은 쓰지 않는다. */
     @Modifying
     @Transactional
     @Query(value = """
             UPDATE places
                SET image_url = :imageUrl, image_credit = :credit, image_license = :license,
-                   image_source_url = :sourceUrl
-             WHERE id = :id AND image_url IS NULL
+                   image_source_url = :sourceUrl, image_wikidata_id = :wikidataId
+             WHERE id = :id AND image_url IS NULL AND wikidata_id = :wikidataId
             """, nativeQuery = true)
     int updateAttributedImage(@Param("id") long id, @Param("imageUrl") String imageUrl,
                               @Param("credit") String credit, @Param("license") String license,
-                              @Param("sourceUrl") String sourceUrl);
+                              @Param("sourceUrl") String sourceUrl, @Param("wikidataId") String wikidataId);
+
+    /** {@link #clearStaleCommonsImages}가 지울 행 수. */
+    @Query(value = """
+            SELECT count(*) FROM places
+             WHERE image_wikidata_id IS NOT NULL AND image_wikidata_id IS DISTINCT FROM wikidata_id
+            """, nativeQuery = true)
+    long countStaleCommonsImages();
+
+    @Query(value = "SELECT count(*) FROM places WHERE image_wikidata_id IS NOT NULL", nativeQuery = true)
+    long countCommonsImages();
+
+    /** 다른 항목의 사진이 남으면 이 장소에 다른 곳의 사진과 저작자를 보여 준다. */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places
+               SET image_url = NULL, image_credit = NULL, image_license = NULL, image_source_url = NULL,
+                   image_wikidata_id = NULL
+             WHERE image_wikidata_id IS NOT NULL AND image_wikidata_id IS DISTINCT FROM wikidata_id
+            """, nativeQuery = true)
+    int clearStaleCommonsImages();
 
     /** 일정 표지 대체 후보: 그 지역에서 사진이 있는 가장 유명한 관광지. */
     @Query("""
