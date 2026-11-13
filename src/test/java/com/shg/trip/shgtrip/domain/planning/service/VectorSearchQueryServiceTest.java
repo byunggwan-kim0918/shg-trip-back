@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.embedding.EmbeddingService;
 import com.shg.trip.shgtrip.domain.place.vector.PlaceVectorSearchService;
 import com.shg.trip.shgtrip.domain.place.vector.VectorSearchRequest;
@@ -42,7 +43,8 @@ class VectorSearchQueryServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new VectorSearchQueryService(embeddingService, placeVectorSearchService);
+        service = new VectorSearchQueryService(embeddingService, placeVectorSearchService,
+                Destinations.fromClasspath());
     }
 
     private static final float[] MOCK_VECTOR = new float[]{0.1f, 0.2f, 0.3f};

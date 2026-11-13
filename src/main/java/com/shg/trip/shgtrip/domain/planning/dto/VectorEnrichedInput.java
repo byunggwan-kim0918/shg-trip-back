@@ -105,6 +105,19 @@ public record VectorEnrichedInput(
                 companionType, partySize, ferryOnlyAreas);
     }
 
+    /**
+     * 도시 구간 하나만 찾을 때의 입력. 그 도시의 여행지·일수로 좁힌다.
+     *
+     * @param blockAllocation 구간 일차 안의 배분 항목, 없으면 null
+     */
+    public VectorEnrichedInput forCityBlock(List<String> cityRegions, int firstDay, int lastDay,
+                                            Map<String, List<String>> blockAllocation) {
+        return new VectorEnrichedInput(destination, themes, categories, pace, transportPref, budget,
+                startDate.plusDays(firstDay - 1L), startDate.plusDays(lastDay - 1L), description, selectedPlaceIds,
+                normalizedDestination, country, cityRegions, searchTags, blockAllocation, budgetRange, seasonContext,
+                enrichedContext, transportationHub, categorySearchQueries, companionType, partySize, ferryOnlyAreas);
+    }
+
     /** null-safe 동행 유형. */
     public CompanionType companion() {
         return companionType != null ? companionType : CompanionType.UNKNOWN;

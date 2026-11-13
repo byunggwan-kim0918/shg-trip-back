@@ -157,11 +157,11 @@ class OptimizedGenerationExecutorTest {
     void execute_success_savesDraftAndTriggersAsyncStory() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
-        when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
+        when(vectorSearchQueryService.search(eq(vectorEnrichedInput), any())).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
-        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList(), any())).thenReturn(selectionOutput);
         when(routeOptimizer.schedule(eq(selectionOutput), anyList(), argThat((ScheduleArgs a) -> "normal".equals(a.pace()) && "any".equals(a.transportPref()))))
                 .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
@@ -175,8 +175,8 @@ class OptimizedGenerationExecutorTest {
         executor.execute("job-1", request, 1L, emitter);
 
         verify(optimizedClaudeAIService).enrichInput(request);
-        verify(vectorSearchQueryService).search(vectorEnrichedInput);
-        verify(selectionCallGenerator).selectPlaces(eq(vectorEnrichedInput), anyList());
+        verify(vectorSearchQueryService).search(eq(vectorEnrichedInput), any());
+        verify(selectionCallGenerator).selectPlaces(eq(vectorEnrichedInput), anyList(), any());
         verify(routeOptimizer).schedule(eq(selectionOutput), anyList(), argThat((ScheduleArgs a) -> "normal".equals(a.pace()) && "any".equals(a.transportPref())));
         verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any());
         verify(resultStore).save("job-1", 42L, 1L);
@@ -197,8 +197,8 @@ class OptimizedGenerationExecutorTest {
         executor.execute("job-2", request, 1L, emitter);
 
         verify(optimizedClaudeAIService).enrichInput(request);
-        verify(vectorSearchQueryService, never()).search(any());
-        verify(selectionCallGenerator, never()).selectPlaces(any(), any());
+        verify(vectorSearchQueryService, never()).search(any(), any());
+        verify(selectionCallGenerator, never()).selectPlaces(any(), any(), any());
         verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
     }
 
@@ -234,13 +234,13 @@ class OptimizedGenerationExecutorTest {
         VectorEnrichedInput korea = withCountry("KR", List.of("Busan"));
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(EnrichmentResult.success(korea));
-        when(vectorSearchQueryService.search(any())).thenReturn(candidates);
+        when(vectorSearchQueryService.search(any(), any())).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.FALLBACK);
 
         executor.execute("job-3", request, 1L, emitter);
 
         verify(fallbackExecutor).execute(eq("job-3"), any(), eq(1L), eq(emitter));
-        verify(selectionCallGenerator, never()).selectPlaces(any(), any());
+        verify(selectionCallGenerator, never()).selectPlaces(any(), any(), any());
         verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
     }
 
@@ -251,7 +251,7 @@ class OptimizedGenerationExecutorTest {
         enableCountries("KR", "JP", "TW");
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(EnrichmentResult.success(jiufen));
-        when(vectorSearchQueryService.search(any())).thenReturn(candidates);
+        when(vectorSearchQueryService.search(any(), any())).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.FALLBACK);
 
         executor.execute("job-tw", request, 1L, emitter);
@@ -272,7 +272,7 @@ class OptimizedGenerationExecutorTest {
 
         executor.execute("job-cn", request, 1L, emitter);
 
-        verify(vectorSearchQueryService, never()).search(any());
+        verify(vectorSearchQueryService, never()).search(any(), any());
         verify(generationPolicyService, never()).recordSuccess(anyLong());
         verify(generationPolicyService, never()).recordValidationFailure(anyLong(), any());
         assertThat(sentError()).containsEntry("errorCode", "PLANNING_005")
@@ -292,9 +292,9 @@ class OptimizedGenerationExecutorTest {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request))
                 .thenReturn(EnrichmentResult.success(withCountry("CN", List.of("Shanghai"), "car")));
-        when(vectorSearchQueryService.search(any())).thenReturn(candidates);
+        when(vectorSearchQueryService.search(any(), any())).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
-        when(selectionCallGenerator.selectPlaces(any(), anyList())).thenReturn(selectionOutput);
+        when(selectionCallGenerator.selectPlaces(any(), anyList(), any())).thenReturn(selectionOutput);
         when(routeOptimizer.schedule(any(), anyList(), any()))
                 .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
 
@@ -303,16 +303,25 @@ class OptimizedGenerationExecutorTest {
         verify(indexResultMapper).toDraftItineraryData(eq(fixedSteps), any(), anyString(), anyList(),
                 argThat((List<String> notices) -> notices.contains(
                         "중국은 한국 운전면허로 운전할 수 없어 택시·차량 호출로 다니는 기준으로 짰어요.")));
-        verify(vectorSearchQueryService).search(argThat(in -> "any".equals(in.transportPref())));
+        verify(vectorSearchQueryService).search(argThat(in -> "any".equals(in.transportPref())), any());
         verify(routeOptimizer).schedule(any(), anyList(), argThat((ScheduleArgs a) -> "any".equals(a.transportPref())));
     }
 
     @Test
-    @DisplayName("같은 공항이 이미 후보에 있으면(3km 안 공항) 관문을 다시 붙이지 않는다")
-    void appendGateways_skipsAirportAlreadyInCandidates() {
+    @DisplayName("관문이 있는 해외 일정은 FSQ 교통 허브 후보(공항 행·항공편·역)를 빼고 관문만 허브로 붙인다")
+    void appendGateways_replacesTransitHubsWithGateways() {
         PlaceCandidate fsqKobe = new PlaceCandidate(1, 48707L, "神戸空港 (Kobe Airport - UKB/RJBE)", "x",
                 "Travel and Transportation > Transport Hub > Airport > Airport Terminal", List.of(), "Kobe", "JP",
                 new BigDecimal("34.6328"), new BigDecimal("135.2239"), null, null, 0.5);
+        PlaceCandidate flight = new PlaceCandidate(2, 48708L, "JL2051 ITM→FUK", "x",
+                "Travel and Transportation > Transport Hub > Airport", List.of(), "Kobe", "JP",
+                new BigDecimal("34.791"), new BigDecimal("135.440"), null, null, 0.5);
+        PlaceCandidate station = new PlaceCandidate(3, 48709L, "三ノ宮駅", "x",
+                "Travel and Transportation > Transport Hub > Rail Station", List.of(), "Kobe", "JP",
+                new BigDecimal("34.6946"), new BigDecimal("135.1955"), null, null, 0.5);
+        PlaceCandidate sight = new PlaceCandidate(4, 48710L, "北野異人館街", "x",
+                "Landmarks and Outdoors > Historic and Protected Site", List.of(), "Kobe", "JP",
+                new BigDecimal("34.7003"), new BigDecimal("135.1901"), null, null, 0.5);
         com.shg.trip.shgtrip.domain.place.entity.Place gatewayKobe = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
                 .id(901L).name("Kobe Airport").address("Kobe Airport, Kobe")
                 .latitude(new BigDecimal("34.6328")).longitude(new BigDecimal("135.2380"))
@@ -320,7 +329,10 @@ class OptimizedGenerationExecutorTest {
                 .source("gateway").placeRole("TRANSIT").build();
         when(placeRepository.findGatewaysByRegions(List.of("Kobe"))).thenReturn(List.of(gatewayKobe));
 
-        assertThat(executor.appendGateways(List.of(fsqKobe), List.of("Kobe"))).containsExactly(fsqKobe);
+        List<PlaceCandidate> result = executor.appendGateways(List.of(fsqKobe, flight, station, sight), List.of("Kobe"));
+
+        assertThat(result).extracting(PlaceCandidate::placeId).containsExactly(48710L, 901L);
+        assertThat(result).extracting(PlaceCandidate::index).containsExactly(1, 2);
     }
 
     @Test
@@ -414,6 +426,35 @@ class OptimizedGenerationExecutorTest {
                 .extracting(PlaceCandidate::placeId).containsExactly(21L, 22L);
     }
 
+    @Test
+    @DisplayName("장소 항목과 그곳 박물관 기관 항목(故宫·故宫博物院)은 언어판이 많은 쪽만 남기고, 영어 이름 박물관은 그대로 둔다")
+    void dedupe_dropsMuseumInstitutionOfSameSite() {
+        PlaceCandidate palace = twinCandidate(1, 41L, "故宫", "Landmarks and Outdoors > Palace", 39.9163, 116.3972, 106);
+        PlaceCandidate museum = twinCandidate(2, 42L, "故宫博物院", "Arts and Entertainment > Museum", 39.9180, 116.3970, 20);
+        PlaceCandidate peace = twinCandidate(3, 43L, "Peace Memorial", "Landmarks and Outdoors > Monument", 34.3955, 132.4536, 30);
+        PlaceCandidate peaceMuseum = twinCandidate(4, 44L, "Peace Memorial Museum", "Arts and Entertainment > Museum",
+                34.3916, 132.4519, 25);
+
+        assertThat(executor.dedupePhysicalCandidates(List.of(palace, museum, peace, peaceMuseum)))
+                .extracting(PlaceCandidate::placeId).containsExactly(41L, 43L, 44L);
+    }
+
+    @Test
+    @DisplayName("예비 후보 검색 중심은 그날 방문지만으로 잡아 먼 도시 식당에 끌려가지 않는다(바나힐)")
+    void activityCentroid_ignoresFarMeals() {
+        List<PlaceCandidate> pool = List.of(
+                twinCandidate(1, 51L, "Golden Bridge", "Landmarks and Outdoors > Bridge", 15.9950, 107.9965, 25),
+                twinCandidate(2, 52L, "Solar Castle", "Landmarks and Outdoors > Castle", 15.9970, 107.9880, 0),
+                twinCandidate(3, 53L, "Bánh Mì Bà Ry", "Dining and Drinking > Sandwich Spot", 16.0600, 108.2200, 0),
+                twinCandidate(4, 54L, "Mỳ Quảng Faifo", "Dining and Drinking > Restaurant", 15.8800, 108.3300, 0));
+        SelectionOutput.DayPlan day = new SelectionOutput.DayPlan(2, null, List.of(1, 2, 3, 4), null, null);
+
+        double[] center = OptimizedGenerationExecutor.activityCentroid(day, pool);
+
+        assertThat(center[0]).isCloseTo(15.996, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(center[1]).isCloseTo(107.992, org.assertj.core.data.Offset.offset(0.01));
+    }
+
     private static PlaceCandidate twinCandidate(int index, long id, String name, String category,
                                                 double lat, double lng, int sitelinks) {
         return new PlaceCandidate(index, id, name, "x", category, List.of(), "Taipei", "TW",
@@ -480,7 +521,7 @@ class OptimizedGenerationExecutorTest {
     void execute_noCandidates_abortsBeforeFallback() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
-        when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(List.of());
+        when(vectorSearchQueryService.search(eq(vectorEnrichedInput), any())).thenReturn(List.of());
 
         executor.execute("job-empty", request, 1L, emitter);
 
@@ -496,11 +537,11 @@ class OptimizedGenerationExecutorTest {
     void execute_hardValidationFails_logsButStillSaves() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
-        when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
+        when(vectorSearchQueryService.search(eq(vectorEnrichedInput), any())).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
-        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList(), any())).thenReturn(selectionOutput);
         when(routeOptimizer.schedule(eq(selectionOutput), anyList(), argThat((ScheduleArgs a) -> "normal".equals(a.pace()) && "any".equals(a.transportPref()))))
                 .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
@@ -526,7 +567,7 @@ class OptimizedGenerationExecutorTest {
         executor.execute("job-6", request, 1L, emitter);
 
         verify(optimizedClaudeAIService, never()).enrichInput(any());
-        verify(vectorSearchQueryService, never()).search(any());
+        verify(vectorSearchQueryService, never()).search(any(), any());
         verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
     }
 
@@ -547,11 +588,11 @@ class OptimizedGenerationExecutorTest {
     void execute_savesWithCorrectLegacyInput() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
-        when(vectorSearchQueryService.search(vectorEnrichedInput)).thenReturn(candidates);
+        when(vectorSearchQueryService.search(eq(vectorEnrichedInput), any())).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
 
-        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList())).thenReturn(selectionOutput);
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList(), any())).thenReturn(selectionOutput);
         when(routeOptimizer.schedule(eq(selectionOutput), anyList(), argThat((ScheduleArgs a) -> "normal".equals(a.pace()) && "any".equals(a.transportPref()))))
                 .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))

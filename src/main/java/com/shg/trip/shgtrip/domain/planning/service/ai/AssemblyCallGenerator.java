@@ -132,6 +132,8 @@ public class AssemblyCallGenerator {
         sb.append("## 여행 컨셉\n").append(concept).append("\n\n");
         sb.append("## 여행 정보\n");
         sb.append("- 여행지: ").append(input.normalizedDestination()).append("\n");
+        int days = fixedSteps.stream().mapToInt(StepData::dayNumber).max().orElse(0);
+        if (days > 0) sb.append("- 여행 기간: ").append(days - 1).append("박 ").append(days).append("일\n");
         if (input.themes() != null && !input.themes().isEmpty()) {
             sb.append("- 테마: ").append(String.join(", ", input.themes())).append("\n");
         }

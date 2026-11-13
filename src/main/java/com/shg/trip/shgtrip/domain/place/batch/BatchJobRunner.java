@@ -30,6 +30,7 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     private final NameKoOverrideJob nameKoOverrideJob;
     private final PlaceRoleBackfillJob placeRoleBackfillJob;
     private final TourApiDetailJob tourApiDetailJob;
+    private final CommonsImageJob commonsImageJob;
     private final ApplicationContext context;
 
     private final List<String> failedStages = new ArrayList<>();
@@ -71,6 +72,10 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     /** 보강 전에 돌아야 비방문 장소가 보강 대상에서 빠진다. */
     @Value("${batch.role-backfill.enabled:true}")
     private boolean roleBackfillEnabled;
+
+    /** 켜면 Wikidata SPARQL·위키미디어 공용 API 호출이 나간다. */
+    @Value("${batch.commons-images.enabled:true}")
+    private boolean commonsImagesEnabled;
 
     @Override
     public void run(String... args) {
@@ -121,6 +126,12 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
         if (roleBackfillEnabled) {
             log.info("[2/4-역할] 비방문 장소 역할 기록 시작");
             stage("[2/4-역할] 비방문 장소 역할 기록", placeRoleBackfillJob::run);
+        }
+
+        // 역할 기록 뒤에 돌아야 비방문 장소에 사진을 붙이지 않고, 인기도 매칭 뒤라 새로 매칭된 항목도 대상이 된다.
+        if (commonsImagesEnabled) {
+            log.info("[2/4-사진] 위키미디어 공용 사진 연결 시작");
+            stage("[2/4-사진] 위키미디어 공용 사진 연결", commonsImageJob::run);
         }
 
         // 보강이 tags/description을 채우고 임베딩을 초기화하므로 임베딩보다 먼저 돌아야 같은 실행에 반영된다.

@@ -48,6 +48,19 @@ class HardValidatorTest {
     }
 
     @Test
+    @DisplayName("도시를 옮기는 열차·비행기 구간은 수백 km여도 비현실 구간으로 보지 않는다")
+    void validate_intercityLegIsNotUnrealistic() {
+        PlaceData osaka = new PlaceData("道頓堀", null, "Tour", "Osaka", "JP");
+        StepData train = new StepData(1, 3, "12:30", "14:00", osaka, List.of(), "TRAIN", 197,
+                BigDecimal.valueOf(524), BigDecimal.valueOf(117_600), null, null);
+        StepData car = new StepData(1, 3, "12:30", "14:00", osaka, List.of(), "CAR", 300,
+                BigDecimal.valueOf(524), null, null, null);
+
+        assertThat(validator.validate(itinerary(List.of(train))).valid()).isTrue();
+        assertThat(validator.validate(itinerary(List.of(car))).valid()).isFalse();
+    }
+
+    @Test
     @DisplayName("같은 날 같은 이름이라도 후보 id가 다른 체인 지점은 중복이 아니고, 같은 id는 중복이다")
     void validate_sameNameDifferentPlaceIds_passes() {
         PlaceData shinjuku = new PlaceData("コメダ珈琲店", "", "Cafe", "Tokyo", "JP", null, null, 10L, null);

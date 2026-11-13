@@ -108,6 +108,14 @@ Step Functions (월 1회)
         빈 값·모르는 코드는 단계 실패. 일본을 넣으면 기존 일본 명소 행 이름이 현지어로 바뀌므로 name_ko를 화면·프롬프트에
         쓰는 배포 뒤에 넣는다. WDQS 429는 Retry-After만큼 기다려 재시도.
         ※ 보강보다 먼저 돈다 — 보강이 인기도 순으로 처리하려면 필요
+  [2/4-사진] CommonsImageJob.run()  (batch.commons-images.enabled, 기본 true)
+        사진이 없고(image_url IS NULL) Wikidata 항목이 있는 활성 방문지(NOT_VISITABLE 제외), 유명한 곳부터
+        → 항목 200개씩 SPARQL로 대표 사진(P18, 여럿이면 이름순 첫 파일)
+        → 파일 50개씩 위키미디어 공용 imageinfo(960px 썸네일·Artist·LicenseShortName)
+        → image_url(upload.wikimedia.org 썸네일 주소)·image_credit(태그 뗀 작성자)·image_license·image_source_url(파일 페이지).
+        파일은 받지 않고 주소만 둔다(TourAPI 사진과 같은 방식). 라이선스가 없는 파일은 쓰지 않고, 그사이 사진이 채워진 행은
+        덮지 않는다. 실패 요청이 20%를 넘으면 단계 실패. 역할 기록 뒤라 비방문 장소에는 붙지 않는다.
+        일정 표지는 사진 있는 스텝이 없으면 일정 지역에서 사진이 있는 가장 유명한 관광지를 쓴다(ItinerarySaveHelper).
   [3/4] BatchEnrichScheduler.enrich()  (batch.enrich.enabled=true일 때만)
         ※ 환경 규약: 운영(AWS)은 상시 ON(terraform/ecs.tf batch task에
           BATCH_ENRICH_ENABLED=true 고정) → 임베딩 전 항상 보강. 로컬은 기본값 false →
@@ -206,6 +214,7 @@ Step Functions (월 1회)
 | 인기도 매칭 | `domain/place/batch/WikidataSitelinksJob.java` (Wikidata SPARQL, CC0·무인증), 해외 이름 키 `OverseasNameKeys.java` |
 | 대표 명소 적재 | `domain/place/batch/WikidataLandmarkSeeder.java` |
 | 해외 관문 적재 | `domain/place/batch/GatewaySeeder.java` |
+| 공용 사진 연결 | `domain/place/batch/CommonsImageJob.java` (Wikidata 대표 사진 → 위키미디어 공용 썸네일·저작자·라이선스), `V54__add_places_image_attribution.sql` |
 | 해외 여행지 | `src/main/resources/destinations.json` → `domain/place/destination/Destinations.java` (추출기와 같은 파일·배정 규칙) |
 | FSQ 추출 | `fsq-extractor/extract.py` (+ `test_extract.py`) |
 | 설정 | `application-batch.yml` (`batch.foursquare.chunk-size=1000`, `batch.embedding.batch-size=100`, `batch.enrich.chunk-size=1000`, `batch.enrich.enabled` 기본 false, `anthropic.batch.model=claude-haiku-5-5`) |

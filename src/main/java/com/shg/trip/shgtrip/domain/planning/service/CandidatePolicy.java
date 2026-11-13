@@ -176,9 +176,10 @@ public final class CandidatePolicy {
      * 음식 종류 키. 보강된 {@code cuisine}이 있으면 그것을, 없으면 이름·태그 기반 세부 유형을 쓴다.
      * 같은 끼니 반복 판정(유형 상한·같은 날 점심/저녁)이 이 값을 본다.
      */
-    static String cuisineOf(PlaceCandidate c) {
+    public static String cuisineOf(PlaceCandidate c) {
         if (c == null) return "";
-        return PlaceCategoryConstants.mealKind(c.name(), c.category(), c.tags(), c.description(), c.cuisine());
+        return PlaceCategoryConstants.mealKind(c.name(), c.nameKo(), c.category(), c.tags(), c.description(),
+                c.cuisine());
     }
 
     /** 바꿔 넣어도 하루 구성이 그대로인 역할끼리인지(식사↔식사, 카페↔카페, 관광 계열끼리). */

@@ -19,7 +19,11 @@ public record PlaceResponse(
         String imageUrl,
         String region,
         OffsetDateTime savedAt,
-        String nameKo
+        String nameKo,
+        /** 사진 작성자·라이선스·원본 페이지. 표시 의무가 없는 사진(TourAPI)은 null이다. */
+        String imageCredit,
+        String imageLicense,
+        String imageSourceUrl
 ) {
     public static PlaceResponse from(Place place) {
         return new PlaceResponse(
@@ -36,7 +40,10 @@ public record PlaceResponse(
                 place.getImageUrl(),
                 place.getRegion(),
                 place.getSavedAt(),
-                place.getNameKo()
+                place.getNameKo(),
+                place.getImageCredit(),
+                place.getImageLicense(),
+                place.getImageSourceUrl()
         );
     }
 }

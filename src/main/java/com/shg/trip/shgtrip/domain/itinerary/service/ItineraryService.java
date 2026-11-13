@@ -11,6 +11,7 @@ import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
+import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
@@ -54,7 +55,7 @@ public class ItineraryService {
     @Transactional(readOnly = true)
     public ItineraryResponse getItinerary(Long itineraryId, Long userId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
-        return ItineraryResponse.from(itinerary);
+        return toResponse(itinerary);
     }
 
     @Transactional(readOnly = true)
@@ -62,7 +63,7 @@ public class ItineraryService {
         Page<Itinerary> page = itineraryRepository
                 .findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable);
 
-        // 이미지 출처는 적재 시점에 확정되는 TourAPI firstimage뿐이라 조회 시점에 채울 경로가 없다.
+        // 사진은 적재 배치(TourAPI·위키미디어 공용)가 채운 주소뿐이라 조회 시점에 채울 경로가 없다.
         // Google 사진은 Maps 약관 3.2.3(a)가 캐싱을 금지해 쓰지 않는다.
         List<Long> coverPlaceIds = page.getContent().stream()
                 .map(Itinerary::getCoverPlaceId)
@@ -74,26 +75,36 @@ public class ItineraryService {
                 ? List.of()
                 : placeRepository.findAllById(coverPlaceIds);
 
-        Map<Long, String> coverUrlById = coverPlaces.stream()
-                .filter(p -> p.getImageUrl() != null)
-                .collect(Collectors.toMap(Place::getId, Place::getImageUrl));
+        Map<Long, Place> coverById = coverPlaces.stream()
+                .collect(Collectors.toMap(Place::getId, p -> p));
 
         return page.map(i -> ItinerarySummaryResponse.from(
-                i, i.getCoverPlaceId() != null ? coverUrlById.get(i.getCoverPlaceId()) : null));
+                i, i.getCoverPlaceId() != null ? coverById.get(i.getCoverPlaceId()) : null));
+    }
+
+    /** 표지 장소가 스텝 밖(여행지 대표 사진)이면 따로 읽는다. */
+    private ItineraryResponse toResponse(Itinerary itinerary) {
+        Long coverId = itinerary.getCoverPlaceId();
+        Place cover = coverId == null ? null : itinerary.getSteps().stream()
+                .map(ItineraryStep::getPlace)
+                .filter(p -> p != null && coverId.equals(p.getId()))
+                .findFirst()
+                .orElseGet(() -> placeRepository.findById(coverId).orElse(null));
+        return ItineraryResponse.from(itinerary, cover);
     }
 
     @Transactional
     public ItineraryResponse updateItinerary(Long itineraryId, Long userId, ItineraryUpdateRequest request) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
         itinerary.updateInfo(request.title(), request.tags());
-        return ItineraryResponse.from(itinerary);
+        return toResponse(itinerary);
     }
 
     @Transactional
     public ItineraryResponse finalizeItinerary(Long itineraryId, Long userId) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
         if (itinerary.getStatus() == Itinerary.ItineraryStatus.FINALIZED) {
-            return ItineraryResponse.from(itinerary);
+            return toResponse(itinerary);
         }
         if (itinerary.getSteps().isEmpty()) {
             throw new BusinessException(ErrorCode.ITINERARY_EMPTY);
@@ -101,7 +112,7 @@ public class ItineraryService {
         itinerary.complete();
         recordEdit(itinerary, userId, ItineraryEditEvent.Type.FINALIZE, null, null,
                 payload("stepCount", itinerary.getSteps().size()));
-        return ItineraryResponse.from(itinerary);
+        return toResponse(itinerary);
     }
 
     @Transactional
@@ -138,7 +149,7 @@ public class ItineraryService {
                 && itinerary.getShareExpiresAt().isBefore(OffsetDateTime.now())) {
             throw new BusinessException(ErrorCode.ITINERARY_NOT_FOUND, "만료된 공유 링크입니다.");
         }
-        return ItineraryResponse.from(itinerary);
+        return toResponse(itinerary);
     }
 
     /**
@@ -170,7 +181,7 @@ public class ItineraryService {
         recalculateTransportation(itinerary.getSteps(), step);
         itinerary.recalculateEstimatedCost();
 
-        return ItineraryResponse.from(itinerary);
+        return toResponse(itinerary);
     }
 
     /**
@@ -196,6 +207,7 @@ public class ItineraryService {
         }
 
         verifyAnchorsKept(daySteps, orderedStepIds);
+        TransferLeg transfer = transferLegOf(daySteps);
 
         // 슬롯 시간을 스텝 변경 전에 먼저 캡처해야 뮤테이션 중 값이 섞이지 않는다.
         List<Integer> slots = daySteps.stream()
@@ -224,9 +236,9 @@ public class ItineraryService {
         }
         entityManager.flush();
 
-        recalculateDayTransportation(itinerary.getSteps(), dayNumber);
+        recalculateDayTransportation(itinerary.getSteps(), dayNumber, transfer);
         itinerary.recalculateEstimatedCost();
-        return ItineraryResponse.from(itinerary);
+        return toResponse(itinerary);
     }
 
     /**
@@ -250,6 +262,8 @@ public class ItineraryService {
         }
         recordEdit(itinerary, userId, ItineraryEditEvent.Type.DELETE_STEP, dayNumber, stepId,
                 payload("placeId", placeIdOf(target), "stepOrder", target.getStepOrder()));
+        TransferLeg transfer = transferLegOf(itinerary.getSteps().stream()
+                .filter(s -> dayNumber.equals(s.getDayNumber())).toList());
 
         itinerary.removeStep(target);
         entityManager.flush(); // orphanRemoval DELETE가 재정렬 UPDATE보다 먼저 나가야 한다
@@ -263,16 +277,32 @@ public class ItineraryService {
         }
         entityManager.flush();
 
-        recalculateDayTransportation(itinerary.getSteps(), dayNumber);
+        recalculateDayTransportation(itinerary.getSteps(), dayNumber, transfer);
         itinerary.recalculateEstimatedCost();
-        return ItineraryResponse.from(itinerary);
+        return toResponse(itinerary);
+    }
+
+    /** 다른 도시에서 넘어온 날 첫 스텝의 열차·비행기 구간. 그날 순서를 바꿔도 이동 자체는 그대로다. */
+    private record TransferLeg(String mode, Integer duration, BigDecimal distance, BigDecimal cost) {}
+
+    /** 그날 첫 스텝이 도시 간 이동 구간이면 그 값, 아니면 null. */
+    private static TransferLeg transferLegOf(List<ItineraryStep> daySteps) {
+        return daySteps.stream()
+                .min(Comparator.comparingInt(ItineraryStep::getStepOrder))
+                .filter(s -> s.getTransportationMode() != null
+                        && ScheduleTuning.INTERCITY_LEG_MODES.contains(s.getTransportationMode()))
+                .map(s -> new TransferLeg(s.getTransportationMode(), s.getTransportationDuration(),
+                        s.getTransportationDistance(), s.getTransportationCost()))
+                .orElse(null);
     }
 
     /**
      * day 첫 스텝은 인바운드 leg가 없어 교통정보를 비운다. 생성 파이프라인과 같은 시맨틱이다.
      * 좌표가 없어 계산할 수 없는 구간도 낡은 leg가 남지 않게 비운다.
+     *
+     * @param transfer 편집 전 첫 스텝의 도시 간 이동 구간. 있으면 새 첫 스텝에 둔다
      */
-    private void recalculateDayTransportation(List<ItineraryStep> allSteps, Integer dayNumber) {
+    private void recalculateDayTransportation(List<ItineraryStep> allSteps, Integer dayNumber, TransferLeg transfer) {
         List<ItineraryStep> daySteps = allSteps.stream()
                 .filter(s -> dayNumber.equals(s.getDayNumber()))
                 .sorted(Comparator.comparingInt(ItineraryStep::getStepOrder))
@@ -280,7 +310,11 @@ public class ItineraryService {
         for (int i = 0; i < daySteps.size(); i++) {
             ItineraryStep step = daySteps.get(i);
             if (i == 0) {
-                step.updateTransportation(null, null, null, null);
+                if (transfer != null) {
+                    step.updateTransportation(transfer.mode(), transfer.duration(), transfer.distance(), transfer.cost());
+                } else {
+                    step.updateTransportation(null, null, null, null);
+                }
                 continue;
             }
             GeoUtils.TransportLeg leg = computeLeg(daySteps.get(i - 1), step);

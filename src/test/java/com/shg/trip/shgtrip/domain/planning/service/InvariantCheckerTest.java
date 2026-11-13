@@ -31,6 +31,19 @@ class InvariantCheckerTest {
     private static final String AIRPORT =
             "Travel and Transportation > Transport Hub > Airport > Airport Terminal";
 
+    @Test
+    @DisplayName("도시를 옮기는 열차·비행기 구간은 하루 이동 예산에 넣지 않는다")
+    void intercityLegIsOutsideDayBudget() {
+        PlaceData osaka = new PlaceData("道頓堀", null, ATTRACTION, "Osaka", "JP");
+        StepData train = new StepData(1, 3, "12:30", "14:00", osaka, List.of(), "TRAIN", 197,
+                BigDecimal.valueOf(524), null, null, null);
+        StepData car = new StepData(1, 3, "12:30", "14:00", osaka, List.of(), "CAR", 40,
+                BigDecimal.valueOf(30), null, null, null);
+
+        assertThat(InvariantChecker.isOutsideDayBudget(List.of(train), 0, false, false)).isTrue();
+        assertThat(InvariantChecker.isOutsideDayBudget(List.of(car), 0, false, false)).isFalse();
+    }
+
     @Nested
     @DisplayName("evaluate - day별 불변식 판정")
     class Evaluate {

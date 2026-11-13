@@ -116,6 +116,12 @@ public class OptimizedClaudeAIService {
             String normalizedDestination = getStringOrDefault(parsed, "normalizedDestination", input.destination());
             String country = getStringOrDefault(parsed, "country", "");
             List<String> regions = EnrichDestinations.canonicalRegions(getListOrDefault(parsed, "regions"), destinations);
+            List<String> mentioned = EnrichDestinations.mentionedDestinations(regions,
+                    input.destination() + " " + (input.description() != null ? input.description() : ""), destinations);
+            if (!mentioned.isEmpty()) {
+                log.info("요청 문장에 나온 근교 여행지 추가: {}", mentioned);
+                regions = java.util.stream.Stream.concat(regions.stream(), mentioned.stream()).toList();
+            }
             List<String> searchTags = getListOrDefault(parsed, "searchTags");
             String budgetRange = getStringOrDefault(parsed, "budgetRange", "MEDIUM");
             String seasonContext = getStringOrDefault(parsed, "seasonContext", "");
@@ -125,6 +131,7 @@ public class OptimizedClaudeAIService {
             Object regionAllocObj = parsed.get("regionAllocation");
             if (regionAllocObj instanceof Map) {
                 regionAllocation = EnrichDestinations.canonicalAllocation((Map<?, ?>) regionAllocObj, destinations);
+                regionAllocation = EnrichDestinations.withAllocated(regionAllocation, mentioned, destinations);
             }
 
             TransportationHub transportationHub = null;

@@ -31,6 +31,10 @@ class DayState {
     Integer startNotBefore;
     /** 마지막 날 출발 허브에 닿아야 하는 시각(분). 모르면 null(기본 21:00). */
     Integer departureDeadline;
+    /** 다른 도시에서 열차·비행기로 넘어와 시작하는 날. 도착 허브가 없다. */
+    boolean resumesAfterTransfer;
+    /** 다음 도시로 넘어가기 전날. 구간의 마지막 날이어도 숙소·저녁이 필요하고 출발 허브가 없다. */
+    boolean continuesAfter;
 
     DayState(SelectionOutput.DayPlan plan) {
         this.dayNumber = plan.dayNumber();
@@ -42,8 +46,7 @@ class DayState {
 
     /** 점심 시간대가 끝난 뒤 도착하거나 끝나기 전에 떠나는 날이면 false. 그날 점심을 요구하지 않는다. */
     boolean lunchInWindow() {
-        return (startNotBefore == null || startNotBefore <= ScheduleTuning.LUNCH_END)
-                && (departureDeadline == null || departureDeadline >= ScheduleTuning.LUNCH_END);
+        return ScheduleTuning.lunchInWindow(startNotBefore, departureDeadline);
     }
 
     /** 점심 무렵 도착이면 내려서 먹는 늦은 점심도 점심으로 본다. */
@@ -72,16 +75,16 @@ class DayState {
 
     /** 도착부터 출발까지가 그날 끼니를 빼면 관광 하나 넣기에도 짧은 날. */
     boolean tooShortForSightseeing() {
-        if (!hasUserWindow()) return false;
-        int start = startNotBefore != null ? startNotBefore : ScheduleTuning.DEFAULT_DAY_START_MINUTES;
-        int end = departureDeadline != null ? departureDeadline : ScheduleTuning.DEPARTURE_HUB_LATEST_MINUTES;
-        int meals = (lunchInWindow() ? ScheduleTuning.DINING_VISIT_MINUTES : 0)
-                + (dinnerInWindow() ? ScheduleTuning.DINING_VISIT_MINUTES : 0);
-        return end - start - meals < ScheduleTuning.MIN_SIGHTSEEING_WINDOW_MINUTES;
+        return ScheduleTuning.tooShortForSightseeing(
+                ScheduleTuning.sightseeingWindowMinutes(startNotBefore, departureDeadline));
     }
 
     boolean dinnerInWindow() {
-        return (startNotBefore == null || startNotBefore <= ScheduleTuning.DINNER_END)
-                && (departureDeadline == null || departureDeadline >= ScheduleTuning.DINNER_END);
+        return ScheduleTuning.dinnerInWindow(startNotBefore, departureDeadline);
+    }
+
+    /** 여행이 끝나는 날. 다음 도시로 이어지는 구간의 마지막 날은 아니다. */
+    static boolean endsTrip(List<DayState> days, int i) {
+        return i == days.size() - 1 && !days.get(i).continuesAfter;
     }
 }

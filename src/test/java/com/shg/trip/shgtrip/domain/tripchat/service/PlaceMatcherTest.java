@@ -22,12 +22,13 @@ import static org.mockito.Mockito.when;
 class PlaceMatcherTest {
 
     private static PlaceResponse place(long id, String name, String address, String category) {
-        return new PlaceResponse(id, name, address, null, null, category, null, null, null, null, null, null, null, null);
+        return new PlaceResponse(id, name, address, null, null, category, null, null, null, null, null, null, null, null,
+                null, null, null);
     }
 
     private static PlaceResponse overseas(long id, String name, String nameKo, String region, String category) {
         return new PlaceResponse(id, name, "東京都", null, null, category, null, null, null, null, null, region, null,
-                nameKo);
+                nameKo, null, null, null);
     }
 
     @Test

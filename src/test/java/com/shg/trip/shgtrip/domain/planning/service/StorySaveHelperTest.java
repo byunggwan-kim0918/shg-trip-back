@@ -15,6 +15,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.math.BigDecimal;
 import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -70,16 +71,16 @@ class StorySaveHelperTest {
     void saveStory_replacesDraftTitle() {
         List<StepData> steps = List.of(step(1));
         AssemblyItineraryOutput output = new AssemblyItineraryOutput(
-                "제주 오름과 흑돼지 4일", List.of("새태그"),
+                "제주 오름과 흑돼지", List.of("새태그"),
                 List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기")));
         when(itineraryStepRepository.updateNotesByDayAndPlace(eq(42L), eq(1), eq("장소1"), eq("이야기")))
                 .thenReturn(1);
-        when(itineraryRepository.updateTitleIfUnchanged(42L, "제주 오름과 흑돼지 4일", DRAFT_TITLE))
+        when(itineraryRepository.updateTitleIfUnchanged(42L, "제주 오름과 흑돼지", DRAFT_TITLE))
                 .thenReturn(1);
 
         helper.saveStory(42L, steps, output, DRAFT_TITLE);
 
-        verify(itineraryRepository).updateTitleIfUnchanged(42L, "제주 오름과 흑돼지 4일", DRAFT_TITLE);
+        verify(itineraryRepository).updateTitleIfUnchanged(42L, "제주 오름과 흑돼지", DRAFT_TITLE);
     }
 
     @Test
@@ -87,7 +88,7 @@ class StorySaveHelperTest {
     void saveStory_doesNotClobberUserEditedTitle() {
         List<StepData> steps = List.of(step(1));
         AssemblyItineraryOutput output = new AssemblyItineraryOutput(
-                "제주 오름과 흑돼지 4일", List.of("새태그"),
+                "제주 오름과 흑돼지", List.of("새태그"),
                 List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기")));
         when(itineraryStepRepository.updateNotesByDayAndPlace(eq(42L), eq(1), eq("장소1"), eq("이야기")))
                 .thenReturn(1);
@@ -97,7 +98,7 @@ class StorySaveHelperTest {
         helper.saveStory(42L, steps, output, DRAFT_TITLE);
 
         // 조건부 UPDATE 한 번만 시도하고, 그 외 제목 관련 추가 조작은 없다
-        verify(itineraryRepository, times(1)).updateTitleIfUnchanged(42L, "제주 오름과 흑돼지 4일", DRAFT_TITLE);
+        verify(itineraryRepository, times(1)).updateTitleIfUnchanged(42L, "제주 오름과 흑돼지", DRAFT_TITLE);
         verify(itineraryRepository).findByIdForUpdate(42L);
         verifyNoMoreInteractions(itineraryRepository);
     }
@@ -162,5 +163,16 @@ class StorySaveHelperTest {
 
         verifyNoInteractions(itineraryStepRepository);
         verify(itineraryRepository, never()).updateTitleIfUnchanged(anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("제목의 여행 기간이 실제와 다르면 실제 값으로 바꾸고, 날짜·끝이 아닌 N일은 그대로 둔다")
+    void titleDurationFollowsActualDays() {
+        assertThat(StorySaveHelper.withActualDuration("타이베이 노을 미식과 야경 4일", 3)).isEqualTo("타이베이 노을 미식과 야경 3일");
+        assertThat(StorySaveHelper.withActualDuration("오사카 3박 4일 먹방", 5)).isEqualTo("오사카 4박 5일 먹방");
+        assertThat(StorySaveHelper.withActualDuration("제주 크리스마스 12월 24일", 3)).isEqualTo("제주 크리스마스 12월 24일");
+        assertThat(StorySaveHelper.withActualDuration("경주 1박 2일 역사 산책", 1)).isEqualTo("경주 당일치기 역사 산책");
+        assertThat(StorySaveHelper.withActualDuration("서울 1일 1카페 산책", 3)).isEqualTo("서울 1일 1카페 산책");
+        assertThat(StorySaveHelper.withActualDuration("부산 야경 드라이브", 2)).isEqualTo("부산 야경 드라이브");
     }
 }

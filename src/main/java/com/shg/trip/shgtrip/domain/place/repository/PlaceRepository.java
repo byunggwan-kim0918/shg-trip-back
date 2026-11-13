@@ -494,6 +494,44 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             """)
     List<Place> findImagelessByNameAndRegion(@Param("name") String name, @Param("region") String region);
 
+    /** 위키미디어 공용 사진을 찾아볼 행. */
+    interface ImageTarget {
+        Long getId();
+
+        String getWikidataId();
+    }
+
+    /** 사진이 없고 Wikidata 항목이 있는 활성 방문지. 유명한 곳이 먼저다. */
+    @Query("""
+            SELECT p.id AS id, p.wikidataId AS wikidataId FROM Place p
+            WHERE p.active = true AND p.wikidataId IS NOT NULL AND p.imageUrl IS NULL
+              AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
+            ORDER BY p.wikidataSitelinks DESC NULLS LAST, p.id
+            """)
+    List<ImageTarget> findCommonsImageTargets();
+
+    /** 사진이 그사이 채워진 행(TourAPI)은 덮지 않는다. */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places
+               SET image_url = :imageUrl, image_credit = :credit, image_license = :license,
+                   image_source_url = :sourceUrl
+             WHERE id = :id AND image_url IS NULL
+            """, nativeQuery = true)
+    int updateAttributedImage(@Param("id") long id, @Param("imageUrl") String imageUrl,
+                              @Param("credit") String credit, @Param("license") String license,
+                              @Param("sourceUrl") String sourceUrl);
+
+    /** 일정 표지 대체 후보: 그 지역에서 사진이 있는 가장 유명한 관광지. */
+    @Query("""
+            SELECT p FROM Place p
+            WHERE p.active = true AND p.region = :region AND p.imageUrl IS NOT NULL
+              AND (p.category LIKE 'Landmarks%' OR p.category LIKE 'Arts and Entertainment%')
+            ORDER BY p.wikidataSitelinks DESC NULLS LAST, p.id
+            """)
+    List<Place> findCoverCandidates(@Param("region") String region, Pageable pageable);
+
     /**
      * 이미지가 없는 관광지. TourAPI 키워드 백필 대상이다.
      *

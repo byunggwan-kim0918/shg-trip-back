@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.embedding.EmbeddingService;
 import com.shg.trip.shgtrip.domain.place.vector.PlaceVectorSearchService;
 import com.shg.trip.shgtrip.domain.place.vector.VectorSearchRequest;
@@ -60,7 +61,8 @@ class NamedPlacePoolTest {
                 place(5, "해운대 블루라인파크", "Landmarks and Outdoors > Tourist Attraction", 3),
                 place(6, "광안대교", "Landmarks and Outdoors > Bridge", 9)));
 
-        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService)
+        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService,
+                Destinations.fromClasspath())
                 .search(busan("KTX로 가요. 해운대랑 광안리 보고 싶어요."));
 
         assertThat(result).extracting(PlaceCandidate::name).containsExactly("광안리해수욕장");
@@ -84,11 +86,100 @@ class NamedPlacePoolTest {
                 LocalDate.of(2026, 11, 28), LocalDate.of(2026, 11, 30), "센소지는 꼭 가고 싶어요.", null,
                 "도쿄", "JP", List.of("Tokyo"), List.of("문화"), null, "MEDIUM", "늦가을", "", null, null);
 
-        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService)
+        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService,
+                Destinations.fromClasspath())
                 .search(tokyo);
 
         assertThat(result).extracting(PlaceCandidate::name).containsExactly("浅草寺");
         assertThat(result.get(0).nameKo()).isEqualTo("센소지");
+    }
+
+    @Test
+    @DisplayName("요청한 근교 명소 안의 식당은 도시 식당에 밀리지 않고 후보에 들어간다(바나힐)")
+    void addsDiningInsideRequestedLandmark() {
+        given(embeddingService.embedBatch(anyList())).willAnswer(inv -> {
+            List<float[]> v = new ArrayList<>();
+            for (int i = 0; i < ((List<?>) inv.getArgument(0)).size(); i++) v.add(new float[]{0.1f});
+            return v;
+        });
+        VectorSearchResult cityMeal = danang(30L, "Bánh Xèo Bà Dưỡng", "Da Nang", 16.0610, 108.2120);
+        VectorSearchResult banaMeal = danang(31L, "Beer Plaza", "Ba Na Hills", 15.9977, 107.9881);
+        given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willAnswer(inv -> {
+            VectorSearchRequest request = inv.getArgument(0);
+            return List.of("Ba Na Hills").equals(request.regions()) ? List.of(banaMeal) : List.of(cityMeal);
+        });
+        VectorEnrichedInput input = new VectorEnrichedInput(
+                "다낭", List.of("food"), List.of("restaurant"), "normal", "any", null,
+                LocalDate.of(2027, 1, 10), LocalDate.of(2027, 1, 12), null, null,
+                "다낭", "VN", List.of("Da Nang", "Ba Na Hills"), List.of("음식"), null, "MEDIUM", "겨울", "", null, null);
+
+        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService,
+                Destinations.fromClasspath()).search(input);
+
+        assertThat(result).extracting(PlaceCandidate::name).contains("Bánh Xèo Bà Dưỡng", "Beer Plaza");
+    }
+
+    @Test
+    @DisplayName("먼 두 도시는 도시마다 따로 찾아 한 도시 결과가 다른 도시 후보를 밀어내지 않는다")
+    void searchesEachCitySeparately() {
+        given(embeddingService.embedBatch(anyList())).willAnswer(inv -> {
+            List<float[]> v = new ArrayList<>();
+            for (int i = 0; i < ((List<?>) inv.getArgument(0)).size(); i++) v.add(new float[]{0.1f});
+            return v;
+        });
+        VectorSearchResult tokyoMeal = new VectorSearchResult(40L, "Tsukiji Sushi", "Tokyo",
+                "Dining and Drinking > Restaurant > Sushi Restaurant", List.of(), "Tokyo", "JP",
+                BigDecimal.valueOf(35.665), BigDecimal.valueOf(139.770), null, null, null, 0, 0.9, "MEAL", null, null);
+        VectorSearchResult osakaMeal = new VectorSearchResult(41L, "Dotonbori Takoyaki", "Osaka",
+                "Dining and Drinking > Restaurant > Takoyaki Place", List.of(), "Osaka", "JP",
+                BigDecimal.valueOf(34.669), BigDecimal.valueOf(135.501), null, null, null, 0, 0.95, "MEAL", null, null);
+        given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willAnswer(inv -> {
+            VectorSearchRequest request = inv.getArgument(0);
+            return List.of("Tokyo").equals(request.regions()) ? List.of(tokyoMeal) : List.of(osakaMeal);
+        });
+        VectorEnrichedInput input = new VectorEnrichedInput(
+                "도쿄 오사카", List.of("food"), List.of("restaurant"), "normal", "any", null,
+                LocalDate.of(2027, 1, 5), LocalDate.of(2027, 1, 8), null, null,
+                "도쿄 오사카", "JP", List.of("Tokyo", "Osaka"), List.of("음식"), null, "MEDIUM", "겨울", "",
+                new com.shg.trip.shgtrip.domain.planning.dto.TransportationHub("Narita International Airport",
+                        "Kansai International Airport", "AIRPORT"), null);
+
+        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService,
+                Destinations.fromClasspath()).search(input);
+
+        assertThat(result).extracting(PlaceCandidate::name).containsExactly("Tsukiji Sushi", "Dotonbori Takoyaki");
+        assertThat(result).extracting(PlaceCandidate::index).containsExactly(1, 2);
+    }
+
+    @Test
+    @DisplayName("도시로 따로 두지 않은 인접 여행지는 가장 가까운 도시 구간에서 함께 찾는다")
+    void nearbyRootIsSearchedWithNearestCity() {
+        given(embeddingService.embedBatch(anyList())).willAnswer(inv -> {
+            List<float[]> v = new ArrayList<>();
+            for (int i = 0; i < ((List<?>) inv.getArgument(0)).size(); i++) v.add(new float[]{0.1f});
+            return v;
+        });
+        List<List<String>> requestedRegions = new ArrayList<>();
+        given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willAnswer(inv -> {
+            requestedRegions.add(((VectorSearchRequest) inv.getArgument(0)).regions());
+            return List.of();
+        });
+        VectorEnrichedInput input = new VectorEnrichedInput(
+                "도쿄 후쿠오카 나가사키", List.of("food"), List.of("restaurant"), "normal", "any", null,
+                LocalDate.of(2027, 1, 5), LocalDate.of(2027, 1, 9), null, null,
+                "도쿄 후쿠오카", "JP", List.of("Tokyo", "Fukuoka", "Nagasaki"), List.of("음식"), null, "MEDIUM", "겨울",
+                "", null, null);
+
+        new VectorSearchQueryService(embeddingService, placeVectorSearchService, Destinations.fromClasspath())
+                .search(input);
+
+        assertThat(requestedRegions).contains(List.of("Tokyo"), List.of("Fukuoka", "Nagasaki"));
+    }
+
+    private static VectorSearchResult danang(long id, String name, String region, double lat, double lng) {
+        return new VectorSearchResult(id, name, region, "Dining and Drinking > Restaurant > Vietnamese Restaurant",
+                List.of(), region, "VN", BigDecimal.valueOf(lat), BigDecimal.valueOf(lng), null, null, null, 0, 0.9,
+                "MEAL", null, null);
     }
 
     private static VectorSearchResult tokyo(long id, String name, String nameKo, int sitelinks) {
@@ -113,7 +204,8 @@ class NamedPlacePoolTest {
         given(placeVectorSearchService.findPopular(any(), anyString(), anyList(), anyInt())).willReturn(List.of(
                 place(2, "광안리해수욕장", "Landmarks and Outdoors > Beach", 11)));
 
-        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService)
+        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService,
+                Destinations.fromClasspath())
                 .search(busan("광안리 보고 싶어요."));
 
         assertThat(result).extracting(PlaceCandidate::name).contains("광안리유가횟집", "광안리해수욕장");
@@ -132,7 +224,8 @@ class NamedPlacePoolTest {
         given(placeVectorSearchService.findPopular(any(), anyString(), anyList(), anyInt())).willReturn(List.of(
                 bulguksa, place(11, "불국사 대웅전", "Landmarks and Outdoors > Historic and Protected Site", 3)));
 
-        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService)
+        List<PlaceCandidate> result = new VectorSearchQueryService(embeddingService, placeVectorSearchService,
+                Destinations.fromClasspath())
                 .search(busan("부모님 모시고 불국사 꼭 가고 싶어요."));
 
         assertThat(result).extracting(PlaceCandidate::name).doesNotContain("불국사 대웅전");

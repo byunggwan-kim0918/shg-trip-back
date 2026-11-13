@@ -1,11 +1,14 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.destination.Destination;
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.embedding.EmbeddingService;
 import com.shg.trip.shgtrip.domain.place.vector.PlaceVectorSearchService;
 import com.shg.trip.shgtrip.domain.place.vector.VectorSearchRequest;
 import com.shg.trip.shgtrip.domain.place.vector.VectorSearchResult;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
+import com.shg.trip.shgtrip.domain.planning.dto.TripCities;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants.SearchRole;
 import com.shg.trip.shgtrip.domain.planning.service.SearchQueryBuilder.SearchSlot;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
@@ -94,15 +97,51 @@ public class VectorSearchQueryService {
 
     private final EmbeddingService embeddingService;
     private final PlaceVectorSearchService placeVectorSearchService;
+    private final Destinations destinations;
 
     public VectorSearchQueryService(EmbeddingService embeddingService,
-                                    PlaceVectorSearchService placeVectorSearchService) {
+                                    PlaceVectorSearchService placeVectorSearchService,
+                                    Destinations destinations) {
         this.embeddingService = embeddingService;
         this.placeVectorSearchService = placeVectorSearchService;
+        this.destinations = destinations;
     }
 
     /** @return 1-based 인덱스가 부여된 후보 장소 목록 */
     public List<PlaceCandidate> search(VectorEnrichedInput input) {
+        return search(input, TripCityDetector.detect(input.regions(), input.regionAllocation(),
+                calculateTripDays(input), destinations, input.transportationHub()));
+    }
+
+    /**
+     * @param cities 먼 도시를 오가는 여행이면 도시 순서와 일차별 도시, 아니면 null. 두 도시를 한 번에 찾으면 상위 결과가
+     *               한 도시로 쏠려 도시마다 그 일수만큼 따로 찾아 합친다.
+     */
+    public List<PlaceCandidate> search(VectorEnrichedInput input, TripCities cities) {
+        if (cities == null || input.startDate() == null) return searchWithin(input);
+        List<PlaceCandidate> merged = new ArrayList<>();
+        Set<Long> seen = new HashSet<>();
+        for (CityBlockPlanner.Block block : CityBlockPlanner.blocksOf(cities)) {
+            List<String> cityRegions = input.regions().stream()
+                    .filter(r -> block.city().equals(cityOfRegion(cities, r)))
+                    .toList();
+            List<PlaceCandidate> found = searchWithin(input.forCityBlock(
+                    cityRegions.isEmpty() ? List.of(block.city()) : cityRegions, block.firstDay(), block.lastDay(),
+                    TripCityDetector.allocationWithin(input.regionAllocation(), block.firstDay(), block.lastDay())));
+            found.stream().filter(c -> c.placeId() == null || seen.add(c.placeId())).forEach(merged::add);
+            log.info("도시별 검색: {} {}~{}일차 {}곳", block.city(), block.firstDay(), block.lastDay(), found.size());
+        }
+        return reindex(merged);
+    }
+
+    /** 도시로 따로 두지 않은 근교·인접 여행지는 가장 가까운 도시 구간에서 찾는다. */
+    private String cityOfRegion(TripCities cities, String region) {
+        return destinations.find(region)
+                .map(d -> cities.cityOf(d.lat(), d.lng()))
+                .orElse(destinations.rootOf(region));
+    }
+
+    private List<PlaceCandidate> searchWithin(VectorEnrichedInput input) {
         int totalLimit = calculateTotalLimit(input);
         List<SearchSlot> slots = SearchQueryBuilder.buildSearchSlots(input);
         Map<String, Integer> slotLimits = buildSlotLimits(slots, totalLimit, calculateTripDays(input));
@@ -187,6 +226,7 @@ public class VectorSearchQueryService {
 
         List<VectorSearchResult> cleaned = new ArrayList<>(filterGeographicOutliers(allResults));
         cleaned.addAll(namedPlaces(input, attractionVector(units, queryVectors), cleaned));
+        cleaned.addAll(landmarkMeals(input, units, queryVectors, cleaned));
 
         // 일정 자리에 들어갈 수 없는 장소는 풀에 두면 Sonnet이나 보충 경로가 집어 든다. 판정은 CandidatePolicy 한 곳이다.
         List<PlaceCandidate> candidates = convertToCandidates(cleaned);
@@ -421,7 +461,8 @@ public class VectorSearchQueryService {
 
     /** RouteOptimizer 유형 상한과 같은 키를 쓴다. */
     private static String mealTypeKey(VectorSearchResult r) {
-        return PlaceCategoryConstants.mealKind(r.name(), r.category(), r.tags(), r.description(), r.cuisine());
+        return PlaceCategoryConstants.mealKind(r.name(), r.nameKo(), r.category(), r.tags(), r.description(),
+                r.cuisine());
     }
 
     /** 끼니·카페는 종류가 반복되면 티가 나서 세부 유형 쏠림을 막는 슬롯. */
@@ -719,6 +760,50 @@ public class VectorSearchQueryService {
 
     private static String compact(String s) {
         return s == null ? "" : s.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+    }
+
+    /** 근교 명소 한 곳마다 따로 찾는 식당·카페 수. 그날 점심·카페를 명소 안에서 고를 만큼이다. */
+    private static final Map<SearchRole, Integer> LANDMARK_DINING_LIMIT = Map.of(
+            SearchRole.RESTAURANT, 3, SearchRole.CAFE, 1);
+
+    /**
+     * 요청한 근교 명소(바나힐·바다링) 안의 식당·카페. 여행지 전체 검색에서는 상위 도시 식당에 밀려 0곳이 되어
+     * 그날 점심을 도시까지 내려가 먹는다.
+     */
+    private List<VectorSearchResult> landmarkMeals(VectorEnrichedInput input, List<SearchUnit> units,
+                                                   List<float[]> vectors, List<VectorSearchResult> already) {
+        if (input.regions() == null) return List.of();
+        List<String> landmarks = input.regions().stream()
+                .map(destinations::find)
+                .flatMap(java.util.Optional::stream)
+                .filter(d -> d.parent() != null && !d.isCity())
+                .map(Destination::name)
+                .distinct()
+                .toList();
+        if (landmarks.isEmpty()) return List.of();
+
+        Set<Long> known = already.stream().map(VectorSearchResult::placeId).filter(Objects::nonNull)
+                .collect(Collectors.toCollection(HashSet::new));
+        List<VectorSearchResult> out = new ArrayList<>();
+        Set<SearchRole> searched = new HashSet<>();
+        for (int i = 0; i < units.size() && i < vectors.size(); i++) {
+            SearchSlot slot = units.get(i).slot();
+            Integer limit = LANDMARK_DINING_LIMIT.get(slot.role());
+            if (limit == null || vectors.get(i) == null || !searched.add(slot.role())) continue;
+            for (String landmark : landmarks) {
+                List<VectorSearchResult> raw = placeVectorSearchService.search(
+                        buildRequest(input, vectors.get(i), List.of(landmark), slot, overfetchFor(slot.role(), limit)));
+                for (ScoredResult scored : applyThresholdAndRank(slot, dedupeByPlace(raw), limit)) {
+                    Long id = scored.result().placeId();
+                    if (id != null && known.add(id)) out.add(scored.result());
+                }
+            }
+        }
+        if (!out.isEmpty()) {
+            log.info("근교 명소 식당·카페 추가 {}: {}", landmarks,
+                    out.stream().map(VectorSearchResult::name).toList());
+        }
+        return out;
     }
 
     private static float[] attractionVector(List<SearchUnit> units, List<float[]> vectors) {

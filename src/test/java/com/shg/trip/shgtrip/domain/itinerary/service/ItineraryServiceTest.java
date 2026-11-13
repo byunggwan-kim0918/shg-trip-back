@@ -170,6 +170,39 @@ class ItineraryServiceTest {
     }
 
     @Test
+    @DisplayName("다른 도시에서 넘어온 날은 순서를 바꾸거나 첫 스텝을 지워도 열차 구간이 새 첫 스텝에 남는다")
+    void keepsIntercityLegOnNewFirstStep() {
+        mockFind();
+        itinerary.getSteps().stream().filter(s -> s.getId() == 20L).findFirst().orElseThrow()
+                .updateTransportation("TRAIN", 197, BigDecimal.valueOf(524), BigDecimal.valueOf(117_600));
+
+        var reordered = byId(itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 2, List.of(21L, 20L)));
+        assertThat(reordered.get(21L).transportationMode()).isEqualTo("TRAIN");
+        assertThat(reordered.get(21L).transportationDuration()).isEqualTo(197);
+        assertThat(reordered.get(20L).transportationMode()).isNotEqualTo("TRAIN");
+
+        var deleted = byId(itineraryService.deleteStep(ITINERARY_ID, USER_ID, 21L));
+        assertThat(deleted.get(20L).transportationMode()).isEqualTo("TRAIN");
+    }
+
+    @Test
+    @DisplayName("표지 장소가 스텝 밖(여행지 대표 사진)이면 따로 읽어 사진과 출처를 함께 준다")
+    void coverOutsideStepsCarriesAttribution() {
+        ReflectionTestUtils.setField(itinerary, "coverPlaceId", 999L);
+        mockFind();
+        when(placeRepository.findById(999L)).thenReturn(Optional.of(Place.builder().id(999L).name("Tokyo Tower")
+                .imageUrl("https://upload.wikimedia.org/t.jpg").imageCredit("Kim").imageLicense("CC BY 4.0")
+                .imageSourceUrl("https://commons.wikimedia.org/wiki/File:T.jpg").build()));
+
+        ItineraryResponse res = itineraryService.getItinerary(ITINERARY_ID, USER_ID);
+
+        assertThat(res.coverImage()).isEqualTo("https://upload.wikimedia.org/t.jpg");
+        assertThat(res.coverImageCredit()).isEqualTo("Kim");
+        assertThat(res.coverImageLicense()).isEqualTo("CC BY 4.0");
+        assertThat(res.coverImageSourceUrl()).isEqualTo("https://commons.wikimedia.org/wiki/File:T.jpg");
+    }
+
+    @Test
     @DisplayName("재정렬 요청이 해당 day 스텝 집합과 불일치하면(누락/타 day 주입) 400")
     void rejectsMismatchedReorder() {
         mockFind();

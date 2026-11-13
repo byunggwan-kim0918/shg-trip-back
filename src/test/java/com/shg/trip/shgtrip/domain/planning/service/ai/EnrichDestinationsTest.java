@@ -45,6 +45,31 @@ class EnrichDestinationsTest {
     }
 
     @Test
+    @DisplayName("요청 문장의 근교 여행지 한국어 별칭은 같은 묶음일 때만 더하고, 한국어 이름은 일반 문장 오탐이라 보지 않는다")
+    void mentionedDestinations() {
+        assertThat(EnrichDestinations.mentionedDestinations(List.of("Beijing"),
+                "베이징 3박4일 자금성, 천단, 만리장성과 베이징 오리구이", destinations)).containsExactly("Badaling");
+        assertThat(EnrichDestinations.mentionedDestinations(List.of("Osaka"), "여러 나라 음식을 먹고 싶어요", destinations))
+                .isEmpty();
+        assertThat(EnrichDestinations.mentionedDestinations(List.of("Tokyo"), "만리장성도 보고 싶어요", destinations)).isEmpty();
+        assertThat(EnrichDestinations.mentionedDestinations(List.of("Beijing", "Badaling"), "만리장성", destinations))
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("더한 근교 여행지는 상위 여행지가 든 첫 배분 항목에만 들어간다")
+    void withAllocated() {
+        Map<String, List<String>> allocation = new java.util.LinkedHashMap<>();
+        allocation.put("1-2", List.of("Beijing"));
+        allocation.put("3-5", List.of("Beijing"));
+
+        assertThat(EnrichDestinations.withAllocated(allocation, List.of("Badaling"), destinations))
+                .containsEntry("1-2", List.of("Beijing", "Badaling"))
+                .containsEntry("3-5", List.of("Beijing"));
+        assertThat(EnrichDestinations.withAllocated(null, List.of("Badaling"), destinations)).isNull();
+    }
+
+    @Test
     @DisplayName("regions는 표준명·한국어 이름·별칭을 표준명으로 바꾸고 겹치면 하나만 둔다. 목록에 없는 이름은 그대로다")
     void canonicalRegions() {
         assertThat(EnrichDestinations.canonicalRegions(

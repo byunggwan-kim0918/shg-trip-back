@@ -369,9 +369,22 @@ public class RouteOptimizer {
     }
 
     public ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args) {
+        if (args.cities() != null) {
+            return CityBlockPlanner.schedule(selection, candidates, args, this::scheduleWithinCity);
+        }
+        return scheduleWithinCity(selection, candidates, args);
+    }
+
+    private ScheduleResult scheduleWithinCity(SelectionOutput selection, List<PlaceCandidate> candidates,
+                                              ScheduleArgs args) {
         return schedule(selection, candidates, args.pace(), args.transportPref(), args.startDate(),
                 args.themes(), args.hub(), args.compact(), args.categories(), args.couple(),
-                ScheduleTimes.toMinutesOrNull(args.arrivalTime()), departureHubDeadline(args));
+                firstDayStart(args), departureHubDeadline(args), args.resumesAfterTransfer(), args.continuesAfter());
+    }
+
+    /** 첫날 시작 시각(분). 도착 시각이 없으면 null. */
+    public static Integer firstDayStart(ScheduleArgs args) {
+        return ScheduleTimes.toMinutesOrNull(args.arrivalTime());
     }
 
     /** 마지막 날 출발 허브 도착 기한(분). 출발 시각이 없으면 null. 해외는 국제선 체크인만큼 더 이르다. */
@@ -391,17 +404,19 @@ public class RouteOptimizer {
                                    List<String> themes, TransportationHub hub,
                                    boolean compactMode, List<String> userCategories, boolean couple) {
         return schedule(selection, candidates, pace, transportPref, startDate, themes, hub, compactMode,
-                userCategories, couple, null, null);
+                userCategories, couple, null, null, false, false);
     }
 
     private ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates,
                                     String pace, String transportPref, java.time.LocalDate startDate,
                                     List<String> themes, TransportationHub hub,
                                     boolean compactMode, List<String> userCategories, boolean couple,
-                                    Integer firstDayStart, Integer lastDayDeadline) {
+                                    Integer firstDayStart, Integer lastDayDeadline,
+                                    boolean resumesAfterTransfer, boolean continuesAfter) {
         List<PlaceCandidate> withIntent = applyIntentHints(selection, candidates);
         ScheduleResult result = scheduleCandidates(selection, withIntent, pace, transportPref, startDate,
-                themes, hub, compactMode, userCategories, couple, firstDayStart, lastDayDeadline);
+                themes, hub, compactMode, userCategories, couple, firstDayStart, lastDayDeadline,
+                resumesAfterTransfer, continuesAfter);
         logIntentOutcome(withIntent, result.steps());
         return result;
     }
@@ -490,7 +505,8 @@ public class RouteOptimizer {
                                               String pace, String transportPref, java.time.LocalDate startDate,
                                               List<String> themes, TransportationHub hub,
                                               boolean compactMode, List<String> userCategories, boolean couple,
-                                              Integer firstDayStart, Integer lastDayDeadline) {
+                                              Integer firstDayStart, Integer lastDayDeadline,
+                                              boolean resumesAfterTransfer, boolean continuesAfter) {
         int[] range = paceRange(pace);
         int minPerDay = compactMode ? Math.min(range[0], 3) : range[0];
         int maxPerDay = range[1];
@@ -505,7 +521,9 @@ public class RouteOptimizer {
         }
         if (!days.isEmpty()) {
             days.get(0).startNotBefore = firstDayStart;
+            days.get(0).resumesAfterTransfer = resumesAfterTransfer;
             days.get(days.size() - 1).departureDeadline = lastDayDeadline;
+            days.get(days.size() - 1).continuesAfter = continuesAfter;
         }
         List<List<Integer>> pairs = selection.pairs() != null ? selection.pairs() : List.of();
         Deque<Integer> spare = new ArrayDeque<>(selection.spareIndices() != null ? selection.spareIndices() : List.of());
@@ -513,7 +531,7 @@ public class RouteOptimizer {
         // 날짜 배분을 좌표로 먼저 정한다. 아래 반응적 수리는 모델이 정한 날짜를 사후에 밀고 당길 뿐이라 넓게 걸친 날을 되돌리지 못한다.
         // 1D DP로 지리적으로 끊기는 지점에서 가변 크기로 자르고 하루 상한은 벌점으로만 둔다. 개수는 뒤의 pace quota 수리가 맞춘다.
         // 분할이 총이동을 줄이지 못하면 기각하고 모델의 배분을 쓴다(estimateTotalTourKm).
-        repartitionDaysByGeography(days, candidates, pairs, maxPerDay);
+        repartitionDaysByGeography(days, candidates, pairs, maxPerDay, hub);
 
         boolean changed = true;
         int iteration = 0;
@@ -578,9 +596,12 @@ public class RouteOptimizer {
 
         // 최종 불변식 패스가 day를 다시 스케줄할 때 같은 spare 조건으로 돌린다.
         List<Integer> spareBaseline = new ArrayList<>(spare);
+        Map<Integer, Integer> protectedHome = protectedHomes(days, candidates);
 
         List<StepData> steps = scheduleAllDays(days, candidates, pairs, highlights, rests,
                 spare, usedIndices, cfg, transportPref, maxPerDay);
+        steps = restoreDroppedProtected(days, steps, candidates, protectedHome, pairs, highlights, rests,
+                spare, spareBaseline, usedIndices, cfg, transportPref, maxPerDay, pace, startDate);
 
         // [최종 불변식 패스] 앞 보정은 확정 전 기준이라 scheduleDay의 버킷 용량·거리 트림이 다시 깰 수 있다.
         // 확정 스텝으로 필수 슬롯·대분류·커버리지·유형 상한을 재검사하고 고친 day만 다시 스케줄한다.
@@ -683,7 +704,7 @@ public class RouteOptimizer {
             DayState day = days.get(i);
             List<StepData> daySteps = byDay.getOrDefault(day.dayNumber, List.of());
             if (daySteps.isEmpty()) continue;
-            boolean lastDay = i == days.size() - 1;
+            boolean lastDay = DayState.endsTrip(days, i);
             changed |= ensureMealSlots(day, daySteps, candidates, spare, usedIndices, maxPerDay,
                     lastDay, startDate, transportPref, memo, cfg, underTypeCap);
             changed |= ensureAccommodation(day, candidates, lastDay);
@@ -729,6 +750,78 @@ public class RouteOptimizer {
     }
 
 
+
+    /** 일정에 넣기 전 보호 장소(사용자 선택·요청 의도의 핵심)의 날. 끼니는 끼니 수리가 따로 채워 뺀다. */
+    private static Map<Integer, Integer> protectedHomes(List<DayState> days, List<PlaceCandidate> candidates) {
+        Map<Integer, Integer> home = new LinkedHashMap<>();
+        for (DayState day : days) {
+            for (Integer idx : day.placeIndices) {
+                PlaceCandidate c = byIndex(candidates, idx);
+                if (c != null && c.keepsPlace() && !c.mealEligible()) home.put(idx, day.dayNumber);
+            }
+        }
+        return home;
+    }
+
+    /**
+     * 첫 스케줄에서 시각·출발·영업시간 가드에 잘린 보호 장소를 다른 날에 넣어 본다. 장소와 가까운 날부터 넣고 다시
+     * 스케줄해, 장소가 남고 다른 보호 장소를 잃지 않고 식사·거리 불변식이 깨지지 않는 첫 날을 쓴다. 맞는 날이 없으면
+     * 잘린 채 둔다. 시도마다 일정 전체를 다시 스케줄해 {@value ScheduleTuning#PROTECTED_RESTORE_MAX_TRIES}번에서 멈춘다.
+     */
+    private List<StepData> restoreDroppedProtected(List<DayState> days, List<StepData> steps,
+                                                   List<PlaceCandidate> candidates, Map<Integer, Integer> protectedHome,
+                                                   List<List<Integer>> pairs, Set<Integer> highlights, Set<Integer> rests,
+                                                   Deque<Integer> spare, List<Integer> spareBaseline,
+                                                   Set<Integer> usedIndices, ScheduleConfig cfg, String transportPref,
+                                                   int maxPerDay, String pace, java.time.LocalDate startDate) {
+        int tries = 0;
+        for (Map.Entry<Integer, Integer> entry : protectedHome.entrySet()) {
+            int idx = entry.getKey();
+            PlaceCandidate c = byIndex(candidates, idx);
+            double[] at = coordsOf(c);
+            if (at == null || collectUsedIndices(days).contains(idx)) continue;
+            List<DayState> targets = days.stream()
+                    .filter(d -> d.dayNumber != entry.getValue() && !d.tooShortForSightseeing())
+                    .filter(d -> openOnDayFilter(startDate, d.dayNumber).test(c))
+                    .sorted(Comparator.comparingDouble(d -> {
+                        double[] center = centroidOf(d.placeIndices, candidates);
+                        return center == null ? Double.MAX_VALUE : haversine(center, at);
+                    }))
+                    .toList();
+            Map<Integer, DayStatus> before = invariantChecker.evaluate(days, steps, transportPref, candidates, pace);
+            Set<Integer> keptBefore = placedProtected(days, protectedHome);
+            for (DayState target : targets) {
+                if (tries++ >= PROTECTED_RESTORE_MAX_TRIES) return steps;
+                DaySnapshot snapshot = DaySnapshot.of(days);
+                Set<Integer> usedSnapshot = new HashSet<>(usedIndices);
+                addToDay(target, idx, spare, usedIndices);
+                resetSpare(spare, spareBaseline, days);
+                List<StepData> tried = scheduleAllDays(days, candidates, pairs, highlights, rests,
+                        spare, usedIndices, cfg, transportPref, maxPerDay);
+                String regression = !target.placeIndices.contains(idx) ? "다시 잘림"
+                        : !placedProtected(days, protectedHome).containsAll(keptBefore) ? "다른 핵심 장소 잘림"
+                        : invariantChecker.findPriorityRegression(before,
+                        invariantChecker.evaluate(days, tried, transportPref, candidates, pace));
+                if (regression == null) {
+                    log.info("잘린 핵심 장소 복원: day={} → day={} {}", entry.getValue(), target.dayNumber, c.name());
+                    steps = tried;
+                    break;
+                }
+                log.info("핵심 장소 복원 보류: day={} {} ({})", target.dayNumber, c.name(), regression);
+                snapshot.restore(days);
+                usedIndices.clear();
+                usedIndices.addAll(usedSnapshot);
+                resetSpare(spare, spareBaseline, days);
+            }
+        }
+        return steps;
+    }
+
+    private Set<Integer> placedProtected(List<DayState> days, Map<Integer, Integer> protectedHome) {
+        Set<Integer> placed = collectUsedIndices(days);
+        placed.retainAll(protectedHome.keySet());
+        return placed;
+    }
 
     /**
      * 그 day에 넣어도 되는 후보 필터. 거리 예산을 보지 않으면 커버리지가 먼 장소를 넣고 다음 패스에 트림하는 왕복이 생긴다.
@@ -1434,8 +1527,9 @@ public class RouteOptimizer {
 
             // 스텝(PlaceData)에는 태그가 없어 후보로 되짚어야 태그로만 드러나는 종류도 상한에 걸린다.
             PlaceCandidate stepCand = candidateOfStep(days, step, candidates);
-            String type = stepCand != null ? subTypeOf(stepCand) : PlaceCategoryConstants.subType(
-                    step.place().name(), step.place().category(), List.of(), step.place().description());
+            String type = stepCand != null ? subTypeOf(stepCand) : PlaceCategoryConstants.mealKind(
+                    step.place().name(), step.place().nameKo(), step.place().category(), List.of(),
+                    step.place().description(), null);
             int typeCap = typeCapFor(stepCand, days.size());
             int count = typeCount.merge(type, 1, Integer::sum);
             if (!isSpecificType(type) || count <= typeCap) continue;
@@ -1726,8 +1820,17 @@ public class RouteOptimizer {
         if (PlaceCategoryConstants.isAggregatePoi(c.name(), c.category())) return false;
         // 여객시설은 카테고리가 관광지로 오적재돼 있어도 방문지가 아니다.
         if (PlaceCategoryConstants.isPassengerFacility(c.name())) return false;
+        // 약한 분류는 언어판·알려진 정도로 명소임이 드러날 때만 보충한다(상하이 타워는 "Structure"다).
+        if (PlaceCategoryConstants.isWeakFill(c.category())
+                && !isNotable(PlaceProminence.effectiveSitelinks(c.wikidataSitelinks(), c.travelerFame()))) {
+            return false;
+        }
         // 긴 등산은 하루 계획의 중심이라 코드가 빈자리 메우기로 넣지 않는다.
         return !isLongHike(c);
+    }
+
+    private static boolean isNotable(Integer sitelinks) {
+        return sitelinks != null && sitelinks >= WEAK_FILL_NOTABLE_SITELINKS;
     }
 
     /** must_pair_with 두 인덱스가 다른 day에 있으면 한쪽 day로 모은다(quota 여유 있는 쪽 우선, best-effort). */
@@ -1829,7 +1932,7 @@ public class RouteOptimizer {
      * <p>허브·숙소는 대상이 아니다. 좌표가 없는 방문지는 옮길 근거가 없어 원래 날짜에 둔다.
      */
     void repartitionDaysByGeography(List<DayState> days, List<PlaceCandidate> candidates,
-                                    List<List<Integer>> pairs, int maxPerDay) {
+                                    List<List<Integer>> pairs, int maxPerDay, TransportationHub hub) {
         if (days.size() <= 1) return;
 
         List<Integer> movable = new ArrayList<>();
@@ -1879,7 +1982,8 @@ public class RouteOptimizer {
         ensureMealPerChunk(chunks, candidates, maxPerDay);
 
         List<double[]> chunkCentroids = chunks.stream().map(c -> centroidOf(c, candidates)).toList();
-        double[] hubAnchor = hubAnchorOf(candidates);
+        // 다른 도시에서 넘어와 시작하는 구간은 도착 허브가 없어 모델의 날짜 순서를 둔다.
+        double[] hubAnchor = days.get(0).resumesAfterTransfer ? null : hubAnchorOf(candidates, hub);
         List<List<Integer>> before = days.stream()
                 .map(d -> new ArrayList<>(d.placeIndices)).collect(Collectors.toList());
 
@@ -2069,7 +2173,8 @@ public class RouteOptimizer {
         Set<Integer> used = collectUsedIndices(days);
         double maxFromCenter = cafeStopRadiusKm(transportPref, cfg);
 
-        for (int i = 0; i < days.size() - 1; i++) {
+        for (int i = 0; i < days.size(); i++) {
+            if (DayState.endsTrip(days, i)) continue;
             DayState day = days.get(i);
             Integer existing = day.placeIndices.stream()
                     .filter(idx -> isCafeLike(byIndex(candidates, idx)))
@@ -2418,14 +2523,20 @@ public class RouteOptimizer {
 
     /**
      * 후보 풀의 교통 허브(공항·역·터미널) 좌표. 첫날을 도착지 근처에서 시작하게 하는 앵커다.
+     * enrich가 정한 도착 허브와 이름이 맞는 허브를 쓰고, 없거나 안 맞으면 후보 순서상 첫 허브다.
      * 허브가 없으면 null이고 조각 순서는 모델의 날짜 순서를 따른다.
      */
-    private double[] hubAnchorOf(List<PlaceCandidate> candidates) {
-        return candidates.stream()
+    private double[] hubAnchorOf(List<PlaceCandidate> candidates, TransportationHub hub) {
+        List<PlaceCandidate> hubs = candidates.stream()
                 .filter(c -> "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category())))
-                .map(this::coordsOf)
-                .filter(Objects::nonNull)
+                .filter(c -> coordsOf(c) != null)
+                .toList();
+        String name = hub != null ? hub.arrivalHub() : null;
+        return hubs.stream()
+                .filter(c -> name != null && (namesOverlap(c.name(), name) || namesOverlap(c.nameKo(), name)))
                 .findFirst()
+                .or(() -> hubs.stream().findFirst())
+                .map(this::coordsOf)
                 .orElse(null);
     }
 
@@ -2709,14 +2820,14 @@ public class RouteOptimizer {
         DayState first = days.get(0);
         DayState last = days.get(days.size() - 1);
 
-        if (first.arrivalHubIndex == null) {
+        if (first.arrivalHubIndex == null && !first.resumesAfterTransfer) {
             Integer hub = findUnusedHub(candidates, used);
             if (hub != null) {
                 first.arrivalHubIndex = hub;
                 used.add(hub);
             }
         }
-        if (last.departureHubIndex == null) {
+        if (last.departureHubIndex == null && !last.continuesAfter) {
             Integer hub = findUnusedHub(candidates, used);
             if (hub != null) {
                 last.departureHubIndex = hub;
@@ -2733,9 +2844,11 @@ public class RouteOptimizer {
         DayState first = days.get(0);
         DayState last = days.get(days.size() - 1);
 
-        Integer arrival = pickNamedHub(candidates, hub.arrivalHub(), first.arrivalHubIndex);
+        Integer arrival = first.resumesAfterTransfer ? null
+                : pickNamedHub(candidates, hub.arrivalHub(), first.arrivalHubIndex);
         if (arrival != null) first.arrivalHubIndex = arrival;
-        Integer departure = pickNamedHub(candidates, hub.departureHub(), last.departureHubIndex);
+        Integer departure = last.continuesAfter ? null
+                : pickNamedHub(candidates, hub.departureHub(), last.departureHubIndex);
         if (departure != null) last.departureHubIndex = departure;
     }
 
@@ -2914,7 +3027,7 @@ public class RouteOptimizer {
      * 초과하면 통일 손해가 가장 작은 날부터 직전 날 숙소로 합쳐 가장 싼 조합이 남는다.
      */
     private void enforceLodgingCountCap(List<DayState> days, List<PlaceCandidate> candidates) {
-        int nights = days.size() - 1;
+        int nights = days.isEmpty() ? 0 : days.size() - (days.get(days.size() - 1).continuesAfter ? 0 : 1);
         if (nights <= 0) return;
         int cap = Math.max(1, (int) Math.ceil((double) nights / NIGHTS_PER_LODGING));
 
@@ -3421,7 +3534,7 @@ public class RouteOptimizer {
                                         ScheduleConfig cfg, double[] dayCentroid,
                                         Set<Integer> usedIndices, String transportPref,
                                         PlaceCandidate startFrom, int maxPerDay) {
-        cfg = cfgFor(day, cfg);
+        cfg = withDepartureLegLead(day, cfgFor(day, cfg), candidates, startFrom, transportPref);
         List<Integer> diningAll = orderedMain.stream()
                 .filter(idx -> {
                     PlaceCandidate c = byIndex(candidates, idx);
@@ -4460,6 +4573,25 @@ public class RouteOptimizer {
         }
         int cap = day.departureDeadline != null ? Math.min(cfg.eveningCap, day.departureDeadline) : cfg.eveningCap;
         return cfg.withWindow(start, Math.max(start, cap));
+    }
+
+    /**
+     * 숙소에서 출발 허브까지가 출발 기한 앞 여유보다 길면 그만큼 일찍 시작한다. 고정 여유
+     * ({@link ScheduleTuning#EARLY_DEPARTURE_LEAD_MINUTES})만 두면 먼 숙소에서는 기한을 넘긴다.
+     */
+    private ScheduleConfig withDepartureLegLead(DayState day, ScheduleConfig cfg, List<PlaceCandidate> candidates,
+                                                PlaceCandidate startFrom, String transportPref) {
+        if (day.startNotBefore != null || day.departureDeadline == null || day.departureHubIndex == null
+                || startFrom == null) {
+            return cfg;
+        }
+        TransportLeg leg = computeLeg(startFrom, byIndex(candidates, day.departureHubIndex), transportPref,
+                day.dayNumber);
+        if (leg == null) return cfg;
+        int latestStart = day.departureDeadline - leg.durationMin();
+        if (cfg.morningStart <= latestStart) return cfg;
+        int start = Math.max(EARLIEST_DAY_START_MINUTES, latestStart);
+        return cfg.withWindow(start, Math.max(start, cfg.eveningCap));
     }
 
     private static int departureDeadline(DayState day) {

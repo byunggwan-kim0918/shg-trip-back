@@ -68,7 +68,7 @@ import java.util.function.Function;
 @Profile("batch")
 public class WikidataSitelinksJob {
 
-    private static final String SPARQL_ENDPOINT = "https://query.wikidata.org/sparql";
+    static final String SPARQL_ENDPOINT = "https://query.wikidata.org/sparql";
 
     /**
      * Wikidata·OSM 모두 User-Agent 없는 요청을 거부한다(Overpass는 406). 연락처를 포함하는 것이
