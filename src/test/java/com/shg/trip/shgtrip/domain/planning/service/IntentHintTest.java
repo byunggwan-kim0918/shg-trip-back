@@ -99,7 +99,7 @@ class IntentHintTest {
     @DisplayName("의도 보호는 userSelected를 켜지 않는다 (Manual 선택과 구분)")
     void protectionIsNotUserSelected() {
         List<PlaceCandidate> candidates = Itinerary115Fixture.candidates();
-        List<PlaceCandidate> out = routeOptimizer.applyIntentHints(
+        List<PlaceCandidate> out = IntentHints.apply(
                 withIntent(List.of(), List.of(SONGAK_VIEW)), candidates);
 
         PlaceCandidate view = out.get(SONGAK_VIEW - 1);
@@ -118,7 +118,7 @@ class IntentHintTest {
         assertThat(candidates.get(CHEONJIYEON - 1).mealEligible()).isFalse();
         assertThat(Itinerary115Fixture.selection().spareIndices()).contains(CHEONJIYEON);
 
-        List<PlaceCandidate> out = routeOptimizer.applyIntentHints(withIntent(List.of(
+        List<PlaceCandidate> out = IntentHints.apply(withIntent(List.of(
                 new SelectionOutput.TimingHint(meal, "evening"),
                 new SelectionOutput.TimingHint(CHEONJIYEON, "evening"),
                 new SelectionOutput.TimingHint(SEONGSAN, "midnight")), List.of(CHEONJIYEON)), candidates);
@@ -135,7 +135,7 @@ class IntentHintTest {
         SelectionOutput base = Itinerary115Fixture.selection();
         List<Integer> all = base.days().stream().flatMap(d -> d.placeIndices().stream()).toList();
         // 3일차(12,13,14,22) 비식당 3곳 중 마지막(14)에만 timing → highlight 둘보다 먼저 보호돼야 한다
-        List<PlaceCandidate> out = routeOptimizer.applyIntentHints(withIntent(
+        List<PlaceCandidate> out = IntentHints.apply(withIntent(
                 List.of(new SelectionOutput.TimingHint(14, "evening")), all), candidates);
 
         Map<Integer, Long> protectedPerDay = base.days().stream().collect(Collectors.toMap(

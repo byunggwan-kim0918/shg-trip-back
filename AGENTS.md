@@ -18,7 +18,7 @@ docker compose up -d                 # PostgreSQL(pgvector) · Valkey · LocalSt
 
 ## 구조
 
-- `domain/planning`: 생성 파이프라인. 조건 판정은 `InvariantChecker`(고치지 않음), 수리는 `RouteOptimizer`, 튜닝 상수는 `ScheduleTuning` 한 곳에 둔다.
+- `domain/planning`: 생성 파이프라인. 조건 판정은 `InvariantChecker`(고치지 않음), 수리는 `RouteOptimizer`가 단계 순서를 정하고 단계 클래스(`DayRebalancer`·`LodgingPlanner`·`MealPlanner`·`DistanceBudget`·`FinalRepair` 등)가 맡는다. 튜닝 상수는 `ScheduleTuning` 한 곳에 둔다.
 - `domain/tripchat`: 대화형 입력. 생성 요청은 `TripRequestMapper` 한 곳에서만 만든다.
 - `domain/place/batch`: `batch` 프로필 전용 적재·보강·임베딩 작업.
 - `src/main/resources/prompts/`: LLM 프롬프트, `db/migration/`: Flyway.

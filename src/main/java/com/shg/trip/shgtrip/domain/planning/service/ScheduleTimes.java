@@ -1,11 +1,14 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
+import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 
+import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.DEPARTURE_CHECKIN_BUFFER_MINUTES;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.END_OF_DAY_MINUTES;
+import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.OVERSEAS_DEPARTURE_CHECKIN_BUFFER_MINUTES;
 
 /**
  * {@link RouteOptimizer}와 {@link InvariantChecker}가 같은 시각·인덱스 규칙을 봐야 한다.
@@ -32,6 +35,20 @@ final class ScheduleTimes {
         if (hhmm == null || !hhmm.matches("\\d{1,2}:\\d{2}")) return null;
         String[] p = hhmm.split(":");
         return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
+    }
+
+    /** 첫날 시작 시각(분). 도착 시각이 없으면 null. */
+    static Integer firstDayStart(ScheduleArgs args) {
+        return toMinutesOrNull(args.arrivalTime());
+    }
+
+    /** 마지막 날 출발 허브 도착 기한(분). 출발 시각이 없으면 null. 해외는 국제선 체크인만큼 더 이르다. */
+    static Integer departureHubDeadline(ScheduleArgs args) {
+        Integer departure = toMinutesOrNull(args.departureTime());
+        if (departure == null) return null;
+        boolean overseas = args.country() != null && !"KR".equalsIgnoreCase(args.country());
+        int buffer = overseas ? OVERSEAS_DEPARTURE_CHECKIN_BUFFER_MINUTES : DEPARTURE_CHECKIN_BUFFER_MINUTES;
+        return Math.max(0, departure - buffer);
     }
 
     /**

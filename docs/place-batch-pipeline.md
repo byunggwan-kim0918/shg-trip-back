@@ -172,7 +172,7 @@ Step Functions (월 1회)
         → 결과 반영만 다시 할 때: BATCH_ENRICH_RESUME_BATCH_ID="msgbatch_a,msgbatch_b" — 결과의 custom_id로 장소를
           읽어 반영하고 새 보강은 하지 않는다(재제출·재과금 없음, Anthropic 결과 보관 29일). 그 사이 보강된 행은
           덮지 않고(v2는 속성 버전 기준) 실패 횟수도 올리지 않는다
-        ※ recommended_time_slots는 RouteOptimizer.timePreference()가 소비 —
+        ※ recommended_time_slots는 DayTiming.timePreference()가 소비 —
           야간 골프장 같은 시간대 부적합 배치 방지
   [3/4-이름] NameKoOverrideJob.run()  (batch.name-ko-overrides.enabled, 기본 true)
         name-ko-overrides.tsv(키: Wikidata QID 또는 "국가코드:원문 이름")의 한국어 이름으로 name_ko를 덮는다.
