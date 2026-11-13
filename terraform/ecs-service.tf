@@ -1,11 +1,12 @@
 # ── ECS 서비스 ────────────────────────────────────────────────────────────────
 # task_definition은 CI 배포가 바꾸므로 무시한다 — 태스크 정의를 바꾼 apply 뒤에는 배포 워크플로를 수동 실행
+# 앱·웹은 두 대를 AZ에 나눠 한 대가 교체·장애 중에도 응답한다. 생성 진행 SSE는 Redis 중계로 어느 앱에 붙어도 이어진다.
 
 resource "aws_ecs_service" "app" {
   name            = "shgtrip-app"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.app.arn
-  desired_count   = 1
+  desired_count   = 2
   launch_type     = "FARGATE"
 
   # Spring 기동(이미지 pull 포함 약 1분) + 타깃 정상 판정(15초×2)
@@ -44,7 +45,7 @@ resource "aws_ecs_service" "web" {
   name            = "shgtrip-web"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.web.arn
-  desired_count   = 1
+  desired_count   = 2
   launch_type     = "FARGATE"
 
   health_check_grace_period_seconds = 120
