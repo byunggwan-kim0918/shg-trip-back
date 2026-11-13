@@ -91,7 +91,10 @@ class PgVectorPlaceSearchServiceTest {
             // 유사도 갈래 + 인기도 시딩 갈래를 UNION한다. 필터는 양쪽에 동일하게 걸린다.
             assertThat(sql).contains("UNION");
             assertThat(sql).contains("ORDER BY p.embedding <=> ?::halfvec");
-            assertThat(sql).contains("ORDER BY p.wikidata_sitelinks DESC");
+            // 같은 장소의 출처별 행을 한 행으로 묶고, 관광공사에 연결된 장소를 먼저 담는다
+            assertThat(sql).contains("DISTINCT ON (COALESCE(p.wikidata_id, p.name))");
+            assertThat(sql).contains("ORDER BY seed.tourism_listed DESC, seed.wikidata_sitelinks DESC");
+            assertThat(sql).contains("NOT IN ('TRANSIT', 'LODGING')");
 
             // params: [vec, country, region, vec(ORDER BY), limit] + [vec, country, region, seedLimit]
             assertThat(params).hasSize(9);

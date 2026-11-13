@@ -32,9 +32,15 @@ public final class SearchQueryBuilder {
      * @param queryText   임베딩 대상 쿼리 문장
      * @param labelTokens 이 슬롯의 의미 라벨 토큰. 이름·태그가 여기 걸리면 랭킹 가점
      * @param excludedCategoryPatterns 이 슬롯에서 배제할 "명백히 틀린 대분류" 패턴
+     * @param baseQueryText AI 힌트를 뺀 쿼리 문장. 힌트가 없으면 queryText와 같다
      */
     public record SearchSlot(String key, SearchRole role, String queryText, List<String> labelTokens,
-                             List<String> excludedCategoryPatterns) {}
+                             List<String> excludedCategoryPatterns, String baseQueryText) {
+        public SearchSlot(String key, SearchRole role, String queryText, List<String> labelTokens,
+                          List<String> excludedCategoryPatterns) {
+            this(key, role, queryText, labelTokens, excludedCategoryPatterns, queryText);
+        }
+    }
 
     /**
      * @param input enrichInput 결과 (normalizedDestination, searchTags 필수)
@@ -175,7 +181,7 @@ public final class SearchQueryBuilder {
     private static SearchSlot slot(String key, SearchRole role, String destination,
                                    String template, String aiHint, String categoryId) {
         return new SearchSlot(key, role, compose(destination, template, aiHint), labelTokens(template),
-                PlaceCategoryConstants.excludedCategoryPatterns(role, categoryId));
+                PlaceCategoryConstants.excludedCategoryPatterns(role, categoryId), compose(destination, template, null));
     }
 
     /** 1글자 토큰은 불용어로 보고 버린다. */
