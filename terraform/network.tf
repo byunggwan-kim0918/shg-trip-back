@@ -102,20 +102,27 @@ resource "aws_route_table" "public" {
 }
 
 # NAT 게이트웨이 대신 NAT 인스턴스 — 월 $40대 고정비 회피
+# 프라이빗 서브넷은 같은 AZ의 NAT로 나간다. 다른 AZ NAT를 거치면 그 AZ 장애에 같이 끊긴다.
 resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.main.id
+  for_each = aws_instance.nat
+  vpc_id   = aws_vpc.main.id
 
   route {
     cidr_block           = "0.0.0.0/0"
-    network_interface_id = aws_instance.nat.primary_network_interface_id
+    network_interface_id = each.value.primary_network_interface_id
   }
 
   tags = {
-    Name      = "shgTrip-private-rt"
+    Name      = "shgTrip-private-rt-${each.key}"
     Project   = var.project
     Env       = var.env
     ManagedBy = "manual"
   }
+}
+
+moved {
+  from = aws_route_table.private
+  to   = aws_route_table.private["2a"]
 }
 
 resource "aws_route_table_association" "public_2a" {
@@ -130,10 +137,11 @@ resource "aws_route_table_association" "public_2c" {
 
 resource "aws_route_table_association" "private_2a" {
   subnet_id      = aws_subnet.private_2a.id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private["2a"].id
 }
 
+# TODO: 2c NAT가 부팅 스크립트(iptables)를 마친 것을 확인한 뒤 private["2c"]로 바꾼다.
 resource "aws_route_table_association" "private_2c" {
   subnet_id      = aws_subnet.private_2c.id
-  route_table_id = aws_route_table.private.id
+  route_table_id = aws_route_table.private["2a"].id
 }
