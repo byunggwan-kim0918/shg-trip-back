@@ -35,7 +35,7 @@ import static org.mockito.Mockito.*;
 
 /**
  * 새 파이프라인: enrich → vectorSearch → selectPlaces(Sonnet, concept+day힌트+pairs)
- * → RouteOptimizer.repairAndSchedule(결정론적 day/순서/시간 확정) → 구조 저장(DRAFT) → complete(emitter 유지)
+ * → RouteOptimizer.schedule(결정론적 day/순서/시간 확정) → 구조 저장(DRAFT) → complete(emitter 유지)
  * → StoryGenerationService.generateAndAttach (비동기, story-ready 후 emitter 종료)
  */
 @ExtendWith(MockitoExtension.class)
@@ -153,7 +153,7 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
-    @DisplayName("정상 흐름: enrich → vectorSearch → selectPlaces → repairAndSchedule → 구조 저장 → complete(유지) → 비동기 story")
+    @DisplayName("정상 흐름: enrich → vectorSearch → selectPlaces → schedule → 구조 저장 → complete(유지) → 비동기 story")
     void execute_success_savesDraftAndTriggersAsyncStory() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);

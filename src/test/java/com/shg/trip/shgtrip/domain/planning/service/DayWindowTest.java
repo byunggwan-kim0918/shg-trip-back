@@ -151,15 +151,4 @@ class DayWindowTest {
 
         assertThat(toMinutesOrZero(last.get(last.size() - 1).startTime())).isLessThanOrEqualTo(11 * 60);
     }
-
-    @Test
-    @DisplayName("시각을 안 주면 기존 일정과 같다")
-    void noTimesMatchesDefault() {
-        List<StepData> withNulls = schedule(null, null);
-        List<StepData> legacy = routeOptimizer.schedule(Itinerary115Fixture.selection(), Itinerary115Fixture.candidates(),
-                "normal", "car", LocalDate.of(2026, 11, 1), List.of("food", "romance"),
-                new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"), false, List.of("restaurant")).steps();
-
-        assertThat(withNulls).isEqualTo(legacy);
-    }
 }

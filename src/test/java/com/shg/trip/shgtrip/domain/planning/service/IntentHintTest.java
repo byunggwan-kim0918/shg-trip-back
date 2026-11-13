@@ -28,9 +28,9 @@ class IntentHintTest {
             "월요일: 휴무, 화요일: 휴무, 수요일: 휴무, 목요일: 휴무, 금요일: 휴무, 토요일: 휴무, 일요일: 휴무";
 
     private List<StepData> schedule(List<PlaceCandidate> candidates, SelectionOutput selection) {
-        return routeOptimizer.schedule(selection, candidates, "normal", "car", LocalDate.of(2026, 11, 1),
-                List.of("food", "romance"), new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"),
-                false, List.of("restaurant")).steps();
+        return routeOptimizer.schedule(selection, candidates,
+                ScheduleTestArgs.of("normal", "car", LocalDate.of(2026, 11, 1), List.of("food", "romance"),
+                        new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"), false, List.of("restaurant"))).steps();
     }
 
     private static SelectionOutput withIntent(List<SelectionOutput.TimingHint> timing, List<Integer> highlights) {

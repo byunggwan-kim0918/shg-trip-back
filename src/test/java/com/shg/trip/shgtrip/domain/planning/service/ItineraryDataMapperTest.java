@@ -45,7 +45,7 @@ import static org.mockito.Mockito.*;
 class ItineraryDataMapperTest {
 
     @Mock private PlaceRepository placeRepository;
-    @Mock private RouteOptimizer routeOptimizer;
+    @Mock private FallbackStepReorderer fallbackStepReorderer;
     @Mock private ItineraryAutoFixer autoFixer;
 
     @InjectMocks
