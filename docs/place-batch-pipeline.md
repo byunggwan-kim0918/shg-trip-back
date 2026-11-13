@@ -112,9 +112,11 @@ Step Functions (월 1회)
         사진이 없고(image_url IS NULL) Wikidata 항목이 있는 활성 방문지(NOT_VISITABLE 제외), 유명한 곳부터
         → 항목 200개씩 SPARQL로 대표 사진(P18, 여럿이면 이름순 첫 파일)
         → 파일 50개씩 위키미디어 공용 imageinfo(960px 썸네일·Artist·LicenseShortName)
-        → image_url(upload.wikimedia.org 썸네일 주소)·image_credit(태그 뗀 작성자)·image_license·image_source_url(파일 페이지).
-        파일은 받지 않고 주소만 둔다(TourAPI 사진과 같은 방식). 라이선스가 없는 파일은 쓰지 않고, 그사이 사진이 채워진 행은
-        덮지 않는다. 실패 요청이 20%를 넘으면 단계 실패. 역할 기록 뒤라 비방문 장소에는 붙지 않는다.
+        → image_url(썸네일 주소, 축소본은 thumb.wikimedia.org·원본 크기는 upload.wikimedia.org, utm 쿼리 제거)
+          ·image_credit(태그 뗀 작성자)·image_license·image_source_url(파일 페이지).
+        파일은 받지 않고 주소만 둔다(TourAPI 사진과 같은 방식). 라이선스나 썸네일이 없는 파일, 파일 서버가 아닌 주소(파일 형식
+        아이콘)는 쓰지 않고, 그사이 사진이 채워진 행은 덮지 않는다. 실패 요청이나 파일 서버가 아닌 썸네일이 20%를 넘으면
+        단계 실패. 역할 기록 뒤라 비방문 장소에는 붙지 않는다.
         일정 표지는 사진 있는 스텝이 없으면 일정 지역에서 사진이 있는 가장 유명한 관광지를 쓴다(ItinerarySaveHelper).
   [3/4] BatchEnrichScheduler.enrich()  (batch.enrich.enabled=true일 때만)
         ※ 환경 규약: 운영(AWS)은 상시 ON(terraform/ecs.tf batch task에

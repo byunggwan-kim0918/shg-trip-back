@@ -38,31 +38,49 @@ class CommonsImageJobTest {
     }
 
     @Test
-    @DisplayName("정규화된 제목으로 되짚어 썸네일·평문 저작자·라이선스를 꺼내고, 라이선스 없는 파일은 뺀다")
+    @DisplayName("정규화된 제목으로 되짚어 썸네일·평문 저작자·라이선스를 꺼내고, 라이선스나 썸네일 없는 파일은 뺀다")
     void parsesImageInfo() throws Exception {
         String json = """
                 {"query":{
                   "normalized":[{"from":"File:a_b.jpg","to":"File:A b.jpg"}],
                   "pages":[
                     {"title":"File:A b.jpg","imageinfo":[{
-                      "thumburl":"https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/A_b.jpg/960px-A_b.jpg",
+                      "thumburl":"https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/A_b.jpg/960px-A_b.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
                       "descriptionurl":"https://commons.wikimedia.org/wiki/File:A_b.jpg",
                       "extmetadata":{
                         "Artist":{"value":"<a href=\\"//commons.wikimedia.org/wiki/User:Kim\\">Kim &amp; Lee</a>"},
                         "LicenseShortName":{"value":"CC BY-SA 4.0"}}}]},
                     {"title":"File:No license.jpg","imageinfo":[{
-                      "thumburl":"https://upload.wikimedia.org/x.jpg","extmetadata":{}}]}
+                      "thumburl":"https://upload.wikimedia.org/x.jpg","extmetadata":{}}]},
+                    {"title":"File:No thumb.tif","imageinfo":[{
+                      "url":"https://upload.wikimedia.org/y.tif",
+                      "extmetadata":{"LicenseShortName":{"value":"CC0"}}}]}
                   ]}}""";
 
         Map<String, CommonsImageJob.CommonsImage> images = CommonsImageJob.parseImageInfo(mapper.readTree(json),
-                List.of("a_b.jpg", "No license.jpg", "Missing.jpg"));
+                List.of("a_b.jpg", "No license.jpg", "No thumb.tif", "Missing.jpg"));
 
         assertThat(images).containsOnlyKeys("a_b.jpg");
         CommonsImageJob.CommonsImage image = images.get("a_b.jpg");
-        assertThat(image.thumbUrl()).endsWith("/960px-A_b.jpg");
+        assertThat(CommonsImageJob.mediaUrl(image.thumbUrl()))
+                .isEqualTo("https://thumb.wikimedia.org/wikipedia/commons/thumb/a/ab/A_b.jpg/960px-A_b.jpg");
         assertThat(image.credit()).isEqualTo("Kim & Lee");
         assertThat(image.license()).isEqualTo("CC BY-SA 4.0");
         assertThat(image.pageUrl()).isEqualTo("https://commons.wikimedia.org/wiki/File:A_b.jpg");
+    }
+
+    @Test
+    @DisplayName("upload·thumb 서버 주소는 쿼리를 떼고 받고, 파일 형식 아이콘 등 다른 주소는 받지 않는다")
+    void acceptsOnlyWikimediaMediaHosts() {
+        assertThat(CommonsImageJob.mediaUrl(
+                "https://upload.wikimedia.org/wikipedia/commons/7/70/Example.png?utm_content=thumbnail_unscaled"))
+                .isEqualTo("https://upload.wikimedia.org/wikipedia/commons/7/70/Example.png");
+        assertThat(CommonsImageJob.mediaUrl("https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0c/T.jpg/960px-T.jpg"))
+                .isEqualTo("https://thumb.wikimedia.org/wikipedia/commons/thumb/0/0c/T.jpg/960px-T.jpg");
+        assertThat(CommonsImageJob.mediaUrl(
+                "https://commons.wikimedia.org/w/resources/assets/file-type-icons/fileicon-ogg.png")).isNull();
+        assertThat(CommonsImageJob.mediaUrl("https://upload.wikimedia.org.example.com/x.jpg")).isNull();
+        assertThat(CommonsImageJob.mediaUrl("")).isNull();
     }
 
     @Test
