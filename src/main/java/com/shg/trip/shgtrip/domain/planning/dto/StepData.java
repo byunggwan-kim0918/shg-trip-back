@@ -22,4 +22,9 @@ public record StepData(
         BigDecimal transportationCost,
         String notes,
         BigDecimal estimatedCost
-) {}
+) {
+    public StepData withStepOrder(int order) {
+        return new StepData(order, dayNumber, startTime, endTime, place, alternatives, transportationMode,
+                transportationDuration, transportationDistance, transportationCost, notes, estimatedCost);
+    }
+}

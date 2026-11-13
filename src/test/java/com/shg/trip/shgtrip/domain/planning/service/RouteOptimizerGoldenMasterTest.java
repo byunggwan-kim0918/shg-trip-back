@@ -155,10 +155,9 @@ class RouteOptimizerGoldenMasterTest {
     @MethodSource("scenarios")
     @DisplayName("schedule() 출력이 고정 스냅샷과 완전히 일치한다")
     void scheduleMatchesSnapshot(Scenario scenario) throws IOException {
-        RouteOptimizer.ScheduleResult result = routeOptimizer.schedule(
-                scenario.selection(), scenario.candidates(), scenario.pace(),
-                scenario.transportPref(), scenario.startDate(), scenario.themes(),
-                scenario.hub(), scenario.compactMode(), scenario.userCategories());
+        RouteOptimizer.ScheduleResult result = routeOptimizer.schedule(scenario.selection(), scenario.candidates(),
+                ScheduleTestArgs.of(scenario.pace(), scenario.transportPref(), scenario.startDate(), scenario.themes(),
+                        scenario.hub(), scenario.compactMode(), scenario.userCategories()));
         assertMatchesSnapshot(scenario.name(), result);
     }
 

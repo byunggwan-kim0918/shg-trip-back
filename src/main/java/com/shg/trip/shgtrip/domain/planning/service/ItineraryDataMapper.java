@@ -32,7 +32,7 @@ import java.util.stream.Stream;
 public class ItineraryDataMapper {
 
     private final PlaceRepository placeRepository;
-    private final RouteOptimizer routeOptimizer;
+    private final FallbackStepReorderer fallbackStepReorderer;
     private final ItineraryAutoFixer autoFixer;
 
     /** 여행지 기준 오매칭 판정 거리(km). 제주↔서울(약 450km) 같은 도시 단위 오매칭을 걸러낸다. */
@@ -69,7 +69,7 @@ public class ItineraryDataMapper {
             optimizedSteps = data.steps();
         } else {
             ItineraryData deduped = autoFixer.fix(data);
-            optimizedSteps = routeOptimizer.optimize(deduped.steps(), placeCache);
+            optimizedSteps = fallbackStepReorderer.optimize(deduped.steps(), placeCache);
         }
 
         Itinerary itinerary = Itinerary.builder()

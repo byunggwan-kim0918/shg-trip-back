@@ -1,6 +1,5 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
-import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
@@ -13,7 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -35,339 +33,14 @@ public class RouteOptimizer {
 
     private static final Set<String> INTENT_TIMES = Set.of("morning", "evening");
 
-    /**
-     * 같은 날 step을 좌표 기반으로 재정렬한다. 시간 슬롯은 원래 자리에 두고 장소만 옮긴다.
-     *
-     * @param placeCache "장소명|주소" → Place 캐시 (좌표 출처)
-     */
-    public List<StepData> optimize(List<StepData> steps, Map<String, Place> placeCache) {
-        if (steps == null || steps.size() <= 1) return steps;
-
-        Map<Integer, List<StepData>> byDay = steps.stream()
-                .collect(Collectors.groupingBy(StepData::dayNumber, TreeMap::new, Collectors.toList()));
-
-        List<StepData> result = new ArrayList<>();
-        int globalOrder = 1;
-
-        for (Map.Entry<Integer, List<StepData>> entry : byDay.entrySet()) {
-            List<StepData> daySteps = entry.getValue().stream()
-                    .sorted(Comparator.comparingInt(StepData::stepOrder))
-                    .collect(Collectors.toList());
-
-            if (daySteps.size() <= 2) {
-                for (StepData s : daySteps) {
-                    result.add(withStepOrder(s, globalOrder++));
-                }
-                continue;
-            }
-
-            // 식사 step은 시간대에 묶여 있어 재정렬하지 않는다.
-            Map<Integer, StepData> pinnedByIndex = new LinkedHashMap<>();
-            List<StepData> movable = new ArrayList<>();
-
-            for (int i = 0; i < daySteps.size(); i++) {
-                StepData s = daySteps.get(i);
-                if (isMealStep(s)) {
-                    pinnedByIndex.put(i, s);
-                } else {
-                    movable.add(s);
-                }
-            }
-
-            if (movable.size() <= 2) {
-                for (StepData s : daySteps) {
-                    result.add(withStepOrder(s, globalOrder++));
-                }
-                continue;
-            }
-
-            List<StepData> reorderedMovable = reorderByNearestNeighbor(movable, placeCache);
-
-            List<StepData> merged = new ArrayList<>(Collections.nCopies(daySteps.size(), null));
-            for (Map.Entry<Integer, StepData> e : pinnedByIndex.entrySet()) {
-                merged.set(e.getKey(), e.getValue());
-            }
-            int movableIdx = 0;
-            for (int i = 0; i < merged.size(); i++) {
-                if (merged.get(i) == null) {
-                    merged.set(i, reorderedMovable.get(movableIdx++));
-                }
-            }
-
-            // 앞 장소가 바뀐 step의 교통 정보는 무효라서 비운다.
-            for (int i = 0; i < merged.size(); i++) {
-                StepData original = daySteps.get(i);
-                StepData placed  = merged.get(i);
-                boolean samePlace = placed == original;
-                boolean isFirst   = (i == 0);
-
-                result.add(new StepData(
-                        globalOrder++,
-                        placed.dayNumber(),
-                        original.startTime(),
-                        original.endTime(),
-                        placed.place(),
-                        placed.alternatives(),
-                        (isFirst || !samePlace) ? null : placed.transportationMode(),
-                        (isFirst || !samePlace) ? null : placed.transportationDuration(),
-                        (isFirst || !samePlace) ? null : placed.transportationDistance(),
-                        (isFirst || !samePlace) ? null : placed.transportationCost(),
-                        placed.notes(),
-                        placed.estimatedCost()
-                ));
-            }
-        }
-
-        log.info("Route optimization complete: {} steps processed", result.size());
-        return fillMissingTransportation(result, placeCache);
-    }
-
-    /** 비어 있는 교통 정보를 Haversine 거리로 대략 추정해 채운다. */
-    private List<StepData> fillMissingTransportation(List<StepData> steps, Map<String, Place> placeCache) {
-        List<StepData> result = new ArrayList<>(steps.size());
-        StepData prevStep = null;
-
-        for (StepData step : steps) {
-            boolean isFirstOfDay = prevStep == null || prevStep.dayNumber() != step.dayNumber();
-
-            if (!isFirstOfDay && step.transportationMode() == null) {
-                StepData estimated = estimateTransportation(step, prevStep, placeCache);
-                result.add(estimated);
-                prevStep = estimated;
-            } else {
-                result.add(step);
-                prevStep = step;
-            }
-        }
-        return result;
-    }
-
-    private StepData estimateTransportation(StepData step, StepData prev, Map<String, Place> placeCache) {
-        double[] prevCoord = resolveCoords(prev.place(), placeCache);
-        double[] curCoord = resolveCoords(step.place(), placeCache);
-        if (prevCoord == null || curCoord == null) return step;
-
-        double distanceKm = GeoUtils.haversine(prevCoord, curCoord);
-        String mode;
-        int durationMin;
-        BigDecimal cost;
-
-        if (distanceKm < 1.0) {
-            mode = "WALK";
-            durationMin = Math.max(1, (int) Math.ceil(distanceKm * 15)); // 도보 약 4km/h
-            cost = BigDecimal.ZERO;
-        } else {
-            mode = "CAR";
-            durationMin = (int) Math.ceil(distanceKm / 40 * 60); // 시내 차량 약 40km/h
-            cost = BigDecimal.valueOf(distanceKm * 2000).setScale(0, RoundingMode.HALF_UP);
-        }
-
-        log.debug("AutoFixer: 교통정보 추정 day={} place={} distance={}km mode={}",
-                step.dayNumber(), step.place() != null ? step.place().name() : "?", distanceKm, mode);
-
-        return new StepData(step.stepOrder(), step.dayNumber(), step.startTime(), step.endTime(),
-                step.place(), step.alternatives(), mode, durationMin,
-                BigDecimal.valueOf(distanceKm).setScale(2, RoundingMode.HALF_UP), cost,
-                step.notes(), step.estimatedCost());
-    }
-
-    /**
-     * DB 카테고리는 Foursquare 계층 경로라서 문자열 비교 대신 대분류로 식당을 판정한다.
-     */
-    private boolean isMealStep(StepData s) {
-        if (s.place() == null) return false;
-        if (!"DINING".equals(PlaceCategoryConstants.majorCategory(s.place().category()))) return false;
-        int startMin = parseTimeToMinutes(s.startTime());
-        if (startMin < 0) return false;
-        return (startMin >= LUNCH_START && startMin <= LUNCH_END)
-                || (startMin >= DINNER_START && startMin <= DINNER_END);
-    }
-
-    /** "HH:mm" → 분. 파싱 실패 시 -1. */
-    private int parseTimeToMinutes(String time) {
-        if (time == null || time.length() < 5) return -1;
-        try {
-            int h = Integer.parseInt(time.substring(0, 2));
-            int m = Integer.parseInt(time.substring(3, 5));
-            return h * 60 + m;
-        } catch (NumberFormatException e) {
-            return -1;
-        }
-    }
-
-    private List<StepData> reorderByNearestNeighbor(List<StepData> daySteps, Map<String, Place> placeCache) {
-        Map<StepData, double[]> coords = new LinkedHashMap<>();
-        List<StepData> noCoords = new ArrayList<>();
-
-        for (StepData step : daySteps) {
-            double[] latLng = resolveCoords(step.place(), placeCache);
-            if (latLng != null) {
-                coords.put(step, latLng);
-            } else {
-                noCoords.add(step);
-            }
-        }
-
-        if (coords.size() <= 2) {
-            return daySteps;
-        }
-
-        List<StepData> coordSteps = new ArrayList<>(coords.keySet());
-        double originalDist = totalDistance(coordSteps, coords);
-
-        List<StepData> optimized = new ArrayList<>();
-        Set<StepData> visited = new HashSet<>();
-
-        // 첫 장소(숙소 출발 등)는 고정한다.
-        StepData current = coordSteps.get(0);
-        optimized.add(current);
-        visited.add(current);
-
-        while (visited.size() < coordSteps.size()) {
-            double[] curCoord = coords.get(current);
-            StepData nearest = null;
-            double minDist = Double.MAX_VALUE;
-
-            for (StepData candidate : coordSteps) {
-                if (visited.contains(candidate)) continue;
-                double dist = haversine(curCoord, coords.get(candidate));
-                if (dist < minDist) {
-                    minDist = dist;
-                    nearest = candidate;
-                }
-            }
-
-            if (nearest != null) {
-                optimized.add(nearest);
-                visited.add(nearest);
-                current = nearest;
-            }
-        }
-
-        double optimizedDist = totalDistance(optimized, coords);
-
-        // 개선이 20% 미만이면 AI가 의도한 경험 흐름을 보존한다.
-        if (originalDist > 0 && (originalDist - optimizedDist) / originalDist < 0.20) {
-            log.debug("Route optimization skipped for day (improvement < 20%): original={}km, optimized={}km",
-                    String.format("%.1f", originalDist), String.format("%.1f", optimizedDist));
-            return daySteps;
-        }
-
-        log.info("Route optimized: {}km → {}km ({}% improvement)",
-                String.format("%.1f", originalDist), String.format("%.1f", optimizedDist),
-                String.format("%.0f", (originalDist - optimizedDist) / originalDist * 100));
-
-        optimized.addAll(noCoords);
-        return optimized;
-    }
-
-    private double[] resolveCoords(PlaceData pd, Map<String, Place> placeCache) {
-        if (pd == null) return null;
-        String key = placeKey(pd);
-        Place place = placeCache.get(key);
-        if (place == null || place.getLatitude() == null || place.getLongitude() == null) return null;
-        // DB에 남아 있는 좌표 (0,0) fallback 행은 좌표 없음으로 본다.
-        if (place.getLatitude().compareTo(BigDecimal.ZERO) == 0
-                && place.getLongitude().compareTo(BigDecimal.ZERO) == 0) return null;
-        return new double[]{place.getLatitude().doubleValue(), place.getLongitude().doubleValue()};
-    }
-
-    private String placeKey(PlaceData pd) {
-        return pd.name() + "|" + (pd.address() != null ? pd.address() : "");
-    }
-
-    private double totalDistance(List<StepData> steps, Map<StepData, double[]> coords) {
-        double total = 0;
-        for (int i = 1; i < steps.size(); i++) {
-            double[] a = coords.get(steps.get(i - 1));
-            double[] b = coords.get(steps.get(i));
-            if (a != null && b != null) total += GeoUtils.haversine(a, b);
-        }
-        return total;
-    }
-
-    private double haversine(double[] a, double[] b) {
-        return GeoUtils.haversine(a, b);
-    }
-
-    private StepData withStepOrder(StepData s, int order) {
-        return new StepData(order, s.dayNumber(), s.startTime(), s.endTime(),
-                s.place(), s.alternatives(), s.transportationMode(),
-                s.transportationDuration(), s.transportationDistance(),
-                s.transportationCost(), s.notes(), s.estimatedCost());
-    }
-
     // ========================================================================================
     // Repair & Schedule: Sonnet의 날짜별 구성을 힌트로 받아 하드 제약을 수리하고 순서·시각·교통·대안을 확정한다.
     // LLM을 다시 부르지 않으며 notes는 비워 두고 Haiku가 나중에 채운다.
     // ========================================================================================
 
-    public List<StepData> repairAndSchedule(SelectionOutput selection, List<PlaceCandidate> candidates, String pace) {
-        return repairAndSchedule(selection, candidates, pace, "any", null);
-    }
-
-    /**
-     * @param startDate 여행 시작일. 요일로 정기휴무 장소를 열려 있는 spare로 교체한다. null이면 휴무 회피를 건너뛴다.
-     */
-    public List<StepData> repairAndSchedule(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                             String pace, java.time.LocalDate startDate) {
-        return repairAndSchedule(selection, candidates, pace, "any", startDate);
-    }
-
-    /**
-     * @param transportPref walk / car / any. 하루 동선의 거리 상한 배수에 반영된다.
-     */
-    public List<StepData> repairAndSchedule(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                             String pace, String transportPref, java.time.LocalDate startDate) {
-        return repairAndSchedule(selection, candidates, pace, transportPref, startDate, List.of());
-    }
-
-    /**
-     * @param themes 여행 테마. 야경류는 저녁 상한을 늦추고 일출·등산류는 아침 시작을 당긴다.
-     *               null/빈 값이면 기본값(09:00~22:00).
-     */
-    public List<StepData> repairAndSchedule(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                             String pace, String transportPref, java.time.LocalDate startDate,
-                                             List<String> themes) {
-        return repairAndSchedule(selection, candidates, pace, transportPref, startDate, themes, null, false);
-    }
-
-    /**
-     * @param hub enrich가 정한 도착/출발 허브 이름. 공항 본체와 부속시설 POI가 rating 동률이어도 이름으로 허브를 고른다.
-     *            null이면 이름 교정을 건너뛴다.
-     * @param compactMode 유효 관광지가 부족한 풀이면 하한 quota를 완화해 엉뚱한 카테고리로 채우지 않는다.
-     */
-    public List<StepData> repairAndSchedule(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                             String pace, String transportPref, java.time.LocalDate startDate,
-                                             List<String> themes, TransportationHub hub,
-                                             boolean compactMode) {
-        return repairAndSchedule(selection, candidates, pace, transportPref, startDate, themes, hub,
-                compactMode, List.of());
-    }
-
-    /**
-     * @param userCategories 생성 요청의 카테고리 id. 일정에 한 번도 없는 카테고리를 spare에서 보충한다.
-     *                       빈 값이면 커버리지 보충을 건너뛴다.
-     */
-    public List<StepData> repairAndSchedule(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                             String pace, String transportPref, java.time.LocalDate startDate,
-                                             List<String> themes, TransportationHub hub,
-                                             boolean compactMode, List<String> userCategories) {
-        return schedule(selection, candidates, pace, transportPref, startDate, themes, hub,
-                compactMode, userCategories).steps();
-    }
-
     /**
      * 확정된 스텝과 함께 끝내 해소하지 못한 품질 문제를 돌려준다. 호출부는 일정을 저장하되 이 문제를 사용자에게 알린다.
      */
-    public ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                   String pace, String transportPref, java.time.LocalDate startDate,
-                                   List<String> themes, TransportationHub hub,
-                                   boolean compactMode, List<String> userCategories) {
-        return schedule(selection, candidates, pace, transportPref, startDate, themes, hub,
-                compactMode, userCategories, false);
-    }
-
     public ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args) {
         if (args.cities() != null) {
             return CityBlockPlanner.schedule(selection, candidates, args, this::scheduleWithinCity);
@@ -377,7 +50,7 @@ public class RouteOptimizer {
 
     private ScheduleResult scheduleWithinCity(SelectionOutput selection, List<PlaceCandidate> candidates,
                                               ScheduleArgs args) {
-        return schedule(selection, candidates, args.pace(), args.transportPref(), args.startDate(),
+        return scheduleWithIntent(selection, candidates, args.pace(), args.transportPref(), args.startDate(),
                 args.themes(), args.hub(), args.compact(), args.categories(), args.couple(),
                 firstDayStart(args), departureHubDeadline(args), args.resumesAfterTransfer(), args.continuesAfter());
     }
@@ -396,23 +69,12 @@ public class RouteOptimizer {
         return Math.max(0, departure - buffer);
     }
 
-    /**
-     * @param couple 커플 여행이면 테마와 무관하게 매일 오후 카페 스톱을 넣는다 ({@link ScheduleConfig#cafeStop}).
-     */
-    public ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                   String pace, String transportPref, java.time.LocalDate startDate,
-                                   List<String> themes, TransportationHub hub,
-                                   boolean compactMode, List<String> userCategories, boolean couple) {
-        return schedule(selection, candidates, pace, transportPref, startDate, themes, hub, compactMode,
-                userCategories, couple, null, null, false, false);
-    }
-
-    private ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                    String pace, String transportPref, java.time.LocalDate startDate,
-                                    List<String> themes, TransportationHub hub,
-                                    boolean compactMode, List<String> userCategories, boolean couple,
-                                    Integer firstDayStart, Integer lastDayDeadline,
-                                    boolean resumesAfterTransfer, boolean continuesAfter) {
+    private ScheduleResult scheduleWithIntent(SelectionOutput selection, List<PlaceCandidate> candidates,
+                                              String pace, String transportPref, java.time.LocalDate startDate,
+                                              List<String> themes, TransportationHub hub,
+                                              boolean compactMode, List<String> userCategories, boolean couple,
+                                              Integer firstDayStart, Integer lastDayDeadline,
+                                              boolean resumesAfterTransfer, boolean continuesAfter) {
         List<PlaceCandidate> withIntent = applyIntentHints(selection, candidates);
         ScheduleResult result = scheduleCandidates(selection, withIntent, pace, transportPref, startDate,
                 themes, hub, compactMode, userCategories, couple, firstDayStart, lastDayDeadline,
@@ -660,10 +322,10 @@ public class RouteOptimizer {
         int order = 1;
         List<StepData> renumbered = new ArrayList<>(steps.size());
         for (StepData s : steps) {
-            renumbered.add(withStepOrder(s, order++));
+            renumbered.add(s.withStepOrder(order++));
         }
 
-        log.info("RouteOptimizer.repairAndSchedule 완료: {}개 step, {}개 day", renumbered.size(), days.size());
+        log.info("RouteOptimizer.schedule 완료: {}개 step, {}개 day", renumbered.size(), days.size());
         return new ScheduleResult(renumbered, notices);
     }
 
@@ -5419,12 +5081,6 @@ public class RouteOptimizer {
         return s;
     }
 
-    private String leafCategory(String cat) {
-        if (cat == null) return null;
-        int i = cat.lastIndexOf('>');
-        return (i >= 0 ? cat.substring(i + 1) : cat).trim();
-    }
-
     /** 대안 dedup 키: placeId 우선, 없으면 유효좌표(4자리), 없으면 정규화 이름. */
     private String altKey(PlaceCandidate c) {
         if (c.placeId() != null) return "id:" + c.placeId();
@@ -5478,9 +5134,13 @@ public class RouteOptimizer {
         return c != null && PlaceCategoryConstants.isOverseasHub(c.country(), c.category()) ? null : coordsOf(c);
     }
 
+    private double haversine(double[] a, double[] b) {
+        return GeoUtils.haversine(a, b);
+    }
+
     private double[] coordsOf(PlaceCandidate c) {
         if (c == null || c.latitude() == null || c.longitude() == null) return null;
-        // DB에 남아 있는 좌표 (0,0) fallback 행은 resolveCoords와 같은 정책으로 좌표 없음으로 본다.
+        // DB에 남아 있는 좌표 (0,0) fallback 행은 좌표 없음으로 본다. FallbackStepReorderer.resolveCoords와 기준이 같다.
         // 그래야 scheduleDay·centroidOf·대안 계산의 거리에 (0,0)이 끼지 않는다.
         if (c.latitude().compareTo(BigDecimal.ZERO) == 0 && c.longitude().compareTo(BigDecimal.ZERO) == 0) {
             return null;

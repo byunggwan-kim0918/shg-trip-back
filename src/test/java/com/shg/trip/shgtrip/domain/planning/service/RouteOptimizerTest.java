@@ -15,13 +15,19 @@ import java.util.stream.Collectors;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * RouteOptimizer.repairAndSchedule() — Sonnet의 day 구성(힌트)을 받아 결정론적으로
+ * RouteOptimizer.schedule() — Sonnet의 day 구성(힌트)을 받아 결정론적으로
  * pace quota·pair·거리이탈·연속숙소·허브를 수리(fixpoint)하고 시간을 확정하는 핵심 엔진 테스트.
  * LLM 호출이 전혀 없는 순수 코드라 모킹 없이 검증 가능.
  */
 class RouteOptimizerTest {
 
     private final RouteOptimizer routeOptimizer = new RouteOptimizer();
+
+    private List<StepData> schedule(SelectionOutput selection, List<PlaceCandidate> candidates, String pace,
+                                    String transportPref, java.time.LocalDate startDate, List<String> themes) {
+        return routeOptimizer.schedule(selection, candidates,
+                ScheduleTestArgs.of(pace, transportPref, startDate, themes, null, false, List.of())).steps();
+    }
 
     private PlaceCandidate place(int index, String name, String category, double lat, double lng, String region) {
         return new PlaceCandidate(index, (long) index, name, "addr-" + index, category,
@@ -38,7 +44,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("개장이 1시간 이내로 늦으면 버리지 않고 시작 시각을 개장 시각으로 늦춘다")
-    void repairAndSchedule_waitsForOpeningWhenShortDelay() {
+    void schedule_waitsForOpeningWhenShortDelay() {
         java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
 
         List<PlaceCandidate> candidates = List.of(
@@ -57,7 +63,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", monday, List.of());
 
         StepData museum = steps.stream().filter(s -> "열시개장관".equals(s.place().name()))
                 .findFirst().orElseThrow();
@@ -67,7 +73,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("개장까지 1시간을 넘게 기다려야 하는 장소는 그 자리에 두지 않는다")
-    void repairAndSchedule_trimsPlaceOpeningMuchLater() {
+    void schedule_trimsPlaceOpeningMuchLater() {
         java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
 
         List<PlaceCandidate> candidates = List.of(
@@ -88,7 +94,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", monday, List.of());
 
         // 09시대에 배정될 자리에 20시 개장 야시장을 두고 11시간을 기다리게 할 수는 없다.
         // 남아 있다면 20:00 이후여야 한다.
@@ -101,7 +107,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("오후 4시 오픈 식당은 점심 자리에 오지 않고 저녁 자리로 간다 (실측 76 제주돗)")
-    void repairAndSchedule_assignsLateOpeningRestaurantToDinnerNotLunch() {
+    void schedule_assignsLateOpeningRestaurantToDinnerNotLunch() {
         java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
 
         List<PlaceCandidate> candidates = List.of(
@@ -122,7 +128,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", monday, List.of());
 
         StepData lunch = steps.stream().filter(s -> "점심만여는집".equals(s.place().name())).findFirst().orElseThrow();
         StepData dinner = steps.stream().filter(s -> "저녁만여는집".equals(s.place().name())).findFirst().orElseThrow();
@@ -133,7 +139,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("점심에 닫혀 있는 식당 하나뿐이면 점심 자리에 넣지 않는다 (닫힌 가게보다 빈 슬롯)")
-    void repairAndSchedule_neverSeatsClosedRestaurantAtLunch() {
+    void schedule_neverSeatsClosedRestaurantAtLunch() {
         java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
 
         List<PlaceCandidate> candidates = List.of(
@@ -152,7 +158,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", monday, List.of());
 
         // 그 식당이 일정에 남는다면 저녁 시간대여야 한다. 11:30 점심 자리에는 절대 오지 않는다.
         steps.stream()
@@ -164,7 +170,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("pace quota 초과 시 day별 장소 수가 normal 상한(5) 이하로 트림된다")
-    void repairAndSchedule_trimsExceedingPaceQuota() {
+    void schedule_trimsExceedingPaceQuota() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "A1", "Landmarks and Outdoors > Park", 37.50, 127.00, "강남"),
                 place(2, "A2", "Landmarks and Outdoors > Park", 37.501, 127.001, "강남"),
@@ -183,7 +189,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         long mainPlaceCount = steps.stream()
                 .filter(s -> !"Lodging".equals(s.place().name()))
@@ -194,7 +200,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("좌표 (0,0) 불량 장소가 있어도 새벽시간 wrap·비현실 이동거리를 만들지 않는다")
-    void repairAndSchedule_invalidZeroCoordDoesNotBreakSchedule() {
+    void schedule_invalidZeroCoordDoesNotBreakSchedule() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "정상A", "Landmarks and Outdoors > Park", 37.50, 127.00, "강남"),
                 place(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -211,7 +217,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         // 1. 모든 스텝의 시작 시각이 일과 시작(09:00) 이후 — 새벽으로 wrap되지 않음
         assertThat(steps).allSatisfy(s ->
@@ -237,7 +243,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("pair는 다른 day에 떨어져 있으면 quota 여유가 있는 쪽으로 합쳐진다")
-    void repairAndSchedule_consolidatesPairsAcrossDays() {
+    void schedule_consolidatesPairsAcrossDays() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Day1-A", "Landmarks and Outdoors > Park", 37.50, 127.00, "강남"),
                 place(2, "Day1-B", "Landmarks and Outdoors > Park", 37.501, 127.001, "강남"),
@@ -257,7 +263,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         Map<String, Integer> dayByName = steps.stream()
                 .collect(Collectors.toMap(s -> s.place().name(), StepData::dayNumber, (a, b) -> a));
@@ -267,7 +273,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("TRANSIT_HUB 후보가 있으면 첫날 도착/마지막날 출발에 누락 시 보충된다")
-    void repairAndSchedule_fillsMissingHubs() {
+    void schedule_fillsMissingHubs() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "공항", "Airport", 37.50, 127.00, "강남"),
                 place(2, "A1", "Landmarks and Outdoors > Park", 37.501, 127.001, "강남"),
@@ -282,14 +288,14 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         assertThat(steps.get(0).place().name()).isEqualTo("공항");
     }
 
     @Test
     @DisplayName("인접 day가 같은 지역(dominant region)이면 동일 숙소를 유지한다")
-    void repairAndSchedule_keepsSameAccommodationForSameRegionConsecutiveDays() {
+    void schedule_keepsSameAccommodationForSameRegionConsecutiveDays() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Day1-A", "Landmarks and Outdoors > Park", 37.50, 127.00, "강남"),
                 place(2, "Day2-A", "Landmarks and Outdoors > Park", 37.501, 127.001, "강남"),
@@ -307,7 +313,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         String day1Accommodation = steps.stream()
                 .filter(s -> s.dayNumber() == 1 && s.place().name().startsWith("Hotel"))
@@ -323,7 +329,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("다음날 첫 스텝은 전날 묵은 숙소에서 가장 가까운 장소가 되어야 한다(반대 방향 출발 방지)")
-    void repairAndSchedule_startsNextDayNearPreviousNightsAccommodation() {
+    void schedule_startsNextDayNearPreviousNightsAccommodation() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Day1Place", "Landmarks and Outdoors > Park", 37.400, 127.000, "강남"),
                 place(2, "Hotel", "Lodging > Hotel", 37.500, 127.000, "강남"),
@@ -344,7 +350,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         StepData firstDay2MainStep = steps.stream()
                 .filter(s -> s.dayNumber() == 2 && !"Hotel".equals(s.place().name()))
@@ -355,7 +361,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("그날 마지막 메인 장소는 그날 숙소에서 가장 가까운 쪽이 되어야 한다")
-    void repairAndSchedule_endsDayNearThatNightsAccommodation() {
+    void schedule_endsDayNearThatNightsAccommodation() {
         List<PlaceCandidate> candidates = List.of(
                 // 입력 순서상 "숙소에서 가까운 곳부터" 나열 — anchor 보정이 없으면 가까운 곳이
                 // 먼저 방문되고 먼 곳에서 하루가 끝나, 마지막에 숙소까지 먼 거리를 이동해야 함.
@@ -372,7 +378,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         List<StepData> mainSteps = steps.stream()
                 .filter(s -> !"Hotel".equals(s.place().name()))
@@ -383,7 +389,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("DINING 카테고리는 점심/저녁 슬롯(11:30-13:30, 17:30-19:30) 안으로 시간이 보정된다")
-    void repairAndSchedule_pinsDiningStepsToMealSlots() {
+    void schedule_pinsDiningStepsToMealSlots() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Morning", "Landmarks and Outdoors > Park", 37.50, 127.00, "강남"),
                 place(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -399,7 +405,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         StepData lunch = steps.stream().filter(s -> s.place().name().equals("Lunch")).findFirst().orElseThrow();
         StepData dinner = steps.stream().filter(s -> s.place().name().equals("Dinner")).findFirst().orElseThrow();
@@ -410,7 +416,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("정기휴무(월요일 휴무) 장소는 startDate 기준 그날 열린 같은 카테고리 spare로 교체된다")
-    void repairAndSchedule_swapsClosedDayPlaceWithOpenSpare() {
+    void schedule_swapsClosedDayPlaceWithOpenSpare() {
         // 2024-01-01 은 월요일 → day1 = 월요일
         java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
 
@@ -432,7 +438,7 @@ class RouteOptimizerTest {
                 List.of(4)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed", monday);
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", monday, List.of());
 
         List<String> names = steps.stream().map(s -> s.place().name()).collect(Collectors.toList());
         assertThat(names).contains("항상열린대체명소");
@@ -441,7 +447,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("정기휴무 장소는 pair 멤버여도 교체한다 (휴무 회피가 인접 배치보다 우선)")
-    void repairAndSchedule_swapsClosedDayPlaceEvenWhenItIsAPairMember() {
+    void schedule_swapsClosedDayPlaceEvenWhenItIsAPairMember() {
         // 2024-01-01 은 월요일 → day1 = 월요일
         java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
 
@@ -468,7 +474,7 @@ class RouteOptimizerTest {
                 List.of(4)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed", monday);
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", monday, List.of());
 
         List<String> names = steps.stream().map(s -> s.place().name()).collect(Collectors.toList());
         assertThat(names).doesNotContain("월요일휴무명소");
@@ -479,7 +485,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("openingHours 데이터가 없으면 휴무 회피를 적용하지 않는다(열림 가정)")
-    void repairAndSchedule_skipsClosedDayWhenNoData() {
+    void schedule_skipsClosedDayWhenNoData() {
         java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
 
         List<PlaceCandidate> candidates = List.of(
@@ -496,7 +502,7 @@ class RouteOptimizerTest {
                 List.of(4)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed", monday);
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", monday, List.of());
 
         // openingHours가 null이면 교체하지 않음 — 원래 장소 유지
         assertThat(steps.stream().map(s -> s.place().name())).contains("데이터없는명소");
@@ -520,7 +526,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("highlightIndices로 표시된 장소는 거리가 비슷하면 그날의 첫 스텝으로 배치되지 않는다")
-    void repairAndSchedule_avoidsPlacingHighlightFirstWhenDistancesAreClose() {
+    void schedule_avoidsPlacingHighlightFirstWhenDistancesAreClose() {
         // 일직선 3점: H(highlight)-M-F, 변끼리 거리가 같아 순방향/역방향 총거리가 동일하다.
         // 거리만 보면 NN 시드(입력 순서 0번째=H부터 시작)를 그대로 둬도 무방하지만,
         // highlight-first 패널티(0.5km)가 있으면 방향을 뒤집어 H를 끝으로 보내는 쪽이 더 싸다.
@@ -539,14 +545,14 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         assertThat(steps.get(0).place().name()).isNotEqualTo("Highlight");
     }
 
     @Test
     @DisplayName("restIndices로 표시된 장소는 거리가 비슷하면 highlightIndices 다음 자리에 배치된다")
-    void repairAndSchedule_prefersRestImmediatelyAfterHighlight() {
+    void schedule_prefersRestImmediatelyAfterHighlight() {
         // 다이아몬드(마름모) 배치: N-E-S-W 네 변의 길이가 거의 동일 → "링 순서"를 따르는
         // 경로들은 거리가 서로 비슷하다. H=N, R=E(인접), Neutral1=S, Neutral2=W일 때
         // rest-after-highlight 보너스(0.3km)가 있으면 H 바로 다음에 R이 오는 순서를 선호한다.
@@ -566,7 +572,7 @@ class RouteOptimizerTest {
                 List.of(2)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "tight");
+        List<StepData> steps = schedule(selection, candidates, "tight", "any", null, List.of());
 
         List<String> names = steps.stream().map(s -> s.place().name()).collect(Collectors.toList());
         int highlightPos = names.indexOf("Highlight");
@@ -578,7 +584,7 @@ class RouteOptimizerTest {
     // ── A-2: day 클러스터링 분리 ──
     @Test
     @DisplayName("day가 동↔서 2-클러스터로 갈리면 소수 클러스터가 인접 day로 이동한다")
-    void repairAndSchedule_movesMinorityClusterToAdjacentDay() {
+    void schedule_movesMinorityClusterToAdjacentDay() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "East1", "Landmarks and Outdoors > Park", 37.50, 127.000, "동"),
                 place(2, "East2", "Landmarks and Outdoors > Garden", 37.5005, 127.0005, "동"),
@@ -597,7 +603,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         int westDay = steps.stream().filter(s -> "West".equals(s.place().name()))
                 .map(StepData::dayNumber).findFirst().orElseThrow();
@@ -607,7 +613,7 @@ class RouteOptimizerTest {
     // ── A-1: 시간 배분 ──
     @Test
     @DisplayName("활동이 많아도 모든 스텝 시작 시각은 저녁 상한(22:00) 이내다")
-    void repairAndSchedule_noStepStartsAfterEveningCap() {
+    void schedule_noStepStartsAfterEveningCap() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.50, 127.000, "강남"),
                 place(2, "Dinner", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -629,7 +635,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "tight");
+        List<StepData> steps = schedule(selection, candidates, "tight", "any", null, List.of());
 
         assertThat(steps).allSatisfy(s ->
                 assertThat(toMinutes(s.startTime())).isLessThanOrEqualTo(22 * 60));
@@ -637,7 +643,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("하루 DINING이 4개 이상이면 3개(아침/점심/저녁)만 스텝에 남는다")
-    void repairAndSchedule_capsDiningToThreePerDay() {
+    void schedule_capsDiningToThreePerDay() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "D1", "Dining and Drinking > Restaurant > Korean", 37.50, 127.000, "강남"),
                 place(2, "D2", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -653,7 +659,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         long diningSteps = steps.stream()
                 .filter(s -> s.place().category().startsWith("Dining and Drinking"))
@@ -663,7 +669,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("야경(nightview) 테마면 저녁 상한이 넓어져 더 많은 활동이 스케줄된다")
-    void repairAndSchedule_nightThemeExtendsEveningCapacity() {
+    void schedule_nightThemeExtendsEveningCapacity() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.50, 127.000, "강남"),
                 place(2, "Dinner", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -686,10 +692,8 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        long defaultSteps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "tight", "any", null, List.of()).size();
-        long nightSteps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "tight", "any", null, List.of("nightview")).size();
+        long defaultSteps = schedule(selection, candidates, "tight", "any", null, List.of()).size();
+        long nightSteps = schedule(selection, candidates, "tight", "any", null, List.of("nightview")).size();
 
         assertThat(nightSteps).isGreaterThan(defaultSteps);
     }
@@ -697,7 +701,7 @@ class RouteOptimizerTest {
     // ── A-0-2: 메인 스텝 중복 제거 ──
     @Test
     @DisplayName("같은 장소가 placeIndices에 두 번 있어도 스텝엔 한 번만 나온다")
-    void repairAndSchedule_dedupesRepeatedMainPlace() {
+    void schedule_dedupesRepeatedMainPlace() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "A1", "Landmarks and Outdoors > Park", 37.50, 127.000, "강남"),
                 place(2, "A2", "Landmarks and Outdoors > Park", 37.501, 127.001, "강남"),
@@ -710,7 +714,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         long a1Count = steps.stream().filter(s -> "A1".equals(s.place().name())).count();
         assertThat(a1Count).isEqualTo(1);
@@ -739,8 +743,7 @@ class RouteOptimizerTest {
                 List.of(4, 5, 6, 7, 8)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "relaxed", "car", null, List.of());
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "car", null, List.of());
 
         StepData mainStep = steps.stream().filter(s -> "MainRest".equals(s.place().name()))
                 .findFirst().orElseThrow();
@@ -758,7 +761,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("저녁 활동이 없으면 숙소에 가까운 오후 활동이 마지막에 배치돼 저녁→숙소 이동이 짧아진다")
-    void repairAndSchedule_endsDayNearAccommodationWhenNoEveningActivity() {
+    void schedule_endsDayNearAccommodationWhenNoEveningActivity() {
         // 숙소는 서쪽(127.000). 두 식당과 FarGallery는 동쪽(숙소에서 멂), NearHotel만 숙소 옆.
         // 활동이 2개라 afternoon 버킷이 채워지고, 저녁 버킷이 비어 endDayNearAccommodation이 발동한다.
         // 활동은 실내형(갤러리)으로 둔다 — 공원·해변·오름 같은 야외 주간형은 세부 유형 판정상
@@ -777,7 +780,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         List<String> nonHotel = steps.stream()
                 .filter(s -> !"Hotel".equals(s.place().name()))
@@ -807,8 +810,7 @@ class RouteOptimizerTest {
                 List.of(4, 5)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "relaxed", "walk", null, List.of());
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "walk", null, List.of());
 
         StepData mainStep = steps.stream().filter(s -> "MainRest".equals(s.place().name()))
                 .findFirst().orElseThrow();
@@ -822,7 +824,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("spare에 숙소(LODGING)만 남아 있으면 pace 하한 미달이어도 방문 스텝으로 채우지 않는다")
-    void repairAndSchedule_neverFillsLodgingAsVisitStep() {
+    void schedule_neverFillsLodgingAsVisitStep() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Park", "Landmarks and Outdoors > Park", 37.500, 127.000, "강남"),
                 place(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -838,7 +840,7 @@ class RouteOptimizerTest {
                 List.of(4, 5)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         List<String> names = steps.stream().map(s -> s.place().name()).collect(Collectors.toList());
         assertThat(names).doesNotContain("SpareHostel", "SpareHotel");
@@ -846,7 +848,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("Sonnet이 메인과 spare에 같은 인덱스를 중복 기재해도 일정 내 장소는 대안으로 재등장하지 않는다")
-    void repairAndSchedule_usedPlaceNeverAppearsAsAlternative() {
+    void schedule_usedPlaceNeverAppearsAsAlternative() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "RestA", "Dining and Drinking > Restaurant > Korean", 37.500, 127.000, "강남"),
                 place(2, "RestB", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -862,8 +864,7 @@ class RouteOptimizerTest {
                 List.of(1, 4)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "relaxed", "car", null, List.of());
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "car", null, List.of());
 
         // 일정에 실제로 들어간 장소 기준으로 본다 — 같은 날 점심·저녁 같은 종류 교체로
         // RestB가 RestC로 바뀔 수 있어, 이름을 고정하면 일정 밖 장소까지 금지하게 된다.
@@ -876,7 +877,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("Bar 계열은 점심 슬롯에 배정되지 않고 저녁 시간대에만 배치된다")
-    void repairAndSchedule_barIsNeverLunchAndGoesToEvening() {
+    void schedule_barIsNeverLunchAndGoesToEvening() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "BeerBar", "Dining and Drinking > Bar > Beer Bar", 37.500, 127.000, "강남"),
                 place(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -890,7 +891,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         StepData lunch = steps.stream().filter(s -> "Lunch".equals(s.place().name())).findFirst().orElseThrow();
         assertThat(lunch.startTime()).isBetween("11:30", "13:30");
@@ -901,7 +902,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("야외 성격 관광지(골프장 등)는 저녁 버킷에 배치되지 않는다")
-    void repairAndSchedule_daytimeOutdoorNeverScheduledInEvening() {
+    void schedule_daytimeOutdoorNeverScheduledInEvening() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Park1", "Landmarks and Outdoors > Park", 37.500, 127.000, "강남"),
                 place(2, "Park2", "Landmarks and Outdoors > Park", 37.501, 127.001, "강남"),
@@ -918,7 +919,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "tight");
+        List<StepData> steps = schedule(selection, candidates, "tight", "any", null, List.of());
 
         // 골프장이 배치됐다면 반드시 저녁 식사 시작(17:30) 전이어야 한다
         steps.stream().filter(s -> "GolfCourse".equals(s.place().name())).findFirst()
@@ -927,7 +928,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("둘째 날 첫 스텝은 전날 숙소 출발 이동정보를 가지며 도착시각은 09:00+이동시간이다")
-    void repairAndSchedule_firstStepOfDayHasTransportFromPreviousAccommodation() {
+    void schedule_firstStepOfDayHasTransportFromPreviousAccommodation() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Day1Park", "Landmarks and Outdoors > Park", 37.500, 127.000, "강남"),
                 place(2, "Day1Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -946,7 +947,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         StepData day2First = steps.stream().filter(s -> s.dayNumber() == 2).findFirst().orElseThrow();
         assertThat(day2First.transportationMode()).isNotNull();
@@ -957,7 +958,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("단일 구간이 절대 상한(car 50km)을 넘으면 가까운 같은 대분류 spare로 교체된다")
-    void repairAndSchedule_swapsFarPlaceExceedingAbsoluteLegCap() {
+    void schedule_swapsFarPlaceExceedingAbsoluteLegCap() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Lunch", "Dining and Drinking > Restaurant > Korean", 33.300, 126.200, "제주"),
                 place(2, "Dinner", "Dining and Drinking > Restaurant > Korean", 33.302, 126.202, "제주"),
@@ -974,8 +975,7 @@ class RouteOptimizerTest {
                 List.of(6)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "car", null, List.of());
+        List<StepData> steps = schedule(selection, candidates, "normal", "car", null, List.of());
 
         List<String> names = steps.stream().map(s -> s.place().name()).collect(Collectors.toList());
         assertThat(names).doesNotContain("FarPark");
@@ -984,7 +984,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("enrich 허브 이름과 매칭되는 공항 본체가 부속시설 POI(Immigration Check)보다 우선 선택된다")
-    void repairAndSchedule_prefersNamedHubOverSubFacility() {
+    void schedule_prefersNamedHubOverSubFacility() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Jeju International Airport Immigration Check",
                         "Travel and Transportation > Transport Hub > Airport > Airport Terminal",
@@ -1005,15 +1005,15 @@ class RouteOptimizerTest {
         com.shg.trip.shgtrip.domain.planning.dto.TransportationHub hub =
                 new com.shg.trip.shgtrip.domain.planning.dto.TransportationHub("제주국제공항", "제주국제공항", "AIRPORT");
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "relaxed", "car", null, List.of(), hub, false);
+        List<StepData> steps = routeOptimizer.schedule(selection, candidates,
+                ScheduleTestArgs.of("relaxed", "car", null, List.of(), hub, false, List.of())).steps();
 
         assertThat(steps.get(0).place().name()).isEqualTo("제주국제공항");
     }
 
     @Test
     @DisplayName("해외 관문 공항 구간은 하루 거리 예산에 넣지 않아 시내 장소를 자르지 않는다")
-    void repairAndSchedule_overseasGatewayLegNotInDayBudget() {
+    void schedule_overseasGatewayLegNotInDayBudget() {
         String airport = "Travel and Transportation > Transport Hub > Airport";
         List<PlaceCandidate> candidates = List.of(
                 overseas(place(1, "Narita International Airport", airport, 35.772, 140.3929, "Tokyo")),
@@ -1034,8 +1034,8 @@ class RouteOptimizerTest {
                 new com.shg.trip.shgtrip.domain.planning.dto.TransportationHub(
                         "Narita International Airport", "Haneda Airport", "AIRPORT");
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "any", null, List.of(), hub, false);
+        List<StepData> steps = routeOptimizer.schedule(selection, candidates,
+                ScheduleTestArgs.of("normal", "any", null, List.of(), hub, false, List.of())).steps();
 
         assertThat(steps).extracting(s -> s.place().name())
                 .startsWith("Narita International Airport")
@@ -1045,7 +1045,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("원문 이름에 허브 신호가 없는 해외 공항도 한국어 이름으로 허브를 맞춘다")
-    void repairAndSchedule_matchesOverseasHubByKoreanName() {
+    void schedule_matchesOverseasHubByKoreanName() {
         String airport = "Travel and Transportation > Transport Hub > Airport";
         PlaceCandidate narita = withNameKo(overseas(place(1, "成田国際空港", airport, 35.772, 140.3929, "Tokyo")),
                 "나리타 국제공항");
@@ -1058,8 +1058,8 @@ class RouteOptimizerTest {
         com.shg.trip.shgtrip.domain.planning.dto.TransportationHub hub =
                 new com.shg.trip.shgtrip.domain.planning.dto.TransportationHub("나리타 국제공항", null, "AIRPORT");
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "relaxed", "any", null, List.of(), hub, false);
+        List<StepData> steps = routeOptimizer.schedule(selection, candidates,
+                ScheduleTestArgs.of("relaxed", "any", null, List.of(), hub, false, List.of())).steps();
 
         assertThat(steps.get(0).place().name()).isEqualTo("成田国際空港");
         assertThat(steps.get(0).place().nameKo()).isEqualTo("나리타 국제공항");
@@ -1080,7 +1080,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("하루를 마치는 숙소 도착 스텝의 체류는 30분이다 (90분 체류로 인한 23시대 종료 방지)")
-    void repairAndSchedule_accommodationArrivalIsThirtyMinutes() {
+    void schedule_accommodationArrivalIsThirtyMinutes() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "Park", "Landmarks and Outdoors > Park", 37.500, 127.000, "강남"),
                 place(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -1093,7 +1093,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         StepData hotel = steps.stream().filter(s -> "Hotel".equals(s.place().name())).findFirst().orElseThrow();
         assertThat(toMinutes(hotel.endTime()) - toMinutes(hotel.startTime())).isEqualTo(30);
@@ -1101,7 +1101,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("식사 슬롯 전 빈 시간이 크면 spare의 근처 주간 활동으로 채워진다 (pace 상한 내에서)")
-    void repairAndSchedule_fillsLargeGapBeforeMealFromSpare() {
+    void schedule_fillsLargeGapBeforeMealFromSpare() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "MorningPark", "Landmarks and Outdoors > Park", 37.500, 127.000, "강남"),
                 place(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -1118,7 +1118,7 @@ class RouteOptimizerTest {
                 List.of(5)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         List<String> names = steps.stream().map(s -> s.place().name()).collect(Collectors.toList());
         // 점심 이후 저녁(17:30)까지 큰 공백 → GapPark 삽입 (점심과 저녁 사이)
@@ -1149,7 +1149,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("userSelected 장소는 pace 상한 트림에서 살아남는다 (평점이 더 낮아도)")
-    void repairAndSchedule_userSelectedSurvivesPaceTrim() {
+    void schedule_userSelectedSurvivesPaceTrim() {
         List<PlaceCandidate> candidates = List.of(
                 placeRated(1, "MustGoLowRated", "Landmarks and Outdoors > Park", 37.500, 127.000, 3.2).asUserSelected(),
                 placeRated(2, "A2", "Landmarks and Outdoors > Park", 37.501, 127.001, 4.5),
@@ -1168,14 +1168,14 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         assertThat(steps.stream().map(s -> s.place().name())).contains("MustGoLowRated");
     }
 
     @Test
     @DisplayName("userSelected 장소는 거리 상한 위반이어도 유지된다 (포함 > 동선)")
-    void repairAndSchedule_userSelectedSurvivesDistanceBudget() {
+    void schedule_userSelectedSurvivesDistanceBudget() {
         // itinerary 26 Day1 실좌표 재현 — 보호 없으면 전부 트림되던 케이스
         List<PlaceCandidate> candidates = List.of(
                 placeRated(1, "제주국제공항", "Travel and Transportation > Transport Hub > Airport > Airport Terminal", 33.5071, 126.4934, 4.4),
@@ -1190,8 +1190,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "relaxed", "any", null, List.of());
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         assertThat(steps.stream().map(s -> s.place().name()))
                 .contains("성산포항", "광치기해변");
@@ -1199,7 +1198,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("userSelected 장소는 정기휴무여도 교체되지 않는다")
-    void repairAndSchedule_userSelectedNotSwappedWhenClosed() {
+    void schedule_userSelectedNotSwappedWhenClosed() {
         java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
         List<PlaceCandidate> candidates = List.of(
                 new PlaceCandidate(1, 1L, "월요일휴무명소", "addr-1", "Landmarks and Outdoors > Park",
@@ -1220,14 +1219,14 @@ class RouteOptimizerTest {
                 List.of(4)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed", monday);
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", monday, List.of());
 
         assertThat(steps.stream().map(s -> s.place().name())).contains("월요일휴무명소");
     }
 
     @Test
     @DisplayName("저녁 식사는 경로순이 아니라 숙소에 가장 가까운 식당으로 배정된다")
-    void repairAndSchedule_dinnerIsNearestDiningToAccommodation() {
+    void schedule_dinnerIsNearestDiningToAccommodation() {
         // 경로순으로는 NearHotelMeal이 먼저(=점심)가 되기 쉽게 배치하되, 숙소 최근접이므로
         // dinner 스왑 후에는 저녁 슬롯(17:30~)에 있어야 한다.
         List<PlaceCandidate> candidates = List.of(
@@ -1243,7 +1242,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         StepData nearMeal = steps.stream()
                 .filter(s -> "NearHotelMeal".equals(s.place().name())).findFirst().orElseThrow();
@@ -1252,7 +1251,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("권장 체류시간이 있으면 체류가 그 값으로(150분), 상한 초과는 180분으로 클램프된다")
-    void repairAndSchedule_usesRecommendedDurationWithClamp() {
+    void schedule_usesRecommendedDurationWithClamp() {
         List<PlaceCandidate> candidates = List.of(
                 placeWithDuration(1, "오름150", "Landmarks and Outdoors > Tourist Attraction", 37.500, 127.000, 150),
                 placeWithDuration(2, "과대240", "Landmarks and Outdoors > Tourist Attraction", 37.501, 127.001, 240),
@@ -1266,7 +1265,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         StepData dur150 = steps.stream().filter(s -> "오름150".equals(s.place().name())).findFirst().orElseThrow();
         StepData dur240 = steps.stream().filter(s -> "과대240".equals(s.place().name())).findFirst().orElseThrow();
@@ -1276,7 +1275,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("등산/트레킹 카테고리는 체류시간 휴리스틱 150분이 적용된다 (데이터 없을 때)")
-    void repairAndSchedule_hikingHeuristicDuration() {
+    void schedule_hikingHeuristicDuration() {
         List<PlaceCandidate> candidates = List.of(
                 placeRated(1, "등산로", "Landmarks and Outdoors > Hiking Trail", 37.500, 127.000, 4.5),
                 placeRated(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, 4.5),
@@ -1289,7 +1288,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         StepData hiking = steps.stream().filter(s -> "등산로".equals(s.place().name())).findFirst().orElseThrow();
         assertThat(toMinutes(hiking.endTime()) - toMinutes(hiking.startTime())).isEqualTo(150);
@@ -1297,7 +1296,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("숙소가 방문지에서 멀면 방문지 중심에 가까운 후보 숙소로 교체된다 (매일 장거리 왕복 완화)")
-    void repairAndSchedule_swapsAccommodationToNearestOfDay() {
+    void schedule_swapsAccommodationToNearestOfDay() {
         // 방문지는 동쪽(127.9 근처), Sonnet이 고른 숙소(FarHotel)는 서쪽(126.4)으로 ~135km 멂.
         // NearHotel이 방문지 근처(127.9)에 있으므로 그걸로 교체돼야 한다.
         List<PlaceCandidate> candidates = List.of(
@@ -1313,7 +1312,7 @@ class RouteOptimizerTest {
                 List.of(4)
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         List<String> names = steps.stream().map(s -> s.place().name()).collect(Collectors.toList());
         assertThat(names).contains("NearHotel");
@@ -1322,7 +1321,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("전 지역에 흩어진 방문지가 지리적으로 맞는 day로 재배치돼 하루 이동거리가 준다")
-    void repairAndSchedule_rebalancesScatteredPlacesByGeography() {
+    void schedule_rebalancesScatteredPlacesByGeography() {
         // Day1에 동부(126.9)와 서부(126.2)가 섞여 있고, Day2엔 서부만 → 재배치로 Day1의 서부
         // 장소가 Day2로 이동해야 한다(각 day가 한 권역에 모임).
         List<PlaceCandidate> candidates = List.of(
@@ -1344,7 +1343,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         // West_misplaced는 Day2(서부)로 이동 — Day1엔 없어야
         StepData west = steps.stream().filter(s -> "West_misplaced".equals(s.place().name())).findFirst().orElseThrow();
@@ -1353,7 +1352,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("관광지 입장료(admissionFee)가 있으면 그 값으로, 무료(0)면 0원으로 책정된다")
-    void repairAndSchedule_usesAdmissionFeeForAttraction() {
+    void schedule_usesAdmissionFeeForAttraction() {
         List<PlaceCandidate> candidates = List.of(
                 // 성산일출봉식 유료 명소(5000), 오름식 무료(0)
                 placeWithAdmission(1, "유료명소", "Landmarks and Outdoors > Tourist Attraction", 37.50, 127.00, 5000),
@@ -1368,7 +1367,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         StepData paid = steps.stream().filter(s -> "유료명소".equals(s.place().name())).findFirst().orElseThrow();
         StepData free = steps.stream().filter(s -> "무료오름".equals(s.place().name())).findFirst().orElseThrow();
@@ -1385,7 +1384,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("숙소 근접 최적화가 방문지로 쓰인 LODGING을 숙소로 뽑지 않는다 (방문+숙소 이중등장 방지)")
-    void repairAndSchedule_proximityDoesNotDoubleUseVisitedLodging() {
+    void schedule_proximityDoesNotDoubleUseVisitedLodging() {
         // NearLodging은 방문지 centroid에 가장 가깝지만 placeIndices에 방문지로 들어가 있음 →
         // 숙소로 뽑히면 이중등장. 대신 그 다음으로 가까운 FarLodging(정상 숙소)이 유지돼야 한다.
         List<PlaceCandidate> candidates = List.of(
@@ -1403,7 +1402,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal");
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", null, List.of());
 
         long nearLodgingCount = steps.stream().filter(s -> "NearLodging".equals(s.place().name())).count();
         // 방문지로 1회만 등장, 숙소로 중복 채택되지 않음
@@ -1412,7 +1411,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("숙소는 0원이 아니라 유형별 추정가로 책정된다 (리조트 > 호텔 > 게스트하우스)")
-    void repairAndSchedule_lodgingCostIsNotZero() {
+    void schedule_lodgingCostIsNotZero() {
         List<PlaceCandidate> candidates = List.of(
                 placeRated(1, "Park", "Landmarks and Outdoors > Park", 37.500, 127.000, 4.5),
                 placeRated(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, 4.5),
@@ -1425,7 +1424,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         StepData lodging = steps.stream().filter(s -> "리조트".equals(s.place().name())).findFirst().orElseThrow();
         assertThat(lodging.estimatedCost()).isNotNull();
@@ -1434,7 +1433,7 @@ class RouteOptimizerTest {
 
     @Test
     @DisplayName("stepOrder는 1부터 연속 증가하며 모든 step의 notes(story)는 비어있다")
-    void repairAndSchedule_producesSequentialStepOrderWithEmptyStory() {
+    void schedule_producesSequentialStepOrderWithEmptyStory() {
         List<PlaceCandidate> candidates = List.of(
                 place(1, "A1", "Landmarks and Outdoors > Park", 37.50, 127.00, "강남"),
                 place(2, "Lunch", "Dining and Drinking > Restaurant > Korean", 37.501, 127.001, "강남"),
@@ -1448,7 +1447,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "relaxed");
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "any", null, List.of());
 
         for (int i = 0; i < steps.size(); i++) {
             assertThat(steps.get(i).stepOrder()).isEqualTo(i + 1);
@@ -1480,9 +1479,7 @@ class RouteOptimizerTest {
     void c1_capsViaRouteRepetition() {
         List<PlaceCandidate> candidates = Itinerary40Fixture.candidates();
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                itinerary40Selection(), candidates, "normal", "car", null,
-                List.of("ocean"), null, false, List.of());
+        List<StepData> steps = schedule(itinerary40Selection(), candidates, "normal", "car", null, List.of("ocean"));
 
         long viaCount = steps.stream()
                 .filter(s -> PlaceCategoryConstants.isViaRoute(
@@ -1510,8 +1507,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "car", null, List.of("food"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "normal", "car", null, List.of("food"));
 
         Map<String, Long> byLeaf = steps.stream()
                 .collect(Collectors.groupingBy(s -> leaf(s.place().category()), Collectors.counting()));
@@ -1524,10 +1520,9 @@ class RouteOptimizerTest {
     void c2_fillsMissingUserCategory() {
         List<PlaceCandidate> candidates = Itinerary40Fixture.candidates();
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                itinerary40Selection(), candidates, "normal", "car", null,
-                List.of("ocean"), null, false,
-                List.of("restaurant", "cafe", "market"));
+        List<StepData> steps = routeOptimizer.schedule(itinerary40Selection(), candidates,
+                ScheduleTestArgs.of("normal", "car", null, List.of("ocean"),
+                        null, false, List.of("restaurant", "cafe", "market"))).steps();
 
         List<String> names = steps.stream().map(s -> s.place().name()).collect(Collectors.toList());
         boolean hasCafe = steps.stream().anyMatch(s ->
@@ -1552,8 +1547,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "car", null, List.of("food"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "normal", "car", null, List.of("food"));
 
         StepData dinner = steps.stream()
                 .filter(s -> "DINING".equals(PlaceCategoryConstants.majorCategory(s.place().category())))
@@ -1584,8 +1578,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "tight", "car", null, List.of("food"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "tight", "car", null, List.of("food"));
 
         long meals = steps.stream()
                 .filter(s -> "DINING".equals(PlaceCategoryConstants.majorCategory(s.place().category())))
@@ -1611,8 +1604,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "car", null, List.of("ocean"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "normal", "car", null, List.of("ocean"));
 
         double day2Km = dayDrivenKm(steps, 2, candidates);
         assertThat(day2Km).isLessThanOrEqualTo(150.0 * 1.31); // car 일일 상한 150km (도로계수 여유)
@@ -1635,8 +1627,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "relaxed", "car", null, List.of("nature"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "relaxed", "car", null, List.of("nature"));
 
         Map<String, Integer> dayByName = steps.stream()
                 .collect(Collectors.toMap(s -> s.place().name(), StepData::dayNumber, (a, b) -> a));
@@ -1699,8 +1690,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "car", null, List.of("nature"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "normal", "car", null, List.of("nature"));
 
         assertThat(mealInWindow(steps, 11 * 60 + 30, 13 * 60 + 30)).as("점심").isTrue();
         assertThat(mealInWindow(steps, 17 * 60 + 30, 19 * 60 + 30)).as("저녁").isTrue();
@@ -1719,8 +1709,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "car", null, List.of("food"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "normal", "car", null, List.of("food"));
 
         boolean hasAttraction = steps.stream().anyMatch(s ->
                 "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(s.place().category())));
@@ -1742,9 +1731,9 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "car", null, List.of("food"), null, false,
-                List.of("restaurant", "cafe", "market"));
+        List<StepData> steps = routeOptimizer.schedule(selection, candidates,
+                ScheduleTestArgs.of("normal", "car", null, List.of("food"),
+                        null, false, List.of("restaurant", "cafe", "market"))).steps();
 
         boolean hasCafe = steps.stream().anyMatch(s ->
                 "CAFE".equals(PlaceCategoryConstants.majorCategory(s.place().category())));
@@ -1775,8 +1764,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "tight", "car", null, List.of("nature"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "tight", "car", null, List.of("nature"));
 
         long hills = steps.stream()
                 .filter(s -> "hill".equals(PlaceCategoryConstants.subType(
@@ -1828,8 +1816,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "tight", "car", null, List.of("healing"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "tight", "car", null, List.of("healing"));
 
         int maxRun = 0, run = 0;
         String prev = null;
@@ -1870,8 +1857,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "car", null, List.of("food"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "normal", "car", null, List.of("food"));
 
         // 저녁 시간대(17:30~19:30)에 실제 식사가 있어야 한다 — 카페로 교체됐다면 깨진다
         assertThat(mealInWindow(steps, 17 * 60 + 30, 19 * 60 + 30)).isTrue();
@@ -1912,9 +1898,9 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "walk", null, List.of("culture"), null, false,
-                List.of("restaurant", "market"));
+        List<StepData> steps = routeOptimizer.schedule(selection, candidates,
+                ScheduleTestArgs.of("normal", "walk", null, List.of("culture"),
+                        null, false, List.of("restaurant", "market"))).steps();
 
         assertThat(steps).extracting(st -> st.place().name()).doesNotContain("먼시장");
     }
@@ -1931,8 +1917,7 @@ class RouteOptimizerTest {
                 List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "tight", "car", null, List.of("ocean"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "tight", "car", null, List.of("ocean"));
 
         double displayedKm = steps.stream()
                 .filter(st -> st.transportationDistance() != null)
@@ -1971,8 +1956,7 @@ class RouteOptimizerTest {
                 List.of(), List.of(), List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "car", null, List.of("ocean"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "normal", "car", null, List.of("ocean"));
 
         steps.stream()
                 .filter(st -> "세기알해변".equals(st.place().name()))
@@ -2004,8 +1988,7 @@ class RouteOptimizerTest {
                 List.of(), List.of(16, 23), List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "tight", "car", null, List.of("food"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "tight", "car", null, List.of("food"));
 
         long earlyMeals = steps.stream()
                 .filter(st -> "DINING".equals(PlaceCategoryConstants.majorCategory(st.place().category())))
@@ -2024,9 +2007,7 @@ class RouteOptimizerTest {
         List<PlaceCandidate> candidates = Itinerary67Fixture.candidates();
         SelectionOutput selection = Itinerary67Fixture.selectionWithLodgingOnlyInSpare();
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "normal", "car", null,
-                List.of("romance", "budget"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "normal", "car", null, List.of("romance", "budget"));
 
         for (int day = 1; day <= 2; day++) {   // 3일차는 귀가일이라 숙소 없음이 정상
             final int d = day;
@@ -2053,8 +2034,7 @@ class RouteOptimizerTest {
                 List.of(), List.of(), List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, withoutLodging, "normal", "car", null, List.of(), null, false, List.of());
+        List<StepData> steps = schedule(selection, withoutLodging, "normal", "car", null, List.of());
 
         assertThat(steps).isNotEmpty();   // 생성 실패가 아니라 degrade
     }
@@ -2075,8 +2055,7 @@ class RouteOptimizerTest {
                 List.of(), List.of(19, 20), List.of(), List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "tight", "car", null, List.of(), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "tight", "car", null, List.of());
 
         steps.stream()
                 .filter(s -> "제주국제공항".equals(s.place().name()))
@@ -2092,9 +2071,7 @@ class RouteOptimizerTest {
         List<PlaceCandidate> candidates = Itinerary67Fixture.candidates();
         SelectionOutput selection = Itinerary67Fixture.selectionWithLodgingOnlyInSpare();
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(
-                selection, candidates, "tight", "car", null,
-                List.of("nightview"), null, false, List.of());
+        List<StepData> steps = schedule(selection, candidates, "tight", "car", null, List.of("nightview"));
 
         assertThat(steps).allSatisfy(s ->
                 assertThat(toMinutes(s.startTime()))
@@ -2159,7 +2136,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", monday, List.of());
 
         List<String> names = steps.stream().map(s -> s.place().name()).toList();
         int bakery = names.indexOf("오후베이커리");
@@ -2192,7 +2169,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", monday, List.of());
 
         // 바꿀 상대가 없어도 스텝이 사라지지 않아야 한다(식사 상한 트림은 별개 규칙)
         assertThat(steps.stream().map(s -> s.place().name())).contains("저녁집", "호텔");
@@ -2307,7 +2284,7 @@ class RouteOptimizerTest {
                 List.of()
         );
 
-        List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", monday);
+        List<StepData> steps = schedule(selection, candidates, "normal", "any", monday, List.of());
         List<String> names = steps.stream().map(s -> s.place().name()).toList();
 
         int cafe = names.indexOf("오후카페");

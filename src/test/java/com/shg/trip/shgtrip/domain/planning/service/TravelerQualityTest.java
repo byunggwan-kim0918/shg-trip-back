@@ -37,10 +37,9 @@ class TravelerQualityTest {
         private final List<PlaceCandidate> candidates = Itinerary115Fixture.candidates();
         private final Map<String, PlaceCandidate> byName = candidates.stream()
                 .collect(Collectors.toMap(PlaceCandidate::name, Function.identity(), (a, b) -> a));
-        private final List<StepData> steps = routeOptimizer.schedule(
-                Itinerary115Fixture.selection(), candidates, "normal", "car", LocalDate.of(2026, 11, 1),
-                List.of("food", "romance"), new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"),
-                false, List.of("restaurant")).steps();
+        private final List<StepData> steps = routeOptimizer.schedule(Itinerary115Fixture.selection(), candidates,
+                ScheduleTestArgs.of("normal", "car", LocalDate.of(2026, 11, 1), List.of("food", "romance"),
+                        new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"), false, List.of("restaurant"))).steps();
 
         @Test
         @DisplayName("같은 음식 종류는 4일 일정 전체에서 2끼를 넘지 않는다 (태그까지 본다)")
@@ -133,7 +132,8 @@ class TravelerQualityTest {
                             new SelectionOutput.DayPlan(2, null, List.of(5, 6, 7, 8), null, null)),
                     List.of(), List.of());
 
-            List<StepData> steps = routeOptimizer.repairAndSchedule(selection, candidates, "normal", "car", null);
+            List<StepData> steps = routeOptimizer.schedule(selection, candidates,
+                    ScheduleTestArgs.of("normal", "car", null, List.of(), null, false, List.of())).steps();
 
             List<String> day2 = steps.stream().filter(s -> s.dayNumber() == 2)
                     .map(s -> s.place().name()).toList();
