@@ -98,6 +98,12 @@ resource "aws_ecs_task_definition" "batch" {
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.batch_task.arn
 
+  # app·web·batch 이미지는 배포 워크플로가 ARM 러너에서 arm64로만 빌드한다. 아키텍처를 바꾸려면 러너도 같이 바꾼다.
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
   container_definitions = jsonencode([{
     name  = "batch"
     image = "${aws_ecr_repository.batch.repository_url}:latest"
@@ -166,6 +172,11 @@ resource "aws_ecs_task_definition" "app" {
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.app_task.arn
 
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
+
   container_definitions = jsonencode([{
     name  = "app"
     image = "${local.ecr_base}/shgtrip/app:latest"
@@ -217,6 +228,11 @@ resource "aws_ecs_task_definition" "web" {
   memory                   = "1024"
   execution_role_arn       = aws_iam_role.ecs_execution.arn
   task_role_arn            = aws_iam_role.web_task.arn
+
+  runtime_platform {
+    operating_system_family = "LINUX"
+    cpu_architecture        = "ARM64"
+  }
 
   container_definitions = jsonencode([{
     name  = "web"
