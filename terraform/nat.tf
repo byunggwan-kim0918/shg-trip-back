@@ -1,10 +1,20 @@
 # ── NAT 인스턴스 ──────────────────────────────────────────────────────────────
-# 프라이빗 서브넷의 유일한 외부 출구 — 멈추면 ECR pull·Secrets Manager·외부 API 호출이 전부 끊긴다
+# AZ마다 한 대씩 두고 같은 AZ 프라이빗 서브넷의 외부 출구로 쓴다. 한 대가 멈춰도 다른 AZ의 앱·웹은
+# ECR pull·Secrets Manager·외부 API 호출을 계속한다.
+
+locals {
+  nat_public_subnets = {
+    "2a" = aws_subnet.public_2a.id
+    "2c" = aws_subnet.public_2c.id
+  }
+}
 
 resource "aws_instance" "nat" {
+  for_each = local.nat_public_subnets
+
   ami                         = "ami-0ee840e948c0ac14b"
   instance_type               = "t3.micro"
-  subnet_id                   = aws_subnet.public_2a.id
+  subnet_id                   = each.value
   vpc_security_group_ids      = [aws_security_group.nat.id]
   associate_public_ip_address = true
   # 자기 주소가 아닌 패킷을 중계하려면 꺼야 한다.
@@ -28,17 +38,22 @@ resource "aws_instance" "nat" {
   }
 
   tags = {
-    Name      = "shgTrip-dev-nat"
+    Name      = "shgTrip-dev-nat-${each.key}"
     Project   = var.project
     Env       = var.env
     ManagedBy = "manual"
   }
 
   # user_data는 첫 부팅 때만 쓰이는데 바뀌면(끝 줄바꿈 하나로도) provider가 인스턴스를 재시작한다.
-  # 스크립트를 바꾸려면 -replace=aws_instance.nat로 교체한다
+  # 스크립트를 바꾸려면 -replace='aws_instance.nat["2a"]'처럼 한 대씩 교체한다
   lifecycle {
     ignore_changes = [user_data]
   }
+}
+
+moved {
+  from = aws_instance.nat
+  to   = aws_instance.nat["2a"]
 }
 
 resource "aws_security_group" "nat" {

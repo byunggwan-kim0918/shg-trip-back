@@ -187,10 +187,12 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
 }
 
 # ── NAT 인스턴스 ──────────────────────────────────────────────────────────────
-# 단일 장애점이라 자동 복구·재부팅까지 건다. 일부러 멈춰 둔 동안은 동작하지 않게 데이터 없음은 판정하지 않는다
+# 멈추면 그 AZ 프라이빗 서브넷의 외부 출구가 끊겨 자동 복구·재부팅까지 건다. 일부러 멈춰 둔 동안은 동작하지 않게 데이터 없음은 판정하지 않는다
 resource "aws_cloudwatch_metric_alarm" "nat_system_check" {
-  alarm_name          = "${var.project}-nat-system-check"
-  alarm_description   = "NAT 인스턴스 시스템 상태 검사 실패 — 다른 호스트로 자동 복구"
+  for_each = aws_instance.nat
+
+  alarm_name          = "${var.project}-nat-${each.key}-system-check"
+  alarm_description   = "NAT 인스턴스(${each.key}) 시스템 상태 검사 실패 — 다른 호스트로 자동 복구"
   namespace           = "AWS/EC2"
   metric_name         = "StatusCheckFailed_System"
   statistic           = "Maximum"
@@ -200,15 +202,17 @@ resource "aws_cloudwatch_metric_alarm" "nat_system_check" {
   threshold           = 1
   treat_missing_data  = "missing"
   dimensions = {
-    InstanceId = aws_instance.nat.id
+    InstanceId = each.value.id
   }
   alarm_actions = ["arn:aws:automate:${var.aws_region}:ec2:recover", local.alert_topic_arn]
   ok_actions    = [local.alert_topic_arn]
 }
 
 resource "aws_cloudwatch_metric_alarm" "nat_instance_check" {
-  alarm_name          = "${var.project}-nat-instance-check"
-  alarm_description   = "NAT 인스턴스 상태 검사 실패 — 재부팅"
+  for_each = aws_instance.nat
+
+  alarm_name          = "${var.project}-nat-${each.key}-instance-check"
+  alarm_description   = "NAT 인스턴스(${each.key}) 상태 검사 실패 — 재부팅"
   namespace           = "AWS/EC2"
   metric_name         = "StatusCheckFailed_Instance"
   statistic           = "Maximum"
@@ -218,7 +222,7 @@ resource "aws_cloudwatch_metric_alarm" "nat_instance_check" {
   threshold           = 1
   treat_missing_data  = "missing"
   dimensions = {
-    InstanceId = aws_instance.nat.id
+    InstanceId = each.value.id
   }
   alarm_actions = ["arn:aws:automate:${var.aws_region}:ec2:reboot", local.alert_topic_arn]
   ok_actions    = [local.alert_topic_arn]
