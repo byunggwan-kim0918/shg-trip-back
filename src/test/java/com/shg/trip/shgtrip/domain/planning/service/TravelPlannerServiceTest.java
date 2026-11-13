@@ -50,6 +50,12 @@ class TravelPlannerServiceTest {
     @Mock
     private GenerationPolicyService generationPolicyService;
 
+    @Mock
+    private GenerationEventLog eventLog;
+
+    @Mock
+    private GenerationStreamRelay relay;
+
     private TravelPlannerService service;
 
     @BeforeEach
@@ -57,7 +63,8 @@ class TravelPlannerServiceTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         service = new TravelPlannerService(
                 optimizedGenerationExecutor, resultStore, cancellationRegistry, redisTemplate,
-                generationPolicyService);
+                generationPolicyService, eventLog, relay);
+        when(eventLog.mirrorFor(anyString())).thenReturn(GenerationStream.Mirror.NONE);
     }
 
     @Test
@@ -138,6 +145,28 @@ class TravelPlannerServiceTest {
 
         assertThat(service.openStream("no-such-job", 1L)).isNotNull();
         assertThat(service.openStream(response.jobId(), 2L)).isNotNull();
+    }
+
+    @Test
+    @DisplayName("다른 인스턴스가 돌리는 작업은 소유자에게만 Redis 기록을 이어 보낸다")
+    void openStream_relaysJobRunningElsewhere() {
+        SseEmitter relayed = new SseEmitter();
+        when(resultStore.findForOwner(anyString(), anyLong())).thenReturn(null);
+        when(eventLog.ownerOf("remote-job")).thenReturn(1L);
+        when(relay.relay(eq("remote-job"), anyLong())).thenReturn(relayed);
+
+        assertThat(service.openStream("remote-job", 1L)).isSameAs(relayed);
+        assertThat(service.openStream("remote-job", 2L)).isNotSameAs(relayed);
+        verify(relay, times(1)).relay(eq("remote-job"), anyLong());
+    }
+
+    @Test
+    @DisplayName("작업을 시작하면 소유자를 기록하고 이벤트를 Redis에도 남긴다")
+    void startGeneration_registersOwnerAndMirror() {
+        GenerateJobResponse response = service.startGeneration(createRequest(), 1L);
+
+        verify(eventLog).register(response.jobId(), 1L);
+        verify(eventLog).mirrorFor(response.jobId());
     }
 
     @Test

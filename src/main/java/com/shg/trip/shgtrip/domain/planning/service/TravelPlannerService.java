@@ -23,8 +23,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 유저당 동시 생성은 1개다. 새 요청이 오면 기존 작업을 취소한다.
  * <p>
- * 활성 jobId는 Redis 키(active:user:{userId})로 인스턴스 간 공유하지만 GenerationStream은 인스턴스 메모리에 있다.
- * 같은 인스턴스로 라우팅하는 것은 ALB sticky session이 맡는다(docs/sse-scaling.md).
+ * 활성 jobId는 Redis 키(active:user:{userId})로 인스턴스 간 공유한다. GenerationStream은 작업을 돌리는 인스턴스 메모리에
+ * 있고, 다른 인스턴스로 온 스트림 요청은 Redis에 남긴 이벤트를 이어 보낸다(docs/sse-scaling.md).
  * <p>
  * 새로고침으로 연결이 끊겨도 작업은 계속 돈다. 끝난 작업도 정리 주기 전까지 맵에 남아 재접속 시 결과를 받는다.
  */
@@ -51,17 +51,23 @@ public class TravelPlannerService {
     private final CancellationRegistry cancellationRegistry;
     private final StringRedisTemplate redisTemplate;
     private final GenerationPolicyService generationPolicyService;
+    private final GenerationEventLog eventLog;
+    private final GenerationStreamRelay relay;
 
     public TravelPlannerService(OptimizedGenerationExecutor optimizedGenerationExecutor,
                                 GenerationResultStore resultStore,
                                 CancellationRegistry cancellationRegistry,
                                 StringRedisTemplate redisTemplate,
-                                GenerationPolicyService generationPolicyService) {
+                                GenerationPolicyService generationPolicyService,
+                                GenerationEventLog eventLog,
+                                GenerationStreamRelay relay) {
         this.optimizedGenerationExecutor = optimizedGenerationExecutor;
         this.resultStore = resultStore;
         this.cancellationRegistry = cancellationRegistry;
         this.redisTemplate = redisTemplate;
         this.generationPolicyService = generationPolicyService;
+        this.eventLog = eventLog;
+        this.relay = relay;
     }
 
     private final ConcurrentHashMap<String, JobEntry> jobs = new ConcurrentHashMap<>();
@@ -87,7 +93,8 @@ public class TravelPlannerService {
             cancelJobInternal(existingJobId);
         }
 
-        GenerationStream stream = new GenerationStream(jobId, () -> onJobFinished(jobId));
+        eventLog.register(jobId, userId);
+        GenerationStream stream = new GenerationStream(jobId, () -> onJobFinished(jobId), eventLog.mirrorFor(jobId));
         jobs.put(jobId, new JobEntry(stream, userId, Instant.now()));
 
         optimizedGenerationExecutor.execute(jobId, request, userId, stream);
@@ -112,6 +119,10 @@ public class TravelPlannerService {
         }
         if (entry == null && resultStore.findForOwner(jobId, userId) != null) {
             return completedStream();
+        }
+        // 작업을 다른 인스턴스가 돌리고 있으면 그 기록을 이어 보낸다.
+        if (entry == null && userId.equals(eventLog.ownerOf(jobId))) {
+            return relay.relay(jobId, SSE_TIMEOUT_MS);
         }
         ErrorCode code = ErrorCode.GENERATION_JOB_NOT_FOUND;
         return GenerationStream.rejected(code.getCode(), code.getMessage());

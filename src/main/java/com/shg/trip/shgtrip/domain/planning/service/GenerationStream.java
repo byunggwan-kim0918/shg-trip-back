@@ -22,6 +22,7 @@ public class GenerationStream {
 
     private final String jobId;
     private final Runnable onFinished;
+    private final Mirror mirror;
     private final List<Set<DataWithMediaType>> history = new ArrayList<>();
     private SseEmitter current;
     private boolean finished;
@@ -31,8 +32,31 @@ public class GenerationStream {
     }
 
     public GenerationStream(String jobId, Runnable onFinished) {
+        this(jobId, onFinished, Mirror.NONE);
+    }
+
+    /** @param mirror 이벤트를 인스턴스 밖에도 남기는 통로. 다른 인스턴스로 온 연결이 여기서 이어 받는다 */
+    public GenerationStream(String jobId, Runnable onFinished, Mirror mirror) {
         this.jobId = jobId;
         this.onFinished = onFinished;
+        this.mirror = mirror;
+    }
+
+    /** 보낸 이벤트와 작업 끝을 인스턴스 밖 기록에 남긴다. 실패해도 생성을 멈추지 않는다. */
+    public interface Mirror {
+        Mirror NONE = new Mirror() {
+            @Override
+            public void append(Set<DataWithMediaType> items) {
+            }
+
+            @Override
+            public void end() {
+            }
+        };
+
+        void append(Set<DataWithMediaType> items);
+
+        void end();
     }
 
     /**
@@ -70,6 +94,7 @@ public class GenerationStream {
         Set<DataWithMediaType> items = event.build();
         if (history.size() < MAX_HISTORY) {
             history.add(items);
+            mirror.append(items);
         }
         deliver(items);
     }
@@ -78,6 +103,7 @@ public class GenerationStream {
         synchronized (this) {
             if (finished) return;
             finished = true;
+            mirror.end();
             if (current != null) {
                 completeQuietly(current);
                 current = null;
