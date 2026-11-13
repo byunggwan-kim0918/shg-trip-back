@@ -34,7 +34,11 @@ public class CommonsImageJob {
 
     private static final String COMMONS_API = "https://commons.wikimedia.org/w/api.php";
     private static final String FILE_PATH_MARKER = "Special:FilePath/";
-    private static final String THUMB_HOST = "https://upload.wikimedia.org/";
+    /**
+     * 썸네일을 만들 수 없는 파일은 commons 서버의 파일 형식 아이콘 주소가 와서 파일 서버만 받는다.
+     * 축소한 썸네일은 thumb, 원본 크기 그대로인 파일은 upload 서버 주소로 온다.
+     */
+    private static final List<String> MEDIA_HOSTS = List.of("https://upload.wikimedia.org/", "https://thumb.wikimedia.org/");
     /** 형식이 다른 id가 VALUES에 하나라도 섞이면 묶음 전체가 쿼리 오류가 된다. */
     private static final Pattern QID = Pattern.compile("Q\\d+");
 
@@ -46,7 +50,7 @@ public class CommonsImageJob {
     static final int THUMB_WIDTH = 960;
     private static final int MAX_CREDIT_LENGTH = 200;
     private static final int MAX_LICENSE_LENGTH = 100;
-    /** 실패한 요청 묶음이 이 비율을 넘으면 단계 실패로 본다. */
+    /** 실패한 요청 묶음이나 파일 서버가 아닌 썸네일이 이 비율을 넘으면 단계 실패로 본다. */
     private static final double MAX_FAILED_RATIO = 0.2;
 
     private final PlaceRepository placeRepository;
@@ -100,21 +104,30 @@ public class CommonsImageJob {
 
         int saved = 0;
         int unusable = 0;
+        int foreignHost = 0;
         for (Map.Entry<String, String> entry : fileByItem.entrySet()) {
             CommonsImage image = imageByFile.get(entry.getValue());
             if (image == null) {
                 unusable++;
                 continue;
             }
+            String url = mediaUrl(image.thumbUrl());
+            if (url == null) {
+                foreignHost++;
+                if (foreignHost == 1) log.warn("파일 서버가 아닌 썸네일 주소 제외: {}", image.thumbUrl());
+                continue;
+            }
             for (Long id : idsByItem.get(entry.getKey())) {
-                saved += placeRepository.updateAttributedImage(id, image.thumbUrl(), image.credit(), image.license(),
-                        image.pageUrl());
+                saved += placeRepository.updateAttributedImage(id, url, image.credit(), image.license(), image.pageUrl());
             }
         }
-        log.info("공용 사진 연결: 저장 {}곳, 대표 사진 있는 항목 {}개, 파일 정보·라이선스 없어 제외 {}개, 실패 요청 {}/{}",
-                saved, fileByItem.size(), unusable, failed, requests);
+        log.info("공용 사진 연결: 저장 {}곳, 대표 사진 있는 항목 {}개, 파일 정보·라이선스 없음 {}개, 파일 서버 아님 {}개, 실패 요청 {}/{}",
+                saved, fileByItem.size(), unusable, foreignHost, failed, requests);
         if (failed > requests * MAX_FAILED_RATIO) {
             throw new BatchStageFailed("공용 사진 요청 실패 " + failed + "/" + requests);
+        }
+        if (foreignHost > fileByItem.size() * MAX_FAILED_RATIO) {
+            throw new BatchStageFailed("파일 서버가 아닌 썸네일 " + foreignHost + "/" + fileByItem.size());
         }
     }
 
@@ -187,12 +200,19 @@ public class CommonsImageJob {
     }
 
     private static CommonsImage toImage(JsonNode info) {
-        String thumb = info.path("thumburl").asText(info.path("url").asText(""));
+        String thumb = info.path("thumburl").asText("");
         String license = plainText(info.path("extmetadata").path("LicenseShortName").path("value").asText(""),
                 MAX_LICENSE_LENGTH);
-        if (!thumb.startsWith(THUMB_HOST) || license == null) return null;
+        if (thumb.isEmpty() || license == null) return null;
         String credit = plainText(info.path("extmetadata").path("Artist").path("value").asText(""), MAX_CREDIT_LENGTH);
         return new CommonsImage(thumb, credit, license, info.path("descriptionurl").asText(null));
+    }
+
+    /** 위키미디어 파일 서버 주소면 쿼리를 뗀 주소, 아니면 null. API가 붙이는 utm 쿼리는 파일 제공과 무관하다. */
+    static String mediaUrl(String url) {
+        int query = url.indexOf('?');
+        String base = query < 0 ? url : url.substring(0, query);
+        return MEDIA_HOSTS.stream().anyMatch(base::startsWith) ? base : null;
     }
 
     /** 공용 메타데이터는 링크·태그가 섞인 HTML이라 평문으로 바꾼다. 비면 null. */
