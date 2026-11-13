@@ -89,11 +89,11 @@ class OverseasPlaceRulesTest {
     @Test
     @DisplayName("지점명: 괄호 속 店과 공백 뒤 …店을 떼고, 공백 없이 붙은 이름은 그대로 둔다")
     void branchSuffix() {
-        assertThat(RouteOptimizer.stripBranchSuffix("星巴克(人民广场店)")).isEqualTo("星巴克");
-        assertThat(RouteOptimizer.stripBranchSuffix("鼎泰豐（信義店）")).isEqualTo("鼎泰豐");
-        assertThat(RouteOptimizer.stripBranchSuffix("一蘭 渋谷店")).isEqualTo("一蘭");
-        assertThat(RouteOptimizer.stripBranchSuffix("一蘭渋谷店")).isEqualTo("一蘭渋谷店");
-        assertThat(RouteOptimizer.stripBranchSuffix("흑본오겹 함덕점")).isEqualTo("흑본오겹");
+        assertThat(AlternativeBuilder.stripBranchSuffix("星巴克(人民广场店)")).isEqualTo("星巴克");
+        assertThat(AlternativeBuilder.stripBranchSuffix("鼎泰豐（信義店）")).isEqualTo("鼎泰豐");
+        assertThat(AlternativeBuilder.stripBranchSuffix("一蘭 渋谷店")).isEqualTo("一蘭");
+        assertThat(AlternativeBuilder.stripBranchSuffix("一蘭渋谷店")).isEqualTo("一蘭渋谷店");
+        assertThat(AlternativeBuilder.stripBranchSuffix("흑본오겹 함덕점")).isEqualTo("흑본오겹");
     }
 
     @Test

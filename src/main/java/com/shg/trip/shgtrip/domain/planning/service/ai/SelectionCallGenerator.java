@@ -505,7 +505,7 @@ public class SelectionCallGenerator {
 
     /**
      * 고신뢰 신호(휴무/closed)가 있는 줄에서만 정기휴무 요일을 "목휴무" 형태로 뽑고, 없으면 null.
-     * RouteOptimizer.repairClosedDayPlaces와 같은 보수적 기준이다.
+     * SubstitutionRepair.repairClosedDayPlaces와 같은 보수적 기준이다.
      */
     private String formatClosedDay(String openingHours) {
         if (openingHours == null || openingHours.isBlank()) return null;

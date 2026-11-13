@@ -473,7 +473,7 @@ public class VectorSearchQueryService {
                 : Math.min(MAX_OVERFETCH, limit * OVERFETCH_FACTOR);
     }
 
-    /** RouteOptimizer 유형 상한과 같은 키를 쓴다. */
+    /** 유형 상한({@link CandidateTraits#subTypeOf})과 같은 키를 쓴다. */
     private static String mealTypeKey(VectorSearchResult r) {
         return PlaceCategoryConstants.mealKind(r.name(), r.nameKo(), r.category(), r.tags(), r.description(),
                 r.cuisine());

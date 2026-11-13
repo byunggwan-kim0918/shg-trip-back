@@ -593,7 +593,7 @@ public class OptimizedGenerationExecutor {
 
     /**
      * 물리적으로 같은 장소의 중복 레코드를 1개만 남긴다. 같은 장소가 여러 스텝·대안에 반복되지 않게
-     * Sonnet 선택 이전에 한다. RouteOptimizer.byIndex가 위치 기반이라 1-based 인덱스를 다시 연속 부여한다.
+     * Sonnet 선택 이전에 한다. ScheduleTimes.byIndex가 위치 기반이라 1-based 인덱스를 다시 연속 부여한다.
      */
     List<PlaceCandidate> dedupePhysicalCandidates(List<PlaceCandidate> candidates) {
         Map<String, List<PlaceCandidate>> groups = new LinkedHashMap<>();

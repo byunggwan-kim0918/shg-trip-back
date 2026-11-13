@@ -95,7 +95,7 @@ final class InvariantChecker {
 
     /**
      * 첫날 해외 도착 허브에서 나오는 구간과 마지막 날 출발 허브로 가는 구간. 해외 관문 공항은 시내에서 30~60km라
-     * 이 구간을 거리 예산에 넣으면 모든 해외 일정의 도착·출발일이 거리 초과가 된다. RouteOptimizer 거리 예산과 기준이 같아야 한다.
+     * 이 구간을 거리 예산에 넣으면 모든 해외 일정의 도착·출발일이 거리 초과가 된다. {@link CandidateGeo#budgetCoords}와 기준이 같아야 한다.
      */
     static boolean isOverseasHubTransfer(List<StepData> daySteps, int i, boolean firstDay, boolean lastDay) {
         if (lastDay && i == daySteps.size() - 1 && isOverseasHub(daySteps.get(i))) return true;
@@ -211,7 +211,7 @@ final class InvariantChecker {
 
     /**
      * 식사 시간창(시작 60분 전까지 허용) 안에 식사 가능한 장소가 있는지.
-     * {@link RouteOptimizer}와 정의가 다르면 수리 뒤에도 검사가 위반을 계속 잡아 무한 루프가 된다.
+     * 끼니 수리({@link MealPlanner})와 정의가 다르면 수리 뒤에도 검사가 위반을 계속 잡아 무한 루프가 된다.
      */
     static boolean hasMealInWindow(List<StepData> daySteps, int windowStart, int windowEnd) {
         return hasMealInWindow(daySteps, windowStart, windowEnd, InvariantChecker::isMealByName);

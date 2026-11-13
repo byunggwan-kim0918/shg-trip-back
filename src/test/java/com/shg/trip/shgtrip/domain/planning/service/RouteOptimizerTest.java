@@ -511,16 +511,16 @@ class RouteOptimizerTest {
     @Test
     @DisplayName("isClosedOnDay: 휴무 신호에만 true, 데이터 없음/요일 미매칭/영업중은 false")
     void isClosedOnDay_onlyTrueOnHighConfidenceClosedSignal() {
-        assertThat(routeOptimizer.isClosedOnDay("월요일: 휴무, 화요일: 오전 9시~오후 6시",
+        assertThat(DayTiming.isClosedOnDay("월요일: 휴무, 화요일: 오전 9시~오후 6시",
                 java.time.DayOfWeek.MONDAY)).isTrue();
-        assertThat(routeOptimizer.isClosedOnDay("Monday: Closed, Tuesday: 9 AM – 6 PM",
+        assertThat(DayTiming.isClosedOnDay("Monday: Closed, Tuesday: 9 AM – 6 PM",
                 java.time.DayOfWeek.MONDAY)).isTrue();
-        assertThat(routeOptimizer.isClosedOnDay("월요일: 오전 9시~오후 6시",
+        assertThat(DayTiming.isClosedOnDay("월요일: 오전 9시~오후 6시",
                 java.time.DayOfWeek.MONDAY)).isFalse();
-        assertThat(routeOptimizer.isClosedOnDay(null, java.time.DayOfWeek.MONDAY)).isFalse();
-        assertThat(routeOptimizer.isClosedOnDay("", java.time.DayOfWeek.MONDAY)).isFalse();
+        assertThat(DayTiming.isClosedOnDay(null, java.time.DayOfWeek.MONDAY)).isFalse();
+        assertThat(DayTiming.isClosedOnDay("", java.time.DayOfWeek.MONDAY)).isFalse();
         // 화요일 정보만 있고 월요일 미매칭 → 열림 가정
-        assertThat(routeOptimizer.isClosedOnDay("화요일: 휴무",
+        assertThat(DayTiming.isClosedOnDay("화요일: 휴무",
                 java.time.DayOfWeek.MONDAY)).isFalse();
     }
 
@@ -2248,8 +2248,8 @@ class RouteOptimizerTest {
     void unmatchedThemeFallsBackToDefaults() {
         // 생성 요청 계약은 영문 슬러그다(WizardOptionIds). 한글을 넣으면 매칭되지 않고
         // 기본 시간창으로 떨어진다 — 별칭을 늘리지 않는 대신 log.warn으로 드러낸다.
-        ScheduleConfig korean = routeOptimizer.scheduleConfig(List.of("야경"), "normal");
-        ScheduleConfig none = routeOptimizer.scheduleConfig(List.of(), "normal");
+        ScheduleConfig korean = ScheduleConfig.forTrip(List.of("야경"), "normal", false);
+        ScheduleConfig none = ScheduleConfig.forTrip(List.of(), "normal", false);
 
         assertThat(korean.morningStart).isEqualTo(none.morningStart);
         assertThat(korean.eveningCap).isEqualTo(none.eveningCap);
@@ -2257,7 +2257,7 @@ class RouteOptimizerTest {
         assertThat(korean.pace).isEqualTo("normal");
 
         // 유효 슬러그는 기본값과 달라야 한다(그래야 위 비교가 의미를 가진다)
-        ScheduleConfig slug = routeOptimizer.scheduleConfig(List.of("nightview"), "normal");
+        ScheduleConfig slug = ScheduleConfig.forTrip(List.of("nightview"), "normal", false);
         assertThat(slug.eveningCap).isGreaterThan(none.eveningCap);
     }
 
