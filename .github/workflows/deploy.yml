@@ -19,7 +19,8 @@ permissions:
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    # ECS 태스크 정의(app·batch)가 ARM64라 같은 아키텍처 러너에서 빌드한다. 다른 러너에서 빌드한 이미지는 태스크가 뜨지 못한다.
+    runs-on: ubuntu-24.04-arm
     environment: production
 
     steps:
