@@ -92,7 +92,7 @@ public final class ItineraryScorer {
             double dayKm = 0;
             for (int i = 0; i < daySteps.size(); i++) {
                 StepData s = daySteps.get(i);
-                if (s.transportationDistance() != null && !InvariantChecker.isOverseasHubTransfer(daySteps, i, first, last)) {
+                if (s.transportationDistance() != null && !InvariantChecker.isOutsideDayBudget(daySteps, i, first, last)) {
                     dayKm += s.transportationDistance().doubleValue() / GeoUtils.ROAD_DISTANCE_FACTOR;
                 }
             }
@@ -180,7 +180,7 @@ public final class ItineraryScorer {
         }
         for (int i = 0; i < daySteps.size(); i++) {
             StepData s = daySteps.get(i);
-            if (s.transportationDistance() != null && !InvariantChecker.isOverseasHubTransfer(daySteps, i, first, last)
+            if (s.transportationDistance() != null && !InvariantChecker.isOutsideDayBudget(daySteps, i, first, last)
                     && s.transportationDistance().doubleValue() / GeoUtils.ROAD_DISTANCE_FACTOR > limits[0]) {
                 violations.add("day" + day + " 구간 상한 초과(" + name(s) + ")");
             }
@@ -226,8 +226,8 @@ public final class ItineraryScorer {
                 .map(s -> {
                     PlaceCandidate c = byName.get(name(s));
                     return c != null
-                            ? PlaceCategoryConstants.mealKind(c.name(), c.category(), c.tags(), c.description(), c.cuisine())
-                            : PlaceCategoryConstants.mealKind(name(s), category(s), null, null, null);
+                            ? CandidatePolicy.cuisineOf(c)
+                            : PlaceCategoryConstants.mealKind(name(s), s.place().nameKo(), category(s), null, null, null);
                 })
                 .filter(Objects::nonNull)
                 .toList();

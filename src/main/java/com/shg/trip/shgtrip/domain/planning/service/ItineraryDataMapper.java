@@ -87,12 +87,20 @@ public class ItineraryDataMapper {
         if (optimizedSteps != null) {
             int dropped = 0;
             boolean precededByDrop = false;
+            StepData pendingTransfer = null;
             for (StepData stepData : optimizedSteps) {
                 if (lookupPlace(stepData.place(), placeCache) == null) {
                     dropped++;
                     precededByDrop = true;
+                    // 도시 간 구간은 다음 도시로 가는 이동 자체라 첫 장소가 빠져도 그날 다음 장소가 이어받는다.
+                    if (InvariantChecker.isIntercityLeg(stepData)) pendingTransfer = stepData;
                     continue;
                 }
+                if (pendingTransfer != null && pendingTransfer.dayNumber() == stepData.dayNumber()) {
+                    stepData = withTransportOf(stepData, pendingTransfer);
+                    precededByDrop = false;
+                }
+                pendingTransfer = null;
                 itinerary.addStep(toStepEntity(stepData, placeCache, precededByDrop));
                 precededByDrop = false;
             }
@@ -105,6 +113,12 @@ public class ItineraryDataMapper {
     }
 
     // ── Private helpers ──
+
+    private static StepData withTransportOf(StepData step, StepData legSource) {
+        return new StepData(step.stepOrder(), step.dayNumber(), step.startTime(), step.endTime(), step.place(),
+                step.alternatives(), legSource.transportationMode(), legSource.transportationDuration(),
+                legSource.transportationDistance(), legSource.transportationCost(), step.notes(), step.estimatedCost());
+    }
 
     private Map<String, PlaceData> collectUniquePlaces(ItineraryData data) {
         Map<String, PlaceData> map = new LinkedHashMap<>();

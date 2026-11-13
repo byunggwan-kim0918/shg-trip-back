@@ -127,6 +127,11 @@ public class Itinerary extends BaseTimeEntity {
                 .ifPresent(s -> this.coverPlaceId = s.getPlace().getId());
     }
 
+    /** 사진 있는 스텝이 없을 때 여행지 대표 사진을 표지로 쓴다. 이미 정한 표지는 바꾸지 않는다. */
+    public void assignCoverPlaceIfAbsent(Long placeId) {
+        if (this.coverPlaceId == null) this.coverPlaceId = placeId;
+    }
+
     /**
      * 높을수록 커버로 우선한다. category는 Foursquare 분류 문자열("A > B > C")이다.
      * 교통 허브는 여행지를 설명하지 못해 최하위지만, 그것밖에 없으면 쓰인다.

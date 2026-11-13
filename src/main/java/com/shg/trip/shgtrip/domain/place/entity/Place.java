@@ -66,6 +66,17 @@ public class Place extends BaseTimeEntity {
 
     private String imageUrl;
 
+    /** 사진 작성자. 위키미디어 공용 사진처럼 저작자 표시가 사용 조건인 출처만 채운다. */
+    @Column(name = "image_credit", insertable = false, updatable = false)
+    private String imageCredit;
+
+    @Column(name = "image_license", insertable = false, updatable = false)
+    private String imageLicense;
+
+    /** 사진 원본 파일 페이지. */
+    @Column(name = "image_source_url", insertable = false, updatable = false)
+    private String imageSourceUrl;
+
     private String photoReference;
 
     private String sourceUrl;

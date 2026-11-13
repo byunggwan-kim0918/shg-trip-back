@@ -50,13 +50,13 @@ final class InvariantChecker {
             DayState day = days.get(i);
             List<StepData> daySteps = byDay.getOrDefault(day.dayNumber, List.of());
             if (daySteps.isEmpty()) continue;
-            boolean lastDay = i == days.size() - 1;
+            boolean lastDay = DayState.endsTrip(days, i);
 
             double total = 0;
             double maxLeg = 0;
             for (int s = 0; s < daySteps.size(); s++) {
                 StepData step = daySteps.get(s);
-                if (step.transportationDistance() == null || isOverseasHubTransfer(daySteps, s, i == 0, lastDay)) continue;
+                if (step.transportationDistance() == null || isOutsideDayBudget(daySteps, s, i == 0 && !day.resumesAfterTransfer, lastDay)) continue;
                 // 저장된 이동거리는 도로 환산값이라 예산과 같은 직선 단위로 되돌려 비교한다.
                 double straight = step.transportationDistance().doubleValue() / GeoUtils.ROAD_DISTANCE_FACTOR;
                 total += straight;
@@ -81,6 +81,16 @@ final class InvariantChecker {
                     missesDeparture(daySteps, candidates, day)));
         }
         return result;
+    }
+
+    /** 하루 이동 예산에 넣지 않는 구간. 관문 공항 연결과 도시 간 열차·비행기는 그날 동선이 아니다. */
+    static boolean isOutsideDayBudget(List<StepData> daySteps, int i, boolean firstDay, boolean lastDay) {
+        return isIntercityLeg(daySteps.get(i)) || isOverseasHubTransfer(daySteps, i, firstDay, lastDay);
+    }
+
+    static boolean isIntercityLeg(StepData step) {
+        return step.transportationMode() != null
+                && ScheduleTuning.INTERCITY_LEG_MODES.contains(step.transportationMode());
     }
 
     /**

@@ -1,17 +1,26 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
+import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
+import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.EnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.ItineraryData;
 import com.shg.trip.shgtrip.domain.user.service.ActiveUserGuard;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * @Async 실행기에서 자기 호출 없이 @Transactional을 적용하려고 분리한 빈이다.
@@ -24,6 +33,7 @@ public class ItinerarySaveHelper {
     private final ItineraryDataMapper itineraryDataMapper;
     private final ItineraryRepository itineraryRepository;
     private final ActiveUserGuard activeUserGuard;
+    private final PlaceRepository placeRepository;
 
     @Transactional
     public Itinerary save(ItineraryData data, EnrichedInput input, Long userId) {
@@ -49,7 +59,25 @@ public class ItinerarySaveHelper {
             throw new BusinessException(ErrorCode.INSUFFICIENT_PLACE_DATA);
         }
         itinerary.assignCoverFromSteps();
+        if (itinerary.getCoverPlaceId() == null) {
+            mainRegion(itinerary).flatMap(region -> placeRepository
+                            .findCoverCandidates(region, PageRequest.of(0, 1)).stream().findFirst())
+                    .ifPresent(place -> itinerary.assignCoverPlaceIfAbsent(place.getId()));
+        }
         itinerary.recalculateEstimatedCost();
         return itineraryRepository.save(itinerary);
+    }
+
+    /** 스텝 장소가 가장 많이 속한 지역. */
+    private static Optional<String> mainRegion(Itinerary itinerary) {
+        Map<String, Long> counts = itinerary.getSteps().stream()
+                .map(ItineraryStep::getPlace)
+                .filter(Objects::nonNull)
+                .map(Place::getRegion)
+                .filter(Objects::nonNull)
+                .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()));
+        return counts.entrySet().stream()
+                .max(Map.Entry.<String, Long>comparingByValue().thenComparing(Map.Entry.comparingByKey()))
+                .map(Map.Entry::getKey);
     }
 }

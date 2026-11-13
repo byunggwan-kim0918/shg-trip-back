@@ -61,9 +61,6 @@ public class OptimizedGenerationExecutor {
     /** 한국 운전면허(국제운전면허 포함)로 운전할 수 없는 나라. 자동차 요청은 택시·차량 호출로 본다. */
     private static final Set<String> NO_KOREAN_LICENSE_COUNTRIES = Set.of("CN", "VN");
 
-    /** 공항 부지 안 POI는 공항 대표 좌표에서 2~3km까지 떨어진다. 서로 다른 두 공항이 이 거리 안에 있지는 않다. */
-    private static final double SAME_AIRPORT_KM = 3.0;
-
     /** 보완 숙소가 기존 후보 median 중심점에서 이 거리(km)를 넘으면 지역 오태깅으로 보고 제외한다. */
     private static final double MAX_ACCOMMODATION_RADIUS_KM = 100.0;
     /** 보완 숙소 좌표 검증용 region별 최소 표본 수. 미만이면 중심점을 믿을 수 없어 필터를 건너뛴다. */
@@ -112,8 +109,11 @@ public class OptimizedGenerationExecutor {
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "SEARCHING", 20, "장소를 검색하고 있습니다...");
 
+            // 검색·선택·스케줄이 같은 도시 구간을 써야 도시마다 후보·날짜·숙소가 맞는다.
+            final TripCities tripCities = TripCityDetector.detect(enrichedInput.regions(),
+                    enrichedInput.regionAllocation(), days, destinations, enrichedInput.transportationHub());
             List<PlaceCandidate> candidatesRaw = executeWithHeartbeat(emitter,
-                    () -> vectorSearchQueryService.search(enrichedInput));
+                    () -> vectorSearchQueryService.search(enrichedInput, tripCities));
 
             List<String> pickNotices = new ArrayList<>();
             if (carWithoutLicense) {
@@ -196,8 +196,11 @@ public class OptimizedGenerationExecutor {
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "SELECTING", 50, "날짜별 장소를 선택하고 있습니다...");
 
+            // 선택 모델도 도착·출발로 짧아진 날과 도시 순서를 알아야 핵심 장소를 그날·그 도시에 둔다.
+            final ScheduleArgs scheduleArgs = ScheduleArgs.of(enrichedInput, compactMode,
+                    request.arrivalTime(), request.departureTime(), tripCities);
             SelectionOutput rawSelectionOutput = executeWithHeartbeat(emitter,
-                    () -> selectionCallGenerator.selectPlaces(enrichedInput, enrichedCandidates));
+                    () -> selectionCallGenerator.selectPlaces(enrichedInput, enrichedCandidates, scheduleArgs));
 
             SelectionOutput dayComposition = indexResultMapper.stripZoneLevelPicks(
                     indexResultMapper.stripCodeOwnedFields(rawSelectionOutput), enrichedCandidates);
@@ -219,8 +222,6 @@ public class OptimizedGenerationExecutor {
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "OPTIMIZING", 65, "동선과 시간을 확정하고 있습니다...");
 
-            final ScheduleArgs scheduleArgs = ScheduleArgs.of(enrichedInput, compactMode,
-                    request.arrivalTime(), request.departureTime());
             RouteOptimizer.ScheduleResult scheduleResult = executeWithHeartbeat(emitter,
                     () -> routeOptimizer.schedule(selectionOutput, candidatesWithLocalStays, scheduleArgs));
             List<StepData> fixedSteps = scaleCostsForParty(scheduleResult.steps(), enrichedInput.partySize());
@@ -294,7 +295,7 @@ public class OptimizedGenerationExecutor {
     // ── Private helpers ──
 
     /**
-     * 1인 기준 식사·카페·입장료를 인원수만큼 곱한다. 숙소(1실)·교통(차 1대)은 그대로 둔다.
+     * 1인 기준 식사·카페·입장료·도시 간 열차·비행기 요금을 인원수만큼 곱한다. 숙소(1실)·교통(차 1대)은 그대로 둔다.
      * 대안을 고르면 그 비용이 스텝 비용을 대체하므로 대안도 같이 곱한다.
      * RouteOptimizer는 순수 계산기라 인원 같은 표시용 배수를 섞지 않으려고 여기서 한다.
      */
@@ -310,9 +311,11 @@ public class OptimizedGenerationExecutor {
                     .toList();
             BigDecimal cost = s.place() != null && isPerPersonCost(s.place().category()) && s.estimatedCost() != null
                     ? s.estimatedCost().multiply(factor) : s.estimatedCost();
+            BigDecimal fare = InvariantChecker.isIntercityLeg(s) && s.transportationCost() != null
+                    ? s.transportationCost().multiply(factor) : s.transportationCost();
             scaled.add(new StepData(s.stepOrder(), s.dayNumber(), s.startTime(), s.endTime(), s.place(), alts,
                     s.transportationMode(), s.transportationDuration(), s.transportationDistance(),
-                    s.transportationCost(), s.notes(), cost));
+                    fare, s.notes(), cost));
         }
         return scaled;
     }
@@ -360,7 +363,7 @@ public class OptimizedGenerationExecutor {
     private List<PlaceCandidate> appendNearbyReserve(List<PlaceCandidate> candidates, SelectionOutput selection,
                                                      VectorEnrichedInput input, List<String> ferryTokens) {
         if (selection == null || selection.days() == null || selection.days().isEmpty()) return candidates;
-        List<double[]> centers = selection.days().stream().map(d -> dayCentroid(d, candidates)).toList();
+        List<double[]> centers = selection.days().stream().map(d -> activityCentroid(d, candidates)).toList();
         double radius = reserveRadiusKm(input.transportPref());
 
         List<PlaceCandidate> result = new ArrayList<>(candidates);
@@ -398,7 +401,7 @@ public class OptimizedGenerationExecutor {
 
         List<PlaceCandidate> lodgings = candidates.stream()
                 .filter(c -> "LODGING".equals(PlaceCategoryConstants.majorCategory(c.category())))
-                .filter(this::hasValidCoords)
+                .filter(OptimizedGenerationExecutor::hasValidCoords)
                 .toList();
 
         List<PlaceCandidate> result = new ArrayList<>(candidates);
@@ -432,8 +435,24 @@ public class OptimizedGenerationExecutor {
         return result;
     }
 
+    private static final Set<String> NON_ACTIVITY_MAJORS = Set.of("DINING", "CAFE", "LODGING", "TRANSIT_HUB");
+
+    /**
+     * 그날 방문지(식당·카페·숙소·교통 허브 제외)의 중심. 모델이 먼 도시 식당을 같은 날에 넣으면 전체 중심이 명소에서 벗어나
+     * 바나힐 같은 근교 명소 근처 식당이 예비 후보 반경에 들지 않는다. 방문지가 없으면 전체 중심이다.
+     */
+    static double[] activityCentroid(SelectionOutput.DayPlan day, List<PlaceCandidate> candidates) {
+        List<Integer> activities = (day.placeIndices() != null ? day.placeIndices() : List.<Integer>of()).stream()
+                .filter(idx -> idx != null && idx >= 1 && idx <= candidates.size())
+                .filter(idx -> !NON_ACTIVITY_MAJORS.contains(
+                        PlaceCategoryConstants.majorCategory(candidates.get(idx - 1).category())))
+                .toList();
+        if (activities.isEmpty()) return dayCentroid(day, candidates);
+        return dayCentroid(new SelectionOutput.DayPlan(day.dayNumber(), null, activities, null, null), candidates);
+    }
+
     /** 유효 좌표가 없으면 null. */
-    private double[] dayCentroid(SelectionOutput.DayPlan day, List<PlaceCandidate> candidates) {
+    private static double[] dayCentroid(SelectionOutput.DayPlan day, List<PlaceCandidate> candidates) {
         List<Double> lats = new ArrayList<>();
         List<Double> lngs = new ArrayList<>();
         for (Integer idx : day.placeIndices() != null ? day.placeIndices() : List.<Integer>of()) {
@@ -487,8 +506,7 @@ public class OptimizedGenerationExecutor {
         Map<String, Long> bySubType = candidates.stream()
                 .filter(c -> PlaceCategoryConstants.isMealPlace(c.name(), c.category()))
                 .collect(Collectors.groupingBy(
-                        c -> PlaceCategoryConstants.subType(c.name(), c.category(), List.of(), c.description()),
-                        Collectors.counting()));
+                        CandidatePolicy::cuisineOf, Collectors.counting()));
         if (bySubType.isEmpty()) return;
         log.info("식사 후보 세부유형 분포: {}", bySubType.entrySet().stream()
                 .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
@@ -579,6 +597,7 @@ public class OptimizedGenerationExecutor {
         }
         representatives = dropStoresInsideVenue(representatives);
         representatives = dropWikidataTwins(representatives);
+        representatives = dropNestedWikidataItems(representatives);
 
         representatives.sort(Comparator.comparingInt(PlaceCandidate::index));
         List<PlaceCandidate> result = new ArrayList<>(representatives.size());
@@ -657,6 +676,45 @@ public class OptimizedGenerationExecutor {
         return hasCoords(twin) && hasCoords(item)
                 && GeoUtils.haversine(item.latitude().doubleValue(), item.longitude().doubleValue(),
                         twin.latitude().doubleValue(), twin.longitude().doubleValue()) <= WIKIDATA_TWIN_KM;
+    }
+
+    /** 장소 항목과 그곳의 박물관 기관 항목(故宫·故宫博物院)은 Wikidata 항목이 달라도 같은 곳이다. */
+    private static final Pattern MUSEUM_INSTITUTION_SUFFIX = Pattern.compile("博物院|博物館|博物馆");
+
+    static List<PlaceCandidate> dropNestedWikidataItems(List<PlaceCandidate> candidates) {
+        List<PlaceCandidate> result = new ArrayList<>(candidates.size());
+        for (PlaceCandidate c : candidates) {
+            if (candidates.stream().anyMatch(other -> isNestedWikidataItem(c, other))) {
+                log.info("같은 장소의 다른 항목 제외: {}", c.name());
+            } else {
+                result.add(c);
+            }
+        }
+        return result;
+    }
+
+    /** dropped가 kept와 같은 곳을 가리키는 다른 항목이고 둘 중 덜 알려진 쪽인가. 같으면 짧은 이름(장소)을 남긴다. */
+    static boolean isNestedWikidataItem(PlaceCandidate dropped, PlaceCandidate kept) {
+        if (dropped == kept || dropped.userSelected() || !isWikidataItem(dropped) || !isWikidataItem(kept)) return false;
+        if (dropped.name() == null || kept.name() == null || !Objects.equals(dropped.region(), kept.region())) return false;
+        String a = dropped.name().strip();
+        String b = kept.name().strip();
+        String shorter = a.length() <= b.length() ? a : b;
+        String longer = a.length() <= b.length() ? b : a;
+        if (shorter.equals(longer) || !longer.startsWith(shorter)
+                || !MUSEUM_INSTITUTION_SUFFIX.matcher(longer.substring(shorter.length())).matches()) {
+            return false;
+        }
+        if (!PlaceCategoryConstants.majorCategory(dropped.category())
+                .equals(PlaceCategoryConstants.majorCategory(kept.category()))
+                || !hasCoords(dropped) || !hasCoords(kept)
+                || GeoUtils.haversine(dropped.latitude().doubleValue(), dropped.longitude().doubleValue(),
+                        kept.latitude().doubleValue(), kept.longitude().doubleValue()) > WIKIDATA_TWIN_KM) {
+            return false;
+        }
+        int droppedLinks = dropped.wikidataSitelinks();
+        int keptLinks = kept.wikidataSitelinks();
+        return droppedLinks < keptLinks || (droppedLinks == keptLinks && a.length() > b.length());
     }
 
     private static boolean isWikidataItem(PlaceCandidate c) {
@@ -744,7 +802,7 @@ public class OptimizedGenerationExecutor {
         return "name:" + name;
     }
 
-    private boolean hasValidCoords(PlaceCandidate c) {
+    private static boolean hasValidCoords(PlaceCandidate c) {
         return c.latitude() != null && c.longitude() != null
                 && !(c.latitude().signum() == 0 && c.longitude().signum() == 0);
     }
@@ -784,7 +842,8 @@ public class OptimizedGenerationExecutor {
             String qid = qidById.get(c.placeId());
             if (qid != null && !seen.add(qid)) continue;
             if (isStoreInsideVenue(c, candidates)) continue;
-            if (result.stream().anyMatch(r -> isWikidataTwin(c, r) || isWikidataTwin(r, c))) continue;
+            if (result.stream().anyMatch(r -> isWikidataTwin(c, r) || isWikidataTwin(r, c)
+                    || isNestedWikidataItem(c, r) || isNestedWikidataItem(r, c))) continue;
             result.add(reindexCandidate(c, result.size() + 1));
         }
         if (result.size() < candidates.size()) {
@@ -1072,8 +1131,8 @@ public class OptimizedGenerationExecutor {
     }
 
     /**
-     * 해외 여행지의 관문(공항·역, source='gateway')을 후보에 넣는다. 관문 공항은 대개 여행지 반경 밖이라 지역 검색에
-     * 잡히지 않고, 없으면 도착·출발 허브가 시내 역으로 대신 잡힌다.
+     * 해외 여행지의 관문(공항, source='gateway')을 후보에 넣는다. 관문이 있으면 도착·출발 허브는 관문만 쓴다. FSQ의 공항 분류
+     * 행에는 항공편 번호·활주로·라운지가 섞여 있어 진짜 공항 대신 허브가 되고, 역·터미널은 해외 일정의 방문지가 아니다.
      */
     List<PlaceCandidate> appendGateways(List<PlaceCandidate> candidates, List<String> regions) {
         if (regions == null || regions.isEmpty()) return candidates;
@@ -1083,17 +1142,20 @@ public class OptimizedGenerationExecutor {
                 .filter(this::isListedGateway)
                 .toList();
         if (gateways.isEmpty()) return candidates;
-        Set<String> known = knownKeys(candidates);
-        List<PlaceCandidate> result = new ArrayList<>(candidates);
+        List<PlaceCandidate> result = new ArrayList<>(candidates.size() + gateways.size());
+        for (PlaceCandidate c : candidates) {
+            if (c.userSelected() || !"TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category()))) {
+                result.add(reindexCandidate(c, result.size() + 1));
+            }
+        }
+        int removedHubs = candidates.size() - result.size();
+        Set<String> known = knownKeys(result);
         for (Place gateway : gateways) {
             PlaceCandidate c = toCandidate(gateway, result.size() + 1);
-            if (hasNearbyAirport(candidates, c) || !addIfNew(known, c)) continue;
-            result.add(c);
+            if (addIfNew(known, c)) result.add(c);
         }
-        if (result.size() > candidates.size()) {
-            log.info("관문 후보 추가: {}", result.subList(candidates.size(), result.size()).stream()
-                    .map(PlaceCandidate::name).toList());
-        }
+        log.info("관문 허브 {}곳 추가, 그 밖의 교통 허브 후보 {}곳 제외", result.size() - (candidates.size() - removedHubs),
+                removedHubs);
         return result;
     }
 
@@ -1101,19 +1163,6 @@ public class OptimizedGenerationExecutor {
         return destinations.find(gateway.getRegion())
                 .map(d -> d.gateways().stream().anyMatch(g -> g.name().equals(gateway.getName())))
                 .orElse(false);
-    }
-
-    /** 같은 공항의 FSQ 행은 관문과 좌표가 수백 m 달라 이름·좌표 키로 걸리지 않는다. */
-    private static boolean hasNearbyAirport(List<PlaceCandidate> candidates, PlaceCandidate gateway) {
-        if (!isAirport(gateway) || gateway.latitude() == null || gateway.longitude() == null) return false;
-        return candidates.stream().anyMatch(c -> isAirport(c) && c.latitude() != null && c.longitude() != null
-                && GeoUtils.haversine(c.latitude().doubleValue(), c.longitude().doubleValue(),
-                        gateway.latitude().doubleValue(), gateway.longitude().doubleValue()) <= SAME_AIRPORT_KM);
-    }
-
-    private static boolean isAirport(PlaceCandidate c) {
-        return c.category() != null && c.category().toLowerCase(Locale.ROOT).contains("airport")
-                && "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category()));
     }
 
     static boolean isCarWithoutKoreanLicense(VectorEnrichedInput input) {

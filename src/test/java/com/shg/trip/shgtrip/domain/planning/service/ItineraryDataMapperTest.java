@@ -336,6 +336,27 @@ class ItineraryDataMapperTest {
     }
 
     @Test
+    @DisplayName("도시를 옮긴 날 첫 장소가 버려지면 열차 구간은 그날 다음 장소가 이어받는다")
+    void carriesIntercityLegPastDroppedStep() {
+        when(placeRepository.findByNameAndAddress("없는곳", "addr-b"))
+                .thenReturn(Optional.empty());
+        when(placeRepository.findByNameAndAddress("있는곳", "addr-a"))
+                .thenReturn(Optional.of(placeAt("있는곳", "addr-a", JEJU_LAT, JEJU_LNG)));
+        StepData dropped = new StepData(1, 1, "12:30", "13:30", new PlaceData("없는곳", "addr-b", "관광", "제주", "Korea"),
+                List.of(), "TRAIN", 197, BigDecimal.valueOf(524), BigDecimal.valueOf(117_600), null, BigDecimal.ZERO);
+        StepData kept = new StepData(2, 1, "14:00", "15:00", new PlaceData("있는곳", "addr-a", "관광", "제주", "Korea"),
+                List.of(), "WALK", 10, BigDecimal.ONE, BigDecimal.ZERO, null, BigDecimal.ZERO);
+
+        Itinerary itinerary = mapper.toEntity(
+                new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(), List.of(dropped, kept)),
+                jejuInput(), 1L, true, List.of(JEJU_CENTER));
+
+        ItineraryStep only = itinerary.getSteps().get(0);
+        assertThat(only.getTransportationMode()).isEqualTo("TRAIN");
+        assertThat(only.getTransportationDuration()).isEqualTo(197);
+    }
+
+    @Test
     @DisplayName("장소를 해소하는 동안 외부 호출도 신규 저장도 하지 않는다")
     void resolvesWithoutAnyWrite() {
         when(placeRepository.findByNameAndAddress("장소", "addr-4"))

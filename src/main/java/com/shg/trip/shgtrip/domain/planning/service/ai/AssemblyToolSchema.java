@@ -31,7 +31,7 @@ public final class AssemblyToolSchema {
                         "type", "string",
                         "description", "일정 목록에서 이 여행을 알아볼 이름. 12~30자, 명사로 끝남. "
                                 + "여행지 + 이 여행만의 특징. '~하는 여행' 같은 설명문과 부제 금지. "
-                                + "예: '제주 오름과 흑돼지 4일'")))
+                                + "일수는 여행 기간과 같게. 예: '제주 오름과 흑돼지'")))
                 .putAdditionalProperty("tags", JsonValue.from(Map.of(
                         "type", "array",
                         "items", Map.of("type", "string"),

@@ -129,6 +129,9 @@ batch:
   role-backfill:
     # 카테고리로 확정되는 비방문 장소에 place_role=NOT_VISITABLE 기록(외부 호출 없음)
     enabled: ${BATCH_ROLE_BACKFILL_ENABLED:true}
+  commons-images:
+    # 사진 없는 장소에 Wikidata 대표 사진(P18)을 위키미디어 공용 썸네일 주소·저작자·라이선스와 함께 연결
+    enabled: ${BATCH_COMMONS_IMAGES_ENABLED:true}
   tourapi:
     # 한국관광공사 TourAPI 관광지 시딩 (Foursquare의 빈약한 관광지 커버리지 보완)
     enabled: ${BATCH_TOURAPI_ENABLED:false}

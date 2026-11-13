@@ -4,10 +4,14 @@ import com.anthropic.client.AnthropicClient;
 import com.anthropic.models.messages.*;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
+import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
+import com.shg.trip.shgtrip.domain.planning.dto.TripCities;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
+import com.shg.trip.shgtrip.domain.planning.service.CityBlockPlanner;
 import com.shg.trip.shgtrip.domain.planning.service.GeoCluster;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceProminence;
+import com.shg.trip.shgtrip.domain.planning.service.RouteOptimizer;
 import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
@@ -45,12 +49,17 @@ public class SelectionCallGenerator {
      * @return 날짜별 선택 출력 (DayPlan 목록 + spare 인덱스)
      */
     public SelectionOutput selectPlaces(VectorEnrichedInput input, List<PlaceCandidate> candidates) {
+        return selectPlaces(input, candidates, null);
+    }
+
+    /** @param args 도착·출발 시각을 날짜별 시간창으로 알려 줄 때 쓴다. null이면 시간창 줄을 넣지 않는다. */
+    public SelectionOutput selectPlaces(VectorEnrichedInput input, List<PlaceCandidate> candidates, ScheduleArgs args) {
         long days = ChronoUnit.DAYS.between(input.startDate(), input.endDate()) + 1;
         int maxTokens = calculateMaxTokens(days);
         log.info("SelectionCallGenerator.selectPlaces: days={}, maxTokens={}, candidates={}",
                 days, maxTokens, candidates.size());
 
-        String userMessage = buildUserMessage(input, candidates, days);
+        String userMessage = buildUserMessage(input, candidates, days, args);
 
         Tool selectionTool = SelectionToolSchema.buildSelectionTool();
 
@@ -179,6 +188,10 @@ public class SelectionCallGenerator {
     }
 
     String buildUserMessage(VectorEnrichedInput input, List<PlaceCandidate> candidates, long days) {
+        return buildUserMessage(input, candidates, days, null);
+    }
+
+    String buildUserMessage(VectorEnrichedInput input, List<PlaceCandidate> candidates, long days, ScheduleArgs args) {
         StringBuilder sb = new StringBuilder();
 
         sb.append("## 여행 정보\n");
@@ -206,6 +219,8 @@ public class SelectionCallGenerator {
             }
             sb.append("- 날짜별 요일: ").append(dows).append("\n");
         }
+        appendDayWindows(sb, args, days);
+        appendCityOrder(sb, args, days);
         // 허브를 알아야 첫날은 도착지 근처에서, 마지막날은 출발지 쪽으로 끝나게 고를 수 있다.
         if (input.transportationHub() != null && input.transportationHub().arrivalHub() != null) {
             sb.append("- 도착/출발: ").append(input.transportationHub().arrivalHub());
@@ -229,8 +244,11 @@ public class SelectionCallGenerator {
         }
 
         // 주소 세부지역은 제주에서 "제주시/서귀포시" 둘뿐이라 지역 묶기 제약이 되지 않아 좌표 구역을 쓴다.
-        GeoCluster.Result geo = GeoCluster.of(candidates);
-        if (geo.isEmpty()) {
+        // 먼 두 도시에 방위 구역을 그으면 도시 하나가 "동부"가 되어 도시 이름을 대신 붙인다.
+        TripCities cities = args != null ? args.cities() : null;
+        GeoCluster.Result geo = cities != null ? new GeoCluster.Result(java.util.Map.of(), List.of())
+                : GeoCluster.of(candidates);
+        if (cities == null && geo.isEmpty()) {
             log.info("지리 구역 미적용 — 후보가 적거나 여행지가 좁다 (candidates={})", candidates.size());
         } else {
             log.info("지리 구역 {}개: {}", geo.zones().size(), geo.zones().stream()
@@ -239,7 +257,7 @@ public class SelectionCallGenerator {
 
         sb.append("\n## 후보 장소 목록 (").append(candidates.size()).append("개)\n");
         sb.append("형식: ID | 이름 | 역할·카테고리 | 평점 · 인기도 | #태그 | ")
-                .append(geo.isEmpty() ? "세부지역" : "구역 · 세부지역")
+                .append(cities != null ? "도시 · 세부지역" : geo.isEmpty() ? "세부지역" : "구역 · 세부지역")
                 .append(" | 체류시간 | 시간대 | 휴무 (값이 없는 항목은 생략됨)\n");
         boolean hasUserSelected = false;
         boolean hasVia = false;
@@ -263,7 +281,7 @@ public class SelectionCallGenerator {
                     .append(formatRating(candidate.rating(), PlaceProminence.effectiveSitelinks(
                             candidate.wikidataSitelinks(), candidate.travelerFame()))).append(" | ")
                     .append(formatTags(candidate.tags())).append(" | ");
-            String zone = geo.labelByIndex().get(candidate.index());
+            String zone = cities != null ? cityLabel(cities, candidate) : geo.labelByIndex().get(candidate.index());
             if (zone != null) sb.append(zone).append(" · ");
             sb.append(candidate.displayRegion() != null ? candidate.displayRegion() : "");
             appendIfPresent(sb, formatDuration(candidate.recommendedDurationMinutes()));
@@ -334,9 +352,13 @@ public class SelectionCallGenerator {
             default -> null;
         };
         if (base == null) return "";
-        if (role == com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy.Role.MEAL
-                && c.cuisine() != null && CUISINE_KO.containsKey(c.cuisine())) {
-            base += "·" + CUISINE_KO.get(c.cuisine());
+        if (role == com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy.Role.MEAL) {
+            String dish = DISH_KO.get(com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy.cuisineOf(c));
+            if (dish != null) {
+                base += "·" + dish;
+            } else if (c.cuisine() != null && CUISINE_KO.containsKey(c.cuisine())) {
+                base += "·" + CUISINE_KO.get(c.cuisine());
+            }
         }
         return "[" + base + "] ";
     }
@@ -344,6 +366,100 @@ public class SelectionCallGenerator {
     private static final java.util.Map<String, String> CUISINE_KO = java.util.Map.of(
             "MEAT", "고기", "SEAFOOD", "해산물", "NOODLE", "면", "SOUP", "국물", "KOREAN_SET", "한식",
             "JAPANESE", "일식", "CHINESE", "중식", "WESTERN", "양식", "SNACK", "분식");
+
+    /** 같은 요리 식당이 "중식"·"양식"으로만 보이면 모델이 같은 요리를 여러 끼 고른다. */
+    private static final java.util.Map<String, String> DISH_KO = java.util.Map.of(
+            "dumpling", "만두·딤섬", "banh_mi", "반미", "takoyaki", "타코야키", "okonomiyaki", "오코노미야키");
+
+    /** 도착·출발 시각으로 짧아진 날을 알린다. 모르면 핵심 장소를 그날에 두고 동선 단계의 시각 가드가 잘라 낸다. */
+    private static void appendDayWindows(StringBuilder sb, ScheduleArgs args, long days) {
+        if (args == null) return;
+        Integer start = RouteOptimizer.firstDayStart(args);
+        Integer deadline = RouteOptimizer.departureHubDeadline(args);
+        if (start == null && deadline == null) return;
+        if (days == 1) {
+            appendDayWindow(sb, "1일차", windowFact(start, args.departureTime(), deadline),
+                    ScheduleTuning.sightseeingWindowMinutes(start, deadline));
+            return;
+        }
+        if (start != null) {
+            appendDayWindow(sb, "1일차", windowFact(start, null, null),
+                    ScheduleTuning.sightseeingWindowMinutes(start, null));
+        }
+        if (deadline != null) {
+            appendDayWindow(sb, days + "일차(마지막 날)", windowFact(null, args.departureTime(), deadline),
+                    ScheduleTuning.sightseeingWindowMinutes(null, deadline));
+        }
+    }
+
+    /** 먼 도시를 오가는 여행의 도시 순서와 이동한 날의 시작 시각. 모르면 하루에 두 도시 장소를 섞는다. */
+    private static void appendCityOrder(StringBuilder sb, ScheduleArgs args, long days) {
+        if (args == null || args.cities() == null) return;
+        List<CityBlockPlanner.Block> blocks = CityBlockPlanner.blocksOf(args.cities());
+        if (blocks.size() < 2) return;
+        java.util.Map<String, TripCities.City> byName = new java.util.HashMap<>();
+        args.cities().cities().forEach(c -> byName.put(c.name(), c));
+
+        StringBuilder order = new StringBuilder("- 도시 순서: ");
+        List<String> transferDays = new java.util.ArrayList<>();
+        for (int i = 0; i < blocks.size(); i++) {
+            CityBlockPlanner.Block block = blocks.get(i);
+            TripCities.City city = byName.get(block.city());
+            if (i > 0) {
+                CityBlockPlanner.IntercityLeg leg = CityBlockPlanner.legBetween(byName.get(blocks.get(i - 1).city()), city);
+                order.append(" → ").append("FLIGHT".equals(leg.mode()) ? "비행기" : "열차").append(" 약 ")
+                        .append(durationLabel(leg.minutes())).append(" → ");
+                int start = CityBlockPlanner.arrivalAfter(leg);
+                Integer deadline = block.firstDay() == days ? RouteOptimizer.departureHubDeadline(args) : null;
+                StringBuilder line = new StringBuilder();
+                appendDayWindow(line, block.firstDay() + "일차",
+                        cityName(byName.get(blocks.get(i - 1).city())) + " → " + cityName(city) + " 이동, "
+                                + hhmm(start) + " 도착",
+                        ScheduleTuning.sightseeingWindowMinutes(start, deadline));
+                transferDays.add(line.toString());
+            }
+            order.append(cityName(city)).append('(').append(block.firstDay());
+            if (block.lastDay() > block.firstDay()) order.append('~').append(block.lastDay());
+            order.append("일차)");
+        }
+        sb.append(order).append(". 각 날의 장소·숙소는 그날 도시 후보에서만 고르세요\n");
+        transferDays.forEach(sb::append);
+    }
+
+    private static String cityLabel(TripCities cities, PlaceCandidate candidate) {
+        if (candidate.latitude() == null || candidate.longitude() == null) return null;
+        String name = cities.cityOf(candidate.latitude().doubleValue(), candidate.longitude().doubleValue());
+        return cities.cities().stream().filter(c -> c.name().equals(name)).findFirst()
+                .map(SelectionCallGenerator::cityName).orElse(null);
+    }
+
+    private static String cityName(TripCities.City city) {
+        return city.nameKo() != null && !city.nameKo().isBlank() ? city.nameKo() : city.name();
+    }
+
+    private static String durationLabel(int minutes) {
+        return minutes % 60 == 0 ? minutes / 60 + "시간" : minutes / 60 + "시간 " + minutes % 60 + "분";
+    }
+
+    private static String windowFact(Integer start, String departureTime, Integer deadline) {
+        List<String> parts = new java.util.ArrayList<>();
+        if (start != null) parts.add(hhmm(start) + " 도착");
+        if (deadline != null) parts.add(departureTime + " 출발, " + hhmm(deadline) + "까지 공항·역 도착");
+        return String.join(", ", parts);
+    }
+
+    private static void appendDayWindow(StringBuilder sb, String day, String fact, Integer minutes) {
+        sb.append("- ").append(day).append(": ").append(fact);
+        if (ScheduleTuning.tooShortForSightseeing(minutes)) {
+            sb.append(". 관광할 시간이 없으니 highlight·timing 장소는 다른 날에 두세요\n");
+        } else {
+            sb.append(", 관광 약 ").append(Math.max(0, minutes) / 60).append("시간\n");
+        }
+    }
+
+    private static String hhmm(int minutes) {
+        return String.format("%02d:%02d", minutes / 60, minutes % 60);
+    }
 
     /** 동행 표시 문구. 모르면 null(줄 자체를 생략). */
     private static String companionLabel(VectorEnrichedInput input) {

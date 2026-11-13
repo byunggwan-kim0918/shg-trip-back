@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import java.util.Map;
+import java.util.Set;
 
 /**
  * {@link RouteOptimizer}의 튜닝 파라미터 모음.
@@ -164,6 +165,32 @@ public final class ScheduleTuning {
     );
     /** 점심·저녁. 아침은 숙소에서 출발하는 날만 붙는 선택이라 세지 않는다. */
     static final int MEALS_PER_DAY = 2;
+
+    /** 점심 시간대가 끝난 뒤 도착하거나 끝나기 전에 떠나면 그날 점심을 요구하지 않는다. 시각은 분, 모르면 null. */
+    static boolean lunchInWindow(Integer start, Integer deadline) {
+        return (start == null || start <= LUNCH_END) && (deadline == null || deadline >= LUNCH_END);
+    }
+
+    static boolean dinnerInWindow(Integer start, Integer deadline) {
+        return (start == null || start <= DINNER_END) && (deadline == null || deadline >= DINNER_END);
+    }
+
+    /**
+     * 도착부터 출발 허브 기한까지 그날 끼니를 빼고 남는 관광 시간(분). 둘 다 모르면 null. 스케줄러의 짧은 날 판정과
+     * 선택 모델에 주는 날짜별 시간창이 같은 값을 써야 모델이 핵심 장소를 짧은 날에 두지 않는다.
+     */
+    public static Integer sightseeingWindowMinutes(Integer start, Integer deadline) {
+        if (start == null && deadline == null) return null;
+        int from = start != null ? start : DEFAULT_DAY_START_MINUTES;
+        int to = deadline != null ? deadline : DEPARTURE_HUB_LATEST_MINUTES;
+        int meals = (lunchInWindow(start, deadline) ? DINING_VISIT_MINUTES : 0)
+                + (dinnerInWindow(start, deadline) ? DINING_VISIT_MINUTES : 0);
+        return to - from - meals;
+    }
+
+    public static boolean tooShortForSightseeing(Integer windowMinutes) {
+        return windowMinutes != null && windowMinutes < MIN_SIGHTSEEING_WINDOW_MINUTES;
+    }
 
     public static int[] sightsPerDay(String pace) {
         return SIGHTS_PER_DAY.getOrDefault(pace == null ? "" : pace.trim().toLowerCase(), SIGHTS_PER_DAY.get("normal"));
@@ -364,4 +391,31 @@ public final class ScheduleTuning {
             Map.entry("festival",  new ThemeSchedule(9 * 60 + 30, 23 * 60, 0, false)),
             Map.entry("pet",       new ThemeSchedule(9 * 60 + 30, 20 * 60, -1, false))
     );
+
+    /** 약한 분류 장소도 언어판이 이만큼이면 명소로 보고 보충한다. 선택 프롬프트의 "인기도 높음" 경계와 같다. */
+    static final int WEAK_FILL_NOTABLE_SITELINKS = 3;
+
+    /** 이 거리(여행지 중심 사이 직선 km)보다 먼 두 여행지는 하루 동선으로 묶지 않고 도시 간 이동으로 본다. */
+    public static final double MULTI_CITY_MIN_KM = 150.0;
+
+    /**
+     * 도시 간 이동 수단. 시간 = 직선거리 / 속도 + 역·공항을 오가는 시간, 요금 = 직선 km당 현지 통화.
+     * 도쿄·신오사카 신칸센, 베이징·상하이 고속철, 타이베이·쭤잉 고속철, 하노이·다낭 국내선 수준이다.
+     */
+    public record IntercityMode(String mode, double kmh, int overheadMinutes, double farePerKm, String currency) {}
+
+    /** 도시 간 이동 구간의 이동 수단. 이 구간은 하루 이동 예산·구간 상한에 넣지 않고 편집 뒤에도 그날 첫 스텝에 남는다. */
+    public static final Set<String> INTERCITY_LEG_MODES = Set.of("TRAIN", "FLIGHT");
+
+    public static final Map<String, IntercityMode> INTERCITY_MODES = Map.of(
+            "JP", new IntercityMode("TRAIN", 160, 45, 35, "JPY"),
+            "CN", new IntercityMode("TRAIN", 220, 60, 0.5, "CNY"),
+            "TW", new IntercityMode("TRAIN", 180, 45, 5, "TWD"),
+            "VN", new IntercityMode("FLIGHT", 600, 150, 2400, "VND"));
+
+    /** 잘린 보호 장소 복원에서 일정 전체를 다시 스케줄하는 횟수 상한. 날이 많은 다도시 일정에서 생성 시간을 묶는다. */
+    static final int PROTECTED_RESTORE_MAX_TRIES = 8;
+
+    /** 도시를 옮기는 날 앞 도시 숙소를 나서는 시각(분). 다음 도시 첫 일정은 여기에 이동 시간을 더한 뒤에 시작한다. */
+    public static final int INTERCITY_DEPARTURE_MINUTES = 9 * 60;
 }

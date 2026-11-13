@@ -9,6 +9,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -69,6 +70,54 @@ final class EnrichDestinations {
             out.put(String.valueOf(e.getKey()), values);
         }
         return out;
+    }
+
+    static final int MAX_MENTIONED_DESTINATIONS = 2;
+    static final int MIN_KOREAN_ALIAS_LENGTH = 3;
+
+    /**
+     * 요청 문장에 같은 여행 묶음 근교 여행지의 한국어 별칭("만리장성")이 나오면 그 여행지를 돌려준다. 모델이 도시만 내면
+     * 근교 명소가 검색되지 않는다. 한국어 이름("나라"·"후에"·"이란")은 일반 문장에도 나와 별칭만 본다.
+     */
+    static List<String> mentionedDestinations(List<String> regions, String text, Destinations destinations) {
+        if (regions == null || regions.isEmpty() || text == null || text.isBlank()) return List.of();
+        String compact = text.replaceAll("\\s+", "");
+        Set<String> roots = regions.stream().map(destinations::rootOf).collect(Collectors.toSet());
+        List<String> out = new ArrayList<>();
+        for (Destination d : destinations.all()) {
+            if (out.size() >= MAX_MENTIONED_DESTINATIONS) break;
+            if (regions.contains(d.name()) || !roots.contains(destinations.rootOf(d.name()))) continue;
+            if (d.aliases().stream().filter(EnrichDestinations::isKoreanAlias)
+                    .anyMatch(a -> compact.contains(a.replaceAll("\\s+", "")))) {
+                out.add(d.name());
+            }
+        }
+        return out;
+    }
+
+    /** 더한 여행지를 그 상위 여행지가 든 첫 배분 항목에 넣는다. 배분이 있으면 그 항목 단위로만 검색해 빠지면 후보가 없다. */
+    static Map<String, List<String>> withAllocated(Map<String, List<String>> allocation, List<String> added,
+                                                   Destinations destinations) {
+        if (allocation == null || added.isEmpty()) return allocation;
+        Map<String, List<String>> out = new LinkedHashMap<>(allocation);
+        for (String region : added) {
+            String root = destinations.rootOf(region);
+            out.entrySet().stream()
+                    .filter(e -> e.getValue().stream().anyMatch(v -> root.equals(destinations.rootOf(v))))
+                    .findFirst()
+                    .ifPresent(e -> {
+                        List<String> values = new ArrayList<>(e.getValue());
+                        if (!values.contains(region)) values.add(region);
+                        e.setValue(List.copyOf(values));
+                    });
+        }
+        return out;
+    }
+
+    private static boolean isKoreanAlias(String alias) {
+        String compact = alias.replaceAll("\\s+", "");
+        return compact.length() >= MIN_KOREAN_ALIAS_LENGTH
+                && compact.codePoints().allMatch(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HANGUL);
     }
 
     private static List<String> asStrings(Object value) {

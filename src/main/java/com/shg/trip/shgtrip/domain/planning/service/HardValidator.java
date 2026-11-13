@@ -92,7 +92,7 @@ public class HardValidator {
                 }
             }
 
-            if (step.transportationDistance() != null
+            if (step.transportationDistance() != null && !InvariantChecker.isIntercityLeg(step)
                     && step.transportationDistance().compareTo(MAX_REASONABLE_LEG_KM) > 0) {
                 errors.add(prefix + String.format("이동거리(%skm)가 비현실적입니다 (한 여행지 내 %skm 초과).",
                         step.transportationDistance().toPlainString(), MAX_REASONABLE_LEG_KM.toPlainString()));

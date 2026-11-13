@@ -11,6 +11,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.TransportationHub;
+import com.shg.trip.shgtrip.domain.planning.dto.TripCities;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +52,21 @@ class GenerationTraceReplayTest {
 
         assertThat(candidatesBack).isEqualTo(candidates);
         assertThat(mapper.writeValueAsString(replayed)).isEqualTo(mapper.writeValueAsString(original));
+    }
+
+    @Test
+    @DisplayName("도시 정보가 없는 옛 인자 기록은 한 도시 일정으로 읽히고, 도시 정보는 저장했다 읽어도 같다")
+    void scheduleArgsCitiesRoundTrip() throws Exception {
+        ObjectNode old = mapper.valueToTree(args);
+        old.remove(List.of("cities", "resumesAfterTransfer", "continuesAfter"));
+        assertThat(mapper.treeToValue(old, ScheduleArgs.class)).isEqualTo(args);
+
+        ScheduleArgs multi = new ScheduleArgs(args.pace(), args.transportPref(), args.startDate(), args.themes(),
+                args.hub(), false, args.categories(), true, null, null, "JP",
+                new TripCities(List.of(new TripCities.City("Tokyo", "도쿄", "JP", 35.6812, 139.7671),
+                        new TripCities.City("Osaka", "오사카", "JP", 34.6937, 135.5023)),
+                        java.util.Map.of(1, "Tokyo", 2, "Osaka")), false, false);
+        assertThat(mapper.readValue(mapper.writeValueAsString(multi), ScheduleArgs.class)).isEqualTo(multi);
     }
 
     @Test

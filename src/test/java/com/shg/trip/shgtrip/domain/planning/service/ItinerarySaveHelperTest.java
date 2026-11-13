@@ -1,7 +1,10 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
+import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
+import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import org.junit.jupiter.api.DisplayName;
@@ -11,6 +14,11 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -21,6 +29,7 @@ class ItinerarySaveHelperTest {
     @Mock private ItineraryDataMapper itineraryDataMapper;
     @Mock private ItineraryRepository itineraryRepository;
     @Mock private com.shg.trip.shgtrip.domain.user.service.ActiveUserGuard activeUserGuard;
+    @Mock private PlaceRepository placeRepository;
     @InjectMocks private ItinerarySaveHelper saveHelper;
 
     @Test
@@ -33,5 +42,27 @@ class ItinerarySaveHelperTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.INSUFFICIENT_PLACE_DATA);
         verify(itineraryRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("사진 있는 스텝이 없으면 스텝이 가장 많은 지역의 대표 관광지 사진을 표지로 쓴다")
+    void coverFallsBackToRegionLandmark() {
+        Itinerary itinerary = Itinerary.builder().userId(1L).title("나고야 2박 3일").destination("나고야")
+                .steps(new ArrayList<>(List.of(step(1, "Nagoya"), step(2, "Nagoya"), step(3, "Gifu")))).build();
+        when(itineraryDataMapper.toEntity(any(), any(), anyLong(), anyBoolean(), any())).thenReturn(itinerary);
+        when(placeRepository.findCoverCandidates(eq("Nagoya"), any()))
+                .thenReturn(List.of(Place.builder().id(77L).name("Nagoya Castle").imageUrl("https://upload.wikimedia.org/c.jpg")
+                        .build()));
+        when(itineraryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        Itinerary saved = saveHelper.save(null, null, 1L, false, null);
+
+        assertThat(saved.getCoverPlaceId()).isEqualTo(77L);
+    }
+
+    private static ItineraryStep step(long id, String region) {
+        Place place = Place.builder().id(id).name("place " + id).address("addr").region(region)
+                .latitude(BigDecimal.ONE).longitude(BigDecimal.ONE).category("Landmarks and Outdoors > Park").build();
+        return ItineraryStep.builder().id(id).dayNumber(1).stepOrder((int) id).place(place).build();
     }
 }

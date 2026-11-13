@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes;
 
+import java.text.Normalizer;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -89,6 +90,19 @@ public final class PlaceCategoryConstants {
     public static boolean hasTransitNameSignal(String name) {
         if (name == null) return false;
         return TRANSIT_FACILITY_NAME.matcher(name).find();
+    }
+
+    /**
+     * 빈 시간을 채울 장소로는 약한 분류(롤러장·오락실·컨벤션센터·조형물 등). 모델이 직접 고른 곳은 막지 않고 코드의 보충만
+     * 거른다. 리프를 정확히 비교해 "shopping arcade" 같은 쇼핑가는 걸리지 않는다.
+     */
+    private static final Set<String> WEAK_FILL_LEAVES = Set.of(
+            "roller rink", "arcade", "convention center", "event space", "stadium", "baseball stadium",
+            "basketball stadium", "football stadium", "soccer stadium", "hockey arena", "public art", "outdoor sculpture",
+            "structure", "bowling alley", "pool hall", "internet cafe");
+
+    public static boolean isWeakFill(String category) {
+        return WEAK_FILL_LEAVES.contains(leafCategory(category));
     }
 
     /** 시딩({@code TourApiSeeder})과 동선 보충이 같은 기준을 보도록 여기 한 곳에 둔다. */
@@ -791,7 +805,37 @@ public final class PlaceCategoryConstants {
             Map.entry("udon restaurant", "noodle"), Map.entry("soba restaurant", "noodle"),
             Map.entry("korean noodle house", "noodle"),
             Map.entry("fried chicken joint", "chicken"), Map.entry("korean fried chicken joint", "chicken"),
-            Map.entry("soup place", "soup"));
+            Map.entry("soup place", "soup"),
+            Map.entry("dumpling restaurant", "dumpling"), Map.entry("dim sum restaurant", "dumpling"),
+            Map.entry("takoyaki place", "takoyaki"), Map.entry("okonomiyaki restaurant", "okonomiyaki"));
+
+    /**
+     * 요리 이름 → 종류 키. 저장된 음식 종류보다 먼저 본다. 반미집이 고기로, 타코야키집이 해산물로, 탕바오집이 국물로
+     * 세이면 같은 요리가 여러 종류로 갈려 반복 상한에 걸리지 않는다. 맨 "교자"는 칼국숫집 상호(명동교자)라 넣지 않는다.
+     */
+    private static final Map<String, List<String>> DISH_KINDS = new LinkedHashMap<>();
+    static {
+        DISH_KINDS.put("dumpling", List.of("샤오룽바오", "샤오롱바오", "탕바오", "딤섬", "만두", "小笼", "小籠", "汤包",
+                "湯包", "餃子", "饺子", "gyoza", "dumpling", "xiaolongbao", "dim sum"));
+        DISH_KINDS.put("banh_mi", List.of("반미", "bánh mì", "banh mi"));
+        DISH_KINDS.put("takoyaki", List.of("타코야키", "たこ焼", "takoyaki"));
+        DISH_KINDS.put("okonomiyaki", List.of("오코노미야키", "お好み焼", "okonomiyaki"));
+    }
+
+    /** 이름(원문·한국어)에 요리 이름이 있거나 태그가 요리 이름 그대로인 식당의 종류 키. 없으면 null. */
+    static String dishKind(String name, String nameKo, List<String> tags) {
+        String names = Normalizer.normalize(((name == null ? "" : name) + " " + (nameKo == null ? "" : nameKo))
+                .toLowerCase(Locale.ROOT), Normalizer.Form.NFC);
+        for (Map.Entry<String, List<String>> entry : DISH_KINDS.entrySet()) {
+            for (String dish : entry.getValue()) {
+                if (names.contains(dish)) return entry.getKey();
+                if (tags != null && tags.stream().anyMatch(t -> t != null && dish.equalsIgnoreCase(t.strip()))) {
+                    return entry.getKey();
+                }
+            }
+        }
+        return null;
+    }
 
     /**
      * 보강이 정한 음식 종류(DiningEnrichment) → 종류 키. 고기·해산물·면·국물만 구체 종류로 보고 나라 단위·분식·기타는
@@ -811,7 +855,14 @@ public final class PlaceCategoryConstants {
     /**
      * 식사 장소의 종류 키. 다양화(검색)와 유형 상한(스케줄)이 같은 값을 쓰도록 한 곳에 둔다.
      */
-    public static String mealKind(String name, String category, List<String> tags, String description, String cuisine) {
+    public static String mealKind(String name, String nameKo, String category, List<String> tags, String description,
+                                  String cuisine) {
+        if (isDiningMajor(category)) {
+            String dish = dishKind(name, nameKo, tags);
+            if (dish != null) return dish;
+            String leafKind = LEAF_ALIAS.get(leafCategory(category));
+            if (DISH_KINDS.containsKey(leafKind)) return leafKind;
+        }
         String key = cuisineKey(cuisine);
         return key != null ? key : subType(name, category, tags, description);
     }

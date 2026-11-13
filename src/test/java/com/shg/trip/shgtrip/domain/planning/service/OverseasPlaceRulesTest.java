@@ -95,4 +95,15 @@ class OverseasPlaceRulesTest {
         assertThat(RouteOptimizer.stripBranchSuffix("一蘭渋谷店")).isEqualTo("一蘭渋谷店");
         assertThat(RouteOptimizer.stripBranchSuffix("흑본오겹 함덕점")).isEqualTo("흑본오겹");
     }
+
+    @Test
+    @DisplayName("빈 시간 보충에서 거르는 약한 분류는 리프 정확 일치로만 본다")
+    void weakFillLeaves() {
+        assertThat(PlaceCategoryConstants.isWeakFill("Arts and Entertainment > Roller Rink")).isTrue();
+        assertThat(PlaceCategoryConstants.isWeakFill("Arts and Entertainment > Arcade")).isTrue();
+        assertThat(PlaceCategoryConstants.isWeakFill("Business and Professional Services > Convention Center")).isTrue();
+        assertThat(PlaceCategoryConstants.isWeakFill("Landmarks and Outdoors > Structure")).isTrue();
+        assertThat(PlaceCategoryConstants.isWeakFill("Retail > Shopping Arcade")).isFalse();
+        assertThat(PlaceCategoryConstants.isWeakFill("Arts and Entertainment > Museum")).isFalse();
+    }
 }
