@@ -925,6 +925,20 @@ public final class PlaceCategoryConstants {
         return sb.toString().toLowerCase();
     }
 
+    private static final List<String> EVENT_VENUE_LEAVES = List.of("arena", "college and university", "university", "college");
+    private static final List<String> EVENT_VENUE_NAMES = List.of("경기장", "야구장");
+
+    /**
+     * 경기장·대학처럼 언어판 수는 많지만 경기·행사가 있어야 가는 시설인지. 대학 안 수목원·박물관은 리프가 달라 걸리지 않는다.
+     * 이름 규칙은 스포츠 대분류에만 쓴다. "수영만 요트경기장"(정박장)처럼 이름에 경기장이 든 관광지가 있다.
+     */
+    public static boolean isEventVenue(String name, String category) {
+        String leaf = leafCategory(category);
+        if (leaf.endsWith("stadium") || EVENT_VENUE_LEAVES.contains(leaf)) return true;
+        boolean sports = category != null && category.startsWith("Sports and Recreation");
+        return sports && name != null && EVENT_VENUE_NAMES.stream().anyMatch(name::contains);
+    }
+
     /**
      * 집합 POI(먹자골목·음식거리처럼 구역을 가리키는 장소)인지. 식사 슬롯에 들어가면 먹을 곳이 없는 스텝이 되고
      * 좌표가 구역 중심이라 동선이 왜곡된다. 소유격 "'s"는 "Joe's Pizza"처럼 흔해 판정에 쓰지 않는다.

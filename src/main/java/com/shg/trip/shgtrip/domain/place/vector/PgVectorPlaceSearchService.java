@@ -38,6 +38,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                    p.latitude, p.longitude, p.description, p.rating, p.user_rating_count,
                    p.wikidata_sitelinks, p.place_role, p.cuisine, p.wikidata_id,
                    p.attributes::text AS attributes, p.name_ko, p.traveler_fame,
+                   (p.tourapi_content_id IS NOT NULL) AS tourism_listed,
                    1 - (p.embedding <=> ?::halfvec) AS similarity_score
             FROM places p
             """;
@@ -256,10 +257,17 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
             return jdbcTemplate.query(similarityLeg, params.toArray(), (rs, rowNum) -> mapRow(rs));
         }
 
+        // 출처별로 같은 장소가 여러 행이라 묶지 않으면 상위 자리를 중복 행이 먹는다. 대표 행은 실행마다 같아야 한다.
+        // 관광공사에 연결된 장소를 먼저 담아 언어판 수만 높은 기관·시설(관광공사 미등록)이 자리를 덜 차지하게 한다.
         String sql = similarityLeg + "\n"
                 + "UNION\n"
-                + "(" + SELECT_COLUMNS + whereClause + "  AND p.wikidata_sitelinks > 0\n"
-                + "ORDER BY p.wikidata_sitelinks DESC\nLIMIT ?)";
+                + "(SELECT * FROM ("
+                + SELECT_COLUMNS.replaceFirst("SELECT", "SELECT DISTINCT ON (COALESCE(p.wikidata_id, p.name))")
+                + whereClause + "  AND p.wikidata_sitelinks > 0\n"
+                + "  AND COALESCE(p.place_role, '') NOT IN ('TRANSIT', 'LODGING')\n"
+                + "ORDER BY COALESCE(p.wikidata_id, p.name), p.tourapi_content_id IS NOT NULL DESC,"
+                + " p.wikidata_sitelinks DESC, p.place_role = 'SIGHT' DESC, p.id) seed\n"
+                + "ORDER BY seed.tourism_listed DESC, seed.wikidata_sitelinks DESC\nLIMIT ?)";
 
         List<Object> params = new ArrayList<>();
         params.add(vectorString);          // 1번 갈래 SELECT의 similarity_score
@@ -368,7 +376,8 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                 rs.getString("wikidata_id"),
                 com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes.fromJson(rs.getString("attributes")),
                 rs.getString("name_ko"),
-                travelerFame
+                travelerFame,
+                rs.getBoolean("tourism_listed")
         );
     }
 

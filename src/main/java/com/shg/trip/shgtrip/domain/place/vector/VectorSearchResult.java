@@ -37,8 +37,22 @@ public record VectorSearchResult(
     /** 한국어 표시 이름(해외 장소). null이면 name을 쓴다. */
     String nameKo,
     /** 알려진 정도(해외 장소 보강 산출, 0~2). null이면 미보강이거나 한국 장소다. */
-    Short travelerFame
+    Short travelerFame,
+    /** 관광공사(TourAPI) 관광 정보와 연결된 장소. 국내에서는 언어판 수보다 여행지 여부를 잘 가린다. */
+    boolean tourismListed
 ) {
+    /** 관광공사 연결 여부 없이 생성하는 호환 생성자. */
+    public VectorSearchResult(Long placeId, String name, String address, String category,
+                              List<String> tags, String region, String country,
+                              BigDecimal latitude, BigDecimal longitude, String description,
+                              BigDecimal rating, Integer userRatingCount, Integer wikidataSitelinks,
+                              double similarityScore, String placeRole, String cuisine, String wikidataId,
+                              PlaceAttributes attributes, String nameKo, Short travelerFame) {
+        this(placeId, name, address, category, tags, region, country, latitude, longitude,
+                description, rating, userRatingCount, wikidataSitelinks, similarityScore, placeRole, cuisine,
+                wikidataId, attributes, nameKo, travelerFame, false);
+    }
+
     /** 알려진 정도 없이 생성하는 호환 생성자. */
     public VectorSearchResult(Long placeId, String name, String address, String category,
                               List<String> tags, String region, String country,
@@ -48,7 +62,7 @@ public record VectorSearchResult(
                               PlaceAttributes attributes, String nameKo) {
         this(placeId, name, address, category, tags, region, country, latitude, longitude,
                 description, rating, userRatingCount, wikidataSitelinks, similarityScore, placeRole, cuisine,
-                wikidataId, attributes, nameKo, null);
+                wikidataId, attributes, nameKo, null, false);
     }
 
     /** 한국어 이름 없이 생성하는 호환 생성자. */

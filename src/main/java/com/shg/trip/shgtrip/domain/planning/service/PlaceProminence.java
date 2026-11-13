@@ -51,7 +51,17 @@ public final class PlaceProminence {
 
     public static double of(PlaceCandidate c) {
         return c == null ? 0.0
-                : of(c.rating(), c.userRatingCount(), effectiveSitelinks(c.wikidataSitelinks(), c.travelerFame()));
+                : of(c.name(), c.category(), c.rating(), c.userRatingCount(),
+                effectiveSitelinks(c.wikidataSitelinks(), c.travelerFame()));
+    }
+
+    /**
+     * 경기장·대학의 언어판 수는 여행지 유명도가 아니라 0으로 본다({@link PlaceCategoryConstants#isEventVenue}).
+     * 검색 랭킹과 일정 충전이 이 값을 같이 써야 검색에서 밀린 경기장이 빈 시간 채우기로 들어오지 않는다.
+     */
+    public static double of(String name, String category, BigDecimal rating, Integer reviewCount, Integer sitelinks) {
+        if (PlaceCategoryConstants.isEventVenue(name, category)) return 0.0;
+        return of(rating, reviewCount, sitelinks);
     }
 
     /**

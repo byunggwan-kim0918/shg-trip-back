@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.eval;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.itinerary.entity.GenerationTrace;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
@@ -16,6 +17,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
+import com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
@@ -197,23 +199,40 @@ public class EvalRunner implements CommandLineRunner {
                 .filter(Objects::nonNull).findFirst().orElse("?");
     }
 
-    /** eval.ids가 비면 기록 전부. 한 줄에 placeId·대분류·유사도·이름. */
+    /**
+     * eval.files가 있으면 그 파일의 {@code itineraryId}·{@code enrichedInput} 줄을, 없으면 DB 기록(eval.ids가 비면 전부)을 쓴다.
+     * 한 줄에 placeId·대분류·역할·유사도·언어판 수·끼니 종류·이름.
+     */
     private void dumpPools() throws Exception {
-        List<GenerationTrace> traces = ids == null || ids.isBlank() ? traceRepository.findAll()
-                : parseIds(ids).stream().map(traceRepository::findByItineraryId).flatMap(Optional::stream).toList();
+        Map<Long, String> inputs = new LinkedHashMap<>();
+        if (files != null && !files.isBlank()) {
+            for (String line : Files.readAllLines(Path.of(files))) {
+                if (line.isBlank()) continue;
+                JsonNode n = objectMapper.readTree(line);
+                if (n.hasNonNull("itineraryId") && n.hasNonNull("enrichedInput")) {
+                    inputs.put(n.path("itineraryId").asLong(), objectMapper.writeValueAsString(n.get("enrichedInput")));
+                }
+            }
+        } else {
+            List<GenerationTrace> traces = ids == null || ids.isBlank() ? traceRepository.findAll()
+                    : parseIds(ids).stream().map(traceRepository::findByItineraryId).flatMap(Optional::stream).toList();
+            traces.stream().filter(t -> t.getEnrichedInput() != null)
+                    .forEach(t -> inputs.put(t.getItineraryId(), t.getEnrichedInput()));
+        }
         Path dir = Path.of(outDir);
         Files.createDirectories(dir);
-        for (GenerationTrace trace : traces) {
-            if (trace.getEnrichedInput() == null) continue;
-            VectorEnrichedInput input = objectMapper.readValue(trace.getEnrichedInput(), VectorEnrichedInput.class);
+        for (Map.Entry<Long, String> entry : inputs.entrySet()) {
+            VectorEnrichedInput input = objectMapper.readValue(entry.getValue(), VectorEnrichedInput.class);
             StringBuilder sb = new StringBuilder();
             for (PlaceCandidate c : vectorSearchQueryService.search(input)) {
-                sb.append(String.format(Locale.ROOT, "%s\t%s\t%.4f\t%s%n", c.placeId(),
-                        PlaceCategoryConstants.majorCategory(c.category()), c.similarityScore(), c.name()));
+                sb.append(String.format(Locale.ROOT, "%s\t%s\t%s\t%.4f\t%s\t%s\t%s%n", c.placeId(),
+                        PlaceCategoryConstants.majorCategory(c.category()), CandidatePolicy.roleOf(c),
+                        c.similarityScore(), c.wikidataSitelinks(),
+                        c.mealEligible() ? CandidatePolicy.cuisineOf(c) : "-", c.name()));
             }
-            Files.writeString(dir.resolve("pool-" + trace.getItineraryId() + ".tsv"), sb.toString());
+            Files.writeString(dir.resolve("pool-" + entry.getKey() + ".tsv"), sb.toString());
         }
-        log.info("후보 풀 {}건 → {}", traces.size(), dir.toAbsolutePath());
+        log.info("후보 풀 {}건 → {}", inputs.size(), dir.toAbsolutePath());
     }
 
     // 비용은 저장본에만 인원 배수가 곱해져 있어 비교에서 뺀다

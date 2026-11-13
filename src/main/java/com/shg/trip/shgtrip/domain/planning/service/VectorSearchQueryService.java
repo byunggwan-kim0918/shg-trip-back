@@ -50,6 +50,12 @@ public class VectorSearchQueryService {
     private static final int MIN_PER_ATTRACTION_SLOT = 4;
 
     /**
+     * 대표 명소 슬롯에 일수 몫(하루 2곳)보다 더 두는 자리. 도시의 대표 명소는 일수와 상관없이 여럿이라
+     * 일수 몫만 두면 언어판 수 상위 몇 곳이 자리를 다 쓰고 그다음 대표 명소가 후보에 오르지 못한다.
+     */
+    private static final int REPRESENTATIVE_RESERVE = 4;
+
+    /**
      * 식사·카페 슬롯에서 한 세부 유형이 가질 수 있는 최소 자리 수. 유형이 둘뿐인 소도시에서
      * 다양화가 후보를 말리지 않게 limit/4보다 작아도 보장한다.
      */
@@ -84,6 +90,11 @@ public class VectorSearchQueryService {
      */
     private static final int REVIEW_SATURATION_COUNT = 10_000;
     private static final double MAJOR_CATEGORY_BONUS = 0.05;
+    /**
+     * 관광 슬롯에서 관광공사 등록 장소에 주는 가점. 국내 명소는 언어판 수가 낮은 곳이 많아 유사도가 비슷한
+     * 비관광 시설(볼링장·체험 공간)에 밀린다. 식당은 등록된 곳이 드물어 주지 않는다.
+     */
+    private static final double TOURISM_LISTED_BONUS = 0.05;
     private static final double LABEL_MATCH_BONUS = 0.03;
 
     /**
@@ -146,8 +157,9 @@ public class VectorSearchQueryService {
         List<SearchSlot> slots = SearchQueryBuilder.buildSearchSlots(input);
         Map<String, Integer> slotLimits = buildSlotLimits(slots, totalLimit, calculateTripDays(input));
 
-        List<SearchUnit> units = buildSearchUnits(input, slots);
-        int unitsPerSlot = Math.max(1, units.size() / Math.max(1, slots.size()));
+        List<SearchUnit> units = withBaseQueryUnits(buildSearchUnits(input, slots), slots);
+        Map<String, Long> unitsPerSlot = units.stream()
+                .collect(Collectors.groupingBy(u -> u.slot().key(), Collectors.counting()));
 
         log.info("검색 슬롯 {}개, 실행 단위 {}개, 슬롯별 limit={}", slots.size(), units.size(), slotLimits);
 
@@ -176,16 +188,16 @@ public class VectorSearchQueryService {
 
             int limit = slotLimits.getOrDefault(slot.key(), MIN_PER_ATTRACTION_SLOT);
             int overfetch = overfetchFor(slot.role(), limit);
-            int unitLimit = Math.max(1, overfetch / unitsPerSlot);
+            int unitLimit = Math.max(1, overfetch / unitsPerSlot.get(slot.key()).intValue());
 
             long queryStart = System.nanoTime();
             List<VectorSearchResult> raw = placeVectorSearchService.search(
-                    buildRequest(input, queryVector, unit.filterRegions(), slot, unitLimit));
+                    buildRequest(input, queryVector, unit.filterRegions(), slot, unitLimit, unit.seedPopularity()));
 
             // fail-open: 지역 필터가 0건이면 필터를 떨어뜨리고 상위 지역으로 재조회한다. 후보 풀이 비는 것보다 낫다.
             if (raw.isEmpty() && unit.filterRegions() != null) {
                 raw = placeVectorSearchService.search(
-                        buildRequest(input, queryVector, null, slot, unitLimit));
+                        buildRequest(input, queryVector, null, slot, unitLimit, unit.seedPopularity()));
                 log.info("지역 필터 0건 → 상위 지역으로 완화 재조회: 슬롯={}, 필터={}, 재조회={}건",
                         slot.key(), unit.filterRegions(), raw.size());
             }
@@ -391,7 +403,8 @@ public class VectorSearchQueryService {
      * 후보별 최소 유사도. 슬롯 임계값을 기본으로 하되 두 경우를 완화한다.
      * <ul>
      *   <li>대분류가 슬롯과 같은 인기 명소(언어판 {@value #ICONIC_SITELINKS}개 이상)는 면제한다. 일반어 질의와
-     *       고유 명소의 유사도는 원래 낮아서 유사도로 자르면 대표 명소가 빠진다.</li>
+     *       고유 명소의 유사도는 원래 낮아서 유사도로 자르면 대표 명소가 빠진다.
+     *       경기장·대학 같은 행사 시설({@link PlaceCategoryConstants#isEventVenue})은 면제하지 않는다.</li>
      *   <li>대분류가 슬롯과 같은 후보는 {@value #SAME_MAJOR_THRESHOLD_RELIEF}만큼 낮춘다. 보강 전 외국어 이름 행은
      *       한국어 질의와의 유사도가 낮아 전부 탈락한다.</li>
      * </ul>
@@ -400,7 +413,8 @@ public class VectorSearchQueryService {
                                        boolean exemptIconic) {
         boolean sameMajor = slotMajor != null && slotMajor.equals(PlaceCategoryConstants.majorCategory(r.category()));
         if (!sameMajor) return minSimilarity;
-        if (exemptIconic && r.wikidataSitelinks() != null && r.wikidataSitelinks() >= ICONIC_SITELINKS) {
+        if (exemptIconic && r.wikidataSitelinks() != null && r.wikidataSitelinks() >= ICONIC_SITELINKS
+                && !PlaceCategoryConstants.isEventVenue(r.name(), r.category())) {
             return Double.NEGATIVE_INFINITY;
         }
         return minSimilarity - SAME_MAJOR_THRESHOLD_RELIEF;
@@ -529,6 +543,9 @@ public class VectorSearchQueryService {
         if (matchesLabel(r, labelTokens)) {
             score += LABEL_MATCH_BONUS;
         }
+        if (r.tourismListed() && "ATTRACTION".equals(slotMajorCategory)) {
+            score += TOURISM_LISTED_BONUS;
+        }
         return score;
     }
 
@@ -541,7 +558,7 @@ public class VectorSearchQueryService {
         if (sitelinks == null && r.userRatingCount() == null) {
             return neutralProminence;
         }
-        return PlaceProminence.of(r.rating(), r.userRatingCount(), sitelinks);
+        return PlaceProminence.of(r.name(), r.category(), r.rating(), r.userRatingCount(), sitelinks);
     }
 
     private static Integer sitelinksOf(VectorSearchResult r) {
@@ -648,8 +665,9 @@ public class VectorSearchQueryService {
                 // 카페 스톱(하루 1곳) + 대안·빈 시간 채우기 여유.
                 case CAFE -> Math.max((int) (days * 2), (int) (totalLimit * 0.15));
                 case ATTRACTION -> slot.key().equals("attraction:market") ? marketLimit
-                        // 대표 명소 슬롯은 테마 슬롯과 균등 분할하면 너무 적어 하루 2곳 몫을 보장한다.
-                        : slot.key().equals(REPRESENTATIVE_SLOT_KEY) ? Math.max(perAttraction, (int) (days * 2))
+                        // 대표 명소 슬롯은 테마 슬롯과 균등 분할하면 너무 적어 하루 2곳 몫에 여유를 더해 보장한다.
+                        : slot.key().equals(REPRESENTATIVE_SLOT_KEY)
+                        ? Math.max(perAttraction, (int) (days * 2) + REPRESENTATIVE_RESERVE)
                         : perAttraction;
             };
             limits.put(slot.key(), Math.min(limit, MAX_PER_CATEGORY));
@@ -792,7 +810,7 @@ public class VectorSearchQueryService {
             if (limit == null || vectors.get(i) == null || !searched.add(slot.role())) continue;
             for (String landmark : landmarks) {
                 List<VectorSearchResult> raw = placeVectorSearchService.search(
-                        buildRequest(input, vectors.get(i), List.of(landmark), slot, overfetchFor(slot.role(), limit)));
+                        buildRequest(input, vectors.get(i), List.of(landmark), slot, overfetchFor(slot.role(), limit), true));
                 for (ScoredResult scored : applyThresholdAndRank(slot, dedupeByPlace(raw), limit)) {
                     Long id = scored.result().placeId();
                     if (id != null && known.add(id)) out.add(scored.result());
@@ -820,7 +838,11 @@ public class VectorSearchQueryService {
      * @param queryText     임베딩할 쿼리. 지역 분리 시 필터로 못 쓰는 세부 지명이 뒤에 붙는다
      * @param filterRegions DB {@code place.region} 하드 필터로 쓸 값. null이면 {@code input.regions()}
      */
-    private record SearchUnit(SearchSlot slot, String queryText, List<String> filterRegions) {}
+    private record SearchUnit(SearchSlot slot, String queryText, List<String> filterRegions, boolean seedPopularity) {
+        SearchUnit(SearchSlot slot, String queryText, List<String> filterRegions) {
+            this(slot, queryText, filterRegions, true);
+        }
+    }
 
     /**
      * 슬롯 목록을 실제 검색 실행 단위로 펼친다. {@code place.region}은 영어 상위 도시명뿐인데 regionAllocation에는
@@ -868,6 +890,23 @@ public class VectorSearchQueryService {
     }
 
     /**
+     * 식사·카페·대표 관광지 슬롯은 AI 힌트 없는 기본 쿼리로도 찾는다. 힌트가 한 동네·한 음식으로 좁으면
+     * ("광안리 해산물 조개구이") 슬롯 후보 전체가 그쪽으로 쏠리고, 슬롯 limit 안의 다양화로는 되돌릴 수 없다.
+     */
+    private static List<SearchUnit> withBaseQueryUnits(List<SearchUnit> units, List<SearchSlot> slots) {
+        List<SearchUnit> out = new ArrayList<>(units);
+        for (SearchSlot slot : slots) {
+            boolean needsBaseQuery = slot.role() == SearchRole.RESTAURANT || slot.role() == SearchRole.CAFE
+                    || REPRESENTATIVE_SLOT_KEY.equals(slot.key());
+            if (needsBaseQuery && !slot.baseQueryText().equals(slot.queryText())) {
+                // 인기도 갈래는 질의와 무관해 힌트 단위가 이미 가져온다
+                out.add(new SearchUnit(slot, slot.baseQueryText(), null, false));
+            }
+        }
+        return out;
+    }
+
+    /**
      * enrichInput 프롬프트가 country=ISO코드, regions=영어 도시명으로 반환하도록 지정한다.
      * 마법사 카테고리 id와 DB category는 형식이 다르고 오적재가 흔해 categories 하드 필터는 넘기지 않는다.
      */
@@ -875,7 +914,8 @@ public class VectorSearchQueryService {
                                               float[] queryVector,
                                               List<String> regions,
                                               SearchSlot slot,
-                                              int limit) {
+                                              int limit,
+                                              boolean seedPopularity) {
         List<String> searchRegions = regions != null ? regions : input.regions();
 
         log.debug("벡터 검색 필터: country='{}', regions={}, slot={}, limit={}",
@@ -892,7 +932,7 @@ public class VectorSearchQueryService {
                 slot.excludedCategoryPatterns(),
                 null,
                 0,
-                slot.role() == SearchRole.ATTRACTION
+                seedPopularity && slot.role() == SearchRole.ATTRACTION
         );
     }
 

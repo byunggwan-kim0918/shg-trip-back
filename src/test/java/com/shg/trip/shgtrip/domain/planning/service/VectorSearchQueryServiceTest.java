@@ -365,6 +365,126 @@ class VectorSearchQueryServiceTest {
     }
 
     @Nested
+    @DisplayName("search - 후보 풀 대표성")
+    class PoolCoverage {
+
+        @SuppressWarnings("unchecked")
+        private final ArgumentCaptor<List<String>> textCaptor = ArgumentCaptor.forClass(List.class);
+
+        private VectorEnrichedInput busan(int days, Map<String, String> aiQueries) {
+            LocalDate start = LocalDate.of(2026, 11, 20);
+            return new VectorEnrichedInput(
+                    "부산", List.of("ocean"), List.of(), "relaxed", "car", null, start, start.plusDays(days - 1),
+                    "부산 여행", null, "부산", "KR", List.of("Busan"), List.of("광안리"), null,
+                    "MEDIUM", "가을", "컨텍스트", null, aiQueries);
+        }
+
+        private VectorSearchResult sight(long id, String name, String category, Integer sitelinks,
+                                         boolean tourismListed, double similarity) {
+            return new VectorSearchResult(id, name, "주소" + id, category, List.of(), "Busan", "KR",
+                    BigDecimal.valueOf(35.1), BigDecimal.valueOf(129.0), "설명", null, null, sitelinks,
+                    similarity, "SIGHT", null, null, null, null, null, tourismListed);
+        }
+
+        @Test
+        @DisplayName("LLM 힌트가 붙은 식당 슬롯은 힌트 없는 기본 질의로도 찾고, 두 질의가 조회량을 나눈다")
+        void restaurantHintAlsoSearchesBaseQuery() {
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willReturn(List.of());
+
+            service.search(busan(6, Map.of("restaurant", "광안리 해산물 조개구이")));
+
+            verify(embeddingService).embedBatch(textCaptor.capture());
+            List<String> texts = textCaptor.getValue();
+            assertThat(texts).contains("부산 맛집 현지 음식 식당");
+            assertThat(texts).anyMatch(t -> t.contains("조개구이"));
+            verify(placeVectorSearchService, times(texts.size())).search(requestCaptor.capture());
+            // 식당 슬롯 오버페치 200을 두 질의가 반씩, 힌트 없는 카페는 혼자 120을 가져간다
+            assertThat(requestCaptor.getAllValues()).extracting(VectorSearchRequest::limit)
+                    .containsOnlyOnce(120).filteredOn(limit -> limit == 100).hasSize(2);
+        }
+
+        @Test
+        @DisplayName("대표 관광지의 기본 질의 단위는 인기도 갈래를 다시 조회하지 않는다")
+        void baseUnitSkipsPopularitySeed() {
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willReturn(List.of());
+            VectorEnrichedInput input = busan(3, Map.of("attraction", "광안리 광안대교 야경"));
+
+            service.search(input);
+
+            long attractionSlots = SearchQueryBuilder.buildSearchSlots(input).stream()
+                    .filter(slot -> slot.role() == PlaceCategoryConstants.SearchRole.ATTRACTION).count();
+            verify(placeVectorSearchService, times((int) attractionSlots + 4)).search(requestCaptor.capture());
+            assertThat(requestCaptor.getAllValues()).filteredOn(VectorSearchRequest::popularitySeed)
+                    .hasSize((int) attractionSlots);
+        }
+
+        @Test
+        @DisplayName("경기장은 언어판 수가 많아도 유사도 기준 면제를 받지 못한다")
+        void stadiumNotExemptFromThreshold() {
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willReturn(List.of(
+                    sight(1L, "아시아드주경기장", "Arts and Entertainment > Stadium > Track Stadium", 29, true, 0.05),
+                    sight(2L, "태종대", "Landmarks and Outdoors > Scenic Lookout", 8, true, 0.05)));
+
+            List<PlaceCandidate> result = service.search(busan(3, Map.of()));
+
+            assertThat(result).extracting(PlaceCandidate::name).contains("태종대").doesNotContain("아시아드주경기장");
+        }
+
+        @Test
+        @DisplayName("힌트가 없는 슬롯은 기본 질의를 한 번만 찾는다")
+        void noHintNoExtraQuery() {
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willReturn(List.of());
+
+            service.search(busan(3, Map.of()));
+
+            verify(embeddingService).embedBatch(textCaptor.capture());
+            assertThat(textCaptor.getValue()).doesNotHaveDuplicates()
+                    .hasSize(SearchQueryBuilder.buildSearchSlots(busan(3, Map.of())).size());
+        }
+
+        @Test
+        @DisplayName("관광 슬롯에서 유사도가 같으면 관광공사에 등록된 장소가 앞선다")
+        void tourismListedWinsTie() {
+            givenBatchEmbeddings();
+            // 0.30은 관광 슬롯 기준(같은 대분류 완화 0.24)만 넘고 식당·카페·숙소 슬롯 기준에는 못 미친다
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willReturn(List.of(
+                    sight(1L, "볼링장형", "Landmarks and Outdoors > Scenic Lookout", null, false, 0.30),
+                    sight(2L, "흰여울형", "Landmarks and Outdoors > Scenic Lookout", null, true, 0.30)));
+
+            List<PlaceCandidate> result = service.search(busan(3, Map.of()));
+
+            assertThat(result).extracting(PlaceCandidate::name).startsWith("흰여울형");
+        }
+
+        @Test
+        @DisplayName("경기장은 언어판 수가 많아도 인기도 가점을 받지 않는다")
+        void stadiumGetsNoProminence() {
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willReturn(List.of(
+                    sight(1L, "아시아드주경기장", "Arts and Entertainment > Stadium > Track Stadium", 29, true, 0.60),
+                    sight(2L, "감천문화마을", "Landmarks and Outdoors > Tourist Attraction", 9, true, 0.60)));
+
+            List<PlaceCandidate> result = service.search(busan(3, Map.of()));
+
+            assertThat(result).extracting(PlaceCandidate::name).startsWith("감천문화마을");
+        }
+
+        @Test
+        @DisplayName("대표 명소 슬롯은 일수 몫(하루 2곳)보다 4곳 더 둔다")
+        void representativeSlotHasReserve() {
+            VectorEnrichedInput input = busan(6, Map.of());
+            Map<String, Integer> limits = service.buildSlotLimits(SearchQueryBuilder.buildSearchSlots(input),
+                    service.calculateTotalLimit(input), 6);
+
+            assertThat(limits.get(VectorSearchQueryService.REPRESENTATIVE_SLOT_KEY)).isEqualTo(16);
+        }
+    }
+
+    @Nested
     @DisplayName("search - 지역별 분리 검색 (5일+ 여행)")
     class RegionSplitSearchTests {
 
