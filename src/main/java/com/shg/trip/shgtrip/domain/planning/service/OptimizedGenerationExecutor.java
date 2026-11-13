@@ -60,6 +60,7 @@ public class OptimizedGenerationExecutor {
 
     /** 한국 운전면허(국제운전면허 포함)로 운전할 수 없는 나라. 자동차 요청은 택시·차량 호출로 본다. */
     private static final Set<String> NO_KOREAN_LICENSE_COUNTRIES = Set.of("CN", "VN");
+    private static final ItineraryRules RULES = new ItineraryRules();
 
     /** 보완 숙소가 기존 후보 median 중심점에서 이 거리(km)를 넘으면 지역 오태깅으로 보고 제외한다. */
     private static final double MAX_ACCOMMODATION_RADIUS_KM = 100.0;
@@ -229,6 +230,7 @@ public class OptimizedGenerationExecutor {
             qualityNotices.addAll(pickNotices);
             qualityNotices.addAll(mustVisitNotices(unresolvedNames,
                     missingUserSelected(candidatesWithLocalStays, fixedSteps)));
+            ItineraryRules.Verdict quality = shadowQuality(fixedSteps, candidatesWithLocalStays, scheduleArgs, days);
 
             // 인위적 sleep을 넣으면 SSE 스레드가 blocking된다.
             sendStepStream(emitter, fixedSteps);
@@ -263,7 +265,7 @@ public class OptimizedGenerationExecutor {
             // 완료 전송보다 먼저 남긴다. 뒤에 남기면 그 사이 지운 일정의 기록(요청 문장 포함)이 삭제를 피해 남는다.
             traceRecorder.record(saved, jobId, request, enrichedInput, rawSelectionOutput,
                     selectionOutput, candidatesWithLocalStays, scheduleArgs,
-                    (System.nanoTime() - pipelineStart) / 1_000_000);
+                    (System.nanoTime() - pipelineStart) / 1_000_000, quality);
 
             // [100%] 구조 완료. emitter는 story-ready까지 닫지 않는다.
             resultStore.save(jobId, saved.getId(), userId);
@@ -293,6 +295,24 @@ public class OptimizedGenerationExecutor {
     }
 
     // ── Private helpers ──
+
+    /** 측정용이라 저장을 막지 않고, 판정이 실패해도 생성은 그대로 진행한다. */
+    private static ItineraryRules.Verdict shadowQuality(List<StepData> steps, List<PlaceCandidate> candidates,
+                                                        ScheduleArgs args, long days) {
+        try {
+            ItineraryRules.Verdict quality = RULES.evaluate(steps, candidates, new ItineraryRules.Context(
+                    args.pace(), args.transportPref(), args.startDate(), (int) days,
+                    RouteOptimizer.departureHubDeadline(args)));
+            log.info("품질 판정 v{}: hard={} core={} soft={} 끼니={}(종류 미상 {}) {}", quality.version(),
+                    quality.has(ItineraryRules.Severity.HARD), quality.has(ItineraryRules.Severity.CORE),
+                    quality.has(ItineraryRules.Severity.SOFT), quality.meals(), quality.unknownKindMeals(),
+                    quality.violations().stream().map(ItineraryRules.Violation::message).toList());
+            return quality;
+        } catch (RuntimeException e) {
+            log.warn("품질 판정 실패: {}", e.getMessage(), e);
+            return null;
+        }
+    }
 
     /**
      * 1인 기준 식사·카페·입장료·도시 간 열차·비행기 요금을 인원수만큼 곱한다. 숙소(1실)·교통(차 1대)은 그대로 둔다.

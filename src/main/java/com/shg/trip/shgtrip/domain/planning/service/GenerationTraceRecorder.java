@@ -40,7 +40,7 @@ public class GenerationTraceRecorder {
     public void record(Itinerary saved, String jobId, ItineraryGenerateRequest request,
                        VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
                        SelectionOutput finalSelection, List<PlaceCandidate> candidates,
-                       ScheduleArgs args, long totalMs) {
+                       ScheduleArgs args, long totalMs, ItineraryRules.Verdict quality) {
         Long itineraryId = saved.getId();
         try {
             GenerationTrace trace = GenerationTrace.builder()
@@ -56,6 +56,7 @@ public class GenerationTraceRecorder {
                     .models(json(Map.of("haiku", anthropicProperties.haiku(),
                             "sonnet", anthropicProperties.sonnet())))
                     .totalMs(totalMs)
+                    .score(scoreJson(quality, itineraryId))
                     .generatedSteps(snapshotJson(saved))
                     .build();
             // 요청 문장이 들어 있어 탈퇴가 trace를 지운 뒤에 들어가면 안 된다.
@@ -65,6 +66,17 @@ public class GenerationTraceRecorder {
             });
         } catch (Exception e) {
             log.warn("생성 기록 저장 실패 (itineraryId={}, jobId={}): {}", itineraryId, jobId, e.getMessage());
+        }
+    }
+
+    /** 판정 결과만 실패해도 나머지 기록은 남긴다. */
+    private String scoreJson(ItineraryRules.Verdict quality, Long itineraryId) {
+        if (quality == null) return null;
+        try {
+            return json(quality);
+        } catch (Exception e) {
+            log.warn("품질 판정 기록 실패 (itineraryId={}): {}", itineraryId, e.getMessage());
+            return null;
         }
     }
 

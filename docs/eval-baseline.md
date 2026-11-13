@@ -43,3 +43,55 @@ DB_PASSWORD=... java -jar build/libs/shg-trip-0.0.1-SNAPSHOT.jar --spring.profil
 | 182 제주 가족 | 초등학생 아이 둘 | 인원 미추론(partySize 없음) |
 | 183·197 부모님 | 칠순 부모님, 등산 빼기 | FAMILY로만 분류(어르신 구분 없음) |
 | 186·189·190·191·201 | 동행 언급 없음 | UNKNOWN |
+
+# 규칙 판정 기준선 — 2026-11-13 (`ItineraryRules` v1)
+
+관문(저장 차단)을 켜기 전에 "켰다면 막혔을 비율"을 잰다. 판정은 `ItineraryRules`, 등급은 HARD(쓸 수 없음)·CORE(조정 필요)·SOFT(표시 안 함)다.
+
+```bash
+# 운영 기록 파일을 로컬 DB에 넣지 않고 replay(무료, 앱 기동에는 로컬 DB가 필요). 파일 형식은 TraceFile, 한 줄이 일정 하나
+java -jar build/libs/shg-trip-0.0.1-SNAPSHOT.jar --spring.profiles.active=local,eval \
+  --eval.mode=files --eval.files=<traces.jsonl> --eval.out=build/eval-files
+```
+
+## 운영 측정 세트 85건 (사용자 본인 2 + 큐레이터 83, 재실행 기준)
+
+| 국가 | 일정 | HARD | CORE | 종류 미상 끼니 |
+|---|---|---|---|---|
+| KR | 47 | 0 | 22 | 63/209 |
+| JP | 28 | 0 | 14 | 16/145 |
+| CN | 4 | 0 | 2 | 3/26 |
+| TW | 3 | 0 | 1 | 2/19 |
+| VN | 3 | 0 | 2 | 1/20 |
+
+| 이동·페이스 | 일정 | CORE | 거리 규칙 빼면 CORE |
+|---|---|---|---|
+| walk·normal | 52 | 29 | 11 |
+| car·normal | 19 | 5 | 5 |
+| any·normal | 13 | 6 | 4 |
+| car·relaxed (91) | 1 | 1 | 1 |
+
+- CORE의 절반은 거리 규칙(구간 상한 21건, 하루 이동 19건)이고 대부분 도보 일정이다. 거리 규칙을 빼면 41/85 → 21/85.
+- 거리 외 CORE는 같은 날 같은 종류 끼니(11), 종류 반복(9)이 많다.
+- 국내 끼니의 30%는 종류를 판정하지 못한다. 보강 cuisine 중 MEAT·SEAFOOD·NOODLE·SOUP 외(KOREAN_SET·CHINESE 등)는 종류 키가 없다.
+- 운영 국내 식당 보강은 100%에 가깝다(부산 11,157건 중 11,156건). 짬뽕·회·조개구이·장어가 모두 SEAFOOD라 같은 종류로 센다.
+- 저장본은 사용자 편집 뒤 상태다. 생성 직후 상태(trace의 generated_steps)에는 이동거리가 없어 판정에 쓰지 않았다.
+- 마지막 날 출발 08:00을 주면 06:14 관광이 들어간다(91 입력으로 확인). 이른 시작은 아직 판정 규칙에 없다.
+
+## 로컬 corpus 27건
+
+| 국가 | 일정 | HARD | CORE |
+|---|---|---|---|
+| KR | 23 | 0 | 16 |
+| JP | 4 | 0 | 2 |
+
+## 사례 91 (부산 5박 6일, car·relaxed·couple)
+
+`Itinerary91Fixture`(운영 기록)와 golden `busan-91-relaxed-couple`로 고정했다. 저장본과 현재 코드 재실행 모두 같은 위반이 나온다.
+
+- 같은 날 점심·저녁 같은 종류: 2·3·4·5일차(seafood)
+- seafood 10/11끼(상한 3)
+- 카페·디저트 3곳: 3·4일차
+- 5일차 하루 이동 136km(상한 90km)
+- 타타스베이글 주소(경기 용인)와 지역(부산) 불일치
+- 원인 경로(재실행 로그): 유형 상한 트림이 해산물 식당을 빼고 카페·관광으로 채운다 → 빈 끼니를 다시 해산물로 보충한다(후보 식당 대부분이 SEAFOOD) → 긴 공백을 디저트·베이글 가게로 메운다.
