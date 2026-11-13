@@ -140,8 +140,7 @@ resource "aws_route_table_association" "private_2a" {
   route_table_id = aws_route_table.private["2a"].id
 }
 
-# TODO: 2c NAT가 부팅 스크립트(iptables)를 마친 것을 확인한 뒤 private["2c"]로 바꾼다.
 resource "aws_route_table_association" "private_2c" {
   subnet_id      = aws_subnet.private_2c.id
-  route_table_id = aws_route_table.private["2a"].id
+  route_table_id = aws_route_table.private["2c"].id
 }
