@@ -82,12 +82,16 @@ final class MealPlanner {
                                                     java.util.function.Predicate<PlaceCandidate> underTypeCap) {
         // 보충할 자리의 시각을 알려줘야 "그 시각에 여는 식당"만 후보가 된다.
         Integer slotStart = "저녁".equals(slotName) ? DINNER_START : LUNCH_START;
+        java.util.function.Predicate<PlaceCandidate> variety = VarietyLedger.admitsOnDay(day, candidates);
+        java.util.function.Predicate<PlaceCandidate> otherGroup = VarietyLedger.avoidsGroupOnDay(day, candidates);
         for (RelaxLevel level : RelaxLevel.values()) {
             java.util.function.Predicate<PlaceCandidate> filter =
                     insertableFilter(day, candidates, startDate, transportPref, memo, level, slotStart, cfg);
-            // 같은 완화 단계 안에서도 음식 종류 상한을 지키는 식당을 먼저 찾는다. 없으면 상한을 넘겨서라도 끼니를 채운다.
+            // 같은 완화 단계 안에서도 반복을 덜 만드는 식당부터 찾는다. 그날 같은 종류가 여행 전체 상한 초과보다 눈에 띄어 먼저 피한다.
+            // 모두 없으면 반복을 감수하고 끼니를 채운다.
             for (java.util.function.Predicate<PlaceCandidate> attempt
-                    : List.of(filter.and(underTypeCap), filter)) {
+                    : List.of(filter.and(underTypeCap).and(variety).and(otherGroup), filter.and(underTypeCap).and(variety),
+                    filter.and(variety), filter.and(underTypeCap), filter)) {
                 for (double[] anchor : anchors) {
                     if (anchor == null) continue;
                     if (insertMeal(day, candidates, spare, usedIndices, maxPerDay, anchor, slotName, attempt, memo)) {

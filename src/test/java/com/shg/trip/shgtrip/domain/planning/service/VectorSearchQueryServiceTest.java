@@ -1053,6 +1053,40 @@ class VectorSearchQueryServiceTest {
         }
 
         @Test
+        @DisplayName("같은 묶음 안에서는 점수가 낮은 다른 요리에도 자리를 준다")
+        void spreadsDishesWithinGroup() {
+            // 조개구이가 모두 횟집보다 점수가 높아도 해산물 자리에 횟집이 하나는 들어와야 한다.
+            List<VectorSearchResult> raw = new java.util.ArrayList<>();
+            double sim = 0.90;
+            for (int i = 1; i <= 6; i++) raw.add(dining("조개구이 " + i + "호", sim -= 0.01));
+            for (int i = 1; i <= 6; i++) raw.add(dining("광안횟집 " + i, sim -= 0.01));
+            for (int i = 1; i <= 6; i++) raw.add(dining("흑돼지구이 " + i + "호점", sim -= 0.01));
+            for (int i = 1; i <= 6; i++) raw.add(dining("치킨 " + i + "번가", sim -= 0.01));
+
+            List<String> accepted = service.applyThresholdAndRank(restaurantSlot, raw, 12).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(countContaining(accepted, "횟집")).isGreaterThanOrEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("요리 상한에 밀린 후보는 같은 묶음에 자리가 남으면 점수 순 되돌림보다 먼저 받는다")
+        void dishCapYieldsToGroupRoomBeforeBackfill() {
+            // limit 12 → 묶음 상한 3, 요리 상한 1. 조개구이가 점수 최하위라도 해산물 자리 3개는 조개구이가 채워야 한다.
+            List<VectorSearchResult> raw = new java.util.ArrayList<>();
+            double sim = 0.90;
+            for (int i = 1; i <= 6; i++) raw.add(dining("흑돼지구이 " + i + "호점", sim -= 0.01));
+            for (int i = 1; i <= 6; i++) raw.add(dining("치킨 " + i + "번가", sim -= 0.01));
+            for (int i = 1; i <= 6; i++) raw.add(dining("조개구이 " + i + "호", sim -= 0.01));
+
+            List<String> accepted = service.applyThresholdAndRank(restaurantSlot, raw, 12).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(accepted).hasSize(12);
+            assertThat(countContaining(accepted, "조개구이")).isEqualTo(3);
+        }
+
+        @Test
         @DisplayName("다양화해도 후보 수는 줄지 않는다 — 상한 초과분을 점수 순으로 되돌린다")
         void neverReturnsFewerThanLimit() {
             // 한 종류뿐인 소도시에서 다양화가 후보를 말려버리면 fallback 경로로 떨어진다.

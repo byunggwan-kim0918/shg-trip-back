@@ -51,16 +51,18 @@ final class DayScheduler {
                     ? coordsOf(byIndex(s.candidates, day.accommodationIndex))
                     : (day.departureHubIndex != null ? coordsOf(byIndex(s.candidates, day.departureHubIndex)) : null);
 
+            // 첫 스텝의 이동 정보와 도착 시각은 전날 숙소를 출발지로 계산한다.
+            PlaceCandidate startFrom = (i > 0 && day.arrivalHubIndex == null
+                    && s.days.get(i - 1).accommodationIndex != null)
+                    ? byIndex(s.candidates, s.days.get(i - 1).accommodationIndex) : null;
+            day.startLodgingIndex = startFrom != null ? startFrom.index() : null;
+
             List<Integer> ordered = RouteOrdering.orderDay(day, s.candidates, s.pairs, s.highlights, s.rests,
                     startAnchor, endAnchor);
             ordered = applyWalkContinuity(ordered, day, s.days, i, s.candidates, s.transportPref);
             ordered = DistanceBudget.enforceDistanceBudget(day, ordered, s.candidates, s.spare, s.usedIndices,
                     s.transportPref, s.cfg);
             double[] dayCentroid = centroidOf(day.placeIndices, s.candidates);
-            // 첫 스텝의 이동 정보와 도착 시각은 전날 숙소를 출발지로 계산한다.
-            PlaceCandidate startFrom = (i > 0 && day.arrivalHubIndex == null
-                    && s.days.get(i - 1).accommodationIndex != null)
-                    ? byIndex(s.candidates, s.days.get(i - 1).accommodationIndex) : null;
             steps.addAll(scheduleDay(day, ordered, s.candidates, s.spare, s.cfg,
                     dayCentroid, s.usedIndices, s.transportPref, startFrom, s.maxPerDay));
         }
@@ -450,7 +452,7 @@ final class DayScheduler {
 
             steps.add(buildStep(day, cand, startMin, endMin, leg,
                     AlternativeBuilder.buildAlternatives(cand, dayCentroid, spareIndices, usedIndices, candidates,
-                            transportPref, dayAltKeys)));
+                            transportPref, dayAltKeys, VarietyLedger.admitsReplacing(day, cand.index(), candidates))));
 
             currentMinutes = Math.max(currentMinutes, endMin);
             prev = cand;

@@ -74,7 +74,7 @@ class ItineraryRulesTest {
     }
 
     @Test
-    @DisplayName("6일 여행에 같은 종류 6끼면 여행 전체 상한(3끼) 초과")
+    @DisplayName("6일 여행에 같은 종류 6끼면 여행 전체 상한(3끼) 초과, 한 요리뿐인 묶음은 묶음 반복으로 따로 세지 않는다")
     void mealKindRepeatedAcrossTrip() {
         List<StepData> steps = new ArrayList<>();
         int order = 1;
@@ -91,7 +91,48 @@ class ItineraryRulesTest {
         assertThat(verdict.violations())
                 .filteredOn(v -> v.rule() == Rule.MEAL_KIND_REPEATED)
                 .extracting(ItineraryRules.Violation::message)
-                .anyMatch(m -> m.contains("seafood 6끼"));
+                .anyMatch(m -> m.contains("shellfish 6끼"));
+        assertThat(rulesOf(verdict)).doesNotContain(Rule.MEAL_GROUP_REPEATED);
+    }
+
+    @Test
+    @DisplayName("요리가 달라도 같은 묶음이 여행 상한을 넘으면 묶음 반복(SOFT), 같은 날 다른 요리는 같은 묶음(SOFT)으로만 센다")
+    void mealGroupRepeatedAcrossTrip() {
+        String[][] meals = {{"광안횟집", "청해 조개구이"}, {"해운대 물회", "황금조개구이"}, {"자갈치 곰장어", "할매국밥"}};
+        List<StepData> steps = new ArrayList<>();
+        int order = 1;
+        for (int d = 1; d <= 3; d++) {
+            steps.add(step(order++, d, "09:00", "10:30", "해변" + d, BEACH, 5.0));
+            steps.add(step(order++, d, "11:30", "12:40", meals[d - 1][0], SEAFOOD, 5.0));
+            steps.add(step(order++, d, "14:00", "15:30", "사찰" + d, TEMPLE, 5.0));
+            steps.add(step(order++, d, "17:30", "18:40", meals[d - 1][1], SEAFOOD, 5.0));
+            if (d < 3) steps.add(step(order++, d, "19:00", "19:30", "펜션", PENSION, 5.0));
+        }
+
+        Verdict verdict = rules.evaluate(steps, List.of(), context("normal", 3));
+
+        assertThat(verdict.violations())
+                .filteredOn(v -> v.rule() == Rule.MEAL_GROUP_REPEATED)
+                .extracting(ItineraryRules.Violation::message)
+                .containsExactly("같은 묶음 seafood 5끼(상한 3)");
+        assertThat(Rule.MEAL_GROUP_REPEATED.severity).isEqualTo(Severity.SOFT);
+        assertThat(rulesOf(verdict)).doesNotContain(Rule.SAME_DAY_MEAL_KIND);
+        assertThat(verdict.violations()).filteredOn(v -> v.rule() == Rule.SAME_DAY_MEAL_GROUP)
+                .extracting(ItineraryRules.Violation::day).containsExactly(1, 2);
+        assertThat(Rule.SAME_DAY_MEAL_GROUP.severity).isEqualTo(Severity.SOFT);
+    }
+
+    @Test
+    @DisplayName("횟집 점심과 요리를 모르는 해산물집 저녁은 같은 날 같은 종류(CORE)다")
+    void unknownDishSeafoodOverlapsRawFishSameDay() {
+        List<StepData> day = List.of(
+                step(1, 1, "09:00", "10:00", "해운대해수욕장", BEACH, 4.9),
+                step(2, 1, "11:30", "12:40", "광안횟집", SEAFOOD, 3.6),
+                step(3, 1, "14:09", "15:39", "해동용궁사", TEMPLE, 8.0),
+                step(4, 1, "17:30", "18:40", "바다식당", SEAFOOD, 8.3),
+                step(5, 1, "18:48", "19:18", "텐테이블펜션", PENSION, 4.8));
+
+        assertThat(rulesOf(rules.evaluate(day, List.of(), context("normal", 1)))).contains(Rule.SAME_DAY_MEAL_KIND);
     }
 
     @Test

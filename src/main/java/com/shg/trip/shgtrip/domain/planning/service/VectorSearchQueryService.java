@@ -491,25 +491,37 @@ public class VectorSearchQueryService {
     private List<ScoredResult> selectWithSubTypeDiversity(List<ScoredResult> ranked, int limit) {
         if (ranked.size() <= limit) return ranked;
         int perType = Math.max(MIN_PER_SUB_TYPE, (int) Math.ceil(limit / 4.0));
+        // 묶음 상한만 두면 해산물 자리가 전부 조개구이일 수 있어 요리 종류는 먼저 그 절반까지만 받는다.
+        // 남은 묶음 자리를 점수 순 되돌림에 바로 넘기면 쏠린 종류가 다시 차지해 같은 묶음의 요리부터 채운다.
+        int perDish = Math.max(1, perType / 2);
         Map<String, Integer> taken = new HashMap<>();
+        Map<String, Integer> takenGroups = new HashMap<>();
         List<ScoredResult> picked = new ArrayList<>(limit);
-        List<ScoredResult> deferred = new ArrayList<>();
+        List<ScoredResult> deferred = new ArrayList<>(ranked);
 
-        for (ScoredResult s : ranked) {
-            if (picked.size() >= limit) break;
-            String type = mealTypeKey(s.result());
-            if (taken.getOrDefault(type, 0) >= perType) {
-                deferred.add(s);
-                continue;
+        for (boolean dishFirst : List.of(true, false)) {
+            List<ScoredResult> next = new ArrayList<>();
+            for (ScoredResult s : deferred) {
+                String type = mealTypeKey(s.result());
+                String group = PlaceCategoryConstants.mealGroup(type);
+                int typeCap = dishFirst && !type.equals(group) ? perDish : perType;
+                if (picked.size() >= limit || taken.getOrDefault(type, 0) >= typeCap
+                        || takenGroups.getOrDefault(group, 0) >= perType) {
+                    next.add(s);
+                    continue;
+                }
+                taken.merge(type, 1, Integer::sum);
+                takenGroups.merge(group, 1, Integer::sum);
+                picked.add(s);
             }
-            taken.merge(type, 1, Integer::sum);
-            picked.add(s);
+            deferred = next;
         }
         for (ScoredResult s : deferred) {
             if (picked.size() >= limit) break;
             picked.add(s);
         }
-        log.info("세부유형 다양화: limit={}, 유형당 상한={}, 채택 유형={}", limit, perType, taken);
+        log.info("세부유형 다양화: limit={}, 유형당 상한={}(요리 {}), 채택 유형={}, 묶음={}", limit, perType, perDish, taken,
+                takenGroups);
         return picked;
     }
 

@@ -10,7 +10,7 @@
       비용: 13000원 / 메모: -
       대안: 감따남 | Dining and Drinking > Restaurant | 13000원
       대안: 흑돈가 제주 | Dining and Drinking > Restaurant | 13000원
-      대안: 영육일삼 | Dining and Drinking > Restaurant | 13000원
+      대안: 삼보식당 | Dining and Drinking > Restaurant | 13000원
   #3  13:30-14:30  외돌개(제주) | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
       이동: CAR 50분 32.73km 9820원
       비용: 0원 / 메모: -
@@ -28,9 +28,9 @@
   #6  18:39-19:49  고집돌우럭 중문점 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
       이동: CAR 19분 12.63km 3788원
       비용: 13000원 / 메모: -
-      대안: 중문색달통갈치 본점 | Dining and Drinking > Restaurant | 13000원
-      대안: 삼보식당 | Dining and Drinking > Restaurant | 13000원
+      대안: 영육일삼 | Dining and Drinking > Restaurant | 13000원
       대안: 올래국수 | Dining and Drinking > Restaurant | 13000원
+      대안: 중문색달통갈치 본점 | Dining and Drinking > Restaurant | 13000원
   #7  19:56-20:26  펜션연리 | Travel and Transportation > Lodging | 서귀포시 | Jeju
       이동: CAR 7분 4.47km 1341원
       비용: 120000원 / 메모: -
@@ -45,8 +45,8 @@
       이동: CAR 25분 16.43km 4928원
       비용: 13000원 / 메모: -
       대안: 영육일삼 | Dining and Drinking > Restaurant | 13000원
-      대안: 감따남 | Dining and Drinking > Restaurant | 13000원
       대안: 중문색달통갈치 본점 | Dining and Drinking > Restaurant | 13000원
+      대안: 바다속고등어쌈밥 | Dining and Drinking > Restaurant | 13000원
   #10 13:27-14:37  미쁜제과 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
       이동: CAR 9분 5.85km 1754원
       비용: 13000원 / 메모: -
@@ -60,7 +60,7 @@
       이동: CAR 21분 13.74km 4123원
       비용: 13000원 / 메모: -
       대안: 흑돈가 제주 | Dining and Drinking > Restaurant | 13000원
-      대안: 바다속고등어쌈밥 | Dining and Drinking > Restaurant | 13000원
+      대안: 감따남 | Dining and Drinking > Restaurant | 13000원
       대안: 삼보식당 | Dining and Drinking > Restaurant | 13000원
   #13 18:48-19:18  프레리아 커플 독채펜션 | Travel and Transportation > Lodging | 제주시 | Jeju
       이동: CAR 8분 5.27km 1580원

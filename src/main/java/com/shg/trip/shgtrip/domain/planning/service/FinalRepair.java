@@ -67,9 +67,9 @@ enum FinalRepair {
                 if (daySteps.isEmpty()) continue;
                 Predicate<PlaceCandidate> fillable = pass.fillable(s, day);
                 changed |= ensureAttraction(day, daySteps, s.candidates, s.spare, s.usedIndices, s.maxPerDay,
-                        s.pace, fillable, pass.memo());
+                        s.pace, fillable, pass.memo(), pass.lookup());
                 changed |= ensureNotFinishingEarly(day, daySteps, s.candidates, s.spare, s.usedIndices,
-                        s.maxPerDay, fillable, pass.memo());
+                        s.maxPerDay, fillable.and(VarietyLedger.admitsOnDay(day, s.candidates)), pass.memo());
             }
             return changed ? RepairOutcome.highPriority(pass.memo().pendingIndices()) : RepairOutcome.none();
         }
@@ -120,7 +120,7 @@ enum FinalRepair {
 
     /** 한 패스의 수리들이 같이 보는 확정 스텝과 유형 상한. 유형 수는 패스 시작 시점 기준이다. */
     record Pass(List<StepData> steps, Map<Integer, List<StepData>> byDay,
-                Predicate<PlaceCandidate> underTypeCap, InvariantMemo memo) {
+                Predicate<PlaceCandidate> underTypeCap, InvariantMemo memo, CandidateLookup lookup) {
 
         static Pass of(PlanState s, List<StepData> steps, InvariantMemo memo) {
             Map<Integer, List<StepData>> byDay = steps.stream()
@@ -129,7 +129,7 @@ enum FinalRepair {
             Predicate<PlaceCandidate> underTypeCap =
                     c -> !DiversityRepair.isSpecificType(subTypeOf(c))
                             || globalTypeCount.getOrDefault(subTypeOf(c), 0) < DiversityRepair.typeCapFor(c, s.days.size());
-            return new Pass(steps, byDay, underTypeCap, memo);
+            return new Pass(steps, byDay, underTypeCap, memo, new CandidateLookup(s.candidates));
         }
 
         List<StepData> stepsOf(DayState day) {
@@ -141,14 +141,19 @@ enum FinalRepair {
         }
     }
 
-    /** 관광(ATTRACTION)이 하루도 없으면 보충한다. relaxed 페이스는 검사하지 않는다. */
+    /**
+     * 관광(ATTRACTION)이 하루도 없으면 보충한다. relaxed는 관광 수를 줄인 것이지 먹기만 하는 날을 고른 것이 아니라서
+     * 식사·카페가 아닌 방문이 하나도 없을 때만 보충한다.
+     */
     private static boolean ensureAttraction(DayState day, List<StepData> daySteps, List<PlaceCandidate> candidates,
                                             Deque<Integer> spare, Set<Integer> usedIndices, int maxPerDay,
                                             String pace, Predicate<PlaceCandidate> openOnDay,
-                                            InvariantMemo memo) {
-        if ("relaxed".equals(pace) || day.tooShortForSightseeing()) return false;
-        boolean has = daySteps.stream().anyMatch(s -> s.place() != null
-                && "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(s.place().category())));
+                                            InvariantMemo memo, CandidateLookup lookup) {
+        if (day.tooShortForSightseeing()) return false;
+        boolean has = "relaxed".equals(pace)
+                ? daySteps.stream().anyMatch(s -> s.place() != null && lookup.role(s).isVisit())
+                : daySteps.stream().anyMatch(s -> s.place() != null
+                        && "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(s.place().category())));
         if (has) return false;
         if (day.placeIndices.size() >= maxPerDay) {
             log.info("관광 보충 실패(quota 여유 없음): day={}", day.dayNumber);

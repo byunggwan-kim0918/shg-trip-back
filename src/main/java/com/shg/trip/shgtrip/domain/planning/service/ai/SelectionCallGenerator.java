@@ -353,9 +353,12 @@ public class SelectionCallGenerator {
         };
         if (base == null) return "";
         if (role == com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy.Role.MEAL) {
-            String dish = DISH_KO.get(com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy.cuisineOf(c));
+            String kind = com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy.cuisineOf(c);
+            String dish = DISH_KO.get(kind);
             if (dish != null) {
-                base += "·" + dish;
+                // 묶음을 앞에 둬야 프롬프트 규칙("해물탕·횟집·회는 한 종류")과 같은 단위로 반복을 센다.
+                String group = MEAL_GROUP_KO.get(PlaceCategoryConstants.mealGroup(kind));
+                base += "·" + (group != null ? group + "(" + dish + ")" : dish);
             } else if (c.cuisine() != null && CUISINE_KO.containsKey(c.cuisine())) {
                 base += "·" + CUISINE_KO.get(c.cuisine());
             }
@@ -367,9 +370,18 @@ public class SelectionCallGenerator {
             "MEAT", "고기", "SEAFOOD", "해산물", "NOODLE", "면", "SOUP", "국물", "KOREAN_SET", "한식",
             "JAPANESE", "일식", "CHINESE", "중식", "WESTERN", "양식", "SNACK", "분식");
 
+    private static final java.util.Map<String, String> MEAL_GROUP_KO = java.util.Map.of(
+            "seafood", "해산물", "noodle", "면", "soup", "국물");
+
     /** 같은 요리 식당이 "중식"·"양식"으로만 보이면 모델이 같은 요리를 여러 끼 고른다. */
-    private static final java.util.Map<String, String> DISH_KO = java.util.Map.of(
-            "dumpling", "만두·딤섬", "banh_mi", "반미", "takoyaki", "타코야키", "okonomiyaki", "오코노미야키");
+    private static final java.util.Map<String, String> DISH_KO = java.util.Map.ofEntries(
+            java.util.Map.entry("dumpling", "만두·딤섬"), java.util.Map.entry("banh_mi", "반미"),
+            java.util.Map.entry("takoyaki", "타코야키"), java.util.Map.entry("okonomiyaki", "오코노미야키"),
+            java.util.Map.entry("tofu", "순두부"), java.util.Map.entry("chinese_noodle", "짬뽕·짜장"),
+            java.util.Map.entry("gukbap", "국밥"), java.util.Map.entry("cold_noodle", "냉면·밀면"),
+            java.util.Map.entry("eel", "장어"), java.util.Map.entry("crab", "게"),
+            java.util.Map.entry("shellfish", "조개"), java.util.Map.entry("raw_fish", "회"),
+            java.util.Map.entry("grilled_fish", "생선구이"));
 
     /** 도착·출발 시각으로 짧아진 날을 알린다. 모르면 핵심 장소를 그날에 두고 동선 단계의 시각 가드가 잘라 낸다. */
     private static void appendDayWindows(StringBuilder sb, ScheduleArgs args, long days) {

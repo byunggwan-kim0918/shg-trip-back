@@ -111,6 +111,7 @@ final class DayRebalancer {
                 .map(i -> byIndex(candidates, i))
                 .filter(Objects::nonNull)
                 .filter(CandidateTraits::isVisitableFill)
+                .filter(VarietyLedger.admitsOnDay(day, candidates))
                 .filter(c -> coordsOf(c) != null)
                 .min(Comparator.comparingDouble(c -> centroid != null
                         ? GeoUtils.haversine(centroid, coordsOf(c)) : 0))
@@ -141,7 +142,11 @@ final class DayRebalancer {
                 DayState target = null;
                 for (int j : new int[]{i + 1, i - 1}) {
                     if (j < 0 || j >= days.size()) continue;
-                    if (days.get(j).placeIndices.size() < maxPerDay) { target = days.get(j); break; }
+                    if (days.get(j).placeIndices.size() < maxPerDay
+                            && VarietyLedger.admitsOnDay(days.get(j), candidates).test(byIndex(candidates, idx))) {
+                        target = days.get(j);
+                        break;
+                    }
                 }
                 if (target != null) {
                     day.placeIndices.remove(idx);
@@ -240,7 +245,7 @@ final class DayRebalancer {
                 double[] nCentroid = centroidOf(neighbor.placeIndices, candidates);
                 if (nCentroid == null || worstCoord == null) continue;
                 double d = GeoUtils.haversine(nCentroid, worstCoord);
-                if (d < betterDist) {
+                if (d < betterDist && VarietyLedger.admitsOnDay(neighbor, candidates).test(byIndex(candidates, worstIdx))) {
                     betterDist = d;
                     better = neighbor;
                 }
@@ -304,6 +309,8 @@ final class DayRebalancer {
                 if (j < 0 || j >= days.size()) continue;
                 DayState nb = days.get(j);
                 if (nb.placeIndices.size() + minority.size() > maxPerDay) continue;
+                // 카페 상한은 넘은 뒤 고치는 경로가 없어 옮기기 전에 막는다.
+                if (!VarietyLedger.admitsAll(nb, minority, candidates)) continue;
                 double[] nc = centroidOf(nb.placeIndices, candidates);
                 if (nc == null) continue;
                 double d = GeoUtils.haversine(nc, minorityCentroid);
@@ -369,7 +376,10 @@ final class DayRebalancer {
                     double[] other = centroids.get(j);
                     if (other == null) continue;
                     double d = GeoUtils.haversine(coord, other);
-                    if (d < bestDist) { bestDist = d; bestDay = j; }
+                    if (d < bestDist && VarietyLedger.admitsOnDay(days.get(j), candidates).test(cand)) {
+                        bestDist = d;
+                        bestDay = j;
+                    }
                 }
                 if (bestDay >= 0) {
                     day.placeIndices.remove(idx);
@@ -395,7 +405,7 @@ final class DayRebalancer {
     /**
      * 서로 다른 day의 방문지 하나씩을 맞바꾼다. 각자 상대 day centroid에 더 가까워지고 합산 이득이
      * {@link ScheduleTuning#SWAP_MIN_GAIN_KM} 이상일 때만이다. 개수 중립이라 꽉 찬 day에도 적용된다.
-     * pair 멤버·사용자 필수 장소는 빼고, 한 패스에서 장소당 최대 1회 교환한다.
+     * pair 멤버·사용자 필수 장소는 빼고, 같은 역할끼리 그날 끼니 종류·카페 상한을 지킬 때만, 한 패스에서 장소당 최대 1회 교환한다.
      */
     private static boolean swapAcrossDays(List<DayState> days, List<PlaceCandidate> candidates,
                                           List<double[]> centroids, Set<Integer> pairedIndices) {
@@ -427,7 +437,8 @@ final class DayRebalancer {
                         // 한쪽을 희생해 합만 맞추는 교환은 받지 않는다.
                         boolean bothImprove = GeoUtils.haversine(ca, cj) < GeoUtils.haversine(ca, ci)
                                 && GeoUtils.haversine(cb, ci) < GeoUtils.haversine(cb, cj);
-                        if (bothImprove && gain > bestGain) {
+                        if (bothImprove && gain > bestGain
+                                && keepsDayComposition(a, b, days.get(i), days.get(j), candidates)) {
                             bestGain = gain;
                             bestA = a;
                             bestB = b;
@@ -451,6 +462,16 @@ final class DayRebalancer {
             }
         }
         return changed;
+    }
+
+    /** 역할이 다르면 날마다 끼니 수가 바뀌고, 끼니를 맞바꿔 받는 날에 같은 종류가 있으면 하루 두 끼가 같아진다. */
+    static boolean keepsDayComposition(Integer a, Integer b, DayState dayA, DayState dayB,
+                                       List<PlaceCandidate> candidates) {
+        PlaceCandidate ca = byIndex(candidates, a);
+        PlaceCandidate cb = byIndex(candidates, b);
+        if (!CandidatePolicy.sameRole(ca, cb)) return false;
+        return VarietyLedger.admitsReplacing(dayA, a, candidates).test(cb)
+                && VarietyLedger.admitsReplacing(dayB, b, candidates).test(ca);
     }
 
     private static boolean isSwappable(Integer idx, List<PlaceCandidate> candidates,

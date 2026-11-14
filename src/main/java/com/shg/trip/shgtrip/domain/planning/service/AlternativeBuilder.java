@@ -42,13 +42,16 @@ final class AlternativeBuilder {
      *   <li><b>같은 종류</b>: 같은 역할 필수 + 세부 카테고리/tags 겹침 가점(버거집↔맥주바 방지).</li>
      *   <li><b>주변</b>: 메인 좌표(없으면 그날 centroid) 기준 이동수단별 반경 내만.</li>
      *   <li><b>중복 없이</b>: 이미 일정에 쓰인 장소 제외 + placeId/좌표 키로 대안끼리 dedup.</li>
+     *   <li><b>그날 구성</b>: {@code variety}를 통과하지 못하는 후보(그날 다른 끼니와 같은 종류 등)는 뒤로 미룬다.
+     *       빼면 해산물만 있는 지역에서 대안이 사라진다.</li>
      * </ul>
      * Sonnet이 큐레이션한 spare를 가점으로 우대하고, 부족하면 미사용 후보에서 채운다.
      */
     static List<AlternativeData> buildAlternatives(PlaceCandidate main, double[] dayCentroid,
                                                    Deque<Integer> spareIndices, Set<Integer> usedIndices,
                                                    List<PlaceCandidate> allCandidates, String transportPref,
-                                                   Set<String> dayAltKeys) {
+                                                   Set<String> dayAltKeys,
+                                                   java.util.function.Predicate<PlaceCandidate> variety) {
         double[] anchor = coordsOf(main) != null ? coordsOf(main) : dayCentroid;
         double radiusKm = altRadiusKm(transportPref);
         Set<Integer> spareSet = new HashSet<>(spareIndices);
@@ -69,20 +72,26 @@ final class AlternativeBuilder {
         // 3개 미만이면 반경×2까지만 완화하고, 그래도 못 채우면 대안 1~2개로 둔다. 무제한 폴백은 먼 식당을 대안으로 낸다.
         addAlternatives(result, seen, base.stream()
                 .filter(c -> withinRadius(anchor, c, radiusKm)).collect(Collectors.toList()),
-                main, anchor, spareSet);
+                main, anchor, spareSet, variety);
         if (result.size() < 3) {
             addAlternatives(result, seen, base.stream()
                     .filter(c -> withinRadius(anchor, c, radiusKm * 2)).collect(Collectors.toList()),
-                    main, anchor, spareSet);
+                    main, anchor, spareSet, variety);
         }
         return result;
     }
 
     /** score 내림차순으로 dedup하며 최대 3개까지 result에 채운다. */
     private static void addAlternatives(List<AlternativeData> result, Set<String> seen, List<PlaceCandidate> pool,
-                                        PlaceCandidate main, double[] anchor, Set<Integer> spareSet) {
+                                        PlaceCandidate main, double[] anchor, Set<Integer> spareSet,
+                                        java.util.function.Predicate<PlaceCandidate> variety) {
+        Set<Integer> demoted = pool.stream().filter(variety.negate()).map(PlaceCandidate::index)
+                .collect(Collectors.toSet());
+        Map<Integer, Double> scores = pool.stream().collect(Collectors.toMap(PlaceCandidate::index,
+                c -> altScore(c, main, anchor, spareSet), (a, b) -> a));
         pool.stream()
-                .sorted(Comparator.comparingDouble(c -> -altScore(c, main, anchor, spareSet)))
+                .sorted(Comparator.<PlaceCandidate, Boolean>comparing(c -> demoted.contains(c.index()))
+                        .thenComparingDouble(c -> -scores.get(c.index())))
                 .forEach(c -> {
                     if (result.size() >= 3 || !seen.add(altKey(c))) return;
                     result.add(new AlternativeData(c.name(), c.address(), c.category(), c.region(),

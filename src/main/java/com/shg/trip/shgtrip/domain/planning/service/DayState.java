@@ -27,6 +27,8 @@ class DayState {
      * 짧게 들르는 곳이라 우회 기여만 보면 가장 먼저 잘려 거리 트림에서 보호한다.
      */
     Integer cafeStopIndex;
+    /** 전날 묵은 숙소(도착 허브가 없는 날). 거리 예산이 아침 구간을 세는 출발점이며 스케줄할 때마다 다시 정한다. */
+    Integer startLodgingIndex;
     /** 첫날 도착 시각(분). 이보다 일찍 시작하지 않는다. 모르면 null. */
     Integer startNotBefore;
     /** 마지막 날 출발 허브에 닿아야 하는 시각(분). 모르면 null(기본 21:00). */
