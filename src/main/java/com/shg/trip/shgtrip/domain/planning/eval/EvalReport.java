@@ -1,9 +1,11 @@
 package com.shg.trip.shgtrip.domain.planning.eval;
 
+import com.shg.trip.shgtrip.domain.planning.service.DropReason;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
 import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
 import com.shg.trip.shgtrip.domain.planning.service.ScoreReport;
+import com.shg.trip.shgtrip.domain.planning.service.SerialPlanner;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -71,7 +73,30 @@ final class EvalReport {
         }
         appendRules(sb, rows);
         appendByLength(sb, rows);
+        appendSerialDrops(sb, rows);
         return sb.toString();
+    }
+
+    /** v2는 고른 장소를 다른 날로 옮기지 않아, 빠진 선택과 그 사유가 선택 단계가 못 지킨 제약을 보여 준다. */
+    private static void appendSerialDrops(StringBuilder sb, List<EvalRunner.Row> rows) {
+        List<SerialPlanner.DayReport> days = rows.stream().filter(r -> r.serialDays() != null)
+                .flatMap(r -> r.serialDays().stream()).toList();
+        if (days.isEmpty()) return;
+        int picked = days.stream().mapToInt(SerialPlanner.DayReport::picked).sum();
+        int filled = days.stream().mapToInt(SerialPlanner.DayReport::filled).sum();
+        Map<DropReason, Long> byReason = dropReasons(days);
+        long dropped = byReason.values().stream().mapToLong(Long::longValue).sum();
+        sb.append("\n## 날짜별 확정에서 빠진 선택\n\n");
+        sb.append("- 고른 장소 ").append(picked).append(", 빠진 장소 ").append(dropped)
+                .append(picked == 0 ? "" : String.format(Locale.ROOT, "(%.1f%%)", 100.0 * dropped / picked))
+                .append(", 코드가 채운 장소 ").append(filled).append("\n\n");
+        sb.append("| 사유 | 건수 |\n|---|---|\n");
+        byReason.forEach((reason, count) -> sb.append("| ").append(reason).append(" | ").append(count).append(" |\n"));
+    }
+
+    private static Map<DropReason, Long> dropReasons(List<SerialPlanner.DayReport> days) {
+        return days.stream().flatMap(d -> d.dropped().stream())
+                .collect(Collectors.groupingBy(SerialPlanner.Dropped::reason, TreeMap::new, Collectors.counting()));
     }
 
     /** 날짜 간 배분의 효과는 긴 여행에서만 드러나 전체 평균으로 보면 묻힌다. */
@@ -317,6 +342,7 @@ final class EvalReport {
         sb.append(",rules_hard,rules_core,meals,unknown_meals");
         for (ItineraryRules.Rule rule : ItineraryRules.Rule.values()) sb.append(',').append(rule);
         sb.append(",days,pace,transport,multi_city,joined,pool,search_pool,zones,day_scores,day_visits,day_prominence,day_end");
+        sb.append(",picked,dropped,filled,drop_reasons");
         sb.append('\n');
         for (EvalRunner.Row r : rows) {
             if (r.saved() != null) line(sb, r, "saved", r.saved(), r.savedRules());
@@ -360,6 +386,16 @@ final class EvalReport {
                 .append(',').append(perDay(s, d -> String.valueOf(d.visits())))
                 .append(',').append(perDay(s, d -> d.prominence() == null ? "" : fmt(d.prominence())))
                 .append(',').append(perDay(s, d -> String.valueOf(d.lastActivityEnd())));
+        List<SerialPlanner.DayReport> serial = "replayed".equals(source) ? r.serialDays() : null;
+        if (serial == null) {
+            sb.append(",,,,");
+        } else {
+            sb.append(',').append(serial.stream().mapToInt(SerialPlanner.DayReport::picked).sum())
+                    .append(',').append(serial.stream().mapToInt(d -> d.dropped().size()).sum())
+                    .append(',').append(serial.stream().mapToInt(SerialPlanner.DayReport::filled).sum())
+                    .append(',').append(dropReasons(serial).entrySet().stream()
+                            .map(e -> e.getKey() + ":" + e.getValue()).collect(Collectors.joining(";")));
+        }
         sb.append('\n');
     }
 

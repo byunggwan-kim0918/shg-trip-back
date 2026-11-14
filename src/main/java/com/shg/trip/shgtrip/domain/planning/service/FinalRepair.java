@@ -108,6 +108,16 @@ enum FinalRepair {
 
     abstract RepairOutcome apply(PlanState s, Pass pass);
 
+    /**
+     * 한 날의 끼니·숙소와 하루 구성만 채운다. 그날 스텝만 넘겨 다른 날의 구성은 바꾸지 않는다.
+     *
+     * @return 무언가를 채웠으면 true. 호출부가 그날을 다시 확정한다
+     */
+    static boolean fillDay(PlanState s, DayState day, List<StepData> steps, InvariantMemo memo) {
+        Pass today = Pass.of(s, steps.stream().filter(st -> st.dayNumber() == day.dayNumber).toList(), memo);
+        return MEALS_AND_LODGING.apply(s, today).changed() || DAY_COMPOSITION.apply(s, today).changed();
+    }
+
     /** 우선순위 순으로 돌려 처음으로 무언가를 고친 수리의 결과. 아무것도 고치지 않았으면 none. */
     static RepairOutcome applyFirst(PlanState s, List<StepData> steps, InvariantMemo memo) {
         Pass pass = Pass.of(s, steps, memo);
