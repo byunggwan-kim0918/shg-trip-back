@@ -178,7 +178,7 @@ class RouteOptimizerGoldenMasterTest {
                 routeOptimizer.schedule(trace.selection(), trace.candidates(), trace.args()));
     }
 
-    private static void assertMatchesSnapshot(String name, RouteOptimizer.ScheduleResult result) throws IOException {
+    static void assertMatchesSnapshot(String name, RouteOptimizer.ScheduleResult result) throws IOException {
         String actual = render(result);
         Path snapshot = SNAPSHOT_DIR.resolve(name + ".txt");
 

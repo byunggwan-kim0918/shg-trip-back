@@ -24,6 +24,21 @@ final class AlternativeBuilder {
     private static final java.util.regex.Pattern BRANCH_TOKEN =
             java.util.regex.Pattern.compile(".*(본점|지점|[0-9]+호점|점|店)");
 
+    /** 대안은 날짜 순서대로 만들어 뒷날에 본일정으로 들어간 장소가 앞날 대안에 남는다. */
+    static List<StepData> pruneUsedAndRenumber(List<StepData> steps) {
+        Set<String> usedPlaceKeys = steps.stream()
+                .map(StepData::place)
+                .filter(Objects::nonNull)
+                .map(p -> placeKey(p.name(), p.address()))
+                .collect(Collectors.toSet());
+        int order = 1;
+        List<StepData> renumbered = new ArrayList<>(steps.size());
+        for (StepData step : steps) {
+            renumbered.add(withoutUsedAlternatives(step, usedPlaceKeys).withStepOrder(order++));
+        }
+        return renumbered;
+    }
+
     static StepData withoutUsedAlternatives(StepData s, Set<String> usedPlaceKeys) {
         if (s.alternatives() == null || s.alternatives().isEmpty()) return s;
         List<AlternativeData> filtered = s.alternatives().stream()

@@ -9,11 +9,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.centroidOf;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.coordsOf;
-import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.placeKey;
 import static com.shg.trip.shgtrip.domain.planning.service.PlanEdits.addToDay;
 import static com.shg.trip.shgtrip.domain.planning.service.PlanEdits.collectUsedIndices;
 import static com.shg.trip.shgtrip.domain.planning.service.PlanEdits.openOnDayFilter;
@@ -82,7 +80,7 @@ public class RouteOptimizer {
         steps = enforceFinalInvariants(s, steps);
         List<String> unresolved = invariantChecker.summarize(s.days, steps, s.pace, s.transportPref, s.candidates, s.cfg);
 
-        List<StepData> finalSteps = pruneAlternativesAndRenumber(steps);
+        List<StepData> finalSteps = AlternativeBuilder.pruneUsedAndRenumber(steps);
         log.info("RouteOptimizer.schedule 완료: {}개 step, {}개 day", finalSteps.size(), s.days.size());
         return new ScheduleResult(finalSteps, unresolved);
     }
@@ -216,21 +214,5 @@ public class RouteOptimizer {
         Set<Integer> placed = collectUsedIndices(days);
         placed.retainAll(protectedHome.keySet());
         return placed;
-    }
-
-    private static List<StepData> pruneAlternativesAndRenumber(List<StepData> steps) {
-        // 대안은 day 순서대로 생성돼 뒤쪽 day 보충으로 본일정에 들어간 장소가 앞쪽 대안에 남을 수 있다.
-        // 최종 스텝 기준으로 걸러낸다.
-        Set<String> usedPlaceKeys = steps.stream()
-                .map(StepData::place)
-                .filter(Objects::nonNull)
-                .map(p -> placeKey(p.name(), p.address()))
-                .collect(Collectors.toSet());
-        int order = 1;
-        List<StepData> renumbered = new ArrayList<>(steps.size());
-        for (StepData step : steps) {
-            renumbered.add(AlternativeBuilder.withoutUsedAlternatives(step, usedPlaceKeys).withStepOrder(order++));
-        }
-        return renumbered;
     }
 }

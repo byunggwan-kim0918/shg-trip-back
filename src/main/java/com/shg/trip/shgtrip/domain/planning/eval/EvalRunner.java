@@ -24,6 +24,7 @@ import com.shg.trip.shgtrip.domain.planning.service.RequiredExperiences;
 import com.shg.trip.shgtrip.domain.planning.service.RouteOptimizer;
 import com.shg.trip.shgtrip.domain.planning.service.SavedItineraryFacts;
 import com.shg.trip.shgtrip.domain.planning.service.ScoreReport;
+import com.shg.trip.shgtrip.domain.planning.service.SerialPlanner;
 import com.shg.trip.shgtrip.domain.planning.service.VectorSearchQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,6 +51,8 @@ import java.util.*;
  * / files: {@code --eval.files}(쉼표로 여러 개)의 {@link TraceFile} JSON 줄을 DB 없이 replay한다
  * / rejected: 관문에서 막혀 일정 없이 남은 기록을 다시 돌려 rejected-{기록 id}.txt로 남긴다(eval.ids는 기록 id).
  *
+ * <p>{@code --eval.pipeline}: 재실행에 쓸 확정 단계. v1(기본)은 {@link RouteOptimizer}, v2는 {@link SerialPlanner}다.
+ *
  * <p>{@code --eval.refresh-attributes}: 기록의 후보에 DB의 현재 속성·영업시간을 덮어쓴다.
  * off(기본) 그대로 / score 채점에만 / all 재실행 입력과 채점 모두.
  * 채점 기준이 같아야 휴무·영업시간 위반 수를 비교할 수 있어 속성 연결 효과는 score와 all을 비교한다.
@@ -68,6 +71,7 @@ public class EvalRunner implements CommandLineRunner {
     private final ApplicationContext context;
     private final VectorSearchQueryService vectorSearchQueryService;
 
+    private final SerialPlanner serialPlanner = new SerialPlanner();
     private final ItineraryScorer scorer = new ItineraryScorer();
     private final ItineraryRules rules = new ItineraryRules();
 
@@ -90,11 +94,20 @@ public class EvalRunner implements CommandLineRunner {
     @Value("${eval.files:}")
     private String files;
 
+    @Value("${eval.pipeline:v1}")
+    private String pipeline;
+
     @Override
     @Transactional(readOnly = true)
     public void run(String... args) throws Exception {
         if (!Set.of("off", "score", "all").contains(refreshAttributes)) {
             throw new IllegalArgumentException("eval.refresh-attributes는 off|score|all: " + refreshAttributes);
+        }
+        if (!Set.of("v1", "v2").contains(pipeline)) {
+            throw new IllegalArgumentException("eval.pipeline은 v1|v2: " + pipeline);
+        }
+        if ("v2".equals(pipeline) && !Set.of("files", "corpus", "replay").contains(mode)) {
+            throw new IllegalArgumentException("eval.pipeline=v2는 재실행하는 모드(files|corpus|replay)에서만 쓴다: " + mode);
         }
         if ("pool".equals(mode)) {
             dumpPools();
@@ -176,11 +189,12 @@ public class EvalRunner implements CommandLineRunner {
     private void writeReport(List<Row> rows) throws Exception {
         Path dir = Path.of(outDir);
         Files.createDirectories(dir);
-        String label = "off".equals(refreshAttributes) ? mode : mode + ", refresh=" + refreshAttributes;
+        String label = mode + ("off".equals(refreshAttributes) ? "" : ", refresh=" + refreshAttributes)
+                + ("v1".equals(pipeline) ? "" : ", pipeline=" + pipeline);
         Files.writeString(dir.resolve("report.md"), EvalReport.markdown(label, rows));
         Files.writeString(dir.resolve("report.csv"), EvalReport.csv(rows));
-        log.info("평가 완료: mode={}, refresh={}, 일정 {}건 → {}", mode, refreshAttributes, rows.size(),
-                dir.toAbsolutePath());
+        log.info("평가 완료: mode={}, refresh={}, pipeline={}, 일정 {}건 → {}", mode, refreshAttributes, pipeline,
+                rows.size(), dir.toAbsolutePath());
 
         System.exit(SpringApplication.exit(context, () -> 0));
     }
@@ -195,7 +209,7 @@ public class EvalRunner implements CommandLineRunner {
             ItineraryRules.Verdict savedRules = rules.evaluate(savedSteps, fromPlaces,
                     new ItineraryRules.Context(null, null, itinerary.getStartDate(), dayCount, null));
             return new Row(itinerary.getId(), itinerary.getDestination(), countryOf(savedSteps), false,
-                    saved, null, null, savedRules, null, Trip.untraced(dayCount));
+                    saved, null, null, savedRules, null, Trip.untraced(dayCount), null);
         }
 
         List<PlaceCandidate> traced = objectMapper.readValue(trace.getCandidates(), new TypeReference<>() {});
@@ -227,10 +241,13 @@ public class EvalRunner implements CommandLineRunner {
                 args.transportPref(), args.startDate(), candidates, selection, hubDeadline)) : null;
         ItineraryRules.Verdict savedRules = hasSaved ? rules.evaluate(savedSteps, candidates, ruleContext) : null;
         if (!replay) {
-            return new Row(itineraryId, destination, country, true, saved, null, null, savedRules, null, trip);
+            return new Row(itineraryId, destination, country, true, saved, null, null, savedRules, null, trip, null);
         }
 
-        List<StepData> replayedSteps = routeOptimizer.schedule(selection, scheduleInput, args).steps();
+        SerialPlanner.Result serial = "v2".equals(pipeline)
+                ? serialPlanner.schedule(selection, scheduleInput, args) : null;
+        List<StepData> replayedSteps = serial != null ? serial.steps()
+                : routeOptimizer.schedule(selection, scheduleInput, args).steps();
         if (dumpSteps) {
             Path dir = Path.of(outDir);
             Files.createDirectories(dir);
@@ -241,7 +258,7 @@ public class EvalRunner implements CommandLineRunner {
                 args.transportPref(), args.startDate(), candidates, selection, hubDeadline));
         return new Row(itineraryId, destination, country, true, saved, replayed,
                 hasSaved ? sameRoute(savedSteps, replayedSteps) : null, savedRules,
-                rules.evaluate(replayedSteps, candidates, ruleContext), trip);
+                rules.evaluate(replayedSteps, candidates, ruleContext), trip, serial == null ? null : serial.days());
     }
 
     private static String countryOf(List<StepData> steps) {
@@ -337,10 +354,13 @@ public class EvalRunner implements CommandLineRunner {
         return Arrays.stream(raw.split(",")).map(String::trim).filter(s -> !s.isEmpty()).map(Long::valueOf).toList();
     }
 
-    /** @param saved 이어 붙인 입력({@link Trip#joined})은 저장본이 없어 null이다 */
+    /**
+     * @param saved      이어 붙인 입력({@link Trip#joined})은 저장본이 없어 null이다
+     * @param serialDays v2로 재실행했을 때의 날짜별 결과. 아니면 null
+     */
     record Row(Long itineraryId, String destination, String country, boolean hasTrace, ScoreReport saved,
                ScoreReport replayed, Boolean sameRoute, ItineraryRules.Verdict savedRules,
-               ItineraryRules.Verdict replayedRules, Trip trip) {
+               ItineraryRules.Verdict replayedRules, Trip trip, List<SerialPlanner.DayReport> serialDays) {
 
         /** 현재 코드의 결과. 재실행하지 않았으면 저장본이다. */
         ScoreReport current() {
