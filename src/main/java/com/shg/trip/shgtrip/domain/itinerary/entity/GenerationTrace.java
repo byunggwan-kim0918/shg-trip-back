@@ -51,6 +51,9 @@ public class GenerationTrace {
     @Column(columnDefinition = "JSONB", nullable = false)
     private String candidates;
 
+    /** 선택 모델이 본 후보 수. candidates의 그 뒤 번호는 선택 결과를 보고 덧붙인 후보다. 값이 없는 기록은 경계를 모른다. */
+    private Integer searchPoolSize;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "JSONB", nullable = false)
     private String scheduleArgs;
@@ -76,8 +79,8 @@ public class GenerationTrace {
     @Builder
     private GenerationTrace(Long itineraryId, Long userId, String jobId, int traceVersion, String request,
                             String enrichedInput, String selectionRaw, String selectionFinal,
-                            String candidates, String scheduleArgs, String models, Long totalMs,
-                            String score, String generatedSteps) {
+                            String candidates, Integer searchPoolSize, String scheduleArgs, String models,
+                            Long totalMs, String score, String generatedSteps) {
         this.itineraryId = itineraryId;
         this.userId = userId;
         this.jobId = jobId;
@@ -87,6 +90,7 @@ public class GenerationTrace {
         this.selectionRaw = selectionRaw;
         this.selectionFinal = selectionFinal;
         this.candidates = candidates;
+        this.searchPoolSize = searchPoolSize;
         this.scheduleArgs = scheduleArgs;
         this.models = models;
         this.totalMs = totalMs;

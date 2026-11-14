@@ -1,14 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.shg.trip.shgtrip.domain.planning.eval.TraceFile;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 
 /**
  * itinerary 91(부산 5박 6일, 커플·여유·자동차) 운영 생성 기록. 후보 70곳·선택·생성 인자·저장된 스텝이다.
@@ -16,18 +8,9 @@ import java.nio.charset.StandardCharsets;
  */
 final class Itinerary91Fixture {
 
-    private static final ObjectMapper MAPPER = JsonMapper.builder()
-            .findAndAddModules()
-            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-            .build();
-
     private Itinerary91Fixture() {}
 
     static TraceFile load() {
-        try (InputStream in = Itinerary91Fixture.class.getResourceAsStream("/fixtures/itinerary-91-busan.json")) {
-            return TraceFile.parse(MAPPER, new String(in.readAllBytes(), StandardCharsets.UTF_8));
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+        return TraceFixtures.load("/fixtures/itinerary-91-busan.json");
     }
 }

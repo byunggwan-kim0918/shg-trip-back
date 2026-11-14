@@ -189,6 +189,42 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("선택 뒤에 덧붙인 숙소는 스케줄 후보에 들어가고 기록의 선택 풀 크기에는 세지 않는다")
+    void recordsPoolSizeBeforeAppendedCandidates() {
+        PlaceCandidate hotel = new PlaceCandidate(9, 900L, "시부야 호텔", "시부야구 도겐자카 1-1",
+                "Travel and Transportation > Lodging > Hotel", List.of(), "Tokyo", "JP",
+                BigDecimal.valueOf(35.6590), BigDecimal.valueOf(139.7005), null, null, 0.8);
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
+        when(vectorSearchQueryService.search(eq(vectorEnrichedInput), any())).thenReturn(candidates);
+        when(vectorSearchQueryService.searchAccommodationsNear(any(), any(), anyDouble(), anyInt(), anyInt()))
+                .thenReturn(List.of(hotel));
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of());
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList(), any())).thenReturn(selectionOutput);
+        when(routeOptimizer.schedule(any(), anyList(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(44L);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
+
+        executor.execute("job-p", request, 1L, emitter);
+
+        ArgumentCaptor<List<PlaceCandidate>> seen = ArgumentCaptor.forClass(List.class);
+        verify(selectionCallGenerator).selectPlaces(eq(vectorEnrichedInput), seen.capture(), any());
+        ArgumentCaptor<List<PlaceCandidate>> scheduled = ArgumentCaptor.forClass(List.class);
+        verify(routeOptimizer).schedule(any(), scheduled.capture(), any());
+        assertThat(scheduled.getValue()).hasSize(seen.getValue().size() + 1)
+                .extracting(PlaceCandidate::name).contains("시부야 호텔");
+        verify(traceRecorder).record(any(), eq("job-p"), eq(request), any(), any(), any(),
+                eq(scheduled.getValue()), eq(seen.getValue().size()), any(), anyLong(), any());
+    }
+
+    @Test
     @DisplayName("필수 경험은 맞춘 후보에 의도를 실어 스케줄·기록에 넘기고, 빠지거나 못 맞춘 경험은 안내한다")
     @SuppressWarnings("unchecked")
     void execute_requiredExperiences_attachIntentAndNotify() {
@@ -228,7 +264,7 @@ class OptimizedGenerationExecutorTest {
         assertThat(attached.intentTime()).isEqualTo("morning");
         assertThat(attached.userSelected()).isFalse();
         verify(traceRecorder).record(any(), eq("job-r"), eq(withRequired), any(), any(), any(),
-                eq(scheduled.getValue()), any(), anyLong(), any());
+                eq(scheduled.getValue()), eq(pool.size()), any(), anyLong(), any());
 
         ArgumentCaptor<List<String>> notices = ArgumentCaptor.forClass(List.class);
         verify(indexResultMapper).toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(),
@@ -591,8 +627,8 @@ class OptimizedGenerationExecutorTest {
         executor.execute("job-4", request, 1L, emitter);
 
         verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any(), any());
-        verify(traceRecorder).recordRejected(eq(1L), eq("job-4"), eq(request), any(), any(), any(), anyList(), any(),
-                anyLong(), any(), eq("구조 검증: 시각 겹침"));
+        verify(traceRecorder).recordRejected(eq(1L), eq("job-4"), eq(request), any(), any(), any(), anyList(),
+                anyInt(), any(), anyLong(), any(), eq("구조 검증: 시각 겹침"));
         verify(generationPolicyService, never()).recordSuccess(anyLong());
         verify(generationPolicyService, never()).recordUnbilled(anyLong());
         assertThat(sentError()).containsEntry("errorCode", "PLANNING_011")
@@ -612,10 +648,10 @@ class OptimizedGenerationExecutorTest {
 
         executor.execute("job-5", request, 1L, emitter);
 
-        verify(traceRecorder).recordRejected(eq(1L), eq("job-5"), eq(request), any(), any(), any(), anyList(), any(),
-                anyLong(), eq(hard), isNull());
-        verify(traceRecorder, never()).record(any(), anyString(), any(), any(), any(), any(), anyList(), any(),
-                anyLong(), any());
+        verify(traceRecorder).recordRejected(eq(1L), eq("job-5"), eq(request), any(), any(), any(), anyList(),
+                anyInt(), any(), anyLong(), eq(hard), isNull());
+        verify(traceRecorder, never()).record(any(), anyString(), any(), any(), any(), any(), anyList(), anyInt(),
+                any(), anyLong(), any());
         verify(resultStore, never()).save(anyString(), anyLong(), anyLong());
         verify(generationPolicyService, never()).recordSuccess(anyLong());
         verify(generationPolicyService).recordUnbilled(1L);

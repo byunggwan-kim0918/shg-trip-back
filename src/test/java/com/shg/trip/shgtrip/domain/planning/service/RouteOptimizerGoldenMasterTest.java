@@ -170,6 +170,14 @@ class RouteOptimizerGoldenMasterTest {
                 routeOptimizer.schedule(trace.selection(), trace.candidates(), trace.args()));
     }
 
+    @Test
+    @DisplayName("서울·부산을 옮겨 다니는 5박 6일(도보)의 schedule() 출력이 고정 스냅샷과 완전히 일치한다")
+    void joinedCitiesScheduleMatchesSnapshot() throws IOException {
+        TraceFile trace = JoinedSeoulBusanFixture.load();
+        assertMatchesSnapshot("seoul-busan-6d-city-blocks",
+                routeOptimizer.schedule(trace.selection(), trace.candidates(), trace.args()));
+    }
+
     private static void assertMatchesSnapshot(String name, RouteOptimizer.ScheduleResult result) throws IOException {
         String actual = render(result);
         Path snapshot = SNAPSHOT_DIR.resolve(name + ".txt");

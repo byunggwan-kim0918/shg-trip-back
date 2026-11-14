@@ -18,6 +18,9 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.*;
  */
 public final class ItineraryScorer {
 
+    /** 가중치·목표·항목 계산이 달라지면 올린다. 버전이 다른 보고서끼리는 점수를 비교하지 않는다. */
+    public static final int VERSION = 1;
+
     /** 페이스 범위의 가운데(올림). tight 3~5 → 4, normal 2~3 → 3, relaxed 1~2 → 2. */
     static double visitTarget(String pace) {
         int[] sights = ScheduleTuning.sightsPerDay(pace);
@@ -91,6 +94,7 @@ public final class ItineraryScorer {
         double travelSum = 0, timeSum = 0, visitSum = 0;
         int totalVisits = 0, maxGap = 0, longGaps = 0;
         double totalKm = 0;
+        List<ScoreReport.DayScore> dayScores = new ArrayList<>();
 
         for (Map.Entry<Integer, List<StepData>> entry : byDay.entrySet()) {
             int day = entry.getKey();
@@ -106,7 +110,8 @@ public final class ItineraryScorer {
                 }
             }
             totalKm += dayKm;
-            travelSum += travelScore(dayKm, limits[1]);
+            double travelScore = travelScore(dayKm, limits[1]);
+            travelSum += travelScore;
 
             int idle = 0;
             for (int i = 1; i < daySteps.size(); i++) {
@@ -125,7 +130,10 @@ public final class ItineraryScorer {
             long visits = daySteps.stream().filter(s -> lookup.role(s).isVisit()).count();
             totalVisits += (int) visits;
             double target = visitTarget(pace) * (first || last ? 0.5 : 1.0);
-            visitSum += Math.min(1.0, visits / target);
+            double visitScore = Math.min(1.0, visits / target);
+            visitSum += visitScore;
+            dayScores.add(new ScoreReport.DayScore(day, (travelScore + timeScore + visitScore) / 3, (int) visits,
+                    dayProminence(daySteps, lookup), lookup.lastActivityEnd(daySteps)));
         }
 
         components.put("travel", dayCount == 0 ? 0 : travelSum / dayCount);
@@ -152,7 +160,17 @@ public final class ItineraryScorer {
         }
 
         return new ScoreReport(violations.size(), Math.round(total * 1000) / 10.0, components,
-                violations, estimated, metrics);
+                violations, estimated, metrics, dayScores);
+    }
+
+    private static Double dayProminence(List<StepData> daySteps, CandidateLookup lookup) {
+        OptionalDouble average = daySteps.stream()
+                .filter(s -> lookup.role(s).isVisit())
+                .map(lookup::of)
+                .filter(Objects::nonNull)
+                .mapToDouble(PlaceProminence::of)
+                .average();
+        return average.isPresent() ? average.getAsDouble() : null;
     }
 
     /** 하루 상한의 60%까지 만점, 120%면 0점. */

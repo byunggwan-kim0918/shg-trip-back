@@ -40,29 +40,30 @@ public class GenerationTraceRecorder {
 
     public void record(Itinerary saved, String jobId, ItineraryGenerateRequest request,
                        VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
-                       SelectionOutput finalSelection, List<PlaceCandidate> candidates,
+                       SelectionOutput finalSelection, List<PlaceCandidate> candidates, int searchPoolSize,
                        ScheduleArgs args, long totalMs, ItineraryRules.Verdict quality) {
         write(saved.getId(), saved.getUserId(), saved, jobId, request, enrichedInput, rawSelection, finalSelection,
-                candidates, args, totalMs, quality, null);
+                candidates, searchPoolSize, args, totalMs, quality, null);
     }
 
     /**
      * 관문에서 막혀 저장하지 않은 생성. 일정 없이 남기고 {@code --eval.mode=rejected}로 다시 돌려 원인을 본다.
      * 거부 건수는 itinerary_id가 없는 기록으로 센다. 구조 검증 거부의 판정은 저장 전 미리보기라 HARD가 아닐 수 있다.
      *
-     * @param rejectReason 판정 규칙 밖의 거부 사유(구조 검증 실패). 판정으로 거부했으면 null
+     * @param searchPoolSize 선택 모델이 본 후보 수
+     * @param rejectReason   판정 규칙 밖의 거부 사유(구조 검증 실패). 판정으로 거부했으면 null
      */
     public void recordRejected(Long userId, String jobId, ItineraryGenerateRequest request,
                                VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
-                               SelectionOutput finalSelection, List<PlaceCandidate> candidates,
+                               SelectionOutput finalSelection, List<PlaceCandidate> candidates, int searchPoolSize,
                                ScheduleArgs args, long totalMs, ItineraryRules.Verdict quality, String rejectReason) {
         write(null, userId, null, jobId, request, enrichedInput, rawSelection, finalSelection,
-                candidates, args, totalMs, quality, rejectReason);
+                candidates, searchPoolSize, args, totalMs, quality, rejectReason);
     }
 
     private void write(Long itineraryId, Long userId, Itinerary saved, String jobId, ItineraryGenerateRequest request,
                        VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
-                       SelectionOutput finalSelection, List<PlaceCandidate> candidates,
+                       SelectionOutput finalSelection, List<PlaceCandidate> candidates, int searchPoolSize,
                        ScheduleArgs args, long totalMs, ItineraryRules.Verdict quality, String rejectReason) {
         try {
             GenerationTrace trace = GenerationTrace.builder()
@@ -75,6 +76,7 @@ public class GenerationTraceRecorder {
                     .selectionRaw(json(rawSelection))
                     .selectionFinal(json(finalSelection))
                     .candidates(json(candidates))
+                    .searchPoolSize(searchPoolSize)
                     .scheduleArgs(json(args))
                     .models(json(Map.of("haiku", anthropicProperties.haiku(),
                             "sonnet", anthropicProperties.sonnet())))
