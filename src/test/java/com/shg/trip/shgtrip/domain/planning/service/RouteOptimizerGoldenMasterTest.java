@@ -275,14 +275,14 @@ class RouteOptimizerGoldenMasterTest {
                 .map(s -> s.place().name())
                 .distinct().count();
 
-        // 하루의 첫 스텝이 점심(11:30) 이후면 오전이 통째로 빈 날이다.
+        // 하루의 첫 스텝이 점심(11:30)이거나 그 뒤면 오전이 통째로 빈 날이다.
         long lateStartDays = steps.stream()
                 .collect(java.util.stream.Collectors.groupingBy(StepData::dayNumber,
                         java.util.stream.Collectors.minBy(
                                 java.util.Comparator.comparingInt(s -> toMinutes(s.startTime())))))
                 .values().stream()
                 .filter(java.util.Optional::isPresent).map(java.util.Optional::get)
-                .filter(s -> toMinutes(s.startTime()) > 11 * 60 + 30)
+                .filter(s -> toMinutes(s.startTime()) >= 11 * 60 + 30)
                 .count();
 
         return String.format(

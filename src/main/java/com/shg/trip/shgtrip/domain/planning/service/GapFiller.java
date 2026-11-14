@@ -57,27 +57,31 @@ final class GapFiller {
 
             int gap = mealStart - arrivalAtMeal;
             // 식사도 장소 수에 들어가 상한 안에서는 오후가 통째로 빌 수 있어, pace 상한이 찼어도 긴 공백은 1곳까지 넣는다.
-            // relaxed는 사용자가 여유를 고른 것이라 쉬어 가는 카페만 넣는다.
+            // relaxed는 쉬어 가는 카페를 먼저 찾고, 맞는 카페가 없으면 관광으로 채운다. 몇 시간 비워 두는 것이 쉬는 일정은 아니다.
             boolean overQuota = inserted.size() >= remainingQuota;
             // 호출 단위로 세면 하루 2곳이 넘어가므로 pace 초과 채움은 점심 앞·저녁 앞을 합쳐 하루 1곳까지다.
             if (overQuota && !(gap >= LARGE_GAP_MINUTES && inserted.isEmpty() && overQuotaUsed[0] == 0)) break;
-            boolean cafeOnly = overQuota && "relaxed".equals(cfg != null ? cfg.pace : null);
-            Integer fillIdx = pickGapFiller(prev, mealCand, candidates, spareIndices, usedIndices,
-                    transportPref, 1.0, null, 0, cfg, cafeOnly, day.dayOfWeek);
-            if (fillIdx == null && gap >= LARGE_GAP_MINUTES) {
-                // 긴 공백은 spare가 말라도 미사용 후보까지 넓히고 반경도 완화한다. 몇 시간 비우느니 조금 더 달리는 게 낫다.
-                // 거리 예산은 지킨다. 반경만 풀면 하루 주행 상한을 깨고 다음 패스에 트림되는 churn이 생긴다.
-                fillIdx = pickGapFiller(prev, mealCand, candidates,
-                        new ArrayDeque<>(unusedIndices(candidates, usedIndices)), usedIndices,
-                        transportPref, LARGE_GAP_RADIUS_MULTIPLIER, day,
-                        LARGE_GAP_MAX_EXTRA_DETOUR_KM, cfg, cafeOnly, day.dayOfWeek);
-                if (fillIdx != null) {
-                    log.info("긴 공백({}분) — 미사용 후보까지 확장해 보충: day={}", gap, day.dayNumber);
+            boolean cafeFirst = overQuota && "relaxed".equals(cfg != null ? cfg.pace : null);
+            java.util.function.Predicate<PlaceCandidate> variety = VarietyLedger.admitsOnDay(day, candidates);
+            Integer fillIdx = null;
+            for (boolean onlyCafe : cafeFirst ? List.of(true, false) : List.of(false)) {
+                fillIdx = pickGapFiller(prev, mealCand, candidates, spareIndices, usedIndices,
+                        transportPref, 1.0, day, cfg, onlyCafe, variety);
+                if (fillIdx == null && gap >= LARGE_GAP_MINUTES) {
+                    // 긴 공백은 spare가 말라도 미사용 후보까지 넓히고 반경도 완화한다. 몇 시간 비우느니 조금 더 달리는 게 낫다.
+                    // 거리 예산은 지킨다. 반경만 풀면 하루 주행 상한을 깨고 다음 패스에 트림되는 churn이 생긴다.
+                    fillIdx = pickGapFiller(prev, mealCand, candidates,
+                            new ArrayDeque<>(unusedIndices(candidates, usedIndices)), usedIndices,
+                            transportPref, LARGE_GAP_RADIUS_MULTIPLIER, day, cfg, onlyCafe, variety);
+                    if (fillIdx != null) {
+                        log.info("긴 공백({}분) — 미사용 후보까지 확장해 보충: day={}", gap, day.dayNumber);
+                    }
                 }
+                if (fillIdx != null) break;
             }
             if (fillIdx == null) {
                 if (gap >= LARGE_GAP_MINUTES) {
-                    log.info("긴 공백({}분) 미충전: day={} (반경·시간대 조건을 만족하는 후보 없음)",
+                    log.info("긴 공백({}분) 미충전: day={} (반경·우회·거리 예산·시간대·끼니 반복·카페 상한을 모두 지키는 후보 없음)",
                             gap, day.dayNumber);
                 }
                 break;
@@ -95,7 +99,7 @@ final class GapFiller {
             int endMin = startMin + resolveVisitMinutes(fill);
             inserted.add(buildStep(day, fill, startMin, endMin, leg,
                     AlternativeBuilder.buildAlternatives(fill, dayCentroid, spareIndices, usedIndices, candidates,
-                            transportPref, dayAltKeys)));
+                            transportPref, dayAltKeys, VarietyLedger.admitsReplacing(day, fillIdx, candidates))));
             log.info("빈 시간대 보충: day={} {} 삽입 (식사 슬롯까지 {}분 공백)",
                     day.dayNumber, fill.name(), mealStart - arrivalAtMeal);
             currentMinutes = endMin;
@@ -107,19 +111,17 @@ final class GapFiller {
     /**
      * 갭 보충 후보: 주간 적합 관광지/카페 중 인기도에서 우회 비용을 뺀 점수가 가장 높은 spare.
      *
+     * 그날 거리 예산을 넘기거나 다음 식당까지 가는 길에서 {@value ScheduleTuning#GAP_FILL_MAX_EXTRA_DETOUR_KM}km 넘게
+     * 벗어나는 후보는 뺀다.
+     *
      * @param radiusMultiplier 반경 완화 배수. 공백이 길 때만 1보다 큰 값을 준다.
-     * @param budgetDay        거리 예산을 검사할 day. {@code null}이면 검사하지 않는다.
-     *                         반경을 완화할 때 넘기지 않으면 하루 주행 상한을 깨고 다음 패스에 트림되는 churn이 생긴다.
-     * @param maxExtraDetourKm 경로에서 벗어나도 되는 추가 거리(km). 0 이하면 제한 없음.
-     *                         반경만 완화하면 공백 대신 긴 운전이 되어 함께 쓴다.
-     * @param cafeOnly         카페만 허용(relaxed 페이스에서 pace 상한을 넘겨 채울 때).
+     * @param cafeOnly         카페만 허용(relaxed 초과 채움의 첫 시도).
      */
     private static Integer pickGapFiller(PlaceCandidate prev, PlaceCandidate mealCand,
                                          List<PlaceCandidate> candidates, Deque<Integer> spareIndices,
                                          Set<Integer> usedIndices, String transportPref,
-                                         double radiusMultiplier, DayState budgetDay,
-                                         double maxExtraDetourKm, ScheduleConfig cfg, boolean cafeOnly,
-                                         java.time.DayOfWeek dow) {
+                                         double radiusMultiplier, DayState day, ScheduleConfig cfg, boolean cafeOnly,
+                                         java.util.function.Predicate<PlaceCandidate> variety) {
         double[] from = prev != null ? coordsOf(prev) : null;
         double[] to = coordsOf(mealCand);
         double radius = AlternativeBuilder.altRadiusKm(transportPref) * radiusMultiplier;
@@ -136,14 +138,13 @@ final class GapFiller {
                 })
                 // 역할·구역·경유·집합POI·여객시설·긴 등산을 다른 보충 경로와 같은 공용 게이트로 본다.
                 .filter(CandidateTraits::isVisitableFill)
-                .filter(c -> dow == null || !isClosedOnDay(c.openingHours(), dow))
+                .filter(variety)
+                .filter(c -> day.dayOfWeek == null || !isClosedOnDay(c.openingHours(), day.dayOfWeek))
                 .filter(c -> timePreference(c) != TimePreference.EVENING)
                 .filter(c -> coordsOf(c) != null)
                 .filter(c -> from == null || GeoUtils.haversine(from, coordsOf(c)) <= radius)
-                .filter(c -> budgetDay == null
-                        || !wouldExceedDayBudget(budgetDay, c, candidates, transportPref, cfg))
-                .filter(c -> maxExtraDetourKm <= 0
-                        || detourVia(from, coordsOf(c), to) - directKm <= maxExtraDetourKm)
+                .filter(c -> !wouldExceedDayBudget(day, c, candidates, transportPref, cfg))
+                .filter(c -> detourVia(from, coordsOf(c), to) - directKm <= GAP_FILL_MAX_EXTRA_DETOUR_KM)
                 // 우회거리만 보면 가장 가까운 무명 spare가 이긴다. 반경·예산·우회 상한이 이미 지리를 제한해 그 안에서는 인기도가 정한다.
                 .max(Comparator.<PlaceCandidate>comparingDouble(c ->
                                 PlaceProminence.of(c) - detourVia(from, coordsOf(c), to) * GAP_FILL_DETOUR_WEIGHT)

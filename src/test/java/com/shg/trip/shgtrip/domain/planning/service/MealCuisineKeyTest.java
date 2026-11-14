@@ -40,7 +40,7 @@ class MealCuisineKeyTest {
         assertThat(PlaceCategoryConstants.cuisineKey("OTHER")).isNull();
         assertThat(PlaceCategoryConstants.mealKind("고서방 짬뽕", null,
                 "Dining and Drinking > Restaurant > Seafood Restaurant", List.of(), null, "KOREAN_SET"))
-                .isEqualTo("seafood");
+                .isEqualTo("chinese_noodle");
     }
 
     @Test
@@ -59,6 +59,63 @@ class MealCuisineKeyTest {
                 List.of(), null, "SEAFOOD")).isEqualTo("takoyaki");
         assertThat(PlaceCategoryConstants.mealKind("何か", null, restaurant, List.of("오코노미야키"), null, "JAPANESE"))
                 .isEqualTo("okonomiyaki");
+    }
+
+    @Test
+    @DisplayName("한식·중식으로 보강된 식당도 이름의 요리로 센다. 종류를 모르면 순두부집 네 끼가 반복으로 잡히지 않는다")
+    void koreanDishFamilies() {
+        String restaurant = "Dining and Drinking > Restaurant";
+        assertThat(kind("토속초당순두부", "KOREAN_SET")).isEqualTo("tofu");
+        assertThat(kind("짬뽕 순두부 초당애", "KOREAN_SET")).isEqualTo("tofu");
+        assertThat(kind("짬뽕지존", "CHINESE")).isEqualTo("chinese_noodle");
+        assertThat(kind("합천돼지국밥 해운대본점", "MEAT")).isEqualTo("gukbap");
+        assertThat(kind("가온밀면", "NOODLE")).isEqualTo("cold_noodle");
+        assertThat(kind("청해 조개구이 장어구이", "SEAFOOD")).isEqualTo("shellfish");
+        assertThat(kind("자갈치 꼼장어", "SEAFOOD")).isEqualTo("eel");
+        assertThat(kind("앞산울진대게 본점", "SEAFOOD")).isEqualTo("crab");
+        assertThat(kind("주문진 생선회센터", "SEAFOOD")).isEqualTo("raw_fish");
+        assertThat(kind("영덕물회", "SEAFOOD")).isEqualTo("raw_fish");
+        assertThat(kind("실비생선구이 본점", "SEAFOOD")).isEqualTo("grilled_fish");
+        assertThat(PlaceCategoryConstants.mealKind("타워 만두", null, restaurant, List.of(), null, "SNACK"))
+                .isEqualTo("dumpling");
+    }
+
+    @Test
+    @DisplayName("요리 키워드가 단어 경계를 넘어 걸리는 이름은 그 요리로 보지 않는다")
+    void dishWordsDoNotCrossWordBoundaries() {
+        assertThat(kind("보물회관", "KOREAN_SET")).isNotEqualTo("raw_fish");
+        assertThat(kind("시장어묵", "SNACK")).isNotEqualTo("eel");
+        assertThat(kind("가게장터 백반", "KOREAN_SET")).isNotEqualTo("crab");
+        // 제외어는 이름에서 그 조각만 지운다. 이름의 다른 곳에 요리가 있거나 태그가 요리면 그대로 잡는다.
+        assertThat(kind("속초 물회 회관", "SEAFOOD")).isEqualTo("raw_fish");
+        assertThat(PlaceCategoryConstants.mealKind("부산어묵", null, "Dining and Drinking > Restaurant", List.of("장어"),
+                null, "SNACK")).isEqualTo("eel");
+    }
+
+    @Test
+    @DisplayName("요리를 모르는 묶음 키는 같은 묶음의 요리와 같은 끼니로 보고, 요리가 다르면 다른 끼니다")
+    void sameMealKindTreatsUnknownDishAsItsGroup() {
+        assertThat(PlaceCategoryConstants.sameMealKind("raw_fish", "seafood")).isTrue();
+        assertThat(PlaceCategoryConstants.sameMealKind("seafood", "shellfish")).isTrue();
+        assertThat(PlaceCategoryConstants.sameMealKind("raw_fish", "shellfish")).isFalse();
+        assertThat(PlaceCategoryConstants.sameMealKind("tofu", "seafood")).isFalse();
+        assertThat(PlaceCategoryConstants.sameMealKind("meat", "meat")).isTrue();
+        assertThat(PlaceCategoryConstants.sameMealKind(null, "meat")).isFalse();
+    }
+
+    @Test
+    @DisplayName("요리 종류는 상위 묶음으로 올라가고, 묶음이 없는 종류는 그 자체가 묶음이다")
+    void mealGroups() {
+        assertThat(List.of("shellfish", "raw_fish", "eel", "crab", "grilled_fish"))
+                .allMatch(k -> "seafood".equals(PlaceCategoryConstants.mealGroup(k)));
+        assertThat(PlaceCategoryConstants.mealGroup("chinese_noodle")).isEqualTo("noodle");
+        assertThat(PlaceCategoryConstants.mealGroup("tofu")).isEqualTo("soup");
+        assertThat(PlaceCategoryConstants.mealGroup("meat")).isEqualTo("meat");
+        assertThat(PlaceCategoryConstants.mealGroup(null)).isNull();
+    }
+
+    private static String kind(String name, String cuisine) {
+        return PlaceCategoryConstants.mealKind(name, null, "Dining and Drinking > Restaurant", List.of(), null, cuisine);
     }
 
     @Test

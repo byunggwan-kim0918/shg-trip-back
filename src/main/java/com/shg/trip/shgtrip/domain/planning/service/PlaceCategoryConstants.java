@@ -820,6 +820,47 @@ public final class PlaceCategoryConstants {
         DISH_KINDS.put("banh_mi", List.of("반미", "bánh mì", "banh mi"));
         DISH_KINDS.put("takoyaki", List.of("타코야키", "たこ焼", "takoyaki"));
         DISH_KINDS.put("okonomiyaki", List.of("오코노미야키", "お好み焼", "okonomiyaki"));
+        // 짬뽕순두부집이 짬뽕으로 세이지 않게 순두부를 먼저 본다.
+        DISH_KINDS.put("tofu", List.of("순두부", "두부"));
+        DISH_KINDS.put("chinese_noodle", List.of("짬뽕", "짜장", "자장면"));
+        DISH_KINDS.put("gukbap", List.of("국밥", "순대국", "순댓국"));
+        DISH_KINDS.put("cold_noodle", List.of("밀면", "냉면", "막국수"));
+        // "조개구이 장어구이"처럼 함께 파는 집은 조개구이로 센다.
+        DISH_KINDS.put("shellfish", List.of("조개", "가리비"));
+        DISH_KINDS.put("eel", List.of("장어", "うなぎ", "鰻", "unagi"));
+        DISH_KINDS.put("crab", List.of("대게", "킹크랩", "홍게", "꽃게", "게장", "蟹"));
+        // "회" 한 글자는 회관·회사에 걸려 요리 이름으로만 본다.
+        DISH_KINDS.put("raw_fish", List.of("횟집", "물회", "활어", "회센터", "생선회"));
+        DISH_KINDS.put("grilled_fish", List.of("생선구이", "고등어구이"));
+    }
+
+    /** 요리 키워드가 단어 경계를 넘어 걸리는 이름 조각("시장어묵"의 장어, "보물회관"의 물회, "가게장터"의 게장). 이름에서만 지운다. */
+    private static final Map<String, List<String>> DISH_EXCLUSIONS = Map.of(
+            "eel", List.of("어묵"),
+            "raw_fish", List.of("회관"),
+            "crab", List.of("게장터"));
+
+    /** 요리 종류 → 상위 음식 묶음. 없는 키는 그 자체가 묶음이다. */
+    private static final Map<String, String> MEAL_GROUPS = Map.ofEntries(
+            Map.entry("shellfish", "seafood"), Map.entry("raw_fish", "seafood"), Map.entry("eel", "seafood"),
+            Map.entry("crab", "seafood"), Map.entry("grilled_fish", "seafood"),
+            Map.entry("chinese_noodle", "noodle"), Map.entry("cold_noodle", "noodle"),
+            Map.entry("gukbap", "soup"), Map.entry("tofu", "soup"));
+
+    /** {@link #mealKind} 값의 상위 묶음(조개구이·횟집 → seafood). null이면 null. */
+    public static String mealGroup(String kind) {
+        return kind == null ? null : MEAL_GROUPS.getOrDefault(kind, kind);
+    }
+
+    /**
+     * 두 끼니를 같은 종류로 볼지. 요리를 모르는 묶음 키(seafood 등)는 같은 묶음의 어떤 요리와도 겹친다고 본다.
+     * 그러지 않으면 횟집 점심과 이름에 요리가 없는 해산물집 저녁이 다른 종류가 된다.
+     */
+    public static boolean sameMealKind(String a, String b) {
+        if (a == null || b == null) return false;
+        if (a.equals(b)) return true;
+        String group = mealGroup(a);
+        return group.equals(mealGroup(b)) && (a.equals(group) || b.equals(group));
     }
 
     /** 이름(원문·한국어)에 요리 이름이 있거나 태그가 요리 이름 그대로인 식당의 종류 키. 없으면 null. */
@@ -827,8 +868,12 @@ public final class PlaceCategoryConstants {
         String names = Normalizer.normalize(((name == null ? "" : name) + " " + (nameKo == null ? "" : nameKo))
                 .toLowerCase(Locale.ROOT), Normalizer.Form.NFC);
         for (Map.Entry<String, List<String>> entry : DISH_KINDS.entrySet()) {
+            String scoped = names;
+            for (String excluded : DISH_EXCLUSIONS.getOrDefault(entry.getKey(), List.of())) {
+                scoped = scoped.replace(excluded, " ");
+            }
             for (String dish : entry.getValue()) {
-                if (names.contains(dish)) return entry.getKey();
+                if (scoped.contains(dish)) return entry.getKey();
                 if (tags != null && tags.stream().anyMatch(t -> t != null && dish.equalsIgnoreCase(t.strip()))) {
                     return entry.getKey();
                 }

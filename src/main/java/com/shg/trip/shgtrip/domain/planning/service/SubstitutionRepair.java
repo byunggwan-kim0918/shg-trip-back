@@ -5,6 +5,7 @@ import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.centroidOf;
@@ -56,13 +57,15 @@ final class SubstitutionRepair {
                 }
 
                 final double[] anchor = centroid != null ? centroid : coordsOf(cand);
+                Predicate<PlaceCandidate> variety = VarietyLedger.admitsReplacing(day, idx, candidates);
                 Integer replacement = spare.stream()
                         .map(si -> byIndex(candidates, si))
                         .filter(Objects::nonNull)
                         .filter(sc -> isSubstituteFor(cand, sc))
                         .filter(sc -> !isClosedOnDay(sc.openingHours(), dow))
-                        .min(Comparator.comparingDouble(sc -> anchor != null && coordsOf(sc) != null
-                                ? GeoUtils.haversine(anchor, coordsOf(sc)) : Double.MAX_VALUE))
+                        .min(Comparator.<PlaceCandidate, Boolean>comparing(sc -> !variety.test(sc))
+                                .thenComparingDouble(sc -> anchor != null && coordsOf(sc) != null
+                                        ? GeoUtils.haversine(anchor, coordsOf(sc)) : Double.MAX_VALUE))
                         .map(PlaceCandidate::index)
                         .orElse(null);
 
@@ -93,7 +96,7 @@ final class SubstitutionRepair {
                 Long pid = c != null ? c.placeId() : null;
                 boolean dup = seenIndices.contains(idx) || (pid != null && seenPlaceIds.contains(pid));
                 if (dup) {
-                    Integer fill = pickDistinctSpare(day, candidates, spare, seenIndices, seenPlaceIds, c);
+                    Integer fill = pickDistinctSpare(day, deduped, candidates, spare, seenIndices, seenPlaceIds, c);
                     if (fill != null) {
                         deduped.add(fill);
                         seenIndices.add(fill);
@@ -114,18 +117,21 @@ final class SubstitutionRepair {
         }
     }
 
-    /** 중복 스텝 보충용: 같은 대분류·미사용(index/placeId) spare 중 day 중심에서 가까운 하나. */
-    private static Integer pickDistinctSpare(DayState day, List<PlaceCandidate> candidates, Deque<Integer> spare,
-                                             Set<Integer> seenIndices, Set<Long> seenPlaceIds, PlaceCandidate like) {
+    /** 중복 스텝 보충용: 같은 대분류·미사용(index/placeId) spare 중 day 중심에서 가까운 하나. 그날 끼니 종류는 지금까지 남긴 장소로 센다. */
+    private static Integer pickDistinctSpare(DayState day, List<Integer> kept, List<PlaceCandidate> candidates,
+                                             Deque<Integer> spare, Set<Integer> seenIndices, Set<Long> seenPlaceIds,
+                                             PlaceCandidate like) {
         double[] centroid = centroidOf(day.placeIndices, candidates);
+        Predicate<PlaceCandidate> variety = VarietyLedger.admitsAmong(kept, candidates);
         Integer chosen = spare.stream()
                 .filter(si -> !seenIndices.contains(si))
                 .map(si -> byIndex(candidates, si))
                 .filter(Objects::nonNull)
                 .filter(sc -> sc.placeId() == null || !seenPlaceIds.contains(sc.placeId()))
                 .filter(sc -> like == null || isSubstituteFor(like, sc))
-                .min(Comparator.comparingDouble(sc -> centroid != null && coordsOf(sc) != null
-                        ? GeoUtils.haversine(centroid, coordsOf(sc)) : Double.MAX_VALUE))
+                .min(Comparator.<PlaceCandidate, Boolean>comparing(sc -> !variety.test(sc))
+                        .thenComparingDouble(sc -> centroid != null && coordsOf(sc) != null
+                                ? GeoUtils.haversine(centroid, coordsOf(sc)) : Double.MAX_VALUE))
                 .map(PlaceCandidate::index)
                 .orElse(null);
         if (chosen != null) spare.remove(chosen);

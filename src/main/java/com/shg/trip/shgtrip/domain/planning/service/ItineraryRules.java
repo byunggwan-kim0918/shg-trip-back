@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -27,7 +28,7 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.*;
 public final class ItineraryRules {
 
     /** 규칙이나 등급이 바뀌면 올린다. 다른 버전의 판정 기록끼리 비교하지 않기 위해서다. */
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;
 
     public enum Severity {
         /** 일정을 쓸 수 없다. */
@@ -55,7 +56,9 @@ public final class ItineraryRules {
         NO_NON_FOOD_ACTIVITY(Severity.CORE),
         ADDRESS_REGION_MISMATCH(Severity.CORE),
         EARLY_FINISH(Severity.SOFT),
-        CONSECUTIVE_MEAL_KIND(Severity.SOFT);
+        CONSECUTIVE_MEAL_KIND(Severity.SOFT),
+        SAME_DAY_MEAL_GROUP(Severity.SOFT),
+        MEAL_GROUP_REPEATED(Severity.SOFT);
 
         public final Severity severity;
 
@@ -237,9 +240,11 @@ public final class ItineraryRules {
         }
     }
 
-    /** 같은 날 점심·저녁, 전날 저녁·다음 날 점심, 여행 전체의 음식 종류 반복. */
+    /** 같은 날 점심·저녁, 전날 저녁·다음 날 점심, 여행 전체의 음식 종류·묶음 반복. */
     private static final class MealTally {
         private final Map<String, Integer> kindCounts = new LinkedHashMap<>();
+        private final Map<String, Set<String>> kindsByGroup = new LinkedHashMap<>();
+        private final Map<String, Integer> groupCounts = new LinkedHashMap<>();
         private String previousDinnerKind;
         private int previousDinnerDay;
         int meals;
@@ -257,17 +262,27 @@ public final class ItineraryRules {
                     kind = null;
                 } else {
                     kindCounts.merge(kind, 1, Integer::sum);
+                    String group = PlaceCategoryConstants.mealGroup(kind);
+                    groupCounts.merge(group, 1, Integer::sum);
+                    kindsByGroup.computeIfAbsent(group, g -> new LinkedHashSet<>()).add(kind);
                 }
                 int start = toMinutesOrZero(s.startTime());
                 if (lunchKind == null && InvariantChecker.inMealWindow(start, LUNCH_START, LUNCH_END)) lunchKind = kind;
                 if (InvariantChecker.inMealWindow(start, DINNER_START, DINNER_END)) dinnerKind = kind;
             }
-            if (lunchKind != null && lunchKind.equals(dinnerKind)) {
+            if (PlaceCategoryConstants.sameMealKind(lunchKind, dinnerKind)) {
                 out.add(new Violation(Rule.SAME_DAY_MEAL_KIND, day,
                         "day" + day + " 점심·저녁 같은 종류(" + lunchKind + ")"));
-            } else if (lunchKind != null && previousDinnerDay == day - 1 && lunchKind.equals(previousDinnerKind)) {
-                out.add(new Violation(Rule.CONSECUTIVE_MEAL_KIND, day,
-                        "day" + day + " 전날 저녁과 점심 같은 종류(" + lunchKind + ")"));
+            } else {
+                String lunchGroup = PlaceCategoryConstants.mealGroup(lunchKind);
+                if (lunchGroup != null && lunchGroup.equals(PlaceCategoryConstants.mealGroup(dinnerKind))) {
+                    out.add(new Violation(Rule.SAME_DAY_MEAL_GROUP, day,
+                            "day" + day + " 점심·저녁 같은 묶음(" + lunchGroup + ")"));
+                }
+                if (previousDinnerDay == day - 1 && PlaceCategoryConstants.sameMealKind(lunchKind, previousDinnerKind)) {
+                    out.add(new Violation(Rule.CONSECUTIVE_MEAL_KIND, day,
+                            "day" + day + " 전날 저녁과 점심 같은 종류(" + lunchKind + ")"));
+                }
             }
             previousDinnerKind = dinnerKind;
             previousDinnerDay = day;
@@ -279,6 +294,14 @@ public final class ItineraryRules {
                 if (count > cap) {
                     out.add(new Violation(Rule.MEAL_KIND_REPEATED, 0,
                             "같은 종류 " + kind + " " + count + "끼(상한 " + cap + ")"));
+                }
+            });
+            // 한 요리만 반복된 묶음은 위 종류 상한이 이미 잡는다.
+            int groupCap = mealGroupTripCap(dayCount);
+            groupCounts.forEach((group, count) -> {
+                if (count > groupCap && kindsByGroup.get(group).size() > 1) {
+                    out.add(new Violation(Rule.MEAL_GROUP_REPEATED, 0,
+                            "같은 묶음 " + group + " " + count + "끼(상한 " + groupCap + ")"));
                 }
             });
         }

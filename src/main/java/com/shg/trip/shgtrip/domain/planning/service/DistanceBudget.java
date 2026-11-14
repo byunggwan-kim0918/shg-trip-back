@@ -5,6 +5,7 @@ import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.budgetCoords;
@@ -58,7 +59,7 @@ final class DistanceBudget {
             if (!day.placeIndices.contains(idx)) break;
             PlaceCandidate cur = byIndex(candidates, idx);
 
-            Integer swap = pickBudgetSwap(result, worstPos, candidates, spare, usedIndices);
+            Integer swap = pickBudgetSwap(day, result, worstPos, candidates, spare, usedIndices);
             if (swap != null) {
                 spare.remove(swap);
                 spare.addLast(idx);
@@ -207,7 +208,7 @@ final class DistanceBudget {
         // 교체 후보: 같은 대분류 + 앞뒤 이웃 경유 거리가 현재의 절반 미만
         double[] prev = bestPos + offset - 1 >= 0 ? coords.get(bestPos + offset - 1) : null;
         double[] next = bestPos + offset + 1 < coords.size() ? coords.get(bestPos + offset + 1) : null;
-        Integer replacement = pickCloserSameMajorSpare(seq, candidates, spareIndices, targetCand, prev, next);
+        Integer replacement = pickCloserSameMajorSpare(day, seq, candidates, spareIndices, targetCand, prev, next);
         if (replacement == null) return false;
 
         seq.set(bestPos, replacement);
@@ -222,10 +223,11 @@ final class DistanceBudget {
     }
 
     /** 같은 대분류 spare 중 prev→후보→next 경유 거리가 현재의 절반 미만인 가장 가까운 후보. */
-    private static Integer pickCloserSameMajorSpare(List<Integer> seq, List<PlaceCandidate> candidates,
+    private static Integer pickCloserSameMajorSpare(DayState day, List<Integer> seq, List<PlaceCandidate> candidates,
                                                     Deque<Integer> spareIndices, PlaceCandidate target,
                                                     double[] prev, double[] next) {
         double currentDetour = detourVia(prev, coordsOf(target), next);
+        Predicate<PlaceCandidate> variety = VarietyLedger.admitsReplacing(day, target.index(), candidates);
         Set<Integer> inSeq = new HashSet<>(seq);
         return spareIndices.stream()
                 .map(i -> byIndex(candidates, i))
@@ -234,7 +236,8 @@ final class DistanceBudget {
                 .filter(c -> isSubstituteFor(target, c))
                 .filter(c -> coordsOf(c) != null)
                 .filter(c -> detourVia(prev, coordsOf(c), next) < currentDetour * 0.5)
-                .min(Comparator.comparingDouble(c -> detourVia(prev, coordsOf(c), next)))
+                .min(Comparator.<PlaceCandidate, Boolean>comparing(c -> !variety.test(c))
+                        .thenComparingDouble(c -> detourVia(prev, coordsOf(c), next)))
                 .map(PlaceCandidate::index)
                 .orElse(null);
     }
@@ -322,7 +325,7 @@ final class DistanceBudget {
     }
 
     /** 같은 대분류 spare 중 이웃 경유 거리가 현재의 절반 미만으로 줄어드는 가장 가까운 후보. */
-    private static Integer pickBudgetSwap(List<Integer> order, int pos, List<PlaceCandidate> candidates,
+    private static Integer pickBudgetSwap(DayState day, List<Integer> order, int pos, List<PlaceCandidate> candidates,
                                           Deque<Integer> spare, Set<Integer> usedIndices) {
         PlaceCandidate cur = byIndex(candidates, order.get(pos));
         if (cur == null) return null;
@@ -330,6 +333,7 @@ final class DistanceBudget {
         double[] next = pos < order.size() - 1 ? coordsOf(byIndex(candidates, order.get(pos + 1))) : null;
         if (prev == null && next == null) return null;
         double currentDetour = detourVia(prev, coordsOf(cur), next);
+        Predicate<PlaceCandidate> variety = VarietyLedger.admitsReplacing(day, cur.index(), candidates);
 
         return spare.stream()
                 .filter(i -> !usedIndices.contains(i))
@@ -338,7 +342,8 @@ final class DistanceBudget {
                 .filter(c -> isSubstituteFor(cur, c))
                 .filter(c -> coordsOf(c) != null)
                 .filter(c -> detourVia(prev, coordsOf(c), next) < currentDetour * 0.5)
-                .min(Comparator.comparingDouble(c -> detourVia(prev, coordsOf(c), next)))
+                .min(Comparator.<PlaceCandidate, Boolean>comparing(c -> !variety.test(c))
+                        .thenComparingDouble(c -> detourVia(prev, coordsOf(c), next)))
                 .map(PlaceCandidate::index)
                 .orElse(null);
     }

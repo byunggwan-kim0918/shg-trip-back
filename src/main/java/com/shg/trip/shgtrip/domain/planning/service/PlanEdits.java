@@ -80,6 +80,10 @@ final class PlanEdits {
         double[] arrivalHub = day.arrivalHubIndex != null
                 ? budgetCoords(byIndex(candidates, day.arrivalHubIndex)) : null;
         if (arrivalHub != null) path.add(arrivalHub);
+        // 전날 숙소에서 나오는 아침 구간을 빼면 판정(ItineraryRules)보다 짧게 보고 넣었다가 초과로 남는다.
+        double[] startLodging = arrivalHub == null && day.startLodgingIndex != null
+                ? coordsOf(byIndex(candidates, day.startLodgingIndex)) : null;
+        if (startLodging != null) path.add(startLodging);
         for (Integer idx : day.placeIndices) {
             double[] c = coordsOf(byIndex(candidates, idx));
             if (c != null) path.add(c);

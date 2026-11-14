@@ -1,5 +1,5 @@
 -- metrics --
-  스텝 14 / 숙소 1곳 / 총이동 216km
+  스텝 14 / 숙소 1곳 / 총이동 217km
   연속중복 0 / 최대공백 290분 / 늦은시작 0일 / 안내 2건
 == day 1 ==
   #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
@@ -26,11 +26,12 @@
       비용: 120000원 / 메모: -
       대안: Ocean Grand Hotel Jeju | Travel and Transportation > Lodging > Resort | 200000원
 == day 2 ==
-  #7  09:43-10:43  카페콜라 | Dining and Drinking > Cafe, Coffee, and Tea House > Café | 제주시 | Jeju
-      이동: CAR 43분 28.43km 8528원
+  #7  09:55-10:55  쉼표 | Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop | 제주시 | Jeju
+      이동: CAR 55분 36.54km 10961원
       비용: 6000원 / 메모: -
+      대안: 카페콜라 | Dining and Drinking > Cafe, Coffee, and Tea House > Café | 6000원
   #8  11:30-12:40  양가형제 | Dining and Drinking > Restaurant | 제주시 | Jeju
-      이동: CAR 31분 20.19km 6056원
+      이동: CAR 20분 12.8km 3840원
       비용: 13000원 / 메모: -
       대안: 공천포식당 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
   #9  17:30-18:40  연돈 | Dining and Drinking > Restaurant | 서귀포시 | Jeju

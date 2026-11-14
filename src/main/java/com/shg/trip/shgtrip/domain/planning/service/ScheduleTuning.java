@@ -131,10 +131,10 @@ public final class ScheduleTuning {
      */
     static final double LARGE_GAP_RADIUS_MULTIPLIER = 2.0;
     /**
-     * 긴 공백을 메울 장소의 우회 한도(km, "현위치 → 후보 → 식당"이 직선보다 길어지는 추가 거리).
-     * 반경만 넓히면 공백 대신 운전 시간이 늘어난다. 이 한도로 못 메운 공백은 자유시간으로 둔다.
+     * 공백을 메울 장소의 우회 한도(km, "현위치 → 후보 → 식당"이 직선보다 길어지는 추가 거리).
+     * 반경만 보면 다음 식당과 반대 방향인 곳이 들어와 공백 대신 운전 시간이 늘어난다. 이 한도로 못 메운 공백은 자유시간으로 둔다.
      */
-    static final double LARGE_GAP_MAX_EXTRA_DETOUR_KM = 15.0;
+    static final double GAP_FILL_MAX_EXTRA_DETOUR_KM = 15.0;
 
     // ── 대안(스왑 후보) 점수 ────────────────────────────────────────────────
 
@@ -148,7 +148,7 @@ public final class ScheduleTuning {
 
     /**
      * 갭 보충에서 우회거리 1km를 인기도(0~1) 몇 점으로 환산할지. 10km 더 가는 명소(0.9)가 옆의 무명 장소(0.35)를
-     * 이기고 30km면 뒤집힌다. 지리 제한은 {@link #LARGE_GAP_MAX_EXTRA_DETOUR_KM}가 맡는다.
+     * 이기고 30km면 뒤집힌다. 지리 제한은 {@link #GAP_FILL_MAX_EXTRA_DETOUR_KM}가 맡는다.
      */
     static final double GAP_FILL_DETOUR_WEIGHT = 0.02;
 
@@ -207,6 +207,11 @@ public final class ScheduleTuning {
     /** 한 음식 종류가 여행 전체에서 나올 수 있는 끼니 수. 선택 프롬프트는 같은 음식 2끼까지라 5일 이상 여행에서는 이 값이 더 느슨하다. */
     static int mealKindTripCap(int dayCount) {
         return Math.max(2, (int) Math.ceil(dayCount / 2.0));
+    }
+
+    /** 요리가 달라도 같은 묶음(해산물·면 등)이 이보다 많으면 한 가지만 먹는 여행이 된다. */
+    static int mealGroupTripCap(int dayCount) {
+        return mealKindTripCap(dayCount) + 1;
     }
 
     /** 하루 카페·디저트·베이커리 방문 수 상한. 넘으면 쉬는 날이 아니라 카페를 옮겨 다니는 날이 된다. */

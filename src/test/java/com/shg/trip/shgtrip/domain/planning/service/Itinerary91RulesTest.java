@@ -22,7 +22,8 @@ class Itinerary91RulesTest {
         Verdict verdict = evaluate();
 
         assertThat(days(verdict, Rule.SAME_DAY_MEAL_KIND)).containsExactly(2, 3, 4, 5);
-        assertThat(messages(verdict, Rule.MEAL_KIND_REPEATED)).containsExactly("같은 종류 seafood 10끼(상한 3)");
+        assertThat(messages(verdict, Rule.MEAL_KIND_REPEATED)).containsExactly("같은 종류 shellfish 6끼(상한 3)");
+        assertThat(messages(verdict, Rule.MEAL_GROUP_REPEATED)).containsExactly("같은 묶음 seafood 9끼(상한 4)");
         assertThat(days(verdict, Rule.CAFE_PER_DAY)).containsExactly(3, 4);
         assertThat(messages(verdict, Rule.DAY_DISTANCE_OVER_CAP)).containsExactly("day5 하루 이동 136km(상한 90km)");
         assertThat(messages(verdict, Rule.ADDRESS_REGION_MISMATCH))

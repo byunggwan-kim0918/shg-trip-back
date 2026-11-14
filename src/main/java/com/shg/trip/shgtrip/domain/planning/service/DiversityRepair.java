@@ -109,7 +109,8 @@ final class DiversityRepair {
         if (targetCand == null || targetCand.keepsPlace()) return false;
 
         Integer pick = pickNearbyCandidate(candidates, spare, usedIndices, coordsOf(targetCand),
-                openOnDay.and(c -> isVisitableFill(c) && !kind.equals(kindOf(c))));
+                openOnDay.and(c -> isVisitableFill(c) && !kind.equals(kindOf(c)))
+                        .and(VarietyLedger.admitsReplacing(day, target, candidates)));
         if (pick == null) return false;
 
         replaceInDay(day, target, pick);
@@ -228,6 +229,7 @@ final class DiversityRepair {
         for (DayState d : days) {
             java.util.function.Predicate<PlaceCandidate> insertable =
                     insertableFilter(d, candidates, startDate, transportPref, memo, cfg);
+            java.util.function.Predicate<PlaceCandidate> variety = VarietyLedger.admitsOnDay(d, candidates);
             Integer pick = spare.stream()
                     .map(i -> byIndex(candidates, i))
                     .filter(Objects::nonNull)
@@ -235,10 +237,12 @@ final class DiversityRepair {
                     .filter(c -> PlaceCategoryConstants.matchesUserCategory(
                             categoryId, c.name(), c.category(), c.tags()))
                     .filter(insertable)
-                    .min(Comparator.comparingDouble(c -> {
-                        double[] centroid = centroidOf(d.placeIndices, candidates);
-                        return centroid == null || coordsOf(c) == null ? 0 : GeoUtils.haversine(centroid, coordsOf(c));
-                    }))
+                    .min(Comparator.<PlaceCandidate, Boolean>comparing(c -> !variety.test(c))
+                            .thenComparingDouble(c -> {
+                                double[] centroid = centroidOf(d.placeIndices, candidates);
+                                return centroid == null || coordsOf(c) == null ? 0
+                                        : GeoUtils.haversine(centroid, coordsOf(c));
+                            }))
                     .map(PlaceCandidate::index)
                     .orElse(null);
             if (pick == null) continue;
@@ -322,7 +326,7 @@ final class DiversityRepair {
             PlaceCandidate dc = candidateOfStep(days, dinner, candidates);
             if (lc == null || dc == null) continue;
             String type = subTypeOf(dc);
-            if (!isSpecificType(type) || !type.equals(subTypeOf(lc))) continue;
+            if (!isSpecificType(type) || !PlaceCategoryConstants.sameMealKind(type, subTypeOf(lc))) continue;
             if (replaceStepWithDifferentSubType(day, dinner, type, "DINING", days.size(), typeCount, candidates,
                     spare, usedIndices, insertableFilter(day, candidates, startDate, transportPref, memo, cfg),
                     true, memo)) {
@@ -349,7 +353,7 @@ final class DiversityRepair {
         if (targetCand == null || targetCand.keepsPlace()) return false;
 
         Integer pick = pickNearbyCandidate(candidates, spare, usedIndices, coordsOf(targetCand),
-                insertable.and(c -> isVisitableFill(c)
+                insertable.and(VarietyLedger.admitsReplacing(day, target, candidates)).and(c -> isVisitableFill(c)
  // 대분류가 바뀌면 식사·관광 구성이 무너진다
                         && major.equals(PlaceCategoryConstants.majorCategory(c.category()))
                         && (!mustBeMeal || c.mealEligible())
@@ -482,6 +486,7 @@ final class DiversityRepair {
                 .map(i -> byIndex(candidates, i))
                 .filter(Objects::nonNull)
                 .filter(CandidateTraits::isVisitableFill)
+                .filter(VarietyLedger.admitsOnDay(day, candidates))
                 .filter(c -> !used.contains(c.index()))
                 .filter(c -> !PlaceCategoryConstants.isViaRoute(c.attributes(), c.name(), c.category(), c.tags()))
                 .filter(c -> typeCount.getOrDefault(subTypeOf(c), 0) < typeCapFor(c, dayCount))

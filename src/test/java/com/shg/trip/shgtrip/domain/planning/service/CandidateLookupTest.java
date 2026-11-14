@@ -23,7 +23,7 @@ class CandidateLookupTest {
         CandidateLookup lookup = new CandidateLookup(List.of(seoul, busan));
 
         assertThat(lookup.of(step("짬뽕지존", 1706233L))).isSameAs(busan);
-        assertThat(lookup.mealKind(step("짬뽕지존", 1706233L))).isEqualTo("seafood");
+        assertThat(lookup.mealKind(step("짬뽕지존", 1706233L))).isEqualTo("chinese_noodle");
     }
 
     @Test
