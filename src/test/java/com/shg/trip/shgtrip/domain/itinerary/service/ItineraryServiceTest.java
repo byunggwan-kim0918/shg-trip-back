@@ -187,6 +187,20 @@ class ItineraryServiceTest {
     }
 
     @Test
+    @DisplayName("차로 다른 도시에서 넘어온 날도 순서를 바꾸면 자동차 이동 구간이 새 첫 스텝에 남는다")
+    void keepsDriveLegOnNewFirstStep() {
+        mockFind();
+        itinerary.getSteps().stream().filter(s -> s.getId() == 20L).findFirst().orElseThrow()
+                .updateTransportation("DRIVE", 206, BigDecimal.valueOf(281), BigDecimal.valueOf(49_800));
+
+        var reordered = byId(itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 2, List.of(21L, 20L)));
+
+        assertThat(reordered.get(21L).transportationMode()).isEqualTo("DRIVE");
+        assertThat(reordered.get(21L).transportationDuration()).isEqualTo(206);
+        assertThat(reordered.get(20L).transportationMode()).isNotEqualTo("DRIVE");
+    }
+
+    @Test
     @DisplayName("표지 장소가 스텝 밖(여행지 대표 사진)이면 따로 읽어 사진과 출처를 함께 준다")
     void coverOutsideStepsCarriesAttribution() {
         ReflectionTestUtils.setField(itinerary, "coverPlaceId", 999L);

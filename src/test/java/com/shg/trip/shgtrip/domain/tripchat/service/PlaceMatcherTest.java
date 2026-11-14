@@ -82,6 +82,24 @@ class PlaceMatcherTest {
     }
 
     @Test
+    @DisplayName("여러 도시를 적은 여행지는 그중 한 곳 주소에 있으면 맞추고, 이름 속 글자로는 나누지 않는다")
+    void multiCityDestination() {
+        PlaceService placeService = mock(PlaceService.class);
+        when(placeService.searchPlaces(eq("해운대 그랜드호텔"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
+                place(7, "해운대 그랜드호텔", "부산광역시 해운대구 해운대해변로 217", "Travel and Transportation > Lodging"))));
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+
+        assertThat(matcher.find("해운대 그랜드호텔", "서울, 부산")).isPresent();
+        assertThat(matcher.find("해운대 그랜드호텔", "서울이랑 부산")).isPresent();
+        assertThat(matcher.find("해운대 그랜드호텔", "서울 갔다가 부산")).isPresent();
+        assertThat(matcher.find("해운대 그랜드호텔", "서울과 대전")).isEmpty();
+
+        when(placeService.searchPlaces(eq("국립과천과학관"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
+                place(8, "국립과천과학관", "경기도 과천시 상하벌로 110", "Arts and Entertainment > Science Museum"))));
+        assertThat(matcher.find("국립과천과학관", "과천")).isPresent();
+    }
+
+    @Test
     @DisplayName("야시장·박물관처럼 일반 명사만 남는 이름은 조회하지 않는다")
     void genericNamesAreNotSearched() {
         PlaceService placeService = mock(PlaceService.class);

@@ -288,7 +288,7 @@ public class OptimizedClaudeAIService {
                    - searchTags: 벡터 검색용 태그 5~10개. 하위 구역 입력 시 해당 구역명과 주변 명소 키워드를 앞쪽에 배치.
                    - budgetRange: LOW(<50만/일), MEDIUM(50~150만/일), HIGH(150~300만/일), LUXURY(300만+/일)
                    - seasonContext: 해당 월 시즌 정보
-                4. 지역 배분 (5일+ 여행 시만):
+                4. 지역 배분 (5일+ 여행 또는 서로 먼 여러 도시 여행, 문장의 도시별 일수를 따름):
                    - regionAllocation: {"1-2": ["시부야","하라주쿠"], "3-4": ["아사쿠사","우에노"]}
 
                 ## 응답 (반드시 JSON만 출력하세요)

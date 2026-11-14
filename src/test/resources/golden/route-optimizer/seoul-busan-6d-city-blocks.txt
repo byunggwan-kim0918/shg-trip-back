@@ -104,18 +104,18 @@
       비용: 50000원 / 메모: -
       대안: 오늘스테이 동대문점 | Travel and Transportation > Lodging | 120000원
 == day 4 ==
-  #23 11:48-12:58  제일돼지국밥 | Dining and Drinking > Restaurant | - | Busan
-      이동: TRAIN 168분 424.01km -원
+  #23 12:24-13:34  제일돼지국밥 | Dining and Drinking > Restaurant | - | Busan
+      이동: TRAIN 204분 424.01km 58700원
       비용: 13000원 / 메모: -
       대안: 밀양순대돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant | 13000원
       대안: 몽실종가돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
-  #24 13:01-14:11  미정식당 | Retail > Food and Beverage Retail | - | Busan
+  #24 13:37-14:47  미정식당 | Retail > Food and Beverage Retail | - | Busan
       이동: CAR 3분 1.79km 1434원
       비용: 0원 / 메모: -
       대안: 대신종합시장 | Retail > Market | 0원
       대안: 신동아수산물종합시장 | Retail > Food and Beverage Retail > Fish Market | 0원
       대안: 영주시장 | Retail > Market | 0원
-  #25 14:26-15:26  국제시장 먹자골목 | Landmarks and Outdoors > Tourist Attraction | - | Busan
+  #25 15:02-16:02  국제시장 먹자골목 | Landmarks and Outdoors > Tourist Attraction | - | Busan
       이동: WALK 15분 0.96km 0원
       비용: 0원 / 메모: -
       대안: 초량전통시장 | Retail > Market | 0원

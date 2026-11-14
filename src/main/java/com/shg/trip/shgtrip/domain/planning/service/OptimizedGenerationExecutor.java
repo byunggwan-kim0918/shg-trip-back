@@ -111,7 +111,7 @@ public class OptimizedGenerationExecutor {
             sendSseEvent(emitter, "SEARCHING", 20, "장소를 검색하고 있습니다...");
 
             // 검색·선택·스케줄이 같은 도시 구간을 써야 도시마다 후보·날짜·숙소가 맞는다.
-            final TripCities tripCities = TripCityDetector.detect(enrichedInput.regions(),
+            final TripCities tripCities = TripCityDetector.detect(enrichedInput.country(), enrichedInput.regions(),
                     enrichedInput.regionAllocation(), days, destinations, enrichedInput.transportationHub());
             List<PlaceCandidate> candidatesRaw = executeWithHeartbeat(emitter,
                     () -> vectorSearchQueryService.search(enrichedInput, tripCities));
@@ -369,7 +369,8 @@ public class OptimizedGenerationExecutor {
                     .toList();
             BigDecimal cost = s.place() != null && isPerPersonCost(s.place().category()) && s.estimatedCost() != null
                     ? s.estimatedCost().multiply(factor) : s.estimatedCost();
-            BigDecimal fare = InvariantChecker.isIntercityLeg(s) && s.transportationCost() != null
+            BigDecimal fare = s.transportationMode() != null && s.transportationCost() != null
+                    && ScheduleTuning.PER_PERSON_FARE_MODES.contains(s.transportationMode())
                     ? s.transportationCost().multiply(factor) : s.transportationCost();
             scaled.add(new StepData(s.stepOrder(), s.dayNumber(), s.startTime(), s.endTime(), s.place(), alts,
                     s.transportationMode(), s.transportationDuration(), s.transportationDistance(),

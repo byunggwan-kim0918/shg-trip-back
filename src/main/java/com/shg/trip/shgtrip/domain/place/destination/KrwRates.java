@@ -11,6 +11,7 @@ public final class KrwRates {
 
     /** 통화 1단위의 원화. 일정 비용 추정용 근삿값이라 일 단위 환율 변동은 따라가지 않는다. */
     static final Map<String, Double> WON_PER_UNIT = Map.of(
+            "KRW", 1.0,
             "JPY", 8.4,
             "CNY", 203.0,
             "TWD", 41.0,

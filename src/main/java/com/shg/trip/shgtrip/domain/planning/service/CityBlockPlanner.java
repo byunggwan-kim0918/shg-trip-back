@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
 import com.shg.trip.shgtrip.domain.place.destination.KrwRates;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
@@ -43,7 +44,11 @@ public final class CityBlockPlanner {
         }
     }
 
-    /** 도시 간 이동 한 번. 역·공항을 오가는 시간까지 포함한 소요 시간이다. */
+    /**
+     * 도시 간 이동 한 번. 역·공항을 오가는 시간까지 포함한 소요 시간이다.
+     *
+     * @param distanceKm 비행기는 직선 km, 그 밖에는 하루 구간과 같은 도로 환산 km
+     */
     public record IntercityLeg(String mode, int minutes, BigDecimal distanceKm, BigDecimal costWon) {}
 
     private static final ScheduleTuning.IntercityMode FALLBACK_MODE =
@@ -111,7 +116,8 @@ public final class CityBlockPlanner {
             boolean first = b == 0;
             boolean last = b == blocks.size() - 1;
             IntercityLeg leg = first ? null
-                    : legBetween(cityByName.get(blocks.get(b - 1).city()), cityByName.get(block.city()));
+                    : legBetween(cityByName.get(blocks.get(b - 1).city()), cityByName.get(block.city()),
+                    args.transportPref());
             plans.add(new BlockPlan(block, args.forCityBlock(blockHub(args.hub(), first, last),
                     first ? args.arrivalTime() : ScheduleTimes.formatMinutes(arrivalAfter(leg)),
                     last ? args.departureTime() : null, !first, !last), leg));
@@ -141,14 +147,26 @@ public final class CityBlockPlanner {
     }
 
     /** 도시 중심 사이 이동. 직선거리를 이동 수단 속도로 나누고 역·공항을 오가는 시간을 더한다. */
-    public static IntercityLeg legBetween(TripCities.City from, TripCities.City to) {
+    public static IntercityLeg legBetween(TripCities.City from, TripCities.City to, String transportPref) {
         double km = GeoUtils.haversine(from.lat(), from.lng(), to.lat(), to.lng());
-        ScheduleTuning.IntercityMode mode = ScheduleTuning.INTERCITY_MODES.getOrDefault(to.country(), FALLBACK_MODE);
+        ScheduleTuning.IntercityMode mode = intercityMode(from, to, transportPref);
         int minutes = (int) Math.ceil(km / mode.kmh() * 60) + mode.overheadMinutes();
         Integer won = KrwRates.toWon((int) Math.round(km * mode.farePerKm()), mode.currency());
-        return new IntercityLeg(mode.mode(), minutes,
-                BigDecimal.valueOf(km * GeoUtils.ROAD_DISTANCE_FACTOR).setScale(2, RoundingMode.HALF_UP),
+        // 비행기는 길을 따라 돌지 않아 도로 계수를 곱하지 않는다.
+        double shownKm = "FLIGHT".equals(mode.mode()) ? km : km * GeoUtils.ROAD_DISTANCE_FACTOR;
+        return new IntercityLeg(mode.mode(), minutes, BigDecimal.valueOf(shownKm).setScale(2, RoundingMode.HALF_UP),
                 won == null ? null : BigDecimal.valueOf(won));
+    }
+
+    private static ScheduleTuning.IntercityMode intercityMode(TripCities.City from, TripCities.City to,
+                                                              String transportPref) {
+        if (!"KR".equals(to.country())) {
+            return ScheduleTuning.INTERCITY_MODES.getOrDefault(to.country(), FALLBACK_MODE);
+        }
+        if (DomesticCities.isIsland(from.name()) || DomesticCities.isIsland(to.name())) {
+            return ScheduleTuning.KR_FLIGHT;
+        }
+        return "car".equals(transportPref) ? ScheduleTuning.KR_DRIVE : ScheduleTuning.KR_TRAIN;
     }
 
     /** 이동한 날 다음 도시에서 일정을 시작할 수 있는 시각(분). */

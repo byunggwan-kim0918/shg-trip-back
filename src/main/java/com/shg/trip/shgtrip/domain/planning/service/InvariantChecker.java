@@ -83,7 +83,7 @@ final class InvariantChecker {
         return result;
     }
 
-    /** 하루 이동 예산에 넣지 않는 구간. 관문 공항 연결과 도시 간 열차·비행기는 그날 동선이 아니다. */
+    /** 하루 이동 예산에 넣지 않는 구간. 관문 공항 연결과 도시 간 이동은 그날 동선이 아니다. */
     static boolean isOutsideDayBudget(List<StepData> daySteps, int i, boolean firstDay, boolean lastDay) {
         return isIntercityLeg(daySteps.get(i)) || isOverseasHubTransfer(daySteps, i, firstDay, lastDay);
     }

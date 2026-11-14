@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.List;
 
 /**
- * 해외 여행지 하나({@code destinations.json}의 한 항목).
+ * 여행지 하나. 해외는 {@code destinations.json}의 한 항목이고 국내 도시는 {@link DomesticCities}가 만든다.
  *
  * @param name     ASCII 표준명. 해외 장소의 {@code places.region} 값이며 국가 간에도 유일하다.
  * @param radiusKm 이 반경 안의 장소만 이 여행지에 배정된다

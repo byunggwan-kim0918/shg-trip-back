@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
+import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
 import com.shg.trip.shgtrip.domain.place.embedding.EmbeddingService;
 import com.shg.trip.shgtrip.domain.place.vector.PlaceVectorSearchService;
 import com.shg.trip.shgtrip.domain.place.vector.VectorSearchRequest;
@@ -120,7 +121,7 @@ public class VectorSearchQueryService {
 
     /** @return 1-based 인덱스가 부여된 후보 장소 목록 */
     public List<PlaceCandidate> search(VectorEnrichedInput input) {
-        return search(input, TripCityDetector.detect(input.regions(), input.regionAllocation(),
+        return search(input, TripCityDetector.detect(input.country(), input.regions(), input.regionAllocation(),
                 calculateTripDays(input), destinations, input.transportationHub()));
     }
 
@@ -147,7 +148,7 @@ public class VectorSearchQueryService {
 
     /** 도시로 따로 두지 않은 근교·인접 여행지는 가장 가까운 도시 구간에서 찾는다. */
     private String cityOfRegion(TripCities cities, String region) {
-        return destinations.find(region)
+        return destinations.find(region).or(() -> DomesticCities.find(region))
                 .map(d -> cities.cityOf(d.lat(), d.lng()))
                 .orElse(destinations.rootOf(region));
     }

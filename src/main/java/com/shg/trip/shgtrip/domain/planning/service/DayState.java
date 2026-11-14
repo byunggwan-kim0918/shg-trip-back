@@ -33,7 +33,7 @@ class DayState {
     Integer startNotBefore;
     /** 마지막 날 출발 허브에 닿아야 하는 시각(분). 모르면 null(기본 21:00). */
     Integer departureDeadline;
-    /** 다른 도시에서 열차·비행기로 넘어와 시작하는 날. 도착 허브가 없다. */
+    /** 다른 도시에서 열차·비행기·차로 넘어와 시작하는 날. 도착 허브가 없다. */
     boolean resumesAfterTransfer;
     /** 다음 도시로 넘어가기 전날. 구간의 마지막 날이어도 숙소·저녁이 필요하고 출발 허브가 없다. */
     boolean continuesAfter;

@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.tripchat.service;
 
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
+import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
 import com.shg.trip.shgtrip.domain.place.dto.PlaceResponse;
 import com.shg.trip.shgtrip.domain.place.service.PlaceService;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
@@ -100,13 +101,27 @@ public class PlaceMatcher {
         return false;
     }
 
-    /** 해외 여행지는 주소가 현지어라 이름 대신 장소 region이 같은 여행지 묶음(교토·나라는 오사카)인지 본다. */
+    /** 여러 도시를 적은 여행지("서울, 부산", "강릉 갔다가 경주")는 그중 한 곳에 있으면 된다. */
     boolean matchesDestination(PlaceResponse p, String destination) {
+        if (matchesOne(p, destination)) return true;
+        return java.util.stream.Stream.concat(
+                        DESTINATION_SEPARATOR.splitAsStream(destination).map(String::strip),
+                        DomesticCities.all().stream().map(Destination::nameKo).filter(destination::contains))
+                .filter(d -> !d.isEmpty() && !d.equals(destination))
+                .anyMatch(d -> matchesOne(p, d));
+    }
+
+    /** 해외 여행지는 주소가 현지어라 이름 대신 장소 region이 같은 여행지 묶음(교토·나라는 오사카)인지 본다. */
+    private boolean matchesOne(PlaceResponse p, String destination) {
         java.util.Optional<Destination> overseas = destinations.resolve(destination);
         if (overseas.isEmpty()) return inDestination(p.address(), destination);
         return p.region() != null
                 && destinations.rootOf(p.region()).equals(destinations.rootOf(overseas.get().name()));
     }
+
+    /** 조사는 뒤에 공백이 올 때만 구분자로 본다. 붙여 쓴 이름("과천")을 덜 자르기 위해서다. */
+    private static final java.util.regex.Pattern DESTINATION_SEPARATOR =
+            java.util.regex.Pattern.compile("[,·/&→~]|(?:이랑|랑|하고|와|과|및|그리고)\\s+");
 
     /** 주소에 여행지 이름이 있어야 한다. "제주도"·"부산시"처럼 붙은 행정 단위는 떼고 본다. */
     static boolean inDestination(String address, String destination) {

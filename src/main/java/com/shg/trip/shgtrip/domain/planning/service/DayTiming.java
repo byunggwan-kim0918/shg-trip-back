@@ -65,7 +65,7 @@ final class DayTiming {
 
     /**
      * 두 장소 사이 이동 추정. 대안 선택 재계산 경로(ItineraryService)와 표시가 어긋나지 않게 {@link GeoUtils#estimateLeg} 공식을 공유한다.
-     * 비현실 구간(200km 초과)은 로그만 남기고 null을 반환한다.
+     * 비현실 구간({@link ScheduleTuning#maxLegKm} 초과)은 로그만 남기고 null을 반환한다.
      */
     static TransportLeg computeLeg(PlaceCandidate prev, PlaceCandidate cand, String transportPref, int dayNumber) {
         if (prev == null || cand == null) return null;
@@ -74,7 +74,7 @@ final class DayTiming {
         if (a == null || b == null) return null;
         boolean hubTransfer = PlaceCategoryConstants.isOverseasHub(prev.country(), prev.category())
                 || PlaceCategoryConstants.isOverseasHub(cand.country(), cand.category());
-        GeoUtils.TransportLeg leg = GeoUtils.estimateLeg(a, b, transportPref, MAX_REASONABLE_LEG_KM, hubTransfer);
+        GeoUtils.TransportLeg leg = GeoUtils.estimateLeg(a, b, transportPref, maxLegKm(hubTransfer), hubTransfer);
         if (leg == null) {
             log.warn("비현실적 구간거리 {}km (day={}, {} → {}) — 교통정보 생략",
                     String.format("%.1f", GeoUtils.haversine(a, b)), dayNumber, prev.name(), cand.name());

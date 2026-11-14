@@ -272,7 +272,15 @@ public final class ScheduleTuning {
      * 한 destination 내 하루 이동으로는 비현실적인 구간거리 임계값. 초과 시 불량 좌표로 보고
      * 해당 leg의 교통정보를 비운다. 그대로 두면 시간 누적이 새벽으로 wrap된다.
      */
-    static final double MAX_REASONABLE_LEG_KM = 200.0;
+    public static final double MAX_REASONABLE_LEG_KM = 200.0;
+
+    /** 해외 관문 공항을 오가는 구간의 직선 상한(km). destinations.json에서 가장 먼 관문(타이산 → 칭다오 공항 268km)보다 크다. */
+    public static final double MAX_GATEWAY_TRANSFER_KM = 300.0;
+
+    /** 이 직선 거리(km)를 넘는 구간은 이동을 추정하지 않고 비운다. */
+    public static double maxLegKm(boolean hubTransfer) {
+        return hubTransfer ? MAX_GATEWAY_TRANSFER_KM : MAX_REASONABLE_LEG_KM;
+    }
 
     /**
      * 이미 하루 거리 상한을 넘은 day에 그래도 허용할 추가 주행. 절대 총량으로 막으면 어떤 후보도 못 들어와
@@ -418,7 +426,17 @@ public final class ScheduleTuning {
     public record IntercityMode(String mode, double kmh, int overheadMinutes, double farePerKm, String currency) {}
 
     /** 도시 간 이동 구간의 이동 수단. 이 구간은 하루 이동 예산·구간 상한에 넣지 않고 편집 뒤에도 그날 첫 스텝에 남는다. */
-    public static final Set<String> INTERCITY_LEG_MODES = Set.of("TRAIN", "FLIGHT");
+    public static final Set<String> INTERCITY_LEG_MODES = Set.of("TRAIN", "FLIGHT", "DRIVE");
+
+    /** 요금이 사람 수만큼 드는 도시 간 이동. 자동차는 한 대 비용이다. */
+    public static final Set<String> PER_PERSON_FARE_MODES = Set.of("TRAIN", "FLIGHT");
+
+    /** 국내 도시 사이 KTX. 서울-부산(직선 325km) 약 2시간 40분·59,800원에 역을 오가는 시간을 더한 기준이다. */
+    static final IntercityMode KR_TRAIN = new IntercityMode("TRAIN", 120, 40, 180, "KRW");
+    /** 제주를 오가는 국내선. 김포-제주(직선 450km) 비행 1시간 10분, 공항 수속·이동 2시간, 편도 약 7만 원 기준이다. */
+    static final IntercityMode KR_FLIGHT = new IntercityMode("FLIGHT", 380, 120, 150, "KRW");
+    /** 차로 다니는 국내 도시 이동. 고속도로 평균 시속 90km(도로 = 직선 × 1.3), 연료·통행료 도로 km당 180원 기준이다. */
+    static final IntercityMode KR_DRIVE = new IntercityMode("DRIVE", 70, 20, 230, "KRW");
 
     public static final Map<String, IntercityMode> INTERCITY_MODES = Map.of(
             "JP", new IntercityMode("TRAIN", 160, 45, 35, "JPY"),

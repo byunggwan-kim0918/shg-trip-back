@@ -424,7 +424,7 @@ public class SelectionCallGenerator {
             TripCities.City city = byName.get(block.city());
             if (i > 0) {
                 CityBlockPlanner.IntercityLeg leg = plans.get(i).leg();
-                order.append(" → ").append("FLIGHT".equals(leg.mode()) ? "비행기" : "열차").append(" 약 ")
+                order.append(" → ").append(intercityModeKo(leg.mode())).append(" 약 ")
                         .append(durationLabel(leg.minutes())).append(" → ");
                 int start = CityBlockPlanner.arrivalAfter(leg);
                 Integer deadline = block.firstDay() == days ? RouteOptimizer.departureHubDeadline(args) : null;
@@ -441,6 +441,14 @@ public class SelectionCallGenerator {
         }
         sb.append(order).append(". 각 날의 장소·숙소는 그날 도시 후보에서만 고르세요\n");
         transferDays.forEach(sb::append);
+    }
+
+    private static String intercityModeKo(String mode) {
+        return switch (mode) {
+            case "FLIGHT" -> "비행기";
+            case "DRIVE" -> "차";
+            default -> "열차";
+        };
     }
 
     private static String cityLabel(TripCities cities, PlaceCandidate candidate) {
