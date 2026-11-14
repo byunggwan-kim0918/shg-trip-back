@@ -130,7 +130,7 @@ class CityBlockPlannerTest {
         RouteOptimizer.ScheduleResult result = routeOptimizer.schedule(selection(), candidates(), args(CITIES));
         List<StepData> steps = result.steps();
 
-        assertThat(result.notices()).isEmpty();
+        assertThat(result.unresolved()).isEmpty();
 
         assertThat(day(steps, 1).get(0).place().name()).isEqualTo("Narita International Airport");
         List<StepData> last = day(steps, 4);

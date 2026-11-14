@@ -39,6 +39,7 @@ class GenerationPolicyServiceTest {
     private static final Long USER = 100L;
     private static final String FAIL_KEY = "generation:fail:100";
     private static final String QUOTA_KEY = "generation:quota:100";
+    private static final String UNBILLED_KEY = "generation:unbilled:100";
 
     @BeforeEach
     void setUp() {
@@ -81,6 +82,55 @@ class GenerationPolicyServiceTest {
         assertThatThrownBy(() -> service.checkAllowed(USER))
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.GENERATION_QUOTA_EXCEEDED);
+    }
+
+    @Test
+    @DisplayName("미차감 생성이 3번째면 한도에 닿았다고 알리고, 안내에는 풀리는 시각을 시간 단위로 넣는다")
+    void reportsReachingUnbilledLimit() {
+        when(valueOps.increment(UNBILLED_KEY)).thenReturn(3L);
+        lenient().when(redisTemplate.getExpire(UNBILLED_KEY, TimeUnit.SECONDS)).thenReturn(5 * 3600L - 10);
+
+        assertThat(service.recordUnbilled(USER)).isTrue();
+        assertThat(service.unbilledLimitNotice(USER))
+                .isEqualTo("기준에 못 미친 생성이 24시간 안에 3번 나와 생성을 잠시 멈췄어요. 약 5시간 후 다시 만들 수 있어요.");
+    }
+
+    @Test
+    @DisplayName("쿼터를 쓰지 않은 생성이 24시간에 3번 쌓이면 GENERATION_UNBILLED_LIMIT로 막는다")
+    void blocksAtUnbilledLimit() {
+        when(valueOps.get(FAIL_KEY)).thenReturn(null);
+        when(valueOps.get(QUOTA_KEY)).thenReturn("1");
+        when(valueOps.get(UNBILLED_KEY)).thenReturn("3");
+        when(redisTemplate.getExpire(UNBILLED_KEY, TimeUnit.SECONDS)).thenReturn(7200L);
+        assertThatThrownBy(() -> service.checkAllowed(USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.GENERATION_UNBILLED_LIMIT);
+        when(valueOps.get(UNBILLED_KEY)).thenReturn("2");
+        assertThatCode(() -> service.checkAllowed(USER)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("조정 필요 생성은 쿼터를 올리지 않고 24시간 미차감 창을 시드한 뒤 INCR, 실패 횟수는 지운다")
+    void recordsUnbilledWithoutQuota() {
+        when(valueOps.increment(UNBILLED_KEY)).thenReturn(1L);
+        assertThat(service.recordUnbilled(USER)).isFalse();
+        verify(redisTemplate).delete(FAIL_KEY);
+        verify(valueOps).setIfAbsent(UNBILLED_KEY, "0", Duration.ofHours(24));
+        verify(valueOps).increment(UNBILLED_KEY);
+        verify(valueOps, never()).increment(QUOTA_KEY);
+    }
+
+    @Test
+    @DisplayName("쿼터 조회에 미차감 사용 수·한도·리셋 시각이 들어간다")
+    void statusIncludesUnbilled() {
+        when(valueOps.get(FAIL_KEY)).thenReturn(null);
+        when(valueOps.get(QUOTA_KEY)).thenReturn(null);
+        when(valueOps.get(UNBILLED_KEY)).thenReturn("1");
+        lenient().when(redisTemplate.getExpire(UNBILLED_KEY, TimeUnit.SECONDS)).thenReturn(600L);
+        var status = service.getStatus(USER);
+        assertThat(status.unbilledUsed()).isEqualTo(1);
+        assertThat(status.unbilledLimit()).isEqualTo(3);
+        assertThat(status.unbilledResetAt()).isNotNull();
     }
 
     @Test

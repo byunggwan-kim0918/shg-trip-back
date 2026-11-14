@@ -1,6 +1,6 @@
 -- metrics --
   스텝 24 / 숙소 3곳 / 총이동 393km
-  연속중복 0 / 최대공백 126분 / 늦은시작 0일 / 안내 0건
+  연속중복 0 / 최대공백 126분 / 늦은시작 0일 / 미해소 0건
 == day 1 ==
   #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: - -분 -km -원
@@ -118,4 +118,4 @@
   #24 19:56-21:26  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: CAR 76분 50.58km 15175원
       비용: 0원 / 메모: -
--- notices (0) --
+-- unresolved (0) --

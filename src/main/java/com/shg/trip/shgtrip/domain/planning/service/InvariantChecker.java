@@ -130,7 +130,7 @@ final class InvariantChecker {
     /**
      * 흩어진 보정 로그만으로는 최종 일정을 읽을 수 없어 루프 종료 후 day별 한 줄 요약을 남긴다.
      *
-     * @return 남은 위반의 안내 문구. 비어 있으면 모든 구조적 불변식을 만족한 일정이다
+     * @return 남은 위반("day{n} 라벨"). 비어 있으면 모든 구조적 불변식을 만족한 일정이다. 사용자 안내는 {@link ItineraryRules}로 만든다
      */
     List<String> summarize(List<DayState> days, List<StepData> steps, String pace,
                            String transportPref, List<PlaceCandidate> candidates, ScheduleConfig cfg) {
@@ -138,7 +138,7 @@ final class InvariantChecker {
         double[] limits = distanceLimits(transportPref, pace);
         int eveningCap = cfg != null ? cfg.eveningCap : DEFAULT_EVENING_CAP_MINUTES;
         int violationDays = 0;
-        List<String> notices = new ArrayList<>();
+        List<String> unresolved = new ArrayList<>();
 
         for (Map.Entry<Integer, DayStatus> entry : status.entrySet()) {
             DayStatus st = entry.getValue();
@@ -146,47 +146,36 @@ final class InvariantChecker {
             int dayNumber = entry.getKey();
             if (!st.lunch()) {
                 violations.add("점심 없음");
-                notices.add(dayNumber + "일차에 점심 식사를 넣지 못했어요. 주변 식당 데이터가 부족합니다.");
             }
             if (st.dinnerRequired() && !st.dinner()) {
                 violations.add("저녁 없음");
-                notices.add(dayNumber + "일차에 저녁 식사를 넣지 못했어요. 주변 식당 데이터가 부족합니다.");
             }
             if (st.lodgingRequired() && !st.lodging()) {
                 violations.add("숙소 없음");
-                notices.add(dayNumber + "일차 숙소를 찾지 못했어요. 직접 추가해 주세요.");
             }
             if (!"relaxed".equals(pace) && !st.attraction()) {
                 violations.add("관광 없음");
-                notices.add(dayNumber + "일차에 넣을 만한 관광지를 찾지 못했어요.");
             }
             if (!st.withinBudget()) {
                 violations.add("거리 초과");
-                notices.add(dayNumber + "일차 이동이 "
-                        + String.format("%.0f", st.totalKm() * GeoUtils.ROAD_DISTANCE_FACTOR)
-                        + "km로 다소 깁니다.");
             }
             if (st.endMinutes() > 0 && st.endMinutes() < EARLY_FINISH_MINUTES && !st.endsEarlyByDeparture()) {
                 violations.add("조기 종료(" + formatMinutes(st.endMinutes()) + ")");
-                notices.add(dayNumber + "일차 일정이 " + formatMinutes(st.endMinutes()) + "에 일찍 끝납니다.");
             }
             if (st.missedDeparture()) {
                 violations.add("출발 시각 초과");
-                notices.add(dayNumber + "일차 출발 시각에 맞추기 어려워요. 출발 시간을 다시 확인해 주세요.");
             }
             if (st.endMinutes() > eveningCap && !st.lateByArrival()) {
                 violations.add("늦은 종료(" + formatMinutes(st.endMinutes()) + ")");
-                notices.add(dayNumber + "일차 일정이 " + formatMinutes(st.endMinutes()) + "까지 이어집니다.");
             }
             // 고정된 식사 슬롯 사이에 먼 곳을 억지로 끼우면 "앉아서 3시간"이 "2.5시간 운전"이 된다.
-            // 그래서 메우지 못한 긴 공백은 자유시간으로 알린다.
+            // 그래서 메우지 못한 긴 공백은 고치지 않고 위반으로만 남긴다.
             int gap = maxIntraDayGap(steps, dayNumber);
             if (gap >= LARGE_GAP_MINUTES) {
                 violations.add("긴 공백(" + gap + "분)");
-                notices.add(dayNumber + "일차 중간에 " + (gap / 60) + "시간 " + (gap % 60)
-                        + "분 비는 시간이 있어요. 주변에 넣을 만한 곳을 찾지 못했습니다.");
             }
             if (!violations.isEmpty()) violationDays++;
+            violations.forEach(v -> unresolved.add("day" + dayNumber + " " + v));
 
             log.info("불변식 요약 day={}: 점심={} 저녁={}{} 숙소={}{} 관광={} 거리={}km(표시 {}km, 상한 {}km) 최대구간={}km 종료={} | {}",
                     entry.getKey(),
@@ -206,7 +195,7 @@ final class InvariantChecker {
         if (violationDays > 0) {
             log.warn("불변식 미해소 day {}개 / 전체 {}개", violationDays, status.size());
         }
-        return notices;
+        return unresolved;
     }
 
     /**

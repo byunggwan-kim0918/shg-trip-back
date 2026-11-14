@@ -80,18 +80,18 @@ public class RouteOptimizer {
         List<StepData> steps = DayScheduler.scheduleAll(s);
         steps = restoreDroppedProtected(s, steps, protectedHome);
         steps = enforceFinalInvariants(s, steps);
-        List<String> notices = invariantChecker.summarize(s.days, steps, s.pace, s.transportPref, s.candidates, s.cfg);
+        List<String> unresolved = invariantChecker.summarize(s.days, steps, s.pace, s.transportPref, s.candidates, s.cfg);
 
         List<StepData> finalSteps = pruneAlternativesAndRenumber(steps);
         log.info("RouteOptimizer.schedule 완료: {}개 step, {}개 day", finalSteps.size(), s.days.size());
-        return new ScheduleResult(finalSteps, notices);
+        return new ScheduleResult(finalSteps, unresolved);
     }
 
     /**
-     * 확정 스텝 + 끝내 해소하지 못한 품질 문제(사용자 안내 문구).
-     * notices가 비어 있으면 모든 구조적 불변식을 만족한 일정이다.
+     * 확정 스텝 + 끝내 해소하지 못한 불변식("day{n} 라벨"). 사용자 안내는 저장 관문이 {@link ItineraryRules}로 만든다.
+     * unresolved가 비어 있으면 모든 구조적 불변식을 만족한 일정이다.
      */
-    public record ScheduleResult(List<StepData> steps, List<String> notices) {}
+    public record ScheduleResult(List<StepData> steps, List<String> unresolved) {}
 
     private static void repairComposition(PlanState s) {
         // swap이라 개수 중립이어서 fixpoint 수렴 뒤 1회만 돈다.

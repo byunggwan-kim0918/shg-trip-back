@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.planning.dto.ItineraryData;
 import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
@@ -7,6 +8,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.TransportationHub;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -19,6 +21,17 @@ class DayWindowTest {
 
     private List<StepData> schedule(String arrival, String departure) {
         return schedule(arrival, departure, null);
+    }
+
+    @Test
+    @DisplayName("자정 직전 도착도 허브와 숙소 시각이 겹치지 않아 구조 검증을 통과한다")
+    void lateArrivalStaysStructurallyValid() {
+        for (String arrival : List.of("23:00", "23:30", "23:50")) {
+            List<StepData> steps = schedule(arrival, null, null);
+
+            assertThat(new HardValidator().validate(new ItineraryData("t", "제주", BigDecimal.ZERO, List.of(), steps)).valid())
+                    .as(arrival).isTrue();
+        }
     }
 
     private List<StepData> schedule(String arrival, String departure, String country) {
@@ -76,15 +89,15 @@ class DayWindowTest {
     }
 
     @Test
-    @DisplayName("오전 출발로 일찍 끝나는 날은 '일찍 끝납니다'·'관광지를 찾지 못했어요' 안내를 내지 않는다")
-    void noMisleadingNoticeOnMorningDeparture() {
+    @DisplayName("오전 출발로 일찍 끝나는 날은 조기 종료·관광 없음을 위반으로 보지 않는다")
+    void noEarlyFinishOnMorningDeparture() {
         ScheduleArgs args = new ScheduleArgs("normal", "car", LocalDate.of(2026, 11, 1),
                 List.of("food", "romance"), new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"),
                 false, List.of("restaurant"), false, null, "11:00", null);
-        List<String> notices = routeOptimizer.schedule(Itinerary115Fixture.selection(),
-                Itinerary115Fixture.candidates(), args).notices();
+        List<String> unresolved = routeOptimizer.schedule(Itinerary115Fixture.selection(),
+                Itinerary115Fixture.candidates(), args).unresolved();
 
-        assertThat(notices).noneMatch(n -> n.startsWith("4일차") && (n.contains("일찍 끝납니다") || n.contains("관광지")));
+        assertThat(unresolved).noneMatch(n -> n.startsWith("day4 ") && (n.contains("조기 종료") || n.contains("관광 없음")));
     }
 
     @Test
@@ -106,15 +119,15 @@ class DayWindowTest {
     }
 
     @Test
-    @DisplayName("지킬 수 없는 출발 시각(00:30)은 위반 없음으로 넘기지 않고 안내한다")
+    @DisplayName("지킬 수 없는 출발 시각(00:30)은 위반 없음으로 넘기지 않고 남은 위반으로 둔다")
     void impossibleDepartureIsReported() {
         ScheduleArgs args = new ScheduleArgs("normal", "car", LocalDate.of(2026, 11, 1),
                 List.of("food", "romance"), new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"),
                 false, List.of("restaurant"), false, null, "00:30", null);
-        List<String> notices = routeOptimizer.schedule(Itinerary115Fixture.selection(),
-                Itinerary115Fixture.candidates(), args).notices();
+        List<String> unresolved = routeOptimizer.schedule(Itinerary115Fixture.selection(),
+                Itinerary115Fixture.candidates(), args).unresolved();
 
-        assertThat(notices).anyMatch(n -> n.contains("출발 시각에 맞추기 어려워요"));
+        assertThat(unresolved).contains("day4 출발 시각 초과");
     }
 
     @Test
@@ -129,7 +142,7 @@ class DayWindowTest {
 
         assertThat(InvariantChecker.hasMealInWindow(day1, ScheduleTuning.DINNER_START, ScheduleTuning.DINNER_END))
                 .isTrue();
-        assertThat(r.notices()).noneMatch(n -> n.startsWith("1일차에 저녁"));
+        assertThat(r.unresolved()).doesNotContain("day1 저녁 없음");
     }
 
     @Test

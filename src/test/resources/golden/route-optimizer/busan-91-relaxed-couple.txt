@@ -1,6 +1,6 @@
 -- metrics --
   스텝 37 / 숙소 1곳 / 총이동 323km
-  연속중복 0 / 최대공백 197분 / 늦은시작 0일 / 안내 2건
+  연속중복 0 / 최대공백 197분 / 늦은시작 0일 / 미해소 2건
 == day 1 ==
   #1  08:30-09:30  임랑해수욕장 | Landmarks and Outdoors > Tourist Attraction | 기장군 | Busan
       이동: - -분 -km -원
@@ -184,6 +184,6 @@
   #37 14:34-16:04  부산타워 (Busan Tower) | Landmarks and Outdoors > Scenic Lookout | - | Busan
       이동: CAR 10분 6.52km 1955원
       비용: 6000원 / 메모: -
--- notices (2) --
-  5일차 중간에 3시간 17분 비는 시간이 있어요. 주변에 넣을 만한 곳을 찾지 못했습니다.
-  6일차 일정이 16:04에 일찍 끝납니다.
+-- unresolved (2) --
+  day5 긴 공백(197분)
+  day6 조기 종료(16:04)

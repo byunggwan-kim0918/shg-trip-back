@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -91,14 +92,23 @@ public class ItineraryGenerationExecutor {
 
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 90, "일정을 저장하고 있습니다...", "SAVING");
-            Itinerary saved = saveHelper.save(allowed, enrichedInput, userId);
+            Itinerary saved = saveHelper.save(allowed, enrichedInput, userId, false, null, planContext(request))
+                    .itinerary();
 
             resultStore.save(jobId, saved.getId(), userId);
-            // optimized 성공 지점과 상호배타라 쿼터는 정확히 1회 소모된다.
-            generationPolicyService.recordSuccess(userId);
+            // optimized 성공 지점과 상호배타라 쿼터나 미차감 한도를 한 번만 센다.
+            if (saved.getQualityStatus() == Itinerary.QualityStatus.NEEDS_ADJUSTMENT) {
+                generationPolicyService.recordUnbilled(userId);
+            } else {
+                generationPolicyService.recordSuccess(userId);
+            }
             sendProgress(emitter, 100, "일정 생성이 완료되었습니다.", "COMPLETE");
             sendComplete(emitter);
 
+        } catch (QualityGate.Rejected e) {
+            boolean atLimit = generationPolicyService.recordUnbilled(userId);
+            sendError(emitter, e.getErrorCode().getCode(), QualityGate.rejectionMessage(e.reason(),
+                    atLimit ? generationPolicyService.unbilledLimitNotice(userId) : null));
         } catch (BusinessException e) {
             log.warn("Generation failed for job {}: {} {}", jobId, e.getErrorCode(), e.getMessage());
             sendError(emitter, e.getErrorCode().getCode(), e.userMessage());
@@ -108,6 +118,13 @@ public class ItineraryGenerationExecutor {
         } finally {
             MDC.remove("jobId");
         }
+    }
+
+    /** 이 경로는 국내만 오고(해외는 후보 부족이면 중단) 필수 경험을 문장으로만 받는다. */
+    static QualityGate.PlanContext planContext(ItineraryGenerateRequest request) {
+        int days = (int) ChronoUnit.DAYS.between(request.startDate(), request.endDate()) + 1;
+        return new QualityGate.PlanContext(new ItineraryRules.Context(request.pace(), request.transportPref(),
+                request.startDate(), days, ScheduleTimes.departureHubDeadline(request.departureTime(), null)), List.of());
     }
 
     /** 이 경로는 Sonnet이 이름을 직접 지어 후보 정책을 거치지 않는다. 사용자가 고른 장소는 남긴다. */

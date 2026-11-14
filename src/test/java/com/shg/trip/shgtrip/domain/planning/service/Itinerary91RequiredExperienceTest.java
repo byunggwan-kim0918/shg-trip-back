@@ -39,10 +39,9 @@ class Itinerary91RequiredExperienceTest {
         StepData beach = steps.stream().filter(s -> "광안리해수욕장".equals(s.place().name())).findFirst().orElse(null);
         assertThat(beach).isNotNull();
         assertThat(beach.startTime()).isGreaterThanOrEqualTo("17:30");
-        assertThat(RequiredExperiences.dropped(match, steps)).isEmpty();
         assertThat(new ItineraryRules().evaluate(steps, match.candidates(), new ItineraryRules.Context(
                 trace.args().pace(), trace.args().transportPref(), trace.args().startDate(), trace.dayCount(),
-                RouteOptimizer.departureHubDeadline(trace.args()), RequiredExperiences.placeIds(match.candidates())))
+                RouteOptimizer.departureHubDeadline(trace.args()), RequiredExperiences.places(match.candidates())))
                 .violations()).noneMatch(v -> v.rule() == Rule.REQUIRED_EXPERIENCE_MISSING);
     }
 }

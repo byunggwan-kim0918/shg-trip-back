@@ -5,10 +5,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.itinerary.entity.GenerationTrace;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
-import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
-import com.shg.trip.shgtrip.domain.place.destination.KrwRates;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
@@ -23,6 +21,7 @@ import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.domain.planning.service.RequiredExperiences;
 import com.shg.trip.shgtrip.domain.planning.service.RouteOptimizer;
+import com.shg.trip.shgtrip.domain.planning.service.SavedItineraryFacts;
 import com.shg.trip.shgtrip.domain.planning.service.ScoreReport;
 import com.shg.trip.shgtrip.domain.planning.service.VectorSearchQueryService;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 
@@ -46,7 +46,8 @@ import java.util.*;
  * </pre>
  * score: 저장본만 채점 / replay: 현재 코드로 다시 돌려 비교 / corpus: 기록 있는 일정 전부 replay
  * / pool: 기록의 보강 입력으로 벡터 검색만 다시 돌려 후보 풀을 pool-{id}.tsv로 남긴다(질의 임베딩 호출이 나간다)
- * / files: {@code --eval.files}의 {@link TraceFile} JSON 줄을 DB 없이 replay한다.
+ * / files: {@code --eval.files}의 {@link TraceFile} JSON 줄을 DB 없이 replay한다
+ * / rejected: 관문에서 막혀 일정 없이 남은 기록을 다시 돌려 rejected-{기록 id}.txt로 남긴다(eval.ids는 기록 id).
  *
  * <p>{@code --eval.refresh-attributes}: 기록의 후보에 DB의 현재 속성·영업시간을 덮어쓴다.
  * off(기본) 그대로 / score 채점에만 / all 재실행 입력과 채점 모두.
@@ -99,6 +100,11 @@ public class EvalRunner implements CommandLineRunner {
             System.exit(SpringApplication.exit(context, () -> 0));
             return;
         }
+        if ("rejected".equals(mode)) {
+            replayRejected();
+            System.exit(SpringApplication.exit(context, () -> 0));
+            return;
+        }
         List<Row> rows = new ArrayList<>();
         if ("files".equals(mode)) {
             // 기록 파일의 후보는 다른 DB(운영)의 값이라 로컬 DB 값으로 덮으면 섞인다.
@@ -118,7 +124,7 @@ public class EvalRunner implements CommandLineRunner {
             return;
         }
         List<Long> targets = "corpus".equals(mode)
-                ? traceRepository.findAll().stream().map(GenerationTrace::getItineraryId).sorted().toList()
+                ? traceRepository.findAll().stream().map(GenerationTrace::getItineraryId).filter(Objects::nonNull).sorted().toList()
                 : parseIds(ids);
         boolean replay = !"score".equals(mode);
 
@@ -131,6 +137,33 @@ public class EvalRunner implements CommandLineRunner {
             rows.add(evaluate(found.get(), traceRepository.findByItineraryId(id).orElse(null), replay));
         }
         writeReport(rows);
+    }
+
+    /** 저장본이 없어 채점표 대신 기록의 판정과 지금 코드의 판정·스텝을 나란히 남긴다. 후보는 기록 그대로 쓴다. */
+    private void replayRejected() throws Exception {
+        Set<Long> only = ids == null || ids.isBlank() ? Set.of() : new HashSet<>(parseIds(ids));
+        List<GenerationTrace> traces = traceRepository.findAll().stream()
+                .filter(t -> t.getItineraryId() == null && (only.isEmpty() || only.contains(t.getId())))
+                .sorted(Comparator.comparing(GenerationTrace::getId))
+                .toList();
+        Path dir = Path.of(outDir);
+        Files.createDirectories(dir);
+        for (GenerationTrace t : traces) {
+            List<PlaceCandidate> traced = objectMapper.readValue(t.getCandidates(), new TypeReference<>() {});
+            SelectionOutput selection = objectMapper.readValue(t.getSelectionFinal(), SelectionOutput.class);
+            ScheduleArgs args = objectMapper.readValue(t.getScheduleArgs(), ScheduleArgs.class);
+            JsonNode request = objectMapper.readTree(t.getRequest());
+            int dayCount = (int) ChronoUnit.DAYS.between(LocalDate.parse(request.path("startDate").asText()),
+                    LocalDate.parse(request.path("endDate").asText())) + 1;
+            List<StepData> steps = routeOptimizer.schedule(selection, traced, args).steps();
+            ItineraryRules.Verdict verdict = rules.evaluate(steps, traced, new ItineraryRules.Context(args.pace(),
+                    args.transportPref(), args.startDate(), dayCount, RouteOptimizer.departureHubDeadline(args),
+                    RequiredExperiences.places(traced)));
+            Files.writeString(dir.resolve("rejected-" + t.getId() + ".txt"),
+                    "== 기록 판정\n" + t.getScore() + "\n== 재실행 판정\n" + objectMapper.writeValueAsString(verdict)
+                            + "\n== 재실행 스텝\n" + renderSteps(steps));
+        }
+        log.info("거부 기록 {}건 → {}", traces.size(), dir.toAbsolutePath());
     }
 
     private void writeReport(List<Row> rows) throws Exception {
@@ -146,10 +179,10 @@ public class EvalRunner implements CommandLineRunner {
     }
 
     private Row evaluate(Itinerary itinerary, GenerationTrace trace, boolean replay) throws Exception {
-        List<StepData> savedSteps = toStepData(itinerary);
+        List<StepData> savedSteps = SavedItineraryFacts.steps(itinerary);
         int dayCount = (int) ChronoUnit.DAYS.between(itinerary.getStartDate(), itinerary.getEndDate()) + 1;
         if (trace == null) {
-            List<PlaceCandidate> fromPlaces = candidatesFromPlaces(itinerary);
+            List<PlaceCandidate> fromPlaces = SavedItineraryFacts.candidates(itinerary);
             ScoreReport saved = scorer.score(new ItineraryScorer.Input(savedSteps, null, null,
                     itinerary.getStartDate(), fromPlaces, null));
             ItineraryRules.Verdict savedRules = rules.evaluate(savedSteps, fromPlaces,
@@ -173,7 +206,7 @@ public class EvalRunner implements CommandLineRunner {
 
         Integer hubDeadline = RouteOptimizer.departureHubDeadline(args);
         ItineraryRules.Context ruleContext = new ItineraryRules.Context(args.pace(), args.transportPref(),
-                args.startDate(), dayCount, hubDeadline, RequiredExperiences.placeIds(traced));
+                args.startDate(), dayCount, hubDeadline, RequiredExperiences.places(traced));
         String country = args.country() != null ? args.country() : countryOf(savedSteps);
         ScoreReport saved = scorer.score(new ItineraryScorer.Input(savedSteps, args.pace(), args.transportPref(),
                 args.startDate(), candidates, selection, hubDeadline));
@@ -217,7 +250,7 @@ public class EvalRunner implements CommandLineRunner {
         } else {
             List<GenerationTrace> traces = ids == null || ids.isBlank() ? traceRepository.findAll()
                     : parseIds(ids).stream().map(traceRepository::findByItineraryId).flatMap(Optional::stream).toList();
-            traces.stream().filter(t -> t.getEnrichedInput() != null)
+            traces.stream().filter(t -> t.getItineraryId() != null && t.getEnrichedInput() != null)
                     .forEach(t -> inputs.put(t.getItineraryId(), t.getEnrichedInput()));
         }
         Path dir = Path.of(outDir);
@@ -262,23 +295,6 @@ public class EvalRunner implements CommandLineRunner {
         return sb.toString();
     }
 
-    private static List<StepData> toStepData(Itinerary itinerary) {
-        return itinerary.getSteps().stream()
-                .sorted(Comparator.comparingInt(ItineraryStep::getDayNumber)
-                        .thenComparingInt(ItineraryStep::getStepOrder))
-                .map(s -> {
-                    Place p = s.getPlace();
-                    PlaceData place = p == null ? null
-                            : new PlaceData(p.getName(), p.getAddress(), p.getCategory(), p.getRegion(), p.getCountry(),
-                                    null, null, p.getId(), p.getNameKo());
-                    return new StepData(s.getStepOrder(), s.getDayNumber(), s.getStartTime(), s.getEndTime(), place,
-                            List.of(), s.getTransportationMode(), s.getTransportationDuration(),
-                            s.getTransportationDistance(), s.getTransportationCost(), s.getNotes(),
-                            s.getEstimatedCost());
-                })
-                .toList();
-    }
-
     /** DB에 값이 있는 것만 덮어쓴다. 없으면 기록의 값을 그대로 둔다. */
     private List<PlaceCandidate> refreshFacts(List<PlaceCandidate> candidates) {
         Map<Long, Place> places = new HashMap<>();
@@ -290,24 +306,6 @@ public class EvalRunner implements CommandLineRunner {
             return c.withRefreshedFacts(p.getAttributes() != null ? p.getAttributes() : c.attributes(),
                     p.getOpeningHours() != null ? p.getOpeningHours() : c.openingHours());
         }).toList();
-    }
-
-    /** 생성 기록이 없는 옛 일정용. */
-    private static List<PlaceCandidate> candidatesFromPlaces(Itinerary itinerary) {
-        List<PlaceCandidate> out = new ArrayList<>();
-        int index = 1;
-        Set<Long> seen = new HashSet<>();
-        for (ItineraryStep s : itinerary.getSteps()) {
-            Place p = s.getPlace();
-            if (p == null || !seen.add(p.getId())) continue;
-            out.add(new PlaceCandidate(index++, p.getId(), p.getName(), p.getAddress(), p.getCategory(), p.getTags(),
-                    p.getRegion(), p.getCountry(), p.getLatitude(), p.getLongitude(), p.getDescription(),
-                    p.getRating(), 0, p.getPriceLevel(), p.getOpeningHours(), p.getRecommendedTimeSlots(),
-                    p.getRecommendedDurationMinutes(), false, KrwRates.admissionWon(p), null, p.getUserRatingCount(),
-                    p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine(), false, null, p.getAttributes(),
-                    p.getNameKo(), p.getTravelerFame()));
-        }
-        return out;
     }
 
     private static List<Long> parseIds(String raw) {

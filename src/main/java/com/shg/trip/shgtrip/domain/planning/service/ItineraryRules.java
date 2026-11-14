@@ -8,6 +8,7 @@ import com.shg.trip.shgtrip.global.util.GeoUtils;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -28,7 +29,7 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.*;
 public final class ItineraryRules {
 
     /** 규칙이나 등급이 바뀌면 올린다. 다른 버전의 판정 기록끼리 비교하지 않기 위해서다. */
-    public static final int VERSION = 3;
+    public static final int VERSION = 4;
 
     public enum Severity {
         /** 일정을 쓸 수 없다. */
@@ -47,15 +48,16 @@ public final class ItineraryRules {
         DINNER_MISSING(Severity.CORE),
         NOT_ENDING_AT_LODGING(Severity.CORE),
         DEPARTURE_LATE(Severity.CORE),
-        LEG_OVER_CAP(Severity.CORE),
         OUTSIDE_HOURS(Severity.CORE),
-        DAY_DISTANCE_OVER_CAP(Severity.CORE),
         SAME_DAY_MEAL_KIND(Severity.CORE),
         MEAL_KIND_REPEATED(Severity.CORE),
         CAFE_PER_DAY(Severity.CORE),
         NO_NON_FOOD_ACTIVITY(Severity.CORE),
         ADDRESS_REGION_MISMATCH(Severity.CORE),
         REQUIRED_EXPERIENCE_MISSING(Severity.CORE),
+        // 거리는 직선 × 도로 계수 추정이라 편집으로 고칠 수 없어 사용자 경고로 띄우지 않는다
+        LEG_OVER_CAP(Severity.SOFT),
+        DAY_DISTANCE_OVER_CAP(Severity.SOFT),
         EARLY_FINISH(Severity.SOFT),
         CONSECUTIVE_MEAL_KIND(Severity.SOFT),
         SAME_DAY_MEAL_GROUP(Severity.SOFT),
@@ -68,8 +70,19 @@ public final class ItineraryRules {
         }
     }
 
-    /** @param day 0이면 여행 전체에 걸친 위반 */
-    public record Violation(Rule rule, int day, String message) {
+    /**
+     * @param day      0이면 여행 전체에 걸친 위반
+     * @param evidence 안내 문구에 넣을 근거(장소 이름·시각·거리). 규칙마다 담는 것이 정해져 있다
+     */
+    public record Violation(Rule rule, int day, String message, List<String> evidence) {
+        public Violation {
+            evidence = evidence == null ? List.of() : List.copyOf(evidence);
+        }
+
+        Violation(Rule rule, int day, String message) {
+            this(rule, day, message, List.of());
+        }
+
         /** 기록(generation_traces.score)만 보고 SQL로 등급을 셀 수 있게 함께 직렬화한다. */
         @JsonProperty("severity")
         public Severity severity() {
@@ -78,19 +91,23 @@ public final class ItineraryRules {
     }
 
     /**
-     * @param dayCount                  여행 일수. 0이면 날짜 누락을 판정하지 않는다
-     * @param lastDayHubDeadline        사용자 출발 시각에서 정한 허브 도착 마감(분). 없으면 null
-     * @param requiredExperiencePlaceIds 필수 경험에 맞춘 장소. 맞출 후보가 없던 경험은 안내만 하므로 넣지 않는다
+     * 일정의 plan_context에 JSON으로 저장된다. 필드 이름을 바꾸면 저장된 일정에서 그 값이 비어 읽혀 편집 뒤 판정이 달라진다.
+     *
+     * @param dayCount            여행 일수. 0이면 날짜 누락을 판정하지 않는다
+     * @param lastDayHubDeadline  사용자 출발 시각에서 정한 허브 도착 마감(분). 없으면 null
+     * @param requiredExperiences 필수 경험에 맞춘 장소 id와 안내 이름. 맞출 후보가 없던 경험은 안내만 하므로 넣지 않는다.
+     *                            저장 뒤 판정은 스텝 장소만 후보로 보므로 빠진 장소의 이름을 여기서 읽는다
      */
     public record Context(String pace, String transportPref, LocalDate startDate, int dayCount,
-                          Integer lastDayHubDeadline, Set<Long> requiredExperiencePlaceIds) {
+                          Integer lastDayHubDeadline, Map<Long, String> requiredExperiences) {
         public Context {
-            requiredExperiencePlaceIds = requiredExperiencePlaceIds == null ? Set.of() : Set.copyOf(requiredExperiencePlaceIds);
+            requiredExperiences = requiredExperiences == null ? Map.of()
+                    : Collections.unmodifiableMap(new LinkedHashMap<>(requiredExperiences));
         }
 
         public Context(String pace, String transportPref, LocalDate startDate, int dayCount,
                        Integer lastDayHubDeadline) {
-            this(pace, transportPref, startDate, dayCount, lastDayHubDeadline, Set.of());
+            this(pace, transportPref, startDate, dayCount, lastDayHubDeadline, Map.of());
         }
     }
 
@@ -140,7 +157,7 @@ public final class ItineraryRules {
         }
         tally.checkTrip(byDay.size(), out);
         checkAddressRegion(byDay, out);
-        checkRequiredExperiences(steps, candidates, ctx.requiredExperiencePlaceIds(), out);
+        checkRequiredExperiences(steps, candidates, ctx.requiredExperiences(), out);
         return new Verdict(VERSION, out, tally.meals, tally.unknown);
     }
 
@@ -183,13 +200,14 @@ public final class ItineraryRules {
             dayKm += straight;
             if (straight > limits[0]) {
                 out.add(new Violation(Rule.LEG_OVER_CAP, day,
-                        "day" + day + " 구간 상한 초과(" + CandidateLookup.name(s) + ")"));
+                        "day" + day + " 구간 상한 초과(" + CandidateLookup.name(s) + ")", List.of(shownName(s))));
             }
         }
         if (dayKm > limits[1]) {
+            String shownKm = String.format("%.0f", dayKm * GeoUtils.ROAD_DISTANCE_FACTOR);
             out.add(new Violation(Rule.DAY_DISTANCE_OVER_CAP, day, String.format(
-                    "day%d 하루 이동 %.0fkm(상한 %.0fkm)", day, dayKm * GeoUtils.ROAD_DISTANCE_FACTOR,
-                    limits[1] * GeoUtils.ROAD_DISTANCE_FACTOR)));
+                    "day%d 하루 이동 %skm(상한 %.0fkm)", day, shownKm,
+                    limits[1] * GeoUtils.ROAD_DISTANCE_FACTOR), List.of(shownKm)));
         }
 
         checkOpeningHours(day, daySteps, ctx.startDate(), lookup, out);
@@ -201,24 +219,28 @@ public final class ItineraryRules {
                 && ctx.lastDayHubDeadline() < EARLY_FINISH_MINUTES;
         int lastActivityEnd = lookup.lastActivityEnd(daySteps);
         if (!endsEarlyByDeparture && lastActivityEnd > 0 && lastActivityEnd < EARLY_FINISH_MINUTES) {
-            out.add(new Violation(Rule.EARLY_FINISH, day,
-                    "day" + day + " 일정이 " + ScheduleTimes.formatMinutes(lastActivityEnd) + "에 끝남"));
+            String end = ScheduleTimes.formatMinutes(lastActivityEnd);
+            out.add(new Violation(Rule.EARLY_FINISH, day, "day" + day + " 일정이 " + end + "에 끝남", List.of(end)));
         }
     }
 
-    private void checkRequiredExperiences(List<StepData> steps, List<PlaceCandidate> candidates, Set<Long> required,
-                                          List<Violation> out) {
+    private void checkRequiredExperiences(List<StepData> steps, List<PlaceCandidate> candidates,
+                                          Map<Long, String> required, List<Violation> out) {
         if (required.isEmpty()) return;
         Set<Long> placed = (steps == null ? List.<StepData>of() : steps).stream()
                 .filter(s -> s.place() != null && s.place().placeId() != null)
                 .map(s -> s.place().placeId())
                 .collect(Collectors.toSet());
-        for (Long id : required) {
+        // plan_context(JSONB)는 객체 키 순서를 바꾸므로 id 순으로 돌아야 편집 전후 안내 순서가 같다.
+        for (Map.Entry<Long, String> entry : required.entrySet().stream().sorted(Map.Entry.comparingByKey()).toList()) {
+            Long id = entry.getKey();
             if (placed.contains(id)) continue;
-            String name = (candidates == null ? List.<PlaceCandidate>of() : candidates).stream()
-                    .filter(c -> c != null && id.equals(c.placeId()))
-                    .map(PlaceCandidate::name).findFirst().orElse("id " + id);
-            out.add(new Violation(Rule.REQUIRED_EXPERIENCE_MISSING, 0, "필수 경험 장소 빠짐(" + name + ")"));
+            PlaceCandidate c = (candidates == null ? List.<PlaceCandidate>of() : candidates).stream()
+                    .filter(x -> x != null && id.equals(x.placeId())).findFirst().orElse(null);
+            String known = entry.getValue() == null || entry.getValue().isBlank() ? "id " + id : entry.getValue();
+            String shown = c == null ? known : shownName(c.name(), c.nameKo());
+            out.add(new Violation(Rule.REQUIRED_EXPERIENCE_MISSING, 0, "필수 경험 장소 빠짐(" + shown + ")",
+                    List.of(shown)));
         }
     }
 
@@ -231,7 +253,7 @@ public final class ItineraryRules {
                 String key = s.place().placeId() != null ? "id:" + s.place().placeId() : "name:" + CandidateLookup.name(s);
                 if (KoreanAddressRegion.contradicts(s.place().address(), s.place().region()) && seen.add(key)) {
                     out.add(new Violation(Rule.ADDRESS_REGION_MISMATCH, day,
-                            "day" + day + " 주소와 지역 불일치(" + CandidateLookup.name(s) + ")"));
+                            "day" + day + " 주소와 지역 불일치(" + CandidateLookup.name(s) + ")", List.of(shownName(s))));
                 }
             }
         });
@@ -247,10 +269,12 @@ public final class ItineraryRules {
             CandidatePolicy.Role role = CandidatePolicy.roleOf(c);
             if (role == CandidatePolicy.Role.LODGING || role == CandidatePolicy.Role.TRANSIT) continue;
             if (OpeningHoursText.isClosedOnDay(c.openingHours(), dow)) {
-                out.add(new Violation(Rule.CLOSED_DAY, day, "day" + day + " 휴무일 방문(" + c.name() + ")"));
+                out.add(new Violation(Rule.CLOSED_DAY, day, "day" + day + " 휴무일 방문(" + c.name() + ")",
+                        List.of(shownName(s))));
             } else if (!OpeningHoursText.isOpenDuring(c.openingHours(), dow,
                     toMinutesOrZero(s.startTime()), toMinutesOrZero(s.endTime()))) {
-                out.add(new Violation(Rule.OUTSIDE_HOURS, day, "day" + day + " 영업시간 밖(" + c.name() + ")"));
+                out.add(new Violation(Rule.OUTSIDE_HOURS, day, "day" + day + " 영업시간 밖(" + c.name() + ")",
+                        List.of(shownName(s))));
             }
         }
     }
@@ -258,9 +282,10 @@ public final class ItineraryRules {
     /** 카페를 옮겨 다니는 날과 먹기만 하는 날. 먹기만 하는 날은 점심·저녁 창을 모두 덮는 날만 본다. */
     private void checkComposition(int day, List<StepData> daySteps, int dayStart, int dayEnd,
                                   CandidateLookup lookup, List<Violation> out) {
-        long cafes = daySteps.stream().filter(s -> lookup.role(s) == CandidatePolicy.Role.CAFE).count();
-        if (cafes > CAFE_PER_DAY_CAP) {
-            out.add(new Violation(Rule.CAFE_PER_DAY, day, "day" + day + " 카페·디저트 " + cafes + "곳"));
+        List<String> cafes = daySteps.stream().filter(s -> lookup.role(s) == CandidatePolicy.Role.CAFE)
+                .map(ItineraryRules::shownName).toList();
+        if (cafes.size() > CAFE_PER_DAY_CAP) {
+            out.add(new Violation(Rule.CAFE_PER_DAY, day, "day" + day + " 카페·디저트 " + cafes.size() + "곳", cafes));
         }
         boolean fullDay = dayStart <= LUNCH_START && dayEnd >= DINNER_START;
         if (fullDay && daySteps.stream().noneMatch(s -> lookup.role(s).isVisit())) {
@@ -268,12 +293,22 @@ public final class ItineraryRules {
         }
     }
 
+    // 해외 장소는 안내에 한국어 이름을 쓴다.
+    private static String shownName(StepData s) {
+        return s.place() == null ? "" : shownName(s.place().name(), s.place().nameKo());
+    }
+
+    static String shownName(String name, String nameKo) {
+        return nameKo != null && !nameKo.isBlank() ? nameKo : name == null ? "" : name;
+    }
+
     /** 같은 날 점심·저녁, 전날 저녁·다음 날 점심, 여행 전체의 음식 종류·묶음 반복. */
     private static final class MealTally {
-        private final Map<String, Integer> kindCounts = new LinkedHashMap<>();
+        private final Map<String, List<String>> placesByKind = new LinkedHashMap<>();
         private final Map<String, Set<String>> kindsByGroup = new LinkedHashMap<>();
-        private final Map<String, Integer> groupCounts = new LinkedHashMap<>();
+        private final Map<String, List<String>> placesByGroup = new LinkedHashMap<>();
         private String previousDinnerKind;
+        private String previousDinnerName;
         private int previousDinnerDay;
         int meals;
         int unknown;
@@ -281,55 +316,68 @@ public final class ItineraryRules {
         void addDay(int day, List<StepData> daySteps, CandidateLookup lookup, List<Violation> out) {
             String lunchKind = null;
             String dinnerKind = null;
+            String lunchName = null;
+            String dinnerName = null;
+            boolean lunchSeen = false;
             for (StepData s : daySteps) {
                 if (s.place() == null || !lookup.isMeal(s)) continue;
                 String kind = lookup.mealKind(s);
+                String name = shownName(s);
                 meals++;
                 if (!CandidateLookup.isSpecificKind(kind)) {
                     unknown++;
                     kind = null;
                 } else {
-                    kindCounts.merge(kind, 1, Integer::sum);
+                    placesByKind.computeIfAbsent(kind, k -> new ArrayList<>()).add(name);
                     String group = PlaceCategoryConstants.mealGroup(kind);
-                    groupCounts.merge(group, 1, Integer::sum);
+                    placesByGroup.computeIfAbsent(group, g -> new ArrayList<>()).add(name);
                     kindsByGroup.computeIfAbsent(group, g -> new LinkedHashSet<>()).add(kind);
                 }
                 int start = toMinutesOrZero(s.startTime());
-                if (lunchKind == null && InvariantChecker.inMealWindow(start, LUNCH_START, LUNCH_END)) lunchKind = kind;
-                if (InvariantChecker.inMealWindow(start, DINNER_START, DINNER_END)) dinnerKind = kind;
+                if (!lunchSeen && InvariantChecker.inMealWindow(start, LUNCH_START, LUNCH_END)) {
+                    lunchSeen = kind != null;
+                    lunchKind = kind;
+                    lunchName = name;
+                }
+                if (InvariantChecker.inMealWindow(start, DINNER_START, DINNER_END)) {
+                    dinnerKind = kind;
+                    dinnerName = name;
+                }
             }
             if (PlaceCategoryConstants.sameMealKind(lunchKind, dinnerKind)) {
                 out.add(new Violation(Rule.SAME_DAY_MEAL_KIND, day,
-                        "day" + day + " 점심·저녁 같은 종류(" + lunchKind + ")"));
+                        "day" + day + " 점심·저녁 같은 종류(" + lunchKind + ")", List.of(lunchName, dinnerName)));
             } else {
                 String lunchGroup = PlaceCategoryConstants.mealGroup(lunchKind);
                 if (lunchGroup != null && lunchGroup.equals(PlaceCategoryConstants.mealGroup(dinnerKind))) {
                     out.add(new Violation(Rule.SAME_DAY_MEAL_GROUP, day,
-                            "day" + day + " 점심·저녁 같은 묶음(" + lunchGroup + ")"));
+                            "day" + day + " 점심·저녁 같은 묶음(" + lunchGroup + ")", List.of(lunchName, dinnerName)));
                 }
                 if (previousDinnerDay == day - 1 && PlaceCategoryConstants.sameMealKind(lunchKind, previousDinnerKind)) {
                     out.add(new Violation(Rule.CONSECUTIVE_MEAL_KIND, day,
-                            "day" + day + " 전날 저녁과 점심 같은 종류(" + lunchKind + ")"));
+                            "day" + day + " 전날 저녁과 점심 같은 종류(" + lunchKind + ")",
+                            List.of(previousDinnerName, lunchName)));
                 }
             }
             previousDinnerKind = dinnerKind;
+            previousDinnerName = dinnerName;
             previousDinnerDay = day;
         }
 
         void checkTrip(int dayCount, List<Violation> out) {
             int cap = mealKindTripCap(dayCount);
-            kindCounts.forEach((kind, count) -> {
-                if (count > cap) {
+            placesByKind.forEach((kind, places) -> {
+                if (places.size() > cap) {
                     out.add(new Violation(Rule.MEAL_KIND_REPEATED, 0,
-                            "같은 종류 " + kind + " " + count + "끼(상한 " + cap + ")"));
+                            "같은 종류 " + kind + " " + places.size() + "끼(상한 " + cap + ")", places));
                 }
             });
             // 한 요리만 반복된 묶음은 위 종류 상한이 이미 잡는다.
             int groupCap = mealGroupTripCap(dayCount);
-            groupCounts.forEach((group, count) -> {
-                if (count > groupCap && kindsByGroup.get(group).size() > 1) {
+            placesByGroup.forEach((group, places) -> {
+                if (places.size() > groupCap && kindsByGroup.get(group).size() > 1) {
                     out.add(new Violation(Rule.MEAL_GROUP_REPEATED, 0,
-                            "같은 묶음 " + group + " " + count + "끼(상한 " + groupCap + ")"));
+                            "같은 묶음 " + group + " " + places.size() + "끼(상한 " + groupCap + ")", places));
                 }
             });
         }

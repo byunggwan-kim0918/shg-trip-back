@@ -72,7 +72,7 @@ public final class CityBlockPlanner {
         Map<Integer, List<Integer>> placesByDay = placesByBlockDay(selection, blocks, cityOfIndex);
 
         List<StepData> steps = new ArrayList<>();
-        List<String> notices = new ArrayList<>();
+        List<String> unresolved = new ArrayList<>();
         StringBuilder route = new StringBuilder();
         for (int b = 0; b < blocks.size(); b++) {
             Block block = blocks.get(b);
@@ -86,14 +86,14 @@ public final class CityBlockPlanner {
                     first ? args.arrivalTime() : ScheduleTimes.formatMinutes(arrivalAfter(leg)),
                     last ? args.departureTime() : null, !first, !last);
             RouteOptimizer.ScheduleResult result = scheduler.schedule(input.selection(), input.candidates(), blockArgs);
-            notices.addAll(result.notices());
+            unresolved.addAll(result.unresolved());
             steps.addAll(leg == null ? result.steps() : withLegOnFirstStep(result.steps(), leg));
             route.append(first ? "" : " → ").append(block.city()).append(' ')
                     .append(block.firstDay()).append('~').append(block.lastDay()).append("일차");
             if (leg != null) route.append(String.format("(%s %d분)", leg.mode(), leg.minutes()));
         }
         log.info("도시별 일정: {}", route);
-        return new RouteOptimizer.ScheduleResult(renumber(steps), notices.stream().distinct().toList());
+        return new RouteOptimizer.ScheduleResult(renumber(steps), unresolved.stream().distinct().toList());
     }
 
     /** 일차별 도시에서 이어진 구간. 일차 순서대로다. */

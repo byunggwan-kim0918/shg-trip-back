@@ -13,6 +13,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -45,6 +46,11 @@ class ItineraryRulesTest {
         Verdict verdict = rules.evaluate(day, List.of(), context("relaxed", 1));
 
         assertThat(rulesOf(verdict)).contains(Rule.CAFE_PER_DAY, Rule.NO_NON_FOOD_ACTIVITY);
+        assertThat(verdict.violations()).filteredOn(v -> v.rule() == Rule.CAFE_PER_DAY).singleElement()
+                .extracting(ItineraryRules.Violation::evidence).asList()
+                .containsExactly("브리앙", "베어케이커리", "베이커리카페 네모", "카페 Ccd. 부산송도점");
+        assertThat(verdict.violations()).filteredOn(v -> v.rule() == Rule.SAME_DAY_MEAL_KIND).singleElement()
+                .extracting(ItineraryRules.Violation::evidence).asList().containsExactly("자갈치해물짬뽕", "짬뽕지존");
         assertThat(verdict.has(Severity.CORE)).isTrue();
         assertThat(verdict.has(Severity.HARD)).isFalse();
     }
@@ -146,8 +152,12 @@ class ItineraryRulesTest {
                 step(5, 1, "17:30", "18:40", "욜로조개구이", SEAFOOD, 34.2),
                 step(6, 1, "19:02", "19:32", "텐테이블펜션", PENSION, 14.5));
 
-        assertThat(rulesOf(rules.evaluate(day, List.of(), context("relaxed", 1))))
-                .contains(Rule.DAY_DISTANCE_OVER_CAP);
+        Verdict relaxed = rules.evaluate(day, List.of(), context("relaxed", 1));
+        assertThat(relaxed.violations()).filteredOn(v -> v.rule() == Rule.DAY_DISTANCE_OVER_CAP)
+                .singleElement().satisfies(v -> {
+                    assertThat(v.severity()).isEqualTo(Severity.SOFT);
+                    assertThat(v.evidence()).containsExactly("136");
+                });
         assertThat(rulesOf(rules.evaluate(day, List.of(), context("normal", 1))))
                 .doesNotContain(Rule.DAY_DISTANCE_OVER_CAP);
     }
@@ -253,10 +263,10 @@ class ItineraryRulesTest {
                 BigDecimal.valueOf(35.1), BigDecimal.valueOf(129.0), null, null, 0.9);
 
         assertThat(rulesOf(rules.evaluate(List.of(beach), List.of(tower),
-                new ItineraryRules.Context("normal", "car", START, 1, null, java.util.Set.of(501L)))))
+                new ItineraryRules.Context("normal", "car", START, 1, null, Map.of(501L, "광안리해수욕장")))))
                 .doesNotContain(Rule.REQUIRED_EXPERIENCE_MISSING);
         Verdict missing = rules.evaluate(List.of(beach), List.of(tower),
-                new ItineraryRules.Context("normal", "car", START, 1, null, java.util.Set.of(501L, 502L)));
+                new ItineraryRules.Context("normal", "car", START, 1, null, Map.of(501L, "광안리해수욕장", 502L, "부산타워")));
         assertThat(missing.violations()).filteredOn(v -> v.rule() == Rule.REQUIRED_EXPERIENCE_MISSING)
                 .extracting(ItineraryRules.Violation::message).containsExactly("필수 경험 장소 빠짐(부산타워)");
         assertThat(missing.core()).isTrue();

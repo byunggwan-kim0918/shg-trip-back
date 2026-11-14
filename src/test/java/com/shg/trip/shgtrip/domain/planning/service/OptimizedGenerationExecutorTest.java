@@ -170,7 +170,8 @@ class OptimizedGenerationExecutorTest {
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(42L);
-        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any())).thenReturn(mockItinerary);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
 
         executor.execute("job-1", request, 1L, emitter);
 
@@ -178,7 +179,7 @@ class OptimizedGenerationExecutorTest {
         verify(vectorSearchQueryService).search(eq(vectorEnrichedInput), any());
         verify(selectionCallGenerator).selectPlaces(eq(vectorEnrichedInput), anyList(), any());
         verify(routeOptimizer).schedule(eq(selectionOutput), anyList(), argThat((ScheduleArgs a) -> "normal".equals(a.pace()) && "any".equals(a.transportPref())));
-        verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any());
+        verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any());
         verify(resultStore).save("job-1", 42L, 1L);
         // 임시 제목(짧은 결정론 문구)을 넘겨야 한다 — concept을 넘기면 제목 교체가 0행이 된다.
         verify(storyGenerationService).generateAndAttach(
@@ -214,7 +215,8 @@ class OptimizedGenerationExecutorTest {
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(43L);
-        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any())).thenReturn(mockItinerary);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
 
         executor.execute("job-r", withRequired, 1L, emitter);
 
@@ -232,7 +234,7 @@ class OptimizedGenerationExecutorTest {
         verify(indexResultMapper).toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(),
                 notices.capture());
         assertThat(notices.getValue()).contains("'오다이바 야경'은(는) 장소를 찾지 못해 일정에 넣지 못했어요.",
-                "꼭 가고 싶다고 고른 '메이지신궁 아침'을(를) 일정에 넣지 못했어요.");
+                "꼭 가고 싶다고 한 '메이지신궁'을(를) 일정에 넣지 못했어요.");
     }
 
     @Test
@@ -247,7 +249,7 @@ class OptimizedGenerationExecutorTest {
         verify(optimizedClaudeAIService).enrichInput(request);
         verify(vectorSearchQueryService, never()).search(any(), any());
         verify(selectionCallGenerator, never()).selectPlaces(any(), any(), any());
-        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any(), any());
     }
 
     /** 끝난 스트림에 새 연결을 붙여 지금까지 보낸 이벤트 중 error 데이터를 꺼낸다. */
@@ -289,7 +291,7 @@ class OptimizedGenerationExecutorTest {
 
         verify(fallbackExecutor).execute(eq("job-3"), any(), eq(1L), eq(emitter));
         verify(selectionCallGenerator, never()).selectPlaces(any(), any(), any());
-        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any(), any());
     }
 
     @Test
@@ -575,36 +577,100 @@ class OptimizedGenerationExecutorTest {
 
         verify(fallbackExecutor, never()).execute(anyString(), any(), anyLong(), any());
         verify(fallbackDecider, never()).assess(any(), anyLong());
-        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any(), any());
         verify(generationPolicyService, never()).recordSuccess(anyLong());
         assertThat(emitter.isFinished()).isTrue();
     }
 
     @Test
-    @DisplayName("구조 검증 실패는 결정론적 버그로 간주 — 재시도 없이 로그만 남기고 그대로 저장 진행")
-    void execute_hardValidationFails_logsButStillSaves() {
+    @DisplayName("구조 검증 실패는 서버 결함이라 저장·쿼터·미차감 한도 없이 PLANNING_011로 끝내고 사유를 기록한다")
+    void execute_hardValidationFails_rejectsWithoutSaving() throws IOException {
+        stubPipelineUntilSave();
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.fail("시각 겹침"));
+
+        executor.execute("job-4", request, 1L, emitter);
+
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any(), any());
+        verify(traceRecorder).recordRejected(eq(1L), eq("job-4"), eq(request), any(), any(), any(), anyList(), any(),
+                anyLong(), any(), eq("구조 검증: 시각 겹침"));
+        verify(generationPolicyService, never()).recordSuccess(anyLong());
+        verify(generationPolicyService, never()).recordUnbilled(anyLong());
+        assertThat(sentError()).containsEntry("errorCode", "PLANNING_011")
+                .containsEntry("message", ErrorCode.QUALITY_GATE_FAILED.getMessage());
+    }
+
+    @Test
+    @DisplayName("저장 관문이 HARD로 거부하면 결과·쿼터·이야기 생성 없이 미차감 한도만 세고 PLANNING_011로 끝낸다")
+    void execute_gateRejects_recordsVerdictAndFails() throws IOException {
+        stubPipelineUntilSave();
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        ItineraryRules.Verdict hard = new ItineraryRules.Verdict(ItineraryRules.VERSION, List.of(
+                new ItineraryRules.Violation(ItineraryRules.Rule.CLOSED_DAY, 1, "day1 휴무일 방문(센소지)",
+                        List.of("센소지"))), 0, 0);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenThrow(new QualityGate.Rejected(hard));
+
+        executor.execute("job-5", request, 1L, emitter);
+
+        verify(traceRecorder).recordRejected(eq(1L), eq("job-5"), eq(request), any(), any(), any(), anyList(), any(),
+                anyLong(), eq(hard), isNull());
+        verify(traceRecorder, never()).record(any(), anyString(), any(), any(), any(), any(), anyList(), any(),
+                anyLong(), any());
+        verify(resultStore, never()).save(anyString(), anyLong(), anyLong());
+        verify(generationPolicyService, never()).recordSuccess(anyLong());
+        verify(generationPolicyService).recordUnbilled(1L);
+        verify(storyGenerationService, never()).generateAndAttach(any(), any(), any(), any(), any(), any(), any());
+        assertThat(sentError()).containsEntry("errorCode", "PLANNING_011").containsEntry("message",
+                "1일차에 휴무일인 '센소지'이(가) 들어가 저장하지 않았어요. 다시 만들어 주세요. 30일 생성 횟수는 차감되지 않았어요.");
+    }
+
+    @Test
+    @DisplayName("이번 거부로 미차감 한도에 닿으면 다시 만들라는 말 대신 한도 안내를 보낸다")
+    void execute_gateRejectsAtUnbilledLimit_sendsLimitNotice() throws IOException {
+        stubPipelineUntilSave();
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenThrow(new QualityGate.Rejected(new ItineraryRules.Verdict(ItineraryRules.VERSION, List.of(
+                        new ItineraryRules.Violation(ItineraryRules.Rule.DEPARTURE_MISSED, 4, "day4 사용자 출발 시각 초과")),
+                        0, 0)));
+        when(generationPolicyService.recordUnbilled(1L)).thenReturn(true);
+        when(generationPolicyService.unbilledLimitNotice(1L)).thenReturn("약 24시간 후 다시 만들 수 있어요.");
+
+        executor.execute("job-7", request, 1L, emitter);
+
+        assertThat(sentError()).containsEntry("message", "마지막 날 출발 시각까지 공항·역에 닿는 일정을 만들 수 없어 저장하지 않았어요."
+                + " 약 24시간 후 다시 만들 수 있어요. 30일 생성 횟수는 차감되지 않았어요.");
+    }
+
+    @Test
+    @DisplayName("조정 필요로 저장된 일정은 30일 쿼터 대신 미차감 한도를 센다")
+    void execute_needsAdjustment_countsUnbilled() {
+        stubPipelineUntilSave();
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(77L);
+        when(mockItinerary.getQualityStatus()).thenReturn(Itinerary.QualityStatus.NEEDS_ADJUSTMENT);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
+
+        executor.execute("job-6", request, 1L, emitter);
+
+        verify(resultStore).save("job-6", 77L, 1L);
+        verify(generationPolicyService).recordUnbilled(1L);
+        verify(generationPolicyService, never()).recordSuccess(anyLong());
+    }
+
+    private void stubPipelineUntilSave() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
         when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
         when(vectorSearchQueryService.search(eq(vectorEnrichedInput), any())).thenReturn(candidates);
         when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
         when(placeRepository.findAllById(anyList())).thenReturn(List.of());
-
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList(), any())).thenReturn(selectionOutput);
-        when(routeOptimizer.schedule(eq(selectionOutput), anyList(), argThat((ScheduleArgs a) -> "normal".equals(a.pace()) && "any".equals(a.transportPref()))))
-                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, java.util.List.of()));
+        when(routeOptimizer.schedule(any(), anyList(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
         when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
                 .thenReturn(draftData);
-        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.fail("일부 검증 경고"));
-
-        Itinerary mockItinerary = mock(Itinerary.class);
-        when(mockItinerary.getId()).thenReturn(99L);
-        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any())).thenReturn(mockItinerary);
-
-        executor.execute("job-4", request, 1L, emitter);
-
-        verify(saveHelper).save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any());
-        verify(resultStore).save("job-4", 99L, 1L);
-        verify(storyGenerationService).generateAndAttach(eq("job-4"), any(), eq(99L), any(), any(), any(), any());
     }
 
     @Test
@@ -616,7 +682,7 @@ class OptimizedGenerationExecutorTest {
 
         verify(optimizedClaudeAIService, never()).enrichInput(any());
         verify(vectorSearchQueryService, never()).search(any(), any());
-        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any(), any());
     }
 
     @Test
@@ -628,7 +694,7 @@ class OptimizedGenerationExecutorTest {
 
         executor.execute("job-7", request, 1L, emitter);
 
-        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any());
+        verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any(), any());
     }
 
     @Test
@@ -649,12 +715,13 @@ class OptimizedGenerationExecutorTest {
 
         Itinerary mockItinerary = mock(Itinerary.class);
         when(mockItinerary.getId()).thenReturn(50L);
-        when(saveHelper.save(any(), any(EnrichedInput.class), eq(1L), eq(true), any())).thenReturn(mockItinerary);
+        when(saveHelper.save(any(), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
 
         executor.execute("job-8", request, 1L, emitter);
 
         ArgumentCaptor<EnrichedInput> inputCaptor = ArgumentCaptor.forClass(EnrichedInput.class);
-        verify(saveHelper).save(eq(draftData), inputCaptor.capture(), eq(1L), eq(true), any());
+        verify(saveHelper).save(eq(draftData), inputCaptor.capture(), eq(1L), eq(true), any(), any());
 
         EnrichedInput captured = inputCaptor.getValue();
         assertThat(captured.destination()).isEqualTo("도쿄");

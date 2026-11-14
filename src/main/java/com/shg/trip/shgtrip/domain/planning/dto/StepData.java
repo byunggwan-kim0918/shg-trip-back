@@ -27,4 +27,9 @@ public record StepData(
         return new StepData(order, dayNumber, startTime, endTime, place, alternatives, transportationMode,
                 transportationDuration, transportationDistance, transportationCost, notes, estimatedCost);
     }
+
+    public StepData withEndTime(String end) {
+        return new StepData(stepOrder, dayNumber, startTime, end, place, alternatives, transportationMode,
+                transportationDuration, transportationDistance, transportationCost, notes, estimatedCost);
+    }
 }

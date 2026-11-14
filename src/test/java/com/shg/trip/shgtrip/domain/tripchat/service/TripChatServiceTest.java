@@ -407,6 +407,22 @@ class TripChatServiceTest {
     }
 
     @Test
+    @DisplayName("생성이 끝난 뒤 다시 불러온 확인 화면에서 확인하면 새 작업을 시작한다")
+    void reconfirmAfterReloadStartsNewJob() {
+        TripChatResponse review = toReview();
+        given(travelPlannerService.startGeneration(any(), eq(USER)))
+                .willReturn(new GenerateJobResponse("job-1"), new GenerateJobResponse("job-2"));
+        service.confirm(USER, id(review), review.version());
+
+        TripChatResponse reloaded = service.current(USER);
+        TripChatResponse retried = service.confirm(USER, id(reloaded), reloaded.version());
+
+        verify(travelPlannerService, times(2)).startGeneration(any(), eq(USER));
+        assertThat(reloaded.jobId()).isEqualTo("job-1");
+        assertThat(retried.jobId()).isEqualTo("job-2");
+    }
+
+    @Test
     @DisplayName("확인 전에는 생성하지 않고, 날짜가 없으면 확인해도 생성하지 않는다")
     void noGenerationWithoutDates() {
         TripChatResponse review = reviewWithoutDates();

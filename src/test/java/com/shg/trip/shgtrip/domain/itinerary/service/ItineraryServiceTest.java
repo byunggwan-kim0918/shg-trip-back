@@ -52,6 +52,7 @@ class ItineraryServiceTest {
     @Mock private GenerationTraceRepository generationTraceRepository;
     @Mock private ItineraryEditEventRepository editEventRepository;
     @Mock private EntityManager entityManager;
+    @Mock private com.shg.trip.shgtrip.domain.planning.service.QualityGate qualityGate;
 
     @InjectMocks private ItineraryService itineraryService;
 
@@ -449,6 +450,17 @@ class ItineraryServiceTest {
         ItineraryEditEvent e = onlyEvent();
         assertThat(e.getType()).isEqualTo(ItineraryEditEvent.Type.SELECT_ALTERNATIVE);
         assertThat(e.getPayload()).containsEntry("fromPlaceId", 110L).containsEntry("toPlaceId", 999L);
+        verify(qualityGate).reflectEdit(itinerary);
+    }
+
+    @Test
+    @DisplayName("대안 선택·재정렬·스텝 삭제는 바뀐 일정으로 품질을 다시 판정한다")
+    void editsReflectQuality() {
+        mockFind();
+        itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 1, List.of(12L, 10L, 11L));
+        itineraryService.deleteStep(ITINERARY_ID, USER_ID, 11L);
+
+        verify(qualityGate, times(2)).reflectEdit(itinerary);
     }
 
     @Test
