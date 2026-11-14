@@ -464,6 +464,21 @@ class ItineraryServiceTest {
     }
 
     @Test
+    @DisplayName("공유 링크 응답에는 소유자용 품질 상태와 안내가 없다")
+    void sharedResponseHidesQuality() {
+        itinerary.applyQuality(Itinerary.QualityStatus.NEEDS_ADJUSTMENT,
+                List.of("꼭 가고 싶다고 한 '우리 동네 국밥'을(를) 일정에 넣지 못했어요."), "{}");
+        itinerary.generateShareToken("token", null);
+        when(itineraryRepository.findByShareToken("token")).thenReturn(Optional.of(itinerary));
+
+        ItineraryResponse shared = itineraryService.getSharedItinerary("token");
+
+        assertThat(shared.qualityStatus()).isNull();
+        assertThat(shared.qualityNotices()).isEmpty();
+        assertThat(shared.steps()).hasSize(6);
+    }
+
+    @Test
     @DisplayName("숙소·공항은 순서 변경으로 자리를 옮길 수 없고, 다른 스텝이 그 자리로 들어와도 거부한다")
     void rejectsMovingAnchors() {
         mockFind();

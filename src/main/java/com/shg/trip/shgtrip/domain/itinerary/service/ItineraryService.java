@@ -151,7 +151,7 @@ public class ItineraryService {
                 && itinerary.getShareExpiresAt().isBefore(OffsetDateTime.now())) {
             throw new BusinessException(ErrorCode.ITINERARY_NOT_FOUND, "만료된 공유 링크입니다.");
         }
-        return toResponse(itinerary);
+        return toResponse(itinerary).forSharing();
     }
 
     /**

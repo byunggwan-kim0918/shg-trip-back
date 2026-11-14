@@ -41,7 +41,7 @@ class QualityNoticesTest {
                 new Violation(Rule.EARLY_FINISH, 2, "day2 일정이 16:00에 끝남", List.of("16:00")));
 
         assertThat(QualityNotices.of(verdict, context(3, null))).containsExactly(
-                "3일차 일정이 15:12에 끝나요. 출발 시간을 알려 주면 마지막 날을 더 채울 수 있어요.");
+                "3일차 일정이 15:12에 끝나요. 다음에 만들 때 출발 시간을 알려 주면 마지막 날을 더 채울 수 있어요.");
         assertThat(QualityNotices.of(verdict, context(3, 15 * 60))).isEmpty();
     }
 
@@ -93,6 +93,15 @@ class QualityNoticesTest {
                 "마지막 날 출발 시각이 일러 그날 일정을 넣지 못해 저장하지 않았어요.", "출발 시간을 확인한 뒤 다시 만들어 주세요."));
         assertThat(QualityNotices.rejection(verdict, context(3, null))).isEqualTo(new QualityNotices.Rejection(
                 "3일차 일정을 채우지 못해 저장하지 않았어요.", "다시 만들어 주세요."));
+    }
+
+    @Test
+    @DisplayName("숙소·출발 허브에 묶인 위반은 편집으로 할 수 없는 일을 시키지 않는다")
+    void anchorNoticesAskNothingImpossible() {
+        assertThat(QualityNotices.of(verdict(
+                new Violation(Rule.NOT_ENDING_AT_LODGING, 2, "day2 숙소로 끝나지 않음"),
+                new Violation(Rule.DEPARTURE_LATE, 3, "day3 출발 마감 초과")), context(3, null)))
+                .containsExactly("2일차 일정이 숙소에서 끝나지 않아요.", "3일차 일정이 늦게 끝나 돌아가는 길이 빠듯해요.");
     }
 
     @Test

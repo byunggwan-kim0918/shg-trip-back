@@ -37,8 +37,9 @@ public final class QualityNotices {
             case DEPARTURE_MISSED -> d + "일차 출발 시각에 맞추기 어려워요. 출발 시간을 다시 확인해 주세요.";
             case LUNCH_MISSING -> d + "일차에 점심 식사가 없어요.";
             case DINNER_MISSING -> d + "일차에 저녁 식사가 없어요.";
-            case NOT_ENDING_AT_LODGING -> d + "일차 일정이 숙소에서 끝나지 않아요. 숙소가 있으면 마지막으로 옮겨 주세요.";
-            case DEPARTURE_LATE -> d + "일차 일정이 늦게 끝나 돌아가는 길이 빠듯해요. 일정 하나를 빼 주세요.";
+            // 숙소·출발 허브는 편집으로 자리와 시각이 바뀌지 않아 할 일을 붙이지 않는다.
+            case NOT_ENDING_AT_LODGING -> d + "일차 일정이 숙소에서 끝나지 않아요.";
+            case DEPARTURE_LATE -> d + "일차 일정이 늦게 끝나 돌아가는 길이 빠듯해요.";
             case OUTSIDE_HOURS -> d + "일차 " + quoted(v, 0) + " 방문 시간이 영업시간을 벗어나요. 순서를 바꾸거나 대안으로 바꿔 주세요.";
             case SAME_DAY_MEAL_KIND -> d + "일차 점심과 저녁이 같은 종류예요(" + String.join("·", v.evidence())
                     + "). 한 곳을 대안으로 바꿔 보세요.";
@@ -49,7 +50,7 @@ public final class QualityNotices {
             case ADDRESS_REGION_MISMATCH -> d + "일차 " + quoted(v, 0) + "의 주소가 여행지와 달라요. 대안으로 바꾸거나 빼 주세요.";
             case REQUIRED_EXPERIENCE_MISSING -> "꼭 가고 싶다고 한 " + quoted(v, 0) + "을(를) 일정에 넣지 못했어요.";
             case EARLY_FINISH -> isLastDayWithoutDeparture(d, ctx)
-                    ? d + "일차 일정이 " + first(v) + "에 끝나요. 출발 시간을 알려 주면 마지막 날을 더 채울 수 있어요."
+                    ? d + "일차 일정이 " + first(v) + "에 끝나요. 다음에 만들 때 출발 시간을 알려 주면 마지막 날을 더 채울 수 있어요."
                     : null;
             case LEG_OVER_CAP, DAY_DISTANCE_OVER_CAP, CONSECUTIVE_MEAL_KIND, SAME_DAY_MEAL_GROUP,
                  MEAL_GROUP_REPEATED -> null;
