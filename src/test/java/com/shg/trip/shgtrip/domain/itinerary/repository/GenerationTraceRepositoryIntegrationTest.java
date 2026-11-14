@@ -84,6 +84,18 @@ class GenerationTraceRepositoryIntegrationTest {
     }
 
     @Test
+    @DisplayName("선택 모델이 본 후보 수를 저장하고, 없는 기록은 null로 읽는다")
+    void searchPoolSizeIsOptional() {
+        Long withSize = traceRepository.save(GenerationTrace.builder().userId(userId).jobId("job-pool")
+                .traceVersion(1).request("{}").enrichedInput("{}").selectionRaw("{}").selectionFinal("{}")
+                .candidates("[]").searchPoolSize(48).scheduleArgs("{}").build()).getId();
+        Long without = traceRepository.save(trace(null)).getId();
+
+        assertThat(traceRepository.findById(withSize).orElseThrow().getSearchPoolSize()).isEqualTo(48);
+        assertThat(traceRepository.findById(without).orElseThrow().getSearchPoolSize()).isNull();
+    }
+
+    @Test
     @DisplayName("일정 없는 기록은 여러 건 둘 수 있고, 한 일정의 기록은 하나뿐이다")
     void uniquePerItineraryOnly() {
         traceRepository.save(trace(null));

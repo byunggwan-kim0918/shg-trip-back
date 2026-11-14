@@ -14,7 +14,7 @@ docker compose up -d                 # PostgreSQL(pgvector) · Valkey · LocalSt
 
 `.env`는 `.env.example`을 복사해 만든다. 직접 채울 키는 `DB_PASSWORD`(`docker-compose.yml`과 같은 값), `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, OAuth 클라이언트 한 쌍 이상이고 나머지는 로컬 기본값이 있다.
 
-배치는 `SPRING_PROFILES_ACTIVE=batch`, 품질 평가는 `--spring.profiles.active=local,eval --eval.mode=score|corpus|replay|pool|rejected`로 jar를 한 번 실행한다. LLM을 부르는 실행은 끝난 뒤 프로세스가 종료됐는지 확인한다.
+배치는 `SPRING_PROFILES_ACTIVE=batch`, 품질 평가는 `--spring.profiles.active=local,eval --eval.mode=score|corpus|replay|files|pool|rejected`로 jar를 한 번 실행한다. LLM을 부르는 실행은 끝난 뒤 프로세스가 종료됐는지 확인한다.
 
 ## 구조
 

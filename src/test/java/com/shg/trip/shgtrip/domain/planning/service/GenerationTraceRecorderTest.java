@@ -64,9 +64,9 @@ class GenerationTraceRecorderTest {
         ItineraryRules.Verdict hard = new ItineraryRules.Verdict(ItineraryRules.VERSION, List.of(
                 new ItineraryRules.Violation(ItineraryRules.Rule.DAY_MISSING, 2, "day2 일정 없음")), 0, 0);
 
-        recorder.recordRejected(7L, "job-x", null, null, null, null, List.of(), null, 1200L, hard, null);
-        recorder.recordRejected(7L, "job-y", null, null, null, null, List.of(), null, 1200L, null, "구조 검증: 시각 겹침");
-        recorder.recordRejected(7L, "job-z", null, null, null, null, List.of(), null, 1200L, hard, "구조 검증: 시각 겹침");
+        recorder.recordRejected(7L, "job-x", null, null, null, null, List.of(), 48, null, 1200L, hard, null);
+        recorder.recordRejected(7L, "job-y", null, null, null, null, List.of(), 0, null, 1200L, null, "구조 검증: 시각 겹침");
+        recorder.recordRejected(7L, "job-z", null, null, null, null, List.of(), 0, null, 1200L, hard, "구조 검증: 시각 겹침");
 
         var saved = org.mockito.ArgumentCaptor.forClass(com.shg.trip.shgtrip.domain.itinerary.entity.GenerationTrace.class);
         verify(repository, org.mockito.Mockito.times(3)).save(saved.capture());
@@ -75,6 +75,7 @@ class GenerationTraceRecorderTest {
         assertThat(byRules.getItineraryId()).isNull();
         assertThat(byRules.getUserId()).isEqualTo(7L);
         assertThat(byRules.getGeneratedSteps()).isNull();
+        assertThat(byRules.getSearchPoolSize()).isEqualTo(48);
         assertThat(byRules.getScore()).contains("\"rule\":\"DAY_MISSING\"", "\"hard\":true")
                 .doesNotContain("rejectReason");
         assertThat(saved.getAllValues().get(1).getScore()).isEqualTo("{\"rejectReason\":\"구조 검증: 시각 겹침\"}");

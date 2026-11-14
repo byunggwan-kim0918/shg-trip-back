@@ -261,7 +261,7 @@ public class OptimizedGenerationExecutor {
             if (!validationResult.valid()) {
                 log.error("Optimized 경로 구조 검증 실패 (결정론적 로직 버그 가능성): {}", validationResult.failureReason());
                 traceRecorder.recordRejected(userId, jobId, request, enrichedInput, rawSelectionOutput,
-                        selectionOutput, scheduleCandidates, scheduleArgs,
+                        selectionOutput, scheduleCandidates, enrichedCandidates.size(), scheduleArgs,
                         (System.nanoTime() - pipelineStart) / 1_000_000, preview,
                         "구조 검증: " + validationResult.failureReason());
                 // 서버 쪽 결함이라 미차감 한도에 세지 않는다.
@@ -280,7 +280,7 @@ public class OptimizedGenerationExecutor {
                 result = saveHelper.save(draftData, legacyInput, userId, true, destinationReference, planContext);
             } catch (QualityGate.Rejected e) {
                 traceRecorder.recordRejected(userId, jobId, request, enrichedInput, rawSelectionOutput,
-                        selectionOutput, scheduleCandidates, scheduleArgs,
+                        selectionOutput, scheduleCandidates, enrichedCandidates.size(), scheduleArgs,
                         (System.nanoTime() - pipelineStart) / 1_000_000, e.verdict(), null);
                 sendSseError(emitter, e.getErrorCode().getCode(), rejectionMessage(e, userId));
                 return;
@@ -289,7 +289,7 @@ public class OptimizedGenerationExecutor {
             stageMark = logStage("save", stageMark);
             // 완료 전송보다 먼저 남긴다. 뒤에 남기면 그 사이 지운 일정의 기록(요청 문장 포함)이 삭제를 피해 남는다.
             traceRecorder.record(saved, jobId, request, enrichedInput, rawSelectionOutput,
-                    selectionOutput, scheduleCandidates, scheduleArgs,
+                    selectionOutput, scheduleCandidates, enrichedCandidates.size(), scheduleArgs,
                     (System.nanoTime() - pipelineStart) / 1_000_000, result.verdict());
 
             // [100%] 구조 완료. emitter는 story-ready까지 닫지 않는다.

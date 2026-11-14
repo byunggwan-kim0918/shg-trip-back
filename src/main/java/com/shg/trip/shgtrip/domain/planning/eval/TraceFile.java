@@ -19,10 +19,13 @@ import java.util.List;
 /**
  * 저장된 일정과 생성 기록을 DB 밖에서 replay하기 위한 JSON 한 건.
  * 운영 기록은 로컬 DB와 일정 번호가 겹쳐서 DB에 넣지 않고 이 형식으로 읽는다.
+ *
+ * @param searchPoolSize 선택 모델이 본 후보 수. 기록에 없으면 null
+ * @param joined         기록 두 건을 이어 붙여 만든 입력({@code scripts/eval/join-traces.py}). 저장본이 없다
  */
 public record TraceFile(Long itineraryId, String destination, LocalDate startDate, LocalDate endDate,
-                        List<StepData> savedSteps, List<PlaceCandidate> candidates,
-                        SelectionOutput selection, ScheduleArgs args) {
+                        List<StepData> savedSteps, List<PlaceCandidate> candidates, Integer searchPoolSize,
+                        SelectionOutput selection, ScheduleArgs args, boolean joined) {
 
     public int dayCount() {
         return (int) ChronoUnit.DAYS.between(startDate, endDate) + 1;
@@ -37,8 +40,10 @@ public record TraceFile(Long itineraryId, String destination, LocalDate startDat
                 LocalDate.parse(n.path("endDate").asText()),
                 savedSteps(n.path("savedSteps")),
                 mapper.convertValue(n.path("candidates"), new TypeReference<List<PlaceCandidate>>() {}),
+                n.hasNonNull("searchPoolSize") ? n.get("searchPoolSize").asInt() : null,
                 mapper.convertValue(n.path("selection"), SelectionOutput.class),
-                mapper.convertValue(n.path("scheduleArgs"), ScheduleArgs.class));
+                mapper.convertValue(n.path("scheduleArgs"), ScheduleArgs.class),
+                n.path("joined").asBoolean(false));
     }
 
     /** {@link PlaceData#placeId()}는 LLM 응답에서 읽지 않도록 역직렬화가 막혀 있어 직접 만든다. */

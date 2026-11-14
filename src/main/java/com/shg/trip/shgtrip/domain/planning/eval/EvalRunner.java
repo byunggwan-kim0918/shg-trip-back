@@ -16,6 +16,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy;
+import com.shg.trip.shgtrip.domain.planning.service.GeoCluster;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
@@ -46,7 +47,7 @@ import java.util.*;
  * </pre>
  * score: 저장본만 채점 / replay: 현재 코드로 다시 돌려 비교 / corpus: 기록 있는 일정 전부 replay
  * / pool: 기록의 보강 입력으로 벡터 검색만 다시 돌려 후보 풀을 pool-{id}.tsv로 남긴다(질의 임베딩 호출이 나간다)
- * / files: {@code --eval.files}의 {@link TraceFile} JSON 줄을 DB 없이 replay한다
+ * / files: {@code --eval.files}(쉼표로 여러 개)의 {@link TraceFile} JSON 줄을 DB 없이 replay한다
  * / rejected: 관문에서 막혀 일정 없이 남은 기록을 다시 돌려 rejected-{기록 id}.txt로 남긴다(eval.ids는 기록 id).
  *
  * <p>{@code --eval.refresh-attributes}: 기록의 후보에 DB의 현재 속성·영업시간을 덮어쓴다.
@@ -114,11 +115,17 @@ public class EvalRunner implements CommandLineRunner {
             if (files == null || files.isBlank()) {
                 throw new IllegalArgumentException("files 모드는 --eval.files=<TraceFile JSON 줄 파일>이 필요하다");
             }
-            for (String line : Files.readAllLines(Path.of(files))) {
-                if (line.isBlank()) continue;
-                TraceFile f = TraceFile.parse(objectMapper, line);
-                rows.add(evaluateTraced(f.itineraryId(), f.destination(), f.dayCount(), f.savedSteps(),
-                        f.candidates(), f.selection(), f.args(), true));
+            Set<Long> seen = new HashSet<>();
+            for (String file : files.split(",")) {
+                for (String line : Files.readAllLines(Path.of(file.trim()))) {
+                    if (line.isBlank()) continue;
+                    TraceFile f = TraceFile.parse(objectMapper, line);
+                    // 스텝 덤프 파일 이름이 일정 번호라 겹치면 앞 결과를 덮어쓴다.
+                    if (!seen.add(f.itineraryId())) {
+                        throw new IllegalArgumentException("일정 번호가 여러 번 나온다: " + f.itineraryId());
+                    }
+                    rows.add(evaluateTraced(f, true));
+                }
             }
             writeReport(rows);
             return;
@@ -188,19 +195,24 @@ public class EvalRunner implements CommandLineRunner {
             ItineraryRules.Verdict savedRules = rules.evaluate(savedSteps, fromPlaces,
                     new ItineraryRules.Context(null, null, itinerary.getStartDate(), dayCount, null));
             return new Row(itinerary.getId(), itinerary.getDestination(), countryOf(savedSteps), false,
-                    saved, null, null, savedRules, null);
+                    saved, null, null, savedRules, null, Trip.untraced(dayCount));
         }
 
         List<PlaceCandidate> traced = objectMapper.readValue(trace.getCandidates(), new TypeReference<>() {});
         SelectionOutput selection = objectMapper.readValue(trace.getSelectionFinal(), SelectionOutput.class);
         ScheduleArgs args = objectMapper.readValue(trace.getScheduleArgs(), ScheduleArgs.class);
-        return evaluateTraced(itinerary.getId(), itinerary.getDestination(), dayCount, savedSteps, traced, selection,
-                args, replay);
+        return evaluateTraced(new TraceFile(itinerary.getId(), itinerary.getDestination(), itinerary.getStartDate(),
+                itinerary.getEndDate(), savedSteps, traced, trace.getSearchPoolSize(), selection, args, false), replay);
     }
 
-    private Row evaluateTraced(Long itineraryId, String destination, int dayCount, List<StepData> savedSteps,
-                               List<PlaceCandidate> traced, SelectionOutput selection, ScheduleArgs args,
-                               boolean replay) throws Exception {
+    private Row evaluateTraced(TraceFile f, boolean replay) throws Exception {
+        Long itineraryId = f.itineraryId();
+        String destination = f.destination();
+        int dayCount = f.dayCount();
+        List<StepData> savedSteps = f.savedSteps();
+        List<PlaceCandidate> traced = f.candidates();
+        SelectionOutput selection = f.selection();
+        ScheduleArgs args = f.args();
         List<PlaceCandidate> candidates = "off".equals(refreshAttributes) ? traced : refreshFacts(traced);
         List<PlaceCandidate> scheduleInput = "all".equals(refreshAttributes) ? candidates : traced;
 
@@ -208,11 +220,14 @@ public class EvalRunner implements CommandLineRunner {
         ItineraryRules.Context ruleContext = new ItineraryRules.Context(args.pace(), args.transportPref(),
                 args.startDate(), dayCount, hubDeadline, RequiredExperiences.places(traced));
         String country = args.country() != null ? args.country() : countryOf(savedSteps);
-        ScoreReport saved = scorer.score(new ItineraryScorer.Input(savedSteps, args.pace(), args.transportPref(),
-                args.startDate(), candidates, selection, hubDeadline));
-        ItineraryRules.Verdict savedRules = rules.evaluate(savedSteps, candidates, ruleContext);
+        Trip trip = new Trip(dayCount, args.pace(), args.transportPref(), args.cities() != null, f.joined(),
+                traced.size(), f.searchPoolSize(), promptZones(traced, f.searchPoolSize(), args));
+        boolean hasSaved = !f.joined();
+        ScoreReport saved = hasSaved ? scorer.score(new ItineraryScorer.Input(savedSteps, args.pace(),
+                args.transportPref(), args.startDate(), candidates, selection, hubDeadline)) : null;
+        ItineraryRules.Verdict savedRules = hasSaved ? rules.evaluate(savedSteps, candidates, ruleContext) : null;
         if (!replay) {
-            return new Row(itineraryId, destination, country, true, saved, null, null, savedRules, null);
+            return new Row(itineraryId, destination, country, true, saved, null, null, savedRules, null, trip);
         }
 
         List<StepData> replayedSteps = routeOptimizer.schedule(selection, scheduleInput, args).steps();
@@ -225,7 +240,8 @@ public class EvalRunner implements CommandLineRunner {
         ScoreReport replayed = scorer.score(new ItineraryScorer.Input(replayedSteps, args.pace(),
                 args.transportPref(), args.startDate(), candidates, selection, hubDeadline));
         return new Row(itineraryId, destination, country, true, saved, replayed,
-                sameRoute(savedSteps, replayedSteps), savedRules, rules.evaluate(replayedSteps, candidates, ruleContext));
+                hasSaved ? sameRoute(savedSteps, replayedSteps) : null, savedRules,
+                rules.evaluate(replayedSteps, candidates, ruleContext), trip);
     }
 
     private static String countryOf(List<StepData> steps) {
@@ -267,6 +283,14 @@ public class EvalRunner implements CommandLineRunner {
             Files.writeString(dir.resolve("pool-" + entry.getKey() + ".tsv"), sb.toString());
         }
         log.info("후보 풀 {}건 → {}", inputs.size(), dir.toAbsolutePath());
+    }
+
+    /** 선택 프롬프트는 도시를 옮기는 여행에 구역을 붙이지 않고, 덧붙이기 전 후보로 구역을 나눈다. */
+    private static int promptZones(List<PlaceCandidate> traced, Integer searchPoolSize, ScheduleArgs args) {
+        if (args.cities() != null) return 0;
+        List<PlaceCandidate> seen = searchPoolSize == null || searchPoolSize > traced.size()
+                ? traced : traced.subList(0, searchPoolSize);
+        return GeoCluster.of(seen).zones().size();
     }
 
     // 비용은 저장본에만 인원 배수가 곱해져 있어 비교에서 뺀다
@@ -313,7 +337,33 @@ public class EvalRunner implements CommandLineRunner {
         return Arrays.stream(raw.split(",")).map(String::trim).filter(s -> !s.isEmpty()).map(Long::valueOf).toList();
     }
 
+    /** @param saved 이어 붙인 입력({@link Trip#joined})은 저장본이 없어 null이다 */
     record Row(Long itineraryId, String destination, String country, boolean hasTrace, ScoreReport saved,
                ScoreReport replayed, Boolean sameRoute, ItineraryRules.Verdict savedRules,
-               ItineraryRules.Verdict replayedRules) {}
+               ItineraryRules.Verdict replayedRules, Trip trip) {
+
+        /** 현재 코드의 결과. 재실행하지 않았으면 저장본이다. */
+        ScoreReport current() {
+            return replayed != null ? replayed : saved;
+        }
+
+        ItineraryRules.Verdict currentRules() {
+            return replayedRules != null ? replayedRules : savedRules;
+        }
+    }
+
+    /**
+     * @param joined     기록 두 건을 이어 붙여 만든 입력
+     * @param pool       일정 확정에 쓴 후보 수(덧붙인 숙소·예비 후보 포함). 기록이 없으면 0
+     * @param searchPool 선택 모델이 본 후보 수. 기록에 없으면 null
+     * @param zones      선택 프롬프트에 나간 구역 수. 좁은 여행지와 도시를 옮기는 여행은 0.
+     *                   {@code searchPool}을 모르는 기록은 덧붙인 후보까지 넣어 센다
+     */
+    record Trip(int days, String pace, String transport, boolean multiCity, boolean joined, int pool,
+                Integer searchPool, int zones) {
+
+        static Trip untraced(int days) {
+            return new Trip(days, null, null, false, false, 0, null, 0);
+        }
+    }
 }

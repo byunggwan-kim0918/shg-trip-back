@@ -1,0 +1,192 @@
+-- metrics --
+  스텝 39 / 숙소 3곳 / 총이동 589km
+  연속중복 0 / 최대공백 179분 / 늦은시작 1일 / 미해소 2건
+== day 1 ==
+  #1  09:00-10:00  광장시장 | Retail > Market | 종로구 | Seoul
+      이동: - -분 -km -원
+      비용: 0원 / 메모: -
+      대안: 남대문시장 | Retail > Market | 0원
+      대안: Bangsan Market | Retail > Market | 0원
+      대안: 종로신진시장 | Retail > Market | 0원
+  #2  11:30-12:40  반포6 | Dining and Drinking > Restaurant | - | Seoul
+      이동: CAR 6분 3.61km 2885원
+      비용: 13000원 / 메모: -
+  #3  12:45-13:35  도도 전통차와 커피 | Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop | - | Seoul
+      이동: CAR 5분 2.81km 2251원
+      비용: 6000원 / 메모: -
+      대안: 울 베이커리 카페 | Dining and Drinking > Cafe, Coffee, and Tea House > Café | 6000원
+  #4  13:53-15:23  종묘 [유네스코 세계유산] | Landmarks and Outdoors > Tourist Attraction | 종로구 | Seoul
+      이동: WALK 18분 1.2km 0원
+      비용: 0원 / 메모: -
+      대안: 숭례문 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 신흥시장 | Retail > Market | 0원
+      대안: 서울동행상회 | Retail > Food and Beverage Retail > Farmers Market | 0원
+  #5  17:30-18:40  설문동 본갈비 | Dining and Drinking > Restaurant | - | Seoul
+      이동: CAR 2분 1.31km 1046원
+      비용: 13000원 / 메모: -
+  #6  18:57-20:07  종로3가 포장마차 거리 | Landmarks and Outdoors > Tourist Attraction | 종로구 | Seoul
+      이동: WALK 17분 1.09km 0원
+      비용: 0원 / 메모: -
+      대안: 서울훼미리청년몰 | Retail > Market | 0원
+      대안: 정릉시장 | Retail > Market | 0원
+      대안: 만리시장 | Retail > Market | 0원
+  #7  20:10-20:40  Travelodge Dongdaemun Seoul | Travel and Transportation > Lodging > Hotel | - | Seoul
+      이동: CAR 3분 1.55km 1236원
+      비용: 120000원 / 메모: -
+      대안: 트레블로지 동대문 호텔 | Travel and Transportation > Lodging | 120000원
+      대안: 명동게스트하우스 | Travel and Transportation > Lodging > Motel | 120000원
+== day 2 ==
+  #8  09:10-10:40  국립중앙박물관 | Arts and Entertainment > Museum | 용산구 | Seoul
+      이동: CAR 10분 6.63km 5301원
+      비용: 0원 / 메모: -
+      대안: 신흥시장 | Retail > Market | 0원
+      대안: 국립중앙도서관 | Arts and Entertainment > Cultural Center | 0원
+      대안: 숭례문 | Landmarks and Outdoors > Tourist Attraction | 0원
+  #9  11:30-12:40  반포식스 | Dining and Drinking > Restaurant > Asian Restaurant > Japanese Restaurant | - | Seoul
+      이동: CAR 7분 4.27km 3419원
+      비용: 13000원 / 메모: -
+  #10 12:59-13:49  바이앤드커피 | Dining and Drinking > Cafe, Coffee, and Tea House | 마포구 | Seoul
+      이동: CAR 19분 12.22km 9779원
+      비용: 6000원 / 메모: -
+      대안: 울 베이커리 카페 | Dining and Drinking > Cafe, Coffee, and Tea House > Café | 6000원
+  #11 14:04-14:54  포비 베이직 | Dining and Drinking > Cafe, Coffee, and Tea House | - | Seoul
+      이동: WALK 15분 0.94km 0원
+      비용: 6000원 / 메모: -
+  #12 15:14-16:14  서교재래시장 | Retail > Market | - | Seoul
+      이동: WALK 20분 1.27km 0원
+      비용: 0원 / 메모: -
+      대안: 아현시장 | Retail > Market | 0원
+      대안: 남대문시장 | Retail > Market | 0원
+      대안: 만리시장 | Retail > Market | 0원
+  #13 17:30-18:40  반포대가삼 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Seoul
+      이동: CAR 19분 12.56km 10050원
+      비용: 13000원 / 메모: -
+  #14 18:53-19:23  Travelodge Dongdaemun Seoul | Travel and Transportation > Lodging > Hotel | - | Seoul
+      이동: CAR 13분 8.01km 6411원
+      비용: 120000원 / 메모: -
+      대안: 트레블로지 동대문 호텔 | Travel and Transportation > Lodging | 120000원
+      대안: 명동게스트하우스 | Travel and Transportation > Lodging > Motel | 120000원
+== day 3 ==
+  #15 09:05-10:35  경복궁 | Landmarks and Outdoors > Tourist Attraction | 종로구 | Seoul
+      이동: CAR 5분 3.21km 2570원
+      비용: 0원 / 메모: -
+      대안: 숭례문 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 남대문시장 | Retail > Market | 0원
+      대안: 서울동행상회 | Retail > Food and Beverage Retail > Farmers Market | 0원
+  #16 11:30-12:40  큰집 설렁탕 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Seoul
+      이동: CAR 7분 4.18km 3343원
+      비용: 13000원 / 메모: -
+  #17 12:48-13:38  행복한 베이커리&카페 | Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop | 5층 | Seoul
+      이동: CAR 8분 4.83km 3865원
+      비용: 6000원 / 메모: -
+      대안: 울 베이커리 카페 | Dining and Drinking > Cafe, Coffee, and Tea House > Café | 6000원
+  #18 13:42-16:12  창덕궁과 후원 [유네스코 세계유산] | Landmarks and Outdoors > Tourist Attraction | 종로구 | Seoul
+      이동: CAR 4분 2.16km 1731원
+      비용: 0원 / 메모: -
+      대안: Bangsan Market | Retail > Market | 0원
+      대안: 종로신진시장 | Retail > Market | 0원
+      대안: 신흥시장 | Retail > Market | 0원
+  #19 17:30-18:40  성북동삼거리전통설렁탕 | Dining and Drinking > Restaurant | - | Seoul
+      이동: CAR 4분 2.32km 1857원
+      비용: 13000원 / 메모: -
+  #20 18:46-19:16  Travelodge Dongdaemun Seoul | Travel and Transportation > Lodging > Hotel | - | Seoul
+      이동: CAR 6분 3.85km 3082원
+      비용: 120000원 / 메모: -
+      대안: 트레블로지 동대문 호텔 | Travel and Transportation > Lodging | 120000원
+      대안: 명동게스트하우스 | Travel and Transportation > Lodging > Motel | 120000원
+  #21 19:23-20:23  성신여대하나로거리 | Event > Marketplace > Street Food Gathering | - | Seoul
+      이동: CAR 7분 4.24km 3391원
+      비용: 0원 / 메모: -
+      대안: 정릉시장 | Retail > Market | 0원
+      대안: 서울훼미리청년몰 | Retail > Market | 0원
+  #22 20:31-21:01  Seoul Cube Jongro | Travel and Transportation > Lodging > Hostel | 51 Samil-daero 17-gil | Seoul
+      이동: CAR 8분 5.1km 4078원
+      비용: 50000원 / 메모: -
+      대안: 오늘스테이 동대문점 | Travel and Transportation > Lodging | 120000원
+== day 4 ==
+  #23 11:48-12:58  제일돼지국밥 | Dining and Drinking > Restaurant | - | Busan
+      이동: TRAIN 168분 424.01km -원
+      비용: 13000원 / 메모: -
+      대안: 밀양순대돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant | 13000원
+      대안: 몽실종가돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
+  #24 13:01-14:11  미정식당 | Retail > Food and Beverage Retail | - | Busan
+      이동: CAR 3분 1.79km 1434원
+      비용: 0원 / 메모: -
+      대안: 대신종합시장 | Retail > Market | 0원
+      대안: 신동아수산물종합시장 | Retail > Food and Beverage Retail > Fish Market | 0원
+      대안: 영주시장 | Retail > Market | 0원
+  #25 14:26-15:26  국제시장 먹자골목 | Landmarks and Outdoors > Tourist Attraction | - | Busan
+      이동: WALK 15분 0.96km 0원
+      비용: 0원 / 메모: -
+      대안: 초량전통시장 | Retail > Market | 0원
+      대안: 하단시장 | Retail > Market | 0원
+      대안: 브레드포럼 | Retail > Food and Beverage Retail | 0원
+  #26 17:30-18:40  영동밀면&돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Busan
+      이동: CAR 4분 2.57km 2054원
+      비용: 13000원 / 메모: -
+  #27 18:44-20:14  부산타워 (Busan Tower) | Landmarks and Outdoors > Scenic Lookout | - | Busan
+      이동: CAR 4분 2.37km 1893원
+      비용: 6000원 / 메모: -
+      대안: 국립해양박물관 | Arts and Entertainment > Cultural Center | 0원
+  #28 20:38-21:08  한화리조트 해운대 | Travel and Transportation > Lodging > Resort | 해운대구 | Busan
+      이동: CAR 24분 15.42km 12332원
+      비용: 200000원 / 메모: -
+      대안: 팔라티움 해운대 바이 소노펠리체 | Travel and Transportation > Lodging | 120000원
+      대안: 호텔아쿠아펠리스 스파&리조트 | Travel and Transportation > Lodging > Hotel | 200000원
+== day 5 ==
+  #29 09:09-10:09  망미중앙시장 | Retail > Market | - | Busan
+      이동: CAR 9분 5.43km 4343원
+      비용: 0원 / 메모: -
+      대안: 밀락더마켓 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 양정시장 | Retail > Market | 0원
+      대안: 부전시장 | Retail > Market | 0원
+  #30 11:30-12:40  자상한 브런치 | Dining and Drinking > Breakfast Spot | 부산진구 | Busan
+      이동: CAR 10분 6.18km 4946원
+      비용: 13000원 / 메모: -
+  #31 12:55-13:25  한화리조트 해운대 | Travel and Transportation > Lodging > Resort | 해운대구 | Busan
+      이동: CAR 15분 9.81km 7847원
+      비용: 200000원 / 메모: -
+      대안: 팔라티움 해운대 바이 소노펠리체 | Travel and Transportation > Lodging | 120000원
+      대안: 호텔아쿠아펠리스 스파&리조트 | Travel and Transportation > Lodging > Hotel | 200000원
+  #32 13:31-14:31  광안시장 | Retail > Food and Beverage Retail > Farmers Market | 수영구 | Busan
+      이동: CAR 6분 3.9km 3118원
+      비용: 0원 / 메모: -
+      대안: 용호시장 | Retail > Market | 0원
+      대안: 좌동재래시장 | Retail > Market | 0원
+      대안: 브레드포럼 | Retail > Food and Beverage Retail | 0원
+  #33 17:30-18:40  부산토박이 돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Busan
+      이동: WALK 15분 0.98km 0원
+      비용: 13000원 / 메모: -
+      대안: 부산24시수제순대돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
+  #34 18:51-20:21  서면먹자골목 | Landmarks and Outdoors > Tourist Attraction | 부산진구 | Busan
+      이동: CAR 11분 7.14km 5714원
+      비용: 0원 / 메모: -
+      대안: 초량전통시장 | Retail > Market | 0원
+      대안: 영주시장 | Retail > Market | 0원
+      대안: 부산아시아드주경기장 (Busan Asiad Main Stadium) | Arts and Entertainment > Stadium > Track Stadium | 0원
+== day 6 ==
+  #35 09:04-10:34  Haeridan-Gil | Event > Marketplace > Street Food Gathering | - | Busan
+      이동: CAR 4분 2.09km 1675원
+      비용: 0원 / 메모: -
+      대안: 좌동재래시장 | Retail > Market | 0원
+      대안: 밀락더마켓 | Landmarks and Outdoors > Tourist Attraction | 0원
+  #36 11:30-12:40  부산제일합천돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Busan
+      이동: CAR 16분 10.09km 8074원
+      비용: 13000원 / 메모: -
+  #37 12:47-14:17  망미단길 | Landmarks and Outdoors > Tourist Attraction | 수영구 | Busan
+      이동: CAR 7분 4.32km 3452원
+      비용: 0원 / 메모: -
+      대안: 부전시장 | Retail > Market | 0원
+      대안: 부산아시아드주경기장 (Busan Asiad Main Stadium) | Arts and Entertainment > Stadium > Track Stadium | 0원
+      대안: 양정시장 | Retail > Market | 0원
+  #38 14:23-15:33  베어케이커리 | Dining and Drinking > Dessert Shop | - | Busan
+      이동: CAR 6분 3.74km 2991원
+      비용: 13000원 / 메모: -
+      대안: 치치타르트 | Dining and Drinking > Bakery | 13000원
+  #39 15:46-17:16  오방맛길 | Landmarks and Outdoors > Tourist Attraction | 연제구 | Busan
+      이동: WALK 13분 0.83km 0원
+      비용: 0원 / 메모: -
+      대안: 브레드포럼 | Retail > Food and Beverage Retail | 0원
+-- unresolved (2) --
+  day2 거리 초과
+  day4 거리 초과

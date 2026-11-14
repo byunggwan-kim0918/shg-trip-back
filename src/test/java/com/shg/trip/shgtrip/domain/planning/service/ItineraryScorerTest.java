@@ -112,6 +112,26 @@ class ItineraryScorerTest {
         assertThat(two).isEqualTo(1.0);
     }
 
+    @Test
+    @DisplayName("일차마다 하루 점수·방문 수·마지막 일정 종료 시각을 낸다")
+    void scoresEachDay() {
+        List<StepData> steps = List.of(
+                step(1, 1, "09:00", "11:00", "전망대", SIGHT, null, null),
+                step(2, 1, "12:00", "13:00", "식당1", RESTAURANT, 10, 5.0),
+                step(3, 1, "20:00", "20:30", "호텔", HOTEL, 10, 5.0),
+                step(4, 2, "12:00", "13:00", "식당2", RESTAURANT, 10, 5.0));
+
+        ScoreReport report = scorer.score(new ItineraryScorer.Input(steps, "normal", "car", null, null, null));
+
+        assertThat(report.days()).extracting(ScoreReport.DayScore::day).containsExactly(1, 2);
+        assertThat(report.days()).extracting(ScoreReport.DayScore::visits).containsExactly(1, 0);
+        assertThat(report.days()).extracting(ScoreReport.DayScore::lastActivityEnd).containsExactly(13 * 60, 13 * 60);
+        // 1일차: 이동 1 + 시간 활용 0(7시간 공백) + 방문 1/1.5. 2일차: 이동 1 + 시간 활용 1 + 방문 0.
+        assertThat(report.days().get(0).score()).isCloseTo(5.0 / 9, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(report.days().get(1).score()).isCloseTo(2.0 / 3, org.assertj.core.data.Offset.offset(1e-9));
+        assertThat(report.days()).allSatisfy(d -> assertThat(d.prominence()).isNull());
+    }
+
     private List<StepData> fourDaysEndingAt(List<String> hotels) {
         List<StepData> steps = new ArrayList<>();
         int order = 1;
