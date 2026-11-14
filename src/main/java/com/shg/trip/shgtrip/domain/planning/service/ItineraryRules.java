@@ -29,7 +29,7 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.*;
 public final class ItineraryRules {
 
     /** 규칙이나 등급이 바뀌면 올린다. 다른 버전의 판정 기록끼리 비교하지 않기 위해서다. */
-    public static final int VERSION = 4;
+    public static final int VERSION = 5;
 
     public enum Severity {
         /** 일정을 쓸 수 없다. */
@@ -55,6 +55,7 @@ public final class ItineraryRules {
         NO_NON_FOOD_ACTIVITY(Severity.CORE),
         ADDRESS_REGION_MISMATCH(Severity.CORE),
         REQUIRED_EXPERIENCE_MISSING(Severity.CORE),
+        TRAVEL_MISSING(Severity.CORE),
         // 거리는 직선 × 도로 계수 추정이라 편집으로 고칠 수 없어 사용자 경고로 띄우지 않는다
         LEG_OVER_CAP(Severity.SOFT),
         DAY_DISTANCE_OVER_CAP(Severity.SOFT),
@@ -149,11 +150,13 @@ public final class ItineraryRules {
         }
 
         MealTally tally = new MealTally();
+        StepData previousDayEnd = null;
         for (Map.Entry<Integer, List<StepData>> entry : byDay.entrySet()) {
             int day = entry.getKey();
             boolean first = day == byDay.firstKey();
             boolean last = day == byDay.lastKey();
             checkDay(day, entry.getValue(), first, last, limits, ctx, lookup, tally, out);
+            previousDayEnd = checkTravel(day, entry.getValue(), previousDayEnd, lookup, out);
         }
         tally.checkTrip(byDay.size(), out);
         checkAddressRegion(byDay, out);
@@ -222,6 +225,38 @@ public final class ItineraryRules {
             String end = ScheduleTimes.formatMinutes(lastActivityEnd);
             out.add(new Violation(Rule.EARLY_FINISH, day, "day" + day + " 일정이 " + end + "에 끝남", List.of(end)));
         }
+    }
+
+    /**
+     * 확정 단계는 직선 {@value ScheduleTuning#MAX_REASONABLE_LEG_KM}km(해외 관문 연결은 더 길게)를 넘는 구간의 이동을 비운다.
+     * 그만큼 떨어졌는데 이동 시간이 없는 구간은 다른 도시로 건너뛴 것이다.
+     *
+     * @return 그날 좌표가 있는 마지막 스텝. 다음 날 첫 스텝을 이것과 견준다
+     */
+    private StepData checkTravel(int day, List<StepData> daySteps, StepData previousDayEnd, CandidateLookup lookup,
+                                 List<Violation> out) {
+        StepData prev = previousDayEnd;
+        boolean reported = false;
+        for (StepData s : daySteps) {
+            double[] to = CandidateGeo.coordsOf(lookup.of(s));
+            // 도시 간 이동 구간은 앞 도시에서 넘어온 이동이라 그 앞 장소와 견주지 않는다.
+            if (InvariantChecker.isIntercityLeg(s)) {
+                prev = to != null ? s : null;
+                continue;
+            }
+            if (to == null) continue;
+            double[] from = prev == null ? null : CandidateGeo.coordsOf(lookup.of(prev));
+            double km = from == null ? 0 : GeoUtils.haversine(from, to);
+            if (!reported && s.transportationDuration() == null && km > MAX_REASONABLE_LEG_KM) {
+                String shownKm = String.format("%.0f", km * GeoUtils.ROAD_DISTANCE_FACTOR);
+                out.add(new Violation(Rule.TRAVEL_MISSING, day, "day" + day + " 이동 없이 " + CandidateLookup.name(prev)
+                        + " → " + CandidateLookup.name(s) + "(" + shownKm + "km)",
+                        List.of(shownName(prev), shownName(s), shownKm)));
+                reported = true;
+            }
+            prev = s;
+        }
+        return prev;
     }
 
     private void checkRequiredExperiences(List<StepData> steps, List<PlaceCandidate> candidates,

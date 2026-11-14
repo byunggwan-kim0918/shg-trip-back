@@ -23,9 +23,6 @@ import java.util.regex.Pattern;
 public class HardValidator {
 
     private static final Pattern TIME_PATTERN = Pattern.compile("^([01]\\d|2[0-3]):[0-5]\\d$");
-    // 한 destination 안에서 비현실적인 구간거리(km). 넘으면 불량 좌표로 만든 일정이라
-    // 새벽 시각·수백 분 이동 같은 결과가 저장되지 않게 실패시킨다.
-    private static final java.math.BigDecimal MAX_REASONABLE_LEG_KM = java.math.BigDecimal.valueOf(200);
 
 
     /**
@@ -92,10 +89,11 @@ public class HardValidator {
                 }
             }
 
+            java.math.BigDecimal roadLimit = maxRoadKm(i > 0 ? steps.get(i - 1) : null, step);
             if (step.transportationDistance() != null && !InvariantChecker.isIntercityLeg(step)
-                    && step.transportationDistance().compareTo(MAX_REASONABLE_LEG_KM) > 0) {
+                    && step.transportationDistance().compareTo(roadLimit) > 0) {
                 errors.add(prefix + String.format("이동거리(%skm)가 비현실적입니다 (한 여행지 내 %skm 초과).",
-                        step.transportationDistance().toPlainString(), MAX_REASONABLE_LEG_KM.toPlainString()));
+                        step.transportationDistance().toPlainString(), roadLimit.toPlainString()));
             }
 
             // 모니터링 전용이라 errors에 추가하지 않는다.
@@ -173,6 +171,19 @@ public class HardValidator {
     private int timeToMinutes(String time) {
         String[] parts = time.split(":");
         return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+    }
+
+    /** 저장 거리는 도로 환산값이라 확정 단계가 이동 정보를 비우는 직선 상한을 도로 단위로 바꿔 견준다. */
+    private static java.math.BigDecimal maxRoadKm(StepData previous, StepData step) {
+        boolean hubTransfer = isOverseasHub(step) || (previous != null
+                && previous.dayNumber() == step.dayNumber() && isOverseasHub(previous));
+        return java.math.BigDecimal.valueOf(Math.round(
+                ScheduleTuning.maxLegKm(hubTransfer) * com.shg.trip.shgtrip.global.util.GeoUtils.ROAD_DISTANCE_FACTOR));
+    }
+
+    private static boolean isOverseasHub(StepData step) {
+        return step.place() != null
+                && PlaceCategoryConstants.isOverseasHub(step.place().country(), step.place().category());
     }
 
     private boolean isAccommodationStep(StepData step) {

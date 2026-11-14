@@ -576,13 +576,13 @@ class VectorSearchQueryServiceTest {
         @Test
         @DisplayName("지역 필터가 0건을 만들면 상위 지역으로 완화해 재조회한다")
         void search_emptyRegionFilter_retriesWithoutIt() {
-            VectorEnrichedInput input = multiCityInput();
+            VectorEnrichedInput input = nearbyRegionsInput();
             givenBatchEmbeddings();
-            // Busan 단독 필터만 0건 — 상위 지역으로 완화한 재조회는 정상 (fail-open 경로 강제)
+            // Gyeongju 단독 필터만 0건이고 상위 지역으로 완화한 재조회는 정상이라 fail-open 경로를 탄다.
             given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
                     .willAnswer(inv -> {
                         VectorSearchRequest request = inv.getArgument(0);
-                        return List.of("Busan").equals(request.regions())
+                        return List.of("Gyeongju").equals(request.regions())
                                 ? List.of()
                                 : createMockResults(5);
                     });
@@ -591,10 +591,29 @@ class VectorSearchQueryServiceTest {
 
             verify(placeVectorSearchService, atLeastOnce()).search(requestCaptor.capture());
             assertThat(requestCaptor.getAllValues())
-                    .as("Busan 슬롯이 0건이면 상위 지역 전체로 완화한 재조회가 뒤따라야 한다")
+                    .as("Gyeongju 슬롯이 0건이면 상위 지역 전체로 완화한 재조회가 뒤따라야 한다")
                     .anyMatch(r -> r.regions() != null
-                            && r.regions().containsAll(List.of("Seoul", "Busan")));
+                            && r.regions().containsAll(List.of("Busan", "Gyeongju")));
             assertThat(result).isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("국내 먼 두 도시는 도시마다 따로 찾고, 한 도시가 0건이어도 다른 도시로 넓히지 않는다")
+        void search_farDomesticCities_searchPerCity() {
+            VectorEnrichedInput input = farCitiesInput();
+            givenBatchEmbeddings();
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willAnswer(inv -> {
+                        VectorSearchRequest request = inv.getArgument(0);
+                        return List.of("Busan").equals(request.regions()) ? List.of() : createMockResults(5);
+                    });
+
+            service.search(input);
+
+            verify(placeVectorSearchService, atLeastOnce()).search(requestCaptor.capture());
+            assertThat(requestCaptor.getAllValues()).extracting(VectorSearchRequest::regions)
+                    .allSatisfy(regions -> assertThat(regions).hasSize(1))
+                    .contains(List.of("Seoul"), List.of("Busan"));
         }
 
         @Test
@@ -636,17 +655,29 @@ class VectorSearchQueryServiceTest {
             );
         }
 
-        /** 서울+부산 5일 — regionAllocation 값이 regions 어휘 그대로라 분리 검색이 유지돼야 한다. */
-        private VectorEnrichedInput multiCityInput() {
+        /** 부산+경주 5일. 하루에 오가는 두 지역이라 한 풀로 찾고, 배분 값이 regions 어휘라 지역별 분리 검색을 한다. */
+        private VectorEnrichedInput nearbyRegionsInput() {
+            return twoRegionInput("부산경주", List.of("Busan", "Gyeongju"),
+                    Map.of("1-3", List.of("Busan"), "4-5", List.of("Gyeongju")));
+        }
+
+        /** 서울+부산 5일. 먼 두 도시라 도시 구간마다 따로 찾는다. */
+        private VectorEnrichedInput farCitiesInput() {
+            return twoRegionInput("서울부산", List.of("Seoul", "Busan"),
+                    Map.of("1-3", List.of("Seoul"), "4-5", List.of("Busan")));
+        }
+
+        private VectorEnrichedInput twoRegionInput(String destination, List<String> regions,
+                                                   Map<String, List<String>> allocation) {
             return new VectorEnrichedInput(
-                    "서울부산", List.of("맛집"), List.of("음식", "관광", "숙소"),
+                    destination, List.of("맛집"), List.of("음식", "관광", "숙소"),
                     "normal", "any", BigDecimal.valueOf(1000000),
                     LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 5),
-                    "서울 부산 5일", null,
-                    "서울부산", "KR", List.of("Seoul", "Busan"),
+                    destination + " 5일", null,
+                    destination, "KR", regions,
                     List.of("맛집"),
-                    Map.of("1-3", List.of("Seoul"), "4-5", List.of("Busan")),
-                    "MEDIUM", "여름", "서울 부산 컨텍스트",
+                    allocation,
+                    "MEDIUM", "여름", destination + " 컨텍스트",
                     null, null
             );
         }

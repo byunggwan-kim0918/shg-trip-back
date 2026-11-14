@@ -49,6 +49,9 @@ public final class QualityNotices {
             case NO_NON_FOOD_ACTIVITY -> d + "일차에 식사·카페 말고 둘러볼 곳이 없어요.";
             case ADDRESS_REGION_MISMATCH -> d + "일차 " + quoted(v, 0) + "의 주소가 여행지와 달라요. 대안으로 바꾸거나 빼 주세요.";
             case REQUIRED_EXPERIENCE_MISSING -> "꼭 가고 싶다고 한 " + quoted(v, 0) + "을(를) 일정에 넣지 못했어요.";
+            case TRAVEL_MISSING -> d + "일차 " + quoted(v, 0) + "에서 " + quoted(v, 1) + "까지 약 "
+                    + (v.evidence().size() > 2 ? v.evidence().get(2) : "") + "km를 이동 시간 없이 건너뛰어요. "
+                    + "멀리 떨어진 장소를 빼거나 다시 만들어 주세요.";
             case EARLY_FINISH -> isLastDayWithoutDeparture(d, ctx)
                     ? d + "일차 일정이 " + first(v) + "에 끝나요. 다음에 만들 때 출발 시간을 알려 주면 마지막 날을 더 채울 수 있어요."
                     : null;
@@ -100,7 +103,7 @@ public final class QualityNotices {
             case CLOSED_DAY -> new Rejection(v.day() + "일차에 휴무일인 " + quoted(v, 0) + "이(가) 들어가 저장하지 않았어요.", retry);
             case LUNCH_MISSING, DINNER_MISSING, NOT_ENDING_AT_LODGING, DEPARTURE_LATE, OUTSIDE_HOURS,
                  SAME_DAY_MEAL_KIND, MEAL_KIND_REPEATED, CAFE_PER_DAY, NO_NON_FOOD_ACTIVITY, ADDRESS_REGION_MISMATCH,
-                 REQUIRED_EXPERIENCE_MISSING, EARLY_FINISH, LEG_OVER_CAP, DAY_DISTANCE_OVER_CAP, CONSECUTIVE_MEAL_KIND,
+                 REQUIRED_EXPERIENCE_MISSING, TRAVEL_MISSING, EARLY_FINISH, LEG_OVER_CAP, DAY_DISTANCE_OVER_CAP, CONSECUTIVE_MEAL_KIND,
                  SAME_DAY_MEAL_GROUP, MEAL_GROUP_REPEATED -> null;
         };
     }

@@ -287,7 +287,7 @@ public class ItineraryService {
         return toResponse(itinerary);
     }
 
-    /** 다른 도시에서 넘어온 날 첫 스텝의 열차·비행기 구간. 그날 순서를 바꿔도 이동 자체는 그대로다. */
+    /** 다른 도시에서 넘어온 날 첫 스텝의 도시 간 이동 구간. 그날 순서를 바꿔도 이동 자체는 그대로다. */
     private record TransferLeg(String mode, Integer duration, BigDecimal distance, BigDecimal cost) {}
 
     /** 그날 첫 스텝이 도시 간 이동 구간이면 그 값, 아니면 null. */
@@ -363,9 +363,6 @@ public class ItineraryService {
         }
     }
 
-    // 한 destination 안 하루 이동으로는 비현실적인 구간거리. RouteOptimizer와 같은 값이다.
-    private static final double MAX_REASONABLE_LEG_KM = 200.0;
-
     /**
      * 시간·비용·모드도 거리와 함께 {@link GeoUtils#estimateLeg}로 갱신해야 프론트 예산 합산(장소비+이동비)이 맞는다.
      * transportPref는 저장돼 있지 않아 "any"(혼합 단가)로 계산한다.
@@ -394,7 +391,7 @@ public class ItineraryService {
         return GeoUtils.estimateLeg(
                 new double[]{fromPlace.getLatitude().doubleValue(), fromPlace.getLongitude().doubleValue()},
                 new double[]{toPlace.getLatitude().doubleValue(), toPlace.getLongitude().doubleValue()},
-                "any", MAX_REASONABLE_LEG_KM, hubTransfer);
+                "any", ScheduleTuning.maxLegKm(hubTransfer), hubTransfer);
     }
 
     /**

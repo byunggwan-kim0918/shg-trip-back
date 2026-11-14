@@ -153,6 +153,25 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("열차·비행기 요금은 사람 수만큼, 자동차 도시 이동과 하루 안 이동 비용은 한 번만 센다")
+    void partyScalesPerPersonFaresOnly() {
+        PlaceData place = new PlaceData("부산역", null, "Travel and Transportation > Transport Hub", "Busan", "KR");
+        List<StepData> steps = List.of(
+                new StepData(1, 4, "13:00", "13:30", place, List.of(), "TRAIN", 200, BigDecimal.valueOf(420),
+                        BigDecimal.valueOf(58_000), null, null),
+                new StepData(2, 4, "14:00", "15:00", place, List.of(), "DRIVE", 300, BigDecimal.valueOf(420),
+                        BigDecimal.valueOf(75_000), null, null),
+                new StepData(3, 4, "16:00", "17:00", place, List.of(), "CAR", 20, BigDecimal.valueOf(9),
+                        BigDecimal.valueOf(7_000), null, null),
+                new StepData(4, 4, "18:00", "19:00", place, List.of(), null, null, null, null, null, null));
+
+        List<StepData> scaled = OptimizedGenerationExecutor.scaleCostsForParty(steps, 3);
+
+        assertThat(scaled).extracting(StepData::transportationCost).containsExactly(
+                BigDecimal.valueOf(174_000), BigDecimal.valueOf(75_000), BigDecimal.valueOf(7_000), null);
+    }
+
+    @Test
     @DisplayName("정상 흐름: enrich → vectorSearch → selectPlaces → schedule → 구조 저장 → complete(유지) → 비동기 story")
     void execute_success_savesDraftAndTriggersAsyncStory() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);

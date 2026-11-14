@@ -61,6 +61,47 @@ class HardValidatorTest {
     }
 
     @Test
+    @DisplayName("비현실 구간은 확정 단계와 같은 직선 200km(도로 260km) 기준이라, 이동 정보가 채워진 직선 170km 구간은 통과한다")
+    void validate_unrealisticLegUsesStraightLimit() {
+        PlaceData place = new PlaceData("오죽헌", null, "Tour", "Gangneung", "KR");
+        StepData straight170 = new StepData(1, 1, "12:30", "14:00", place, List.of(), "CAR", 260,
+                BigDecimal.valueOf(221), null, null, null);
+        StepData straight210 = new StepData(1, 1, "12:30", "14:00", place, List.of(), "CAR", 320,
+                BigDecimal.valueOf(273), null, null, null);
+
+        assertThat(validator.validate(itinerary(List.of(straight170))).valid()).isTrue();
+        assertThat(validator.validate(itinerary(List.of(straight210))).failureReason()).contains("260km 초과");
+    }
+
+    @Test
+    @DisplayName("해외 관문 바로 다음 구간은 관문 연결 상한(직선 300km, 도로 390km)까지 통과한다")
+    void validate_gatewayLegUsesWiderLimit() {
+        PlaceData noiBai = new PlaceData("Noi Bai International Airport", null,
+                "Travel and Transportation > Transport Hub > Airport", "Hanoi", "VN");
+        PlaceData sapa = new PlaceData("Sa Pa Market", null, "Retail > Market", "Sa Pa", "VN");
+        StepData hub = new StepData(1, 1, "10:00", "10:30", noiBai, List.of(), null, null, null, null, null, null);
+        StepData afterHub = new StepData(2, 1, "15:40", "16:40", sapa, List.of(), "CAR", 310,
+                BigDecimal.valueOf(309), null, null, null);
+        StepData midTrip = new StepData(2, 2, "15:40", "16:40", sapa, List.of(), "CAR", 310,
+                BigDecimal.valueOf(309), null, null, null);
+
+        assertThat(validator.validate(itinerary(List.of(hub, afterHub))).valid()).isTrue();
+        assertThat(validator.validate(itinerary(List.of(
+                new StepData(1, 2, "10:00", "11:00", new PlaceData("Hanoi Hotel", null, "Tour", "Hanoi", "VN"), List.of(),
+                        null, null, null, null, null, null), midTrip))).valid()).isFalse();
+    }
+
+    @Test
+    @DisplayName("차로 도시를 옮기는 구간도 도시 간 이동이라 수백 km여도 통과한다")
+    void validate_driveTransferIsIntercity() {
+        PlaceData gyeongju = new PlaceData("불국사", null, "Tour", "Gyeongju", "KR");
+        StepData drive = new StepData(1, 3, "12:30", "14:00", gyeongju, List.of(), "DRIVE", 206,
+                BigDecimal.valueOf(281), BigDecimal.valueOf(49_800), null, null);
+
+        assertThat(validator.validate(itinerary(List.of(drive))).valid()).isTrue();
+    }
+
+    @Test
     @DisplayName("같은 날 같은 이름이라도 후보 id가 다른 체인 지점은 중복이 아니고, 같은 id는 중복이다")
     void validate_sameNameDifferentPlaceIds_passes() {
         PlaceData shinjuku = new PlaceData("コメダ珈琲店", "", "Cafe", "Tokyo", "JP", null, null, 10L, null);

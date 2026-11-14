@@ -285,6 +285,123 @@ class ItineraryRulesTest {
                 "\"hard\":true", "\"core\":false", "\"version\":" + ItineraryRules.VERSION);
     }
 
+    @Test
+    @DisplayName("이동 정보 없이 200km 넘게 떨어진 장소로 이어지면 이동 누락(CORE), 도시 간 이동 구간은 아니다")
+    void travelMissingBetweenFarPlaces() {
+        PlaceCandidate seoul = at(1, "경복궁", TEMPLE, 37.5796, 126.9770);
+        PlaceCandidate busanMeal = at(2, "부산국밥", KOREAN, 35.1580, 129.0590);
+        PlaceCandidate seoulHotel = at(3, "서울호텔", PENSION, 37.5665, 126.9780);
+        PlaceCandidate busanBeach = at(4, "해운대해수욕장", BEACH, 35.1587, 129.1604);
+        List<PlaceCandidate> candidates = List.of(seoul, busanMeal, seoulHotel, busanBeach);
+        List<StepData> mixed = List.of(
+                step(1, 1, "09:00", "11:00", "경복궁", TEMPLE, null),
+                step(2, 1, "12:00", "13:00", "부산국밥", KOREAN, null),
+                step(3, 1, "20:00", "20:30", "서울호텔", PENSION, null),
+                step(4, 2, "10:00", "12:00", "해운대해수욕장", BEACH, null));
+
+        Verdict verdict = rules.evaluate(mixed, candidates, context("normal", 2));
+
+        // 날마다 처음 건너뛴 곳 하나만 센다. 2일차는 전날 숙소에서 시작하는 구간이다.
+        assertThat(verdict.violations()).filteredOn(v -> v.rule() == Rule.TRAVEL_MISSING)
+                .extracting(ItineraryRules.Violation::day, ItineraryRules.Violation::evidence)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(1, List.of("경복궁", "부산국밥", "426")),
+                        org.assertj.core.groups.Tuple.tuple(2, List.of("서울호텔", "해운대해수욕장", "431")));
+        assertThat(verdict.core()).isTrue();
+
+        StepData byTrain = new StepData(4, 2, "13:00", "15:00", new PlaceData("해운대해수욕장", null, BEACH, "Busan", "KR"),
+                List.of(), "TRAIN", 200, BigDecimal.valueOf(420), BigDecimal.valueOf(58_000), null, null);
+        List<StepData> transfer = List.of(mixed.get(0), mixed.get(2), byTrain);
+        assertThat(rulesOf(rules.evaluate(transfer, candidates, context("normal", 2))))
+                .doesNotContain(Rule.TRAVEL_MISSING);
+    }
+
+    @Test
+    @DisplayName("좌표 없는 장소를 건너 이어 보고, 200km 이하나 이동 시간이 있는 해외 관문 연결은 이동 누락이 아니다")
+    void travelMissingSkipsUnlocatedAndExempt() {
+        PlaceCandidate seoul = at(1, "경복궁", TEMPLE, 37.5796, 126.9770);
+        PlaceCandidate daejeon = at(2, "대전 성심당", KOREAN, 36.3277, 127.4271);
+        PlaceCandidate busan = at(3, "해운대해수욕장", BEACH, 35.1587, 129.1604);
+        StepData unlocated = step(2, 1, "11:30", "12:00", "좌표 모름", KOREAN, null);
+
+        Verdict hidden = rules.evaluate(List.of(step(1, 1, "09:00", "11:00", "경복궁", TEMPLE, null), unlocated,
+                step(3, 1, "13:00", "15:00", "해운대해수욕장", BEACH, null)), List.of(seoul, busan), context("normal", 1));
+        Verdict within = rules.evaluate(List.of(step(1, 1, "09:00", "11:00", "경복궁", TEMPLE, null),
+                step(2, 1, "12:00", "13:00", "대전 성심당", KOREAN, null)), List.of(seoul, daejeon), context("normal", 1));
+
+        assertThat(rulesOf(hidden)).contains(Rule.TRAVEL_MISSING);
+        assertThat(rulesOf(within)).doesNotContain(Rule.TRAVEL_MISSING);
+
+        String airport = "Travel and Transportation > Transport Hub > Airport";
+        PlaceCandidate noiBai = new PlaceCandidate(1, null, "Noi Bai International Airport", null, airport, List.of(),
+                "Hanoi", "VN", BigDecimal.valueOf(21.2187), BigDecimal.valueOf(105.8042), null, null, 0.9, null, null,
+                null, 60, false, null, null, null, null, "TRANSIT", null, false, null);
+        PlaceCandidate sapa = new PlaceCandidate(2, null, "Sa Pa Market", null, "Retail > Market", List.of(), "Sa Pa",
+                "VN", BigDecimal.valueOf(22.3364), BigDecimal.valueOf(103.8438), null, null, 0.9, null, null,
+                null, 60, false, null, null, null, null, "MARKET", null, false, null);
+        List<StepData> overseas = List.of(
+                new StepData(1, 1, "10:00", "10:30", new PlaceData("Noi Bai International Airport", null, airport,
+                        "Hanoi", "VN"), List.of(), null, null, null, null, null, null),
+                new StepData(2, 1, "15:00", "16:00", new PlaceData("Sa Pa Market", null, "Retail > Market", "Sa Pa",
+                        "VN"), List.of(), "CAR", 310, BigDecimal.valueOf(309), null, null, null));
+        assertThat(rulesOf(rules.evaluate(overseas, List.of(noiBai, sapa), context("normal", 2))))
+                .doesNotContain(Rule.TRAVEL_MISSING);
+    }
+
+    @Test
+    @DisplayName("도시 간 이동 첫 스텝에 좌표가 없어도 앞 도시 숙소와 다음 장소를 견주지 않는다")
+    void intercityStepWithoutCoordinatesResetsOrigin() {
+        PlaceCandidate seoulHotel = at(1, "서울호텔", PENSION, 37.5665, 126.9780);
+        PlaceCandidate busanBeach = at(2, "해운대해수욕장", BEACH, 35.1587, 129.1604);
+        List<StepData> steps = List.of(
+                step(1, 1, "20:00", "20:30", "서울호텔", PENSION, null),
+                new StepData(2, 2, "13:00", "14:00", new PlaceData("좌표 모름 시장", null, "Retail > Market", "Busan", "KR"),
+                        List.of(), "TRAIN", 202, BigDecimal.valueOf(422), BigDecimal.valueOf(58_300), null, null),
+                step(3, 2, "15:00", "16:00", "해운대해수욕장", BEACH, null));
+
+        assertThat(rulesOf(rules.evaluate(steps, List.of(seoulHotel, busanBeach), context("normal", 2))))
+                .doesNotContain(Rule.TRAVEL_MISSING);
+    }
+
+    @Test
+    @DisplayName("해외 관문 연결 상한은 목록의 모든 여행지에서 관문까지 거리보다 크다")
+    void gatewayLimitCoversEveryDestination() {
+        com.shg.trip.shgtrip.domain.place.destination.Destinations destinations =
+                com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath();
+        for (var d : destinations.all()) {
+            var withGateways = destinations.find(destinations.gatewayRegion(d.name())).orElseThrow();
+            for (var g : withGateways.gateways()) {
+                assertThat(com.shg.trip.shgtrip.global.util.GeoUtils.haversine(d.lat(), d.lng(), g.lat(), g.lng()))
+                        .as("%s → %s", d.name(), g.name()).isLessThan(ScheduleTuning.MAX_GATEWAY_TRANSFER_KM);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("다른 도시에서 하루 만에 해외 관문으로 가면(도쿄 → 간사이공항 570km) 관문 연결이어도 이동 누락이다")
+    void farGatewayIsTravelMissing() {
+        String airport = "Travel and Transportation > Transport Hub > Airport";
+        PlaceCandidate museum = new PlaceCandidate(1, null, "江戸東京博物館", null, "Arts and Entertainment > Museum",
+                List.of(), "Tokyo", "JP", BigDecimal.valueOf(35.6966), BigDecimal.valueOf(139.7957), null, null, 0.9,
+                null, null, null, 60, false, null, null, null, null, "SIGHT", null, false, null);
+        PlaceCandidate kansai = new PlaceCandidate(2, null, "Kansai International Airport", null, airport, List.of(),
+                "Osaka", "JP", BigDecimal.valueOf(34.4347), BigDecimal.valueOf(135.2441), null, null, 0.9, null, null,
+                null, 60, false, null, null, null, null, "TRANSIT", null, false, null);
+        List<StepData> lastDay = List.of(
+                new StepData(1, 1, "09:00", "11:00", new PlaceData("江戸東京博物館", null,
+                        "Arts and Entertainment > Museum", "Tokyo", "JP"), List.of(), null, null, null, null, null, null),
+                new StepData(2, 1, "16:00", "17:00", new PlaceData("Kansai International Airport", null, airport,
+                        "Osaka", "JP"), List.of(), null, null, null, null, null, null));
+
+        assertThat(rulesOf(rules.evaluate(lastDay, List.of(museum, kansai), context("normal", 1))))
+                .contains(Rule.TRAVEL_MISSING);
+    }
+
+    private static PlaceCandidate at(int index, String name, String category, double lat, double lng) {
+        return new PlaceCandidate(index, null, name, null, category, List.of(), "Busan", "KR",
+                BigDecimal.valueOf(lat), BigDecimal.valueOf(lng), null, null, 0.9, null, null,
+                null, 60, false, null, null, null, null, null, null, false, null);
+    }
+
     private static PlaceCandidate mealCandidate(int index, String name, String cuisine) {
         return new PlaceCandidate(index, null, name, null, KOREAN, List.of(), "Busan", "KR",
                 BigDecimal.valueOf(35.1), BigDecimal.valueOf(129.0), null, null, 0.9, null, null,

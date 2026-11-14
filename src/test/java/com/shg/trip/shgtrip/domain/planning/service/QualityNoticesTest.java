@@ -61,6 +61,17 @@ class QualityNoticesTest {
     }
 
     @Test
+    @DisplayName("이동 누락은 두 장소와 도로 거리를 넣는다")
+    void travelMissingNamesBothPlaces() {
+        Verdict verdict = verdict(new Violation(Rule.TRAVEL_MISSING, 2, "day2 이동 없이 서울호텔 → 해운대(420km)",
+                List.of("서울호텔", "해운대해수욕장", "420")));
+
+        assertThat(QualityNotices.of(verdict, context(3, null)))
+                .containsExactly("2일차 '서울호텔'에서 '해운대해수욕장'까지 약 420km를 이동 시간 없이 건너뛰어요. "
+                        + "멀리 떨어진 장소를 빼거나 다시 만들어 주세요.");
+    }
+
+    @Test
     @DisplayName("거부 사유는 다시 만들어도 막히는 출발 시각을 먼저 말하고, HARD가 없으면 없다")
     void rejectionPrefersInputCause() {
         Verdict verdict = verdict(

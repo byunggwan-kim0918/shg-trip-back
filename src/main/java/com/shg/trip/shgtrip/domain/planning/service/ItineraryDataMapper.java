@@ -101,6 +101,8 @@ public class ItineraryDataMapper {
                     precededByDrop = false;
                 }
                 pendingTransfer = null;
+                // 도시 간 이동은 앞 도시에서 온 구간이라 앞 장소(전날 숙소 등)가 빠져도 그대로다.
+                if (InvariantChecker.isIntercityLeg(stepData)) precededByDrop = false;
                 itinerary.addStep(toStepEntity(stepData, placeCache, precededByDrop));
                 precededByDrop = false;
             }
