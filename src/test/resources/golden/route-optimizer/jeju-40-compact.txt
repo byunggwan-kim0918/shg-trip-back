@@ -1,6 +1,6 @@
 -- metrics --
   스텝 16 / 숙소 1곳 / 총이동 300km
-  연속중복 0 / 최대공백 143분 / 늦은시작 0일 / 안내 0건
+  연속중복 0 / 최대공백 143분 / 늦은시작 0일 / 미해소 0건
 == day 1 ==
   #1  09:00-10:00  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: - -분 -km -원
@@ -65,4 +65,4 @@
       이동: CAR 6분 3.81km 1143원
       비용: 13000원 / 메모: -
       대안: 하하호호 우도점 | Dining and Drinking > Restaurant > Burger Joint | 13000원
--- notices (0) --
+-- unresolved (0) --

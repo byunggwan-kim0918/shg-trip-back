@@ -30,6 +30,7 @@ class ItinerarySaveHelperTest {
     @Mock private ItineraryRepository itineraryRepository;
     @Mock private com.shg.trip.shgtrip.domain.user.service.ActiveUserGuard activeUserGuard;
     @Mock private PlaceRepository placeRepository;
+    @Mock private QualityGate qualityGate;
     @InjectMocks private ItinerarySaveHelper saveHelper;
 
     @Test
@@ -38,9 +39,24 @@ class ItinerarySaveHelperTest {
         when(itineraryDataMapper.toEntity(any(), any(), anyLong(), anyBoolean(), any()))
                 .thenReturn(Itinerary.builder().userId(1L).title("제주 3박 4일").destination("제주").build());
 
-        assertThatThrownBy(() -> saveHelper.save(null, null, 1L, false, null))
+        assertThatThrownBy(() -> saveHelper.save(null, null, 1L, false, null, null))
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.INSUFFICIENT_PLACE_DATA);
+        verify(itineraryRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("관문이 거부하면 판정을 실은 예외를 그대로 올리고 저장하지 않는다")
+    void gateRejectionSkipsSave() {
+        Itinerary itinerary = Itinerary.builder().userId(1L).title("나고야 2박 3일").destination("나고야")
+                .steps(new ArrayList<>(List.of(step(1, "Nagoya")))).build();
+        when(itineraryDataMapper.toEntity(any(), any(), anyLong(), anyBoolean(), any())).thenReturn(itinerary);
+        QualityGate.PlanContext ctx = new QualityGate.PlanContext(null, List.of());
+        QualityGate.Rejected rejected = new QualityGate.Rejected(new ItineraryRules.Verdict(ItineraryRules.VERSION,
+                List.of(new ItineraryRules.Violation(ItineraryRules.Rule.DAY_MISSING, 2, "day2 없음")), 0, 0));
+        when(qualityGate.admit(itinerary, ctx)).thenThrow(rejected);
+
+        assertThatThrownBy(() -> saveHelper.save(null, null, 1L, false, null, ctx)).isSameAs(rejected);
         verify(itineraryRepository, never()).save(any());
     }
 
@@ -55,7 +71,7 @@ class ItinerarySaveHelperTest {
                         .build()));
         when(itineraryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        Itinerary saved = saveHelper.save(null, null, 1L, false, null);
+        Itinerary saved = saveHelper.save(null, null, 1L, false, null, null).itinerary();
 
         assertThat(saved.getCoverPlaceId()).isEqualTo(77L);
     }

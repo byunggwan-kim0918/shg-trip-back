@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,7 +41,7 @@ class RequiredExperiencesTest {
         assertThat(beach.intentTime()).isEqualTo("evening");
         assertThat(beach.userSelected()).isFalse();
         assertThat(match.candidates().get(0)).isSameAs(candidates.get(0));
-        assertThat(RequiredExperiences.placeIds(match.candidates())).containsExactly(102L);
+        assertThat(RequiredExperiences.places(match.candidates())).containsExactly(Map.entry(102L, "광안리해수욕장"));
     }
 
     @Test
@@ -75,7 +76,7 @@ class RequiredExperiencesTest {
 
         assertThat(match.matched()).extracting(m -> m.place().name()).containsExactly("감천문화마을", "감천문화마을");
         assertThat(match.matched()).allSatisfy(m -> assertThat(m.place().intentTime()).isEqualTo("morning"));
-        assertThat(match.placeIds()).containsExactly(106L);
+        assertThat(match.places()).containsOnlyKeys(106L);
     }
 
     @Test
@@ -95,21 +96,20 @@ class RequiredExperiencesTest {
     @DisplayName("요청에 필수 경험이 없으면 후보 목록을 그대로 둔다")
     void noExperiencesKeepsCandidates() {
         assertThat(RequiredExperiences.attach(null, candidates).candidates()).isSameAs(candidates);
-        assertThat(RequiredExperiences.placeIds(candidates)).isEmpty();
+        assertThat(RequiredExperiences.places(candidates)).isEmpty();
     }
 
     @Test
-    @DisplayName("맞춘 장소가 일정에서 빠지면 안내하고, 못 맞춘 경험은 이름이 든 장소가 일정에 없을 때만 안내한다")
-    void noticesForDroppedAndUnplaced() {
+    @DisplayName("못 맞춘 경험은 이름이 든 장소가 일정에 없을 때만 안내한다")
+    void unplacedOnlyWhenNoStepCarriesTheName() {
         RequiredExperiences.Match match = RequiredExperiences.attach(List.of(
                 new RequiredExperience("광안리 야경", "광안리", "evening"),
                 new RequiredExperience("자갈치 회", "자갈치", null),
                 new RequiredExperience("기장 해녀촌", "기장", null)), candidates);
         List<StepData> steps = List.of(step("감천문화마을", 106L), step("자갈치 꼼장어", 900L));
 
-        assertThat(RequiredExperiences.dropped(match, steps)).containsExactly("광안리 야경");
+        assertThat(match.places()).containsOnlyKeys(102L);
         assertThat(RequiredExperiences.unplaced(match, steps)).containsExactly("기장 해녀촌");
-        assertThat(RequiredExperiences.dropped(match, List.of(step("광안리해수욕장", 102L)))).isEmpty();
     }
 
     private static StepData step(String name, Long placeId) {

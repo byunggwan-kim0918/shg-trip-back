@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.entity.GenerationTrace;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
@@ -41,10 +42,32 @@ public class GenerationTraceRecorder {
                        VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
                        SelectionOutput finalSelection, List<PlaceCandidate> candidates,
                        ScheduleArgs args, long totalMs, ItineraryRules.Verdict quality) {
-        Long itineraryId = saved.getId();
+        write(saved.getId(), saved.getUserId(), saved, jobId, request, enrichedInput, rawSelection, finalSelection,
+                candidates, args, totalMs, quality, null);
+    }
+
+    /**
+     * 관문에서 막혀 저장하지 않은 생성. 일정 없이 남기고 {@code --eval.mode=rejected}로 다시 돌려 원인을 본다.
+     * 거부 건수는 itinerary_id가 없는 기록으로 센다. 구조 검증 거부의 판정은 저장 전 미리보기라 HARD가 아닐 수 있다.
+     *
+     * @param rejectReason 판정 규칙 밖의 거부 사유(구조 검증 실패). 판정으로 거부했으면 null
+     */
+    public void recordRejected(Long userId, String jobId, ItineraryGenerateRequest request,
+                               VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
+                               SelectionOutput finalSelection, List<PlaceCandidate> candidates,
+                               ScheduleArgs args, long totalMs, ItineraryRules.Verdict quality, String rejectReason) {
+        write(null, userId, null, jobId, request, enrichedInput, rawSelection, finalSelection,
+                candidates, args, totalMs, quality, rejectReason);
+    }
+
+    private void write(Long itineraryId, Long userId, Itinerary saved, String jobId, ItineraryGenerateRequest request,
+                       VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
+                       SelectionOutput finalSelection, List<PlaceCandidate> candidates,
+                       ScheduleArgs args, long totalMs, ItineraryRules.Verdict quality, String rejectReason) {
         try {
             GenerationTrace trace = GenerationTrace.builder()
                     .itineraryId(itineraryId)
+                    .userId(userId)
                     .jobId(jobId)
                     .traceVersion(TRACE_VERSION)
                     .request(json(request))
@@ -56,12 +79,12 @@ public class GenerationTraceRecorder {
                     .models(json(Map.of("haiku", anthropicProperties.haiku(),
                             "sonnet", anthropicProperties.sonnet())))
                     .totalMs(totalMs)
-                    .score(scoreJson(quality, itineraryId))
-                    .generatedSteps(snapshotJson(saved))
+                    .score(scoreJson(quality, rejectReason, jobId))
+                    .generatedSteps(saved == null ? null : snapshotJson(saved))
                     .build();
             // 요청 문장이 들어 있어 탈퇴가 trace를 지운 뒤에 들어가면 안 된다.
             transactionTemplate.executeWithoutResult(status -> {
-                activeUserGuard.lockActive(saved.getUserId());
+                activeUserGuard.lockActive(userId);
                 traceRepository.save(trace);
             });
         } catch (Exception e) {
@@ -70,12 +93,15 @@ public class GenerationTraceRecorder {
     }
 
     /** 판정 결과만 실패해도 나머지 기록은 남긴다. */
-    private String scoreJson(ItineraryRules.Verdict quality, Long itineraryId) {
-        if (quality == null) return null;
+    private String scoreJson(ItineraryRules.Verdict quality, String rejectReason, String jobId) {
+        if (quality == null && rejectReason == null) return null;
         try {
-            return json(quality);
+            if (rejectReason == null) return json(quality);
+            ObjectNode node = quality == null ? objectMapper.createObjectNode() : objectMapper.valueToTree(quality);
+            node.put("rejectReason", rejectReason);
+            return json(node);
         } catch (Exception e) {
-            log.warn("품질 판정 기록 실패 (itineraryId={}): {}", itineraryId, e.getMessage());
+            log.warn("품질 판정 기록 실패 (jobId={}): {}", jobId, e.getMessage());
             return null;
         }
     }

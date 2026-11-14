@@ -51,6 +51,11 @@ public enum ErrorCode {
     TRIP_CHAT_RATE_LIMITED("PLANNING_008", "답변을 너무 자주 보냈어요. 잠시 후 다시 보내주세요.", HttpStatus.TOO_MANY_REQUESTS),
     TRIP_CHAT_CONFLICT("PLANNING_009", "다른 화면에서 대화가 바뀌었어요. 최신 내용으로 다시 불러올게요.", HttpStatus.CONFLICT),
     TRIP_CHAT_UNAVAILABLE("PLANNING_010", "답변을 정리하지 못했어요. 잠시 후 다시 보내주세요.", HttpStatus.SERVICE_UNAVAILABLE),
+    QUALITY_GATE_FAILED("PLANNING_011",
+            "이번에는 조건에 맞는 일정을 완성하지 못해 저장하지 않았어요. 다시 만들어 주세요. 30일 생성 횟수는 차감되지 않았어요.",
+            HttpStatus.UNPROCESSABLE_ENTITY),
+    GENERATION_UNBILLED_LIMIT("PLANNING_012", "기준에 못 미친 생성이 반복돼 잠시 생성을 멈췄어요.",
+            HttpStatus.TOO_MANY_REQUESTS),
 
     // External
     EXTERNAL_API_ERROR("EXTERNAL_001", "외부 API 오류가 발생했습니다.", HttpStatus.BAD_GATEWAY),

@@ -450,6 +450,7 @@ final class DayScheduler {
             int endMin = Math.min(startMin + visitMinutes, END_OF_DAY_MINUTES);
             if (endMin <= startMin) endMin = startMin + 1;
 
+            trimPreviousEnd(steps, startMin);
             steps.add(buildStep(day, cand, startMin, endMin, leg,
                     AlternativeBuilder.buildAlternatives(cand, dayCentroid, spareIndices, usedIndices, candidates,
                             transportPref, dayAltKeys, VarietyLedger.admitsReplacing(day, cand.index(), candidates))));
@@ -458,6 +459,15 @@ final class DayScheduler {
             prev = cand;
         }
         return dropAdjacentDuplicates(steps, day);
+    }
+
+    // 시작 상한(23:58)에 걸린 스텝은 23:59에 끝난 앞 스텝과 겹쳐 HardValidator를 깨므로 앞 스텝 끝을 당긴다.
+    private static void trimPreviousEnd(List<StepData> steps, int startMin) {
+        if (steps.isEmpty()) return;
+        StepData last = steps.get(steps.size() - 1);
+        if (toMinutesOrZero(last.endTime()) > startMin && toMinutesOrZero(last.startTime()) < startMin) {
+            steps.set(steps.size() - 1, last.withEndTime(formatMinutes(startMin)));
+        }
     }
 
     /**

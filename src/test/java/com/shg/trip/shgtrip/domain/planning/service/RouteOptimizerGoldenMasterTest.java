@@ -224,9 +224,9 @@ class RouteOptimizerGoldenMasterTest {
             }
         }
 
-        sb.append("-- notices (").append(result.notices().size()).append(") --\n");
-        for (String notice : result.notices()) {
-            sb.append("  ").append(notice).append('\n');
+        sb.append("-- unresolved (").append(result.unresolved().size()).append(") --\n");
+        for (String violation : result.unresolved()) {
+            sb.append("  ").append(violation).append('\n');
         }
         return sb.toString();
     }
@@ -288,9 +288,9 @@ class RouteOptimizerGoldenMasterTest {
         return String.format(
                 "-- metrics --%n"
                 + "  스텝 %d / 숙소 %d곳 / 총이동 %.0fkm%n"
-                + "  연속중복 %d / 최대공백 %d분 / 늦은시작 %d일 / 안내 %d건%n",
+                + "  연속중복 %d / 최대공백 %d분 / 늦은시작 %d일 / 미해소 %d건%n",
                 steps.size(), lodgingCount, totalKm,
-                duplicateAdjacent, maxGapMinutes, lateStartDays, result.notices().size());
+                duplicateAdjacent, maxGapMinutes, lateStartDays, result.unresolved().size());
     }
 
     private static int toMinutes(String hhmm) {

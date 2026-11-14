@@ -44,9 +44,14 @@ final class ScheduleTimes {
 
     /** 마지막 날 출발 허브 도착 기한(분). 출발 시각이 없으면 null. 해외는 국제선 체크인만큼 더 이르다. */
     static Integer departureHubDeadline(ScheduleArgs args) {
-        Integer departure = toMinutesOrNull(args.departureTime());
+        return departureHubDeadline(args.departureTime(), args.country());
+    }
+
+    /** @param country 모르면 null(국내로 본다) */
+    static Integer departureHubDeadline(String departureTime, String country) {
+        Integer departure = toMinutesOrNull(departureTime);
         if (departure == null) return null;
-        boolean overseas = args.country() != null && !"KR".equalsIgnoreCase(args.country());
+        boolean overseas = country != null && !"KR".equalsIgnoreCase(country);
         int buffer = overseas ? OVERSEAS_DEPARTURE_CHECKIN_BUFFER_MINUTES : DEPARTURE_CHECKIN_BUFFER_MINUTES;
         return Math.max(0, departure - buffer);
     }

@@ -20,8 +20,10 @@ public class GenerationTrace {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false)
+    /** 관문에서 막혀 저장하지 않은 생성은 null이다. */
     private Long itineraryId;
+
+    private Long userId;
 
     @Column(nullable = false)
     private String jobId;
@@ -72,11 +74,12 @@ public class GenerationTrace {
     private OffsetDateTime createdAt;
 
     @Builder
-    private GenerationTrace(Long itineraryId, String jobId, int traceVersion, String request,
+    private GenerationTrace(Long itineraryId, Long userId, String jobId, int traceVersion, String request,
                             String enrichedInput, String selectionRaw, String selectionFinal,
                             String candidates, String scheduleArgs, String models, Long totalMs,
                             String score, String generatedSteps) {
         this.itineraryId = itineraryId;
+        this.userId = userId;
         this.jobId = jobId;
         this.traceVersion = traceVersion;
         this.request = request;

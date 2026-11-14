@@ -22,6 +22,8 @@ import java.util.concurrent.TimeUnit;
  *   <li><b>실패 rate-limit</b>: enrich valid:false(비현실 입력)만 세고 5회면 24h 차단한다.
  *       서버 오류·AI 출력 문제는 사용자 책임이 아니라 세지 않는다.</li>
  *   <li><b>생성 쿼터</b>: 30일 창 성공 5회. 서버 실패로 소모되지 않게 성공 시에만 센다.</li>
+ *   <li><b>미차감 한도</b>: 쿼터를 쓰지 않고 끝난 생성(조정 필요 저장, 판정 거부)을 24h 창에서 3회까지만 허용한다.
+ *       같은 조건의 재시도가 LLM 비용만 쓰며 끝없이 반복되지 않게 한다.</li>
  * </ul>
  *
  * <p>차단 체크는 진입부(동기)에서, INCR/DEL은 executor 스레드에서 일어난다.
@@ -34,10 +36,13 @@ public class GenerationPolicyService {
 
     private static final String FAIL_KEY_PREFIX = "generation:fail:";
     private static final String QUOTA_KEY_PREFIX = "generation:quota:";
+    private static final String UNBILLED_KEY_PREFIX = "generation:unbilled:";
     static final int MAX_FAILURES = 5;
     static final int MAX_QUOTA = 5;
+    static final int MAX_UNBILLED = 3;
     private static final Duration FAIL_TTL = Duration.ofHours(24);
     private static final Duration QUOTA_TTL = Duration.ofDays(30);
+    private static final Duration UNBILLED_TTL = Duration.ofHours(24);
     private static final String IDENTITY_SUFFIX = "ident:";
 
     // 대화 입력은 자유 입력 답마다 Haiku를 부른다. 한 세션은 보통 4~6회다.
@@ -70,6 +75,10 @@ public class GenerationPolicyService {
         if (quota >= MAX_QUOTA) {
             throw new BusinessException(ErrorCode.GENERATION_QUOTA_EXCEEDED,
                     quotaMessage(getTtlSeconds(QUOTA_KEY_PREFIX + userId)));
+        }
+        if (getCount(UNBILLED_KEY_PREFIX + userId) >= MAX_UNBILLED) {
+            throw new BusinessException(ErrorCode.GENERATION_UNBILLED_LIMIT,
+                    unbilledMessage(getTtlSeconds(UNBILLED_KEY_PREFIX + userId)));
         }
     }
 
@@ -110,6 +119,32 @@ public class GenerationPolicyService {
             log.info("Generation success for user {} — quota used={}", userId, count);
         } catch (Exception e) {
             log.warn("recordSuccess best-effort 실패 (user {}): {}", userId, e.getMessage());
+        }
+    }
+
+    /**
+     * 조정 필요 저장이나 판정 거부로 끝난 생성. 쿼터 대신 24h 창 카운터를 올린다. best-effort라 Redis 오류가 critical path를 깨지 않는다.
+     *
+     * @return 이번 생성으로 한도에 닿았으면 true. Redis 오류면 false
+     */
+    public boolean recordUnbilled(Long userId) {
+        try {
+            redisTemplate.delete(FAIL_KEY_PREFIX + userId);
+            long count = incrementWindow(UNBILLED_KEY_PREFIX + userId, UNBILLED_TTL);
+            log.info("Generation unbilled for user {} — unbilled used={}", userId, count);
+            return count >= MAX_UNBILLED;
+        } catch (Exception e) {
+            log.warn("recordUnbilled best-effort 실패 (user {}): {}", userId, e.getMessage());
+            return false;
+        }
+    }
+
+    /** 미차감 한도에 닿은 응답에 붙이는 안내. Redis 오류면 기본 창(24h)으로 쓴다. */
+    public String unbilledLimitNotice(Long userId) {
+        try {
+            return unbilledMessage(getTtlSeconds(UNBILLED_KEY_PREFIX + userId));
+        } catch (Exception e) {
+            return unbilledMessage(null);
         }
     }
 
@@ -165,7 +200,7 @@ public class GenerationPolicyService {
 
     private void moveCounters(String fromSuffix, List<String> toSuffixes) {
         if (toSuffixes.isEmpty()) return;
-        for (String prefix : List.of(FAIL_KEY_PREFIX, QUOTA_KEY_PREFIX)) {
+        for (String prefix : List.of(FAIL_KEY_PREFIX, QUOTA_KEY_PREFIX, UNBILLED_KEY_PREFIX)) {
             String from = prefix + fromSuffix;
             try {
                 String value = redisTemplate.opsForValue().get(from);
@@ -191,10 +226,13 @@ public class GenerationPolicyService {
             if (getCount(FAIL_KEY_PREFIX + userId) >= MAX_FAILURES) {
                 blockedUntil = ttlToInstant(getTtlSeconds(FAIL_KEY_PREFIX + userId));
             }
-            return new GenerationQuotaResponse((int) used, MAX_QUOTA, resetAt, blockedUntil);
+            long unbilled = getCount(UNBILLED_KEY_PREFIX + userId);
+            OffsetDateTime unbilledResetAt = ttlToInstant(getTtlSeconds(UNBILLED_KEY_PREFIX + userId));
+            return new GenerationQuotaResponse((int) used, MAX_QUOTA, resetAt, blockedUntil,
+                    (int) unbilled, MAX_UNBILLED, unbilledResetAt);
         } catch (Exception e) {
             log.warn("getStatus 조회 실패 — 기본값 반환(fail-open, user {}): {}", userId, e.getMessage());
-            return new GenerationQuotaResponse(0, MAX_QUOTA, null, null);
+            return new GenerationQuotaResponse(0, MAX_QUOTA, null, null, 0, MAX_UNBILLED, null);
         }
     }
 
@@ -222,6 +260,12 @@ public class GenerationPolicyService {
         long hours = ttlSeconds != null ? (ttlSeconds + 3599) / 3600 : 24;
         return "입력 검증에 " + MAX_FAILURES + "회 실패해 생성이 일시 제한됐어요. 약 " + hours
                 + "시간 후 다시 시도할 수 있어요. 여행지·기간·예산을 현실적으로 조정해 주세요.";
+    }
+
+    private String unbilledMessage(Long ttlSeconds) {
+        long hours = ttlSeconds != null ? (ttlSeconds + 3599) / 3600 : 24;
+        return "기준에 못 미친 생성이 24시간 안에 " + MAX_UNBILLED + "번 나와 생성을 잠시 멈췄어요. 약 " + hours
+                + "시간 후 다시 만들 수 있어요.";
     }
 
     private String quotaMessage(Long ttlSeconds) {

@@ -229,20 +229,20 @@ public class OptimizedGenerationExecutor {
             RouteOptimizer.ScheduleResult scheduleResult = executeWithHeartbeat(emitter,
                     () -> routeOptimizer.schedule(selectionOutput, scheduleCandidates, scheduleArgs));
             List<StepData> fixedSteps = scaleCostsForParty(scheduleResult.steps(), enrichedInput.partySize());
-            List<String> qualityNotices = new ArrayList<>(scheduleResult.notices());
-            qualityNotices.addAll(pickNotices);
             List<String> unplaced = new ArrayList<>(unresolvedNames);
             unplaced.addAll(RequiredExperiences.unplaced(requiredExperiences, fixedSteps));
-            List<String> dropped = new ArrayList<>(missingUserSelected(scheduleCandidates, fixedSteps));
-            dropped.addAll(RequiredExperiences.dropped(requiredExperiences, fixedSteps));
-            qualityNotices.addAll(mustVisitNotices(unplaced, dropped));
-            ItineraryRules.Verdict quality = shadowQuality(fixedSteps, scheduleCandidates, scheduleArgs, days,
-                    requiredExperiences.placeIds());
+            List<String> fixedNotices = new ArrayList<>(pickNotices);
+            fixedNotices.addAll(mustVisitNotices(unplaced, missingUserSelected(scheduleCandidates, fixedSteps)));
+            QualityGate.PlanContext planContext = new QualityGate.PlanContext(
+                    ruleContext(scheduleArgs, days, requiredExperiences.places()), fixedNotices);
+            ItineraryRules.Verdict preview = previewQuality(fixedSteps, scheduleCandidates, planContext.rules());
+            List<String> qualityNotices = QualityGate.mergedNotices(preview, planContext);
 
             // 인위적 sleep을 넣으면 SSE 스레드가 blocking된다.
             sendStepStream(emitter, fixedSteps);
             // 로그만 남기면 숙소 없는 일정이 표시 없이 나간다. 상세 화면 표시는 itineraries.quality_notices가 맡는다.
-            sendQualityNotices(emitter, qualityNotices);
+            // 저장에서 거부될 일정에 바꿔 달라는 안내를 먼저 보내지 않는다.
+            if (preview == null || !preview.hard()) sendQualityNotices(emitter, qualityNotices);
             stageMark = logStage("optimize", stageMark);
 
             // [80%] 구조 검증. 결정론적 코드라 실패는 재시도가 아니라 버그로 취급한다.
@@ -260,6 +260,14 @@ public class OptimizedGenerationExecutor {
             HardValidationResult validationResult = hardValidator.validate(draftData);
             if (!validationResult.valid()) {
                 log.error("Optimized 경로 구조 검증 실패 (결정론적 로직 버그 가능성): {}", validationResult.failureReason());
+                traceRecorder.recordRejected(userId, jobId, request, enrichedInput, rawSelectionOutput,
+                        selectionOutput, scheduleCandidates, scheduleArgs,
+                        (System.nanoTime() - pipelineStart) / 1_000_000, preview,
+                        "구조 검증: " + validationResult.failureReason());
+                // 서버 쪽 결함이라 미차감 한도에 세지 않는다.
+                ErrorCode code = ErrorCode.QUALITY_GATE_FAILED;
+                sendSseError(emitter, code.getCode(), code.getMessage());
+                return;
             }
 
             // [90%] 구조 일정 저장. story는 비동기로 채운다.
@@ -267,22 +275,35 @@ public class OptimizedGenerationExecutor {
             sendSseEvent(emitter, "SAVING", 90, "일정을 저장하고 있습니다...");
 
             EnrichedInput legacyInput = toLegacyEnrichedInput(enrichedInput);
-            Itinerary saved = saveHelper.save(draftData, legacyInput, userId, true, destinationReference);
+            ItinerarySaveHelper.Saved result;
+            try {
+                result = saveHelper.save(draftData, legacyInput, userId, true, destinationReference, planContext);
+            } catch (QualityGate.Rejected e) {
+                traceRecorder.recordRejected(userId, jobId, request, enrichedInput, rawSelectionOutput,
+                        selectionOutput, scheduleCandidates, scheduleArgs,
+                        (System.nanoTime() - pipelineStart) / 1_000_000, e.verdict(), null);
+                sendSseError(emitter, e.getErrorCode().getCode(), rejectionMessage(e, userId));
+                return;
+            }
+            Itinerary saved = result.itinerary();
             stageMark = logStage("save", stageMark);
             // 완료 전송보다 먼저 남긴다. 뒤에 남기면 그 사이 지운 일정의 기록(요청 문장 포함)이 삭제를 피해 남는다.
             traceRecorder.record(saved, jobId, request, enrichedInput, rawSelectionOutput,
                     selectionOutput, scheduleCandidates, scheduleArgs,
-                    (System.nanoTime() - pipelineStart) / 1_000_000, quality);
+                    (System.nanoTime() - pipelineStart) / 1_000_000, result.verdict());
 
             // [100%] 구조 완료. emitter는 story-ready까지 닫지 않는다.
             resultStore.save(jobId, saved.getId(), userId);
-            // 30일 쿼터는 성공 시에만 소모한다.
-            generationPolicyService.recordSuccess(userId);
+            if (saved.getQualityStatus() == Itinerary.QualityStatus.NEEDS_ADJUSTMENT) {
+                generationPolicyService.recordUnbilled(userId);
+            } else {
+                generationPolicyService.recordSuccess(userId);
+            }
             sendSseEvent(emitter, "COMPLETE", 100, "일정 생성이 완료되었습니다.");
             sendCompleteKeepOpen(emitter, saved.getId());
 
-            log.info("OptimizedGeneration 구조 완료: jobId={}, itineraryId={}, days={}",
-                    jobId, saved.getId(), days);
+            log.info("OptimizedGeneration 구조 완료: jobId={}, itineraryId={}, days={}, quality={}",
+                    jobId, saved.getId(), days, saved.getQualityStatus());
             log.info("stage=total elapsedMs={}", (System.nanoTime() - pipelineStart) / 1_000_000);
 
             // expectedTitle은 실제로 저장한 임시 제목이어야 한다. concept을 넘기면 0행 업데이트가 되어 제목이 임시값으로 남는다.
@@ -303,13 +324,23 @@ public class OptimizedGenerationExecutor {
 
     // ── Private helpers ──
 
-    /** 측정용이라 저장을 막지 않고, 판정이 실패해도 생성은 그대로 진행한다. */
-    private static ItineraryRules.Verdict shadowQuality(List<StepData> steps, List<PlaceCandidate> candidates,
-                                                        ScheduleArgs args, long days, Set<Long> requiredPlaceIds) {
+    /** 이번 거부로 미차감 한도에 닿았으면 다시 만들라는 말 대신 한도 안내를 쓴다. */
+    private String rejectionMessage(QualityGate.Rejected e, Long userId) {
+        boolean atLimit = generationPolicyService.recordUnbilled(userId);
+        return QualityGate.rejectionMessage(e.reason(),
+                atLimit ? generationPolicyService.unbilledLimitNotice(userId) : null);
+    }
+
+    private static ItineraryRules.Context ruleContext(ScheduleArgs args, long days, Map<Long, String> requiredPlaces) {
+        return new ItineraryRules.Context(args.pace(), args.transportPref(), args.startDate(), (int) days,
+                RouteOptimizer.departureHubDeadline(args), requiredPlaces);
+    }
+
+    /** 저장 전 안내용 판정. 저장 여부는 저장 관문이 실제 엔티티로 다시 정하므로, 실패해도 생성은 진행한다. */
+    private static ItineraryRules.Verdict previewQuality(List<StepData> steps, List<PlaceCandidate> candidates,
+                                                         ItineraryRules.Context ctx) {
         try {
-            ItineraryRules.Verdict quality = RULES.evaluate(steps, candidates, new ItineraryRules.Context(
-                    args.pace(), args.transportPref(), args.startDate(), (int) days,
-                    RouteOptimizer.departureHubDeadline(args), requiredPlaceIds));
+            ItineraryRules.Verdict quality = RULES.evaluate(steps, candidates, ctx);
             log.info("품질 판정 v{}: hard={} core={} soft={} 끼니={}(종류 미상 {}) {}", quality.version(),
                     quality.has(ItineraryRules.Severity.HARD), quality.has(ItineraryRules.Severity.CORE),
                     quality.has(ItineraryRules.Severity.SOFT), quality.meals(), quality.unknownKindMeals(),

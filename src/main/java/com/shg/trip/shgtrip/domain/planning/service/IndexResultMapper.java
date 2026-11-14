@@ -70,8 +70,7 @@ public class IndexResultMapper {
     }
 
     /**
-     * @param qualityNotices RouteOptimizer가 끝내 해소하지 못한 품질 문제의 사용자 안내 문구.
-     *                       일정과 함께 저장돼 상세 화면에서 노출된다.
+     * @param qualityNotices 저장 전 미리보기 안내. 저장 관문이 저장할 일정 기준으로 다시 만든다.
      */
     public ItineraryData toDraftItineraryData(
             List<StepData> fixedSteps, String destination, String concept, List<String> tagSeed,

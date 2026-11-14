@@ -11,6 +11,7 @@ import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
+import com.shg.trip.shgtrip.domain.planning.service.QualityGate;
 import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
@@ -48,6 +49,7 @@ public class ItineraryService {
     private final PlaceRepository placeRepository;
     private final GenerationTraceRepository generationTraceRepository;
     private final ItineraryEditEventRepository editEventRepository;
+    private final QualityGate qualityGate;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -180,6 +182,7 @@ public class ItineraryService {
 
         recalculateTransportation(itinerary.getSteps(), step);
         itinerary.recalculateEstimatedCost();
+        qualityGate.reflectEdit(itinerary);
 
         return toResponse(itinerary);
     }
@@ -238,6 +241,7 @@ public class ItineraryService {
 
         recalculateDayTransportation(itinerary.getSteps(), dayNumber, transfer);
         itinerary.recalculateEstimatedCost();
+        qualityGate.reflectEdit(itinerary);
         return toResponse(itinerary);
     }
 
@@ -279,6 +283,7 @@ public class ItineraryService {
 
         recalculateDayTransportation(itinerary.getSteps(), dayNumber, transfer);
         itinerary.recalculateEstimatedCost();
+        qualityGate.reflectEdit(itinerary);
         return toResponse(itinerary);
     }
 

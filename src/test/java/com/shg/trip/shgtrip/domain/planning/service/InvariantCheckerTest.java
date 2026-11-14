@@ -178,12 +178,12 @@ class InvariantCheckerTest {
     }
 
     @Nested
-    @DisplayName("summarize - 사용자 안내 문구")
+    @DisplayName("summarize - 남은 위반")
     class Summarize {
 
         @Test
-        @DisplayName("모든 불변식을 만족하면 안내 문구가 없다")
-        void noNoticesWhenClean() {
+        @DisplayName("모든 불변식을 만족하면 남은 위반이 없다")
+        void noViolationsWhenClean() {
             List<DayState> days = List.of(day(1, 5));
             List<StepData> steps = List.of(
                     step(1, "12:00", "13:10", "점심식당", RESTAURANT),
@@ -191,14 +191,14 @@ class InvariantCheckerTest {
                     step(1, "18:00", "19:10", "저녁식당", RESTAURANT),
                     step(1, "19:30", "20:00", "호텔", "Travel and Transportation > Lodging > Hotel"));
 
-            List<String> notices = checker.summarize(days, steps, "normal", "car", List.of(), null);
+            List<String> unresolved = checker.summarize(days, steps, "normal", "car", List.of(), null);
 
-            assertThat(notices).isEmpty();
+            assertThat(unresolved).isEmpty();
         }
 
         @Test
-        @DisplayName("숙소 미배정은 안내 문구로 사용자에게 노출된다")
-        void surfacesMissingLodging() {
+        @DisplayName("숙소 미배정은 귀가일을 빼고 남은 위반으로 잡힌다")
+        void reportsMissingLodging() {
             List<DayState> days = List.of(day(1, null), day(2, null));
             List<StepData> steps = List.of(
                     step(1, "12:00", "13:10", "점심식당", RESTAURANT),
@@ -208,26 +208,23 @@ class InvariantCheckerTest {
                     step(2, "14:00", "15:30", "관광지", ATTRACTION),
                     step(2, "18:00", "19:10", "저녁식당", RESTAURANT));
 
-            List<String> notices = checker.summarize(days, steps, "normal", "car", List.of(), null);
+            List<String> unresolved = checker.summarize(days, steps, "normal", "car", List.of(), null);
 
-            assertThat(notices).anyMatch(n -> n.contains("1일차") && n.contains("숙소"));
-            assertThat(notices)
-                    .as("2일차는 귀가일이라 숙소 안내가 없어야 한다")
-                    .noneMatch(n -> n.contains("2일차") && n.contains("숙소"));
+            assertThat(unresolved).contains("day1 숙소 없음").doesNotContain("day2 숙소 없음");
         }
 
         @Test
-        @DisplayName("relaxed 페이스는 관광지가 없어도 안내하지 않는다")
-        void relaxedPaceSkipsAttractionNotice() {
+        @DisplayName("relaxed 페이스는 관광지가 없어도 위반으로 보지 않는다")
+        void relaxedPaceSkipsAttraction() {
             List<DayState> days = List.of(day(1, 5));
             List<StepData> steps = List.of(
                     step(1, "12:00", "13:10", "점심식당", RESTAURANT),
                     step(1, "18:00", "19:10", "저녁식당", RESTAURANT));
 
             assertThat(checker.summarize(days, steps, "relaxed", "car", List.of(), null))
-                    .noneMatch(n -> n.contains("관광지"));
+                    .doesNotContain("day1 관광 없음");
             assertThat(checker.summarize(days, steps, "normal", "car", List.of(), null))
-                    .anyMatch(n -> n.contains("관광지"));
+                    .contains("day1 관광 없음");
         }
     }
 

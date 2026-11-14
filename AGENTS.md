@@ -14,11 +14,11 @@ docker compose up -d                 # PostgreSQL(pgvector) · Valkey · LocalSt
 
 `.env`는 `.env.example`을 복사해 만든다. 직접 채울 키는 `DB_PASSWORD`(`docker-compose.yml`과 같은 값), `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, OAuth 클라이언트 한 쌍 이상이고 나머지는 로컬 기본값이 있다.
 
-배치는 `SPRING_PROFILES_ACTIVE=batch`, 품질 평가는 `--spring.profiles.active=local,eval --eval.mode=score|corpus|replay|pool`로 jar를 한 번 실행한다. LLM을 부르는 실행은 끝난 뒤 프로세스가 종료됐는지 확인한다.
+배치는 `SPRING_PROFILES_ACTIVE=batch`, 품질 평가는 `--spring.profiles.active=local,eval --eval.mode=score|corpus|replay|pool|rejected`로 jar를 한 번 실행한다. LLM을 부르는 실행은 끝난 뒤 프로세스가 종료됐는지 확인한다.
 
 ## 구조
 
-- `domain/planning`: 생성 파이프라인. 조건 판정은 `InvariantChecker`(고치지 않음), 수리는 `RouteOptimizer`가 단계 순서를 정하고 단계 클래스(`DayRebalancer`·`LodgingPlanner`·`MealPlanner`·`DistanceBudget`·`FinalRepair` 등)가 맡는다. 튜닝 상수는 `ScheduleTuning` 한 곳에 둔다.
+- `domain/planning`: 생성 파이프라인. 조건 판정은 `InvariantChecker`(고치지 않음), 수리는 `RouteOptimizer`가 단계 순서를 정하고 단계 클래스(`DayRebalancer`·`LodgingPlanner`·`MealPlanner`·`DistanceBudget`·`FinalRepair` 등)가 맡는다. 튜닝 상수는 `ScheduleTuning` 한 곳에 둔다. 저장할 일정은 `QualityGate`가 `ItineraryRules`로 판정해 HARD면 막고 CORE면 '조정 필요'로 저장한다.
 - `domain/tripchat`: 대화형 입력. 생성 요청은 `TripRequestMapper` 한 곳에서만 만든다.
 - `domain/place/batch`: `batch` 프로필 전용 적재·보강·임베딩 작업.
 - `src/main/resources/prompts/`: LLM 프롬프트, `db/migration/`: Flyway.

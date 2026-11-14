@@ -34,23 +34,19 @@ public class ItinerarySaveHelper {
     private final ItineraryRepository itineraryRepository;
     private final ActiveUserGuard activeUserGuard;
     private final PlaceRepository placeRepository;
+    private final QualityGate qualityGate;
 
-    @Transactional
-    public Itinerary save(ItineraryData data, EnrichedInput input, Long userId) {
-        return save(data, input, userId, false);
-    }
-
-    @Transactional
-    public Itinerary save(ItineraryData data, EnrichedInput input, Long userId, boolean alreadyOptimized) {
-        return save(data, input, userId, alreadyOptimized, null);
-    }
+    /** @param verdict 저장한 엔티티의 관문 판정. 판정이 실패했으면 null */
+    public record Saved(Itinerary itinerary, ItineraryRules.Verdict verdict) {}
 
     /**
+     * 관문이 HARD로 판정하면 {@link QualityGate.Rejected}를 던지고 저장하지 않는다.
+     *
      * @param referenceCenters 여행지별 후보 좌표 median 중심점. 후보 풀이 없는 fallback 경로는 null.
      */
     @Transactional
-    public Itinerary save(ItineraryData data, EnrichedInput input, Long userId,
-                          boolean alreadyOptimized, List<double[]> referenceCenters) {
+    public Saved save(ItineraryData data, EnrichedInput input, Long userId, boolean alreadyOptimized,
+                      List<double[]> referenceCenters, QualityGate.PlanContext planContext) {
         activeUserGuard.lockActive(userId);
         Itinerary itinerary = itineraryDataMapper.toEntity(data, input, userId, alreadyOptimized, referenceCenters);
         // 매퍼는 DB에서 못 찾은 장소의 스텝을 버린다. 전부 버려지면 제목만 있는 빈 일정이 저장되고
@@ -58,6 +54,7 @@ public class ItinerarySaveHelper {
         if (itinerary.getSteps().isEmpty()) {
             throw new BusinessException(ErrorCode.INSUFFICIENT_PLACE_DATA);
         }
+        ItineraryRules.Verdict verdict = qualityGate.admit(itinerary, planContext);
         itinerary.assignCoverFromSteps();
         if (itinerary.getCoverPlaceId() == null) {
             mainRegion(itinerary).flatMap(region -> placeRepository
@@ -65,7 +62,7 @@ public class ItinerarySaveHelper {
                     .ifPresent(place -> itinerary.assignCoverPlaceIfAbsent(place.getId()));
         }
         itinerary.recalculateEstimatedCost();
-        return itineraryRepository.save(itinerary);
+        return new Saved(itineraryRepository.save(itinerary), verdict);
     }
 
     /** 스텝 장소가 가장 많이 속한 지역. */

@@ -24,7 +24,9 @@ public record ItineraryResponse(
         String coverImageSourceUrl,
         List<String> tags,
         String status,
-        /** 생성 시 해소하지 못한 품질 문제 안내. 없으면 빈 목록이다. */
+        /** OK·NEEDS_ADJUSTMENT. 핵심 품질 기준에 못 미쳐 편집이 필요하면 NEEDS_ADJUSTMENT다. */
+        String qualityStatus,
+        /** 해소하지 못한 품질 문제 안내. 편집하면 현재 일정 기준으로 다시 만든다. 없으면 빈 목록이다. */
         List<String> qualityNotices,
         List<ItineraryStepResponse> steps
 ) {
@@ -47,6 +49,7 @@ public record ItineraryResponse(
                 hasImage ? cover.getImageSourceUrl() : null,
                 itinerary.getTags(),
                 itinerary.getStatus().name(),
+                itinerary.getQualityStatus().name(),
                 itinerary.getQualityNotices() != null ? itinerary.getQualityNotices() : List.of(),
                 // reorder는 stepOrder 필드만 바꾸므로 배열 순서를 실제 순서에 맞춰 다시 정렬한다.
                 itinerary.getSteps().stream()

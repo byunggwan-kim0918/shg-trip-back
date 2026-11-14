@@ -2,7 +2,6 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest.RequiredExperience;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
-import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import lombok.extern.slf4j.Slf4j;
 
@@ -10,20 +9,18 @@ import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * 이름으로 맞추지 못한 꼭 가고 싶은 곳("광안리 야경")을, 지역 낱말이 이름에 든 관광 후보 한 곳에 의도로 싣는다.
  * 실린 후보는 트림·교체에서 빠지고 선택 결과에 없으면 주입된다. userSelected가 아니라 영업시간·휴무·귀가 가드는 그대로 받는다.
  *
  * <p>스케줄 전 후보 목록에서 의도가 실린 곳은 여기서 실은 곳뿐이다. 선택 결과의 timing·highlight는 스케줄 안에서
- * 따로 실린다({@link IntentHints#apply}). 요청이 없는 기록 재채점은 이 규약으로 필수 경험 장소를 다시 찾는다({@link #placeIds}).
+ * 따로 실린다({@link IntentHints#apply}). 요청이 없는 기록 재채점은 이 규약으로 필수 경험 장소를 다시 찾는다({@link #places}).
  */
 @Slf4j
 public final class RequiredExperiences {
@@ -38,9 +35,9 @@ public final class RequiredExperiences {
     /** @param candidates 맞춘 장소에 의도를 실은 후보 목록. 맞춘 것이 없으면 입력 그대로다 */
     record Match(List<PlaceCandidate> candidates, List<Matched> matched, List<RequiredExperience> unmatched) {
 
-        Set<Long> placeIds() {
-            return matched.stream().map(m -> m.place().placeId()).filter(Objects::nonNull)
-                    .collect(Collectors.toCollection(LinkedHashSet::new));
+        /** 맞춘 장소 id와 안내 이름. */
+        Map<Long, String> places() {
+            return namesById(matched.stream().map(Matched::place).toList());
         }
     }
 
@@ -80,23 +77,16 @@ public final class RequiredExperiences {
         return new Match(out, matched, unmatched);
     }
 
-    /** 스케줄 전 후보 목록의 필수 경험 장소 id. 요청이 남지 않는 기록 재채점용이다. */
-    public static Set<Long> placeIds(List<PlaceCandidate> candidates) {
-        return candidates.stream()
-                .filter(c -> c != null && c.intentProtected() && c.placeId() != null)
-                .map(PlaceCandidate::placeId)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
+    /** 스케줄 전 후보 목록의 필수 경험 장소 id와 안내 이름. 요청이 남지 않는 기록 재채점용이다. */
+    public static Map<Long, String> places(List<PlaceCandidate> candidates) {
+        return namesById(candidates.stream().filter(c -> c != null && c.intentProtected()).toList());
     }
 
-    /** 맞춘 장소가 최종 일정에 없는 경험. 휴무·영업시간·출발 시각 가드로 빠질 수 있다. */
-    static List<String> dropped(Match match, List<StepData> steps) {
-        Set<Long> placedIds = steps.stream().map(StepData::place).filter(Objects::nonNull)
-                .map(PlaceData::placeId).filter(Objects::nonNull).collect(Collectors.toSet());
-        List<String> out = match.matched().stream()
-                .filter(m -> m.place().placeId() == null || !placedIds.contains(m.place().placeId()))
-                .map(m -> m.experience().text())
-                .toList();
-        if (!out.isEmpty()) log.warn("필수 경험 장소가 최종 일정에서 빠짐: {}", out);
+    private static Map<Long, String> namesById(List<PlaceCandidate> places) {
+        Map<Long, String> out = new LinkedHashMap<>();
+        for (PlaceCandidate p : places) {
+            if (p.placeId() != null) out.putIfAbsent(p.placeId(), ItineraryRules.shownName(p.name(), p.nameKo()));
+        }
         return out;
     }
 
