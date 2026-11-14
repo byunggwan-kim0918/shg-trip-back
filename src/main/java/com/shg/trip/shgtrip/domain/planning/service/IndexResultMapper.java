@@ -213,7 +213,8 @@ public class IndexResultMapper {
     }
 
     /**
-     * Sonnet 출력에서 누락된 사용자 필수 장소를 주입한다. 프롬프트의 ★ 지시는 보장이 아니라서 코드가 보증한다.
+     * Sonnet 출력에서 누락된 사용자 필수 장소와 필수 경험 장소({@link PlaceCandidate#keepsPlace()})를 주입한다.
+     * 프롬프트의 ★ 지시는 보장이 아니라서 코드가 보증한다.
      * 일반 장소는 centroid가 가장 가까운 day에, LODGING은 귀가일을 뺀 전 일정 숙소로 넣는다.
      */
     public SelectionOutput injectRequiredPlaces(SelectionOutput selection, List<PlaceCandidate> allCandidates) {
@@ -221,7 +222,7 @@ public class IndexResultMapper {
             return selection;
         }
         List<PlaceCandidate> required = allCandidates.stream()
-                .filter(PlaceCandidate::userSelected)
+                .filter(PlaceCandidate::keepsPlace)
                 .filter(c -> !"TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category())))
                 .toList();
         if (required.isEmpty()) return selection;
@@ -240,6 +241,8 @@ public class IndexResultMapper {
             boolean isLodging = "LODGING".equals(PlaceCategoryConstants.majorCategory(cand.category()));
 
             if (isLodging) {
+                // 숙소 교체는 사용자가 예약한 숙소만 한다. 필수 경험 매칭은 숙소를 받지 않는다.
+                if (!cand.userSelected()) continue;
                 boolean usedAsAccommodation = days.stream()
                         .anyMatch(d -> Integer.valueOf(idx).equals(d.accommodationIndex()));
                 if (!usedAsAccommodation) {
@@ -274,7 +277,7 @@ public class IndexResultMapper {
             SelectionOutput.DayPlan target = pickNearestDay(days, allCandidates, cand);
             target.placeIndices().add(idx);
             spare.remove(Integer.valueOf(idx));
-            log.warn("사용자 필수 장소 누락 → day={}에 주입: index={} ({})",
+            log.warn("{} 누락 → day={}에 주입: index={} ({})", cand.userSelected() ? "사용자 필수 장소" : "필수 경험 장소",
                     target.dayNumber(), idx, cand.name());
         }
 

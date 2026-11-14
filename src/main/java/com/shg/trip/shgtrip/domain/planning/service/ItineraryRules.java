@@ -28,7 +28,7 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.*;
 public final class ItineraryRules {
 
     /** 규칙이나 등급이 바뀌면 올린다. 다른 버전의 판정 기록끼리 비교하지 않기 위해서다. */
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
 
     public enum Severity {
         /** 일정을 쓸 수 없다. */
@@ -55,6 +55,7 @@ public final class ItineraryRules {
         CAFE_PER_DAY(Severity.CORE),
         NO_NON_FOOD_ACTIVITY(Severity.CORE),
         ADDRESS_REGION_MISMATCH(Severity.CORE),
+        REQUIRED_EXPERIENCE_MISSING(Severity.CORE),
         EARLY_FINISH(Severity.SOFT),
         CONSECUTIVE_MEAL_KIND(Severity.SOFT),
         SAME_DAY_MEAL_GROUP(Severity.SOFT),
@@ -77,11 +78,21 @@ public final class ItineraryRules {
     }
 
     /**
-     * @param dayCount           여행 일수. 0이면 날짜 누락을 판정하지 않는다
-     * @param lastDayHubDeadline 사용자 출발 시각에서 정한 허브 도착 마감(분). 없으면 null
+     * @param dayCount                  여행 일수. 0이면 날짜 누락을 판정하지 않는다
+     * @param lastDayHubDeadline        사용자 출발 시각에서 정한 허브 도착 마감(분). 없으면 null
+     * @param requiredExperiencePlaceIds 필수 경험에 맞춘 장소. 맞출 후보가 없던 경험은 안내만 하므로 넣지 않는다
      */
     public record Context(String pace, String transportPref, LocalDate startDate, int dayCount,
-                          Integer lastDayHubDeadline) {}
+                          Integer lastDayHubDeadline, Set<Long> requiredExperiencePlaceIds) {
+        public Context {
+            requiredExperiencePlaceIds = requiredExperiencePlaceIds == null ? Set.of() : Set.copyOf(requiredExperiencePlaceIds);
+        }
+
+        public Context(String pace, String transportPref, LocalDate startDate, int dayCount,
+                       Integer lastDayHubDeadline) {
+            this(pace, transportPref, startDate, dayCount, lastDayHubDeadline, Set.of());
+        }
+    }
 
     /** @param unknownKindMeals 종류를 판정하지 못한 끼니 수. 이 끼니들은 반복 판정에서 빠진다 */
     public record Verdict(int version, List<Violation> violations, int meals, int unknownKindMeals) {
@@ -129,6 +140,7 @@ public final class ItineraryRules {
         }
         tally.checkTrip(byDay.size(), out);
         checkAddressRegion(byDay, out);
+        checkRequiredExperiences(steps, candidates, ctx.requiredExperiencePlaceIds(), out);
         return new Verdict(VERSION, out, tally.meals, tally.unknown);
     }
 
@@ -191,6 +203,22 @@ public final class ItineraryRules {
         if (!endsEarlyByDeparture && lastActivityEnd > 0 && lastActivityEnd < EARLY_FINISH_MINUTES) {
             out.add(new Violation(Rule.EARLY_FINISH, day,
                     "day" + day + " 일정이 " + ScheduleTimes.formatMinutes(lastActivityEnd) + "에 끝남"));
+        }
+    }
+
+    private void checkRequiredExperiences(List<StepData> steps, List<PlaceCandidate> candidates, Set<Long> required,
+                                          List<Violation> out) {
+        if (required.isEmpty()) return;
+        Set<Long> placed = (steps == null ? List.<StepData>of() : steps).stream()
+                .filter(s -> s.place() != null && s.place().placeId() != null)
+                .map(s -> s.place().placeId())
+                .collect(Collectors.toSet());
+        for (Long id : required) {
+            if (placed.contains(id)) continue;
+            String name = (candidates == null ? List.<PlaceCandidate>of() : candidates).stream()
+                    .filter(c -> c != null && id.equals(c.placeId()))
+                    .map(PlaceCandidate::name).findFirst().orElse("id " + id);
+            out.add(new Violation(Rule.REQUIRED_EXPERIENCE_MISSING, 0, "필수 경험 장소 빠짐(" + name + ")"));
         }
     }
 

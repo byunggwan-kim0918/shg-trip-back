@@ -25,4 +25,16 @@ class KoreanAddressRegionTest {
     void contradicts(String address, String region, boolean expected) {
         assertThat(KoreanAddressRegion.contradicts(address, region)).isEqualTo(expected);
     }
+
+    @ParameterizedTest(name = "{0} / {1} → {2}")
+    @DisplayName("주소가 지역과 어긋나면 세부지역을 비워 지역명이 쓰이게 한다")
+    @CsvSource(delimiter = '|', nullValues = "null", value = {
+            "경기 용인시 처인구 백령로20번길 3|Busan|null",
+            "부산광역시 해운대구 구남로 42|Busan|해운대구",
+            "경남 김해시 어딘가 1|Busan|김해시",
+            "1-1 Namba, Chuo-ku, Osaka|Osaka|Chuo-ku",
+    })
+    void subRegionOf(String address, String region, String expected) {
+        assertThat(PlaceCategoryConstants.subRegionOf(address, region)).isEqualTo(expected);
+    }
 }

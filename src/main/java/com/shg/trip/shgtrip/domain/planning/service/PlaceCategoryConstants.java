@@ -539,6 +539,14 @@ public final class PlaceCategoryConstants {
             "步行街", "歩行者天国", "pedestrian", "walking street", "phố đi bộ");
 
     /**
+     * 선택·설명 프롬프트에 지역으로 보일 세부지역. 주소의 광역 단위가 {@code region}과 어긋나면 null이라 호출부가
+     * region을 쓴다. 그 주소의 시·구를 그대로 쓰면 부산 장소 설명에 "용인시"가 나온다.
+     */
+    public static String subRegionOf(String address, String region) {
+        return KoreanAddressRegion.contradicts(address, region) ? null : extractSubRegion(address);
+    }
+
+    /**
      * 주소에서 세부지역(시/군/구 단위) 토큰을 추출한다. region 컬럼이 상위 도시명뿐이라 Sonnet이 day를
      * 지리적으로 묶을 근거가 필요하다. 판단이 서지 않으면 null이고 호출부가 region을 유지한다.
      * <ul>
@@ -546,7 +554,7 @@ public final class PlaceCategoryConstants {
      *   <li>쉼표 구분(영문/일본식): 앞에서 두 번째 토큰이 있으면 그것(도시 단위가 오는 자리)</li>
      * </ul>
      */
-    public static String extractSubRegion(String address) {
+    private static String extractSubRegion(String address) {
         if (address == null || address.isBlank()) return null;
         String trimmed = address.trim();
 

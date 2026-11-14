@@ -855,7 +855,10 @@ public class BatchEnrichScheduler {
     private static final java.util.Set<String> ATTRACTION_ROLES = java.util.Set.of(
             "SIGHT", "ACTIVITY", "SHOPPING", "MARKET", "LODGING", "TRANSIT", "NOT_VISITABLE");
 
-    /** 응답이 JSON이 아니면(잘림 포함) false다. 그 밖의 예외는 던진다. 코드 오류를 장소 실패 횟수로 세지 않는다. */
+    /**
+     * 응답이 JSON이 아니거나(잘림 포함) 국내 장소 설명에 한자·가나가 섞이면 false라 실패 횟수에 넣고 다음 실행에서 다시 받는다.
+     * 그 밖의 예외는 던진다. 코드 오류를 장소 실패 횟수로 세지 않는다.
+     */
     boolean applyEnrichment(Place place, String content) {
         try {
             String json = extractJson(content);
@@ -873,6 +876,7 @@ public class BatchEnrichScheduler {
                 DiningEnrichment.Result dining = DiningEnrichment.interpret(root,
                         DiningEnrichment.venueOf(place.getCategory()), describe,
                         overseas ? OverseasEnrichment.ownRegionNames(place) : Set.of());
+                if (rejectsDescription(place, overseas, dining.description())) return false;
                 place.enrichWith(dining.tags(), dining.description(), dining.timeSlots(),
                         dining.durationMinutes(), null);
                 // 카테고리 리프까지 보고 음식 종류를 다시 정한다(태그만으로는 "라멘집"의 면요리가 빠질 수 있다).
@@ -898,6 +902,7 @@ public class BatchEnrichScheduler {
             if (descNode != null && !descNode.isNull()) {
                 description = descNode.asText();
             }
+            if (rejectsDescription(place, overseas, description)) return false;
 
             List<String> timeSlots = new ArrayList<>();
             JsonNode timeSlotsNode = root.get("recommended_time_slots");
@@ -938,6 +943,30 @@ public class BatchEnrichScheduler {
             log.warn("보강 데이터 파싱 실패 - placeId={}, error={}", place.getId(), e.getMessage());
             return false;
         }
+    }
+
+    // 해외 장소 설명은 현지어 이름에 조사가 붙어("金閣寺는") 판정하지 않는다.
+    private static boolean rejectsDescription(Place place, boolean overseas, String description) {
+        if (overseas || !mixesForeignScript(description, place.getName())) return false;
+        log.warn("국내 장소 설명에 한자·가나 섞임 - placeId={}", place.getId());
+        return true;
+    }
+
+    private static final String FOREIGN_SCRIPT = "[\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}]";
+    private static final java.util.regex.Pattern FOREIGN_SCRIPT_RUN = java.util.regex.Pattern.compile(FOREIGN_SCRIPT + "+");
+    /** 한글 낱말에 붙은 한자·가나("适합니다"). 괄호로 병기한 한자는 한글과 붙지 않아 걸리지 않는다. */
+    private static final java.util.regex.Pattern FOREIGN_SCRIPT_IN_WORD = java.util.regex.Pattern.compile(
+            "[가-힣]" + FOREIGN_SCRIPT + "|" + FOREIGN_SCRIPT + "[가-힣]");
+
+    /** 장소 이름에 든 한자·가나("세이천洗耳泉")는 빼고 본다. 이름을 따라 쓴 설명까지 막으면 그 장소는 매번 실패한다. */
+    static boolean mixesForeignScript(String text, String placeName) {
+        if (text == null) return false;
+        String checked = text;
+        if (placeName != null) {
+            java.util.regex.Matcher run = FOREIGN_SCRIPT_RUN.matcher(placeName);
+            while (run.find()) checked = checked.replace(run.group(), "");
+        }
+        return FOREIGN_SCRIPT_IN_WORD.matcher(checked).find();
     }
 
     /** 코드 블록(```json ... ```)과 순수 JSON을 모두 받는다. */

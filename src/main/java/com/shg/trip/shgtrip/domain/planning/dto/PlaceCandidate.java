@@ -85,7 +85,7 @@ public record PlaceCandidate(
                 intentProtected, intentTime, null);
     }
 
-    /** 의도는 스케줄 직전(RouteOptimizer)에만 실린다. */
+    /** 의도는 필수 경험 매칭과 스케줄 직전(RouteOptimizer)에만 실린다. */
     public PlaceCandidate(int index, Long placeId, String name, String address,
                           String category, List<String> tags, String region, String country,
                           BigDecimal latitude, BigDecimal longitude, String description,
@@ -205,13 +205,13 @@ public record PlaceCandidate(
                 protect, time, attributes, nameKo, travelerFame);
     }
 
-    /** 인덱스만 바꾼 사본. 의도 필드는 싣지 않는다(의도는 스케줄 직전에만 실린다). */
+    /** 인덱스만 바꾼 사본. 도시 구간으로 나눠 다시 번호를 매겨도 필수 경험 의도가 남아야 한다. */
     public PlaceCandidate reindexed(int newIndex) {
         return new PlaceCandidate(newIndex, placeId, name, address, category, tags, region, country,
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
                 userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                false, null, attributes, nameKo, travelerFame);
+                intentProtected, intentTime, attributes, nameKo, travelerFame);
     }
 
     /** DB에서 다시 읽은 속성·영업시간만 바꾼 사본(평가 재채점용). */

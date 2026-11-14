@@ -111,6 +111,20 @@ class CityBlockPlannerTest {
     }
 
     @Test
+    @DisplayName("도시 구간마다 번호를 다시 매겨도 필수 경험의 저녁 의도가 남는다")
+    void requiredIntentSurvivesCityBlocks() {
+        int osakaSight = 16;
+        List<PlaceCandidate> candidates = new ArrayList<>(candidates());
+        candidates.set(osakaSight - 1, candidates.get(osakaSight - 1).withIntent(true, "evening"));
+
+        StepData sight = routeOptimizer.schedule(selection(), candidates, args(CITIES)).steps().stream()
+                .filter(s -> s.place().name().equals("Osaka sight 0")).findFirst().orElseThrow();
+
+        assertThat(sight.dayNumber()).isEqualTo(3);
+        assertThat(toMinutesOrZero(sight.startTime())).isGreaterThanOrEqualTo(ScheduleTuning.EVENING_ACTIVITY_EARLIEST_START);
+    }
+
+    @Test
     @DisplayName("도착은 첫 도시 공항, 출발은 마지막 도시 공항이고 앞 도시 마지막 날은 숙소에서 끝난다")
     void hubsAndLodgingFollowCities() {
         RouteOptimizer.ScheduleResult result = routeOptimizer.schedule(selection(), candidates(), args(CITIES));

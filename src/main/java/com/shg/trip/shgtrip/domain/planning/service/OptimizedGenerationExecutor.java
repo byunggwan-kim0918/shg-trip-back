@@ -214,9 +214,12 @@ public class OptimizedGenerationExecutor {
                             dayComposition, enrichedInput, ferryTokens)),
                     enrichedCandidates.size());
 
+            final RequiredExperiences.Match requiredExperiences =
+                    RequiredExperiences.attach(request.requiredExperiences(), candidatesWithLocalStays);
+            final List<PlaceCandidate> scheduleCandidates = requiredExperiences.candidates();
             final SelectionOutput selectionOutput = indexResultMapper.injectRequiredPlaces(
-                    indexResultMapper.fillMissingAccommodation(dayComposition, candidatesWithLocalStays),
-                    candidatesWithLocalStays);
+                    indexResultMapper.fillMissingAccommodation(dayComposition, scheduleCandidates),
+                    scheduleCandidates);
             stageMark = logStage("select", stageMark);
 
             // [65%] day/순서/시간/교통/대안을 결정론적으로 확정
@@ -224,13 +227,17 @@ public class OptimizedGenerationExecutor {
             sendSseEvent(emitter, "OPTIMIZING", 65, "동선과 시간을 확정하고 있습니다...");
 
             RouteOptimizer.ScheduleResult scheduleResult = executeWithHeartbeat(emitter,
-                    () -> routeOptimizer.schedule(selectionOutput, candidatesWithLocalStays, scheduleArgs));
+                    () -> routeOptimizer.schedule(selectionOutput, scheduleCandidates, scheduleArgs));
             List<StepData> fixedSteps = scaleCostsForParty(scheduleResult.steps(), enrichedInput.partySize());
             List<String> qualityNotices = new ArrayList<>(scheduleResult.notices());
             qualityNotices.addAll(pickNotices);
-            qualityNotices.addAll(mustVisitNotices(unresolvedNames,
-                    missingUserSelected(candidatesWithLocalStays, fixedSteps)));
-            ItineraryRules.Verdict quality = shadowQuality(fixedSteps, candidatesWithLocalStays, scheduleArgs, days);
+            List<String> unplaced = new ArrayList<>(unresolvedNames);
+            unplaced.addAll(RequiredExperiences.unplaced(requiredExperiences, fixedSteps));
+            List<String> dropped = new ArrayList<>(missingUserSelected(scheduleCandidates, fixedSteps));
+            dropped.addAll(RequiredExperiences.dropped(requiredExperiences, fixedSteps));
+            qualityNotices.addAll(mustVisitNotices(unplaced, dropped));
+            ItineraryRules.Verdict quality = shadowQuality(fixedSteps, scheduleCandidates, scheduleArgs, days,
+                    requiredExperiences.placeIds());
 
             // 인위적 sleep을 넣으면 SSE 스레드가 blocking된다.
             sendStepStream(emitter, fixedSteps);
@@ -264,7 +271,7 @@ public class OptimizedGenerationExecutor {
             stageMark = logStage("save", stageMark);
             // 완료 전송보다 먼저 남긴다. 뒤에 남기면 그 사이 지운 일정의 기록(요청 문장 포함)이 삭제를 피해 남는다.
             traceRecorder.record(saved, jobId, request, enrichedInput, rawSelectionOutput,
-                    selectionOutput, candidatesWithLocalStays, scheduleArgs,
+                    selectionOutput, scheduleCandidates, scheduleArgs,
                     (System.nanoTime() - pipelineStart) / 1_000_000, quality);
 
             // [100%] 구조 완료. emitter는 story-ready까지 닫지 않는다.
@@ -298,11 +305,11 @@ public class OptimizedGenerationExecutor {
 
     /** 측정용이라 저장을 막지 않고, 판정이 실패해도 생성은 그대로 진행한다. */
     private static ItineraryRules.Verdict shadowQuality(List<StepData> steps, List<PlaceCandidate> candidates,
-                                                        ScheduleArgs args, long days) {
+                                                        ScheduleArgs args, long days, Set<Long> requiredPlaceIds) {
         try {
             ItineraryRules.Verdict quality = RULES.evaluate(steps, candidates, new ItineraryRules.Context(
                     args.pace(), args.transportPref(), args.startDate(), (int) days,
-                    RouteOptimizer.departureHubDeadline(args)));
+                    RouteOptimizer.departureHubDeadline(args), requiredPlaceIds));
             log.info("품질 판정 v{}: hard={} core={} soft={} 끼니={}(종류 미상 {}) {}", quality.version(),
                     quality.has(ItineraryRules.Severity.HARD), quality.has(ItineraryRules.Severity.CORE),
                     quality.has(ItineraryRules.Severity.SOFT), quality.meals(), quality.unknownKindMeals(),
@@ -576,8 +583,7 @@ public class OptimizedGenerationExecutor {
                     place.getRecommendedDurationMinutes(),
                     c.userSelected(),
                     KrwRates.admissionWon(place),
-                    // DB 주소로 세부지역을 다시 뽑고, 실패하면 기존 값을 유지한다.
-                    subRegionOrKeep(place.getAddress(), c.subRegion()),
+                    subRegionOrKeep(place.getAddress(), c.region(), c.subRegion()),
                     place.getUserRatingCount() != null ? place.getUserRatingCount() : c.userRatingCount(),
                     place.getWikidataSitelinks() != null
                             ? place.getWikidataSitelinks() : c.wikidataSitelinks(),
@@ -876,8 +882,9 @@ public class OptimizedGenerationExecutor {
         return c.reindexed(index);
     }
 
-    private String subRegionOrKeep(String address, String current) {
-        String extracted = PlaceCategoryConstants.extractSubRegion(address);
+    private String subRegionOrKeep(String address, String region, String current) {
+        if (KoreanAddressRegion.contradicts(address, region)) return null;
+        String extracted = PlaceCategoryConstants.subRegionOf(address, region);
         return extracted != null ? extracted : current;
     }
 
@@ -1080,7 +1087,7 @@ public class OptimizedGenerationExecutor {
                     p.getTags(), p.getRegion(), p.getCountry(), p.getLatitude(), p.getLongitude(),
                     p.getDescription(), p.getRating(), 1.0, p.getPriceLevel(), p.getOpeningHours(),
                     p.getRecommendedTimeSlots(), p.getRecommendedDurationMinutes(), true, KrwRates.admissionWon(p),
-                    PlaceCategoryConstants.extractSubRegion(p.getAddress()), p.getUserRatingCount(),
+                    PlaceCategoryConstants.subRegionOf(p.getAddress(), p.getRegion()), p.getUserRatingCount(),
                     p.getWikidataSitelinks(), p.getPlaceRole(), p.getCuisine(), false, null, p.getAttributes(),
                     p.getNameKo(), p.getTravelerFame()));
         }
@@ -1144,7 +1151,7 @@ public class OptimizedGenerationExecutor {
                 place.getRating(), 0.0, null, place.getOpeningHours(),
                 place.getRecommendedTimeSlots(), place.getRecommendedDurationMinutes(),
                 false, KrwRates.admissionWon(place),
-                PlaceCategoryConstants.extractSubRegion(place.getAddress()),
+                PlaceCategoryConstants.subRegionOf(place.getAddress(), place.getRegion()),
                 place.getUserRatingCount(), place.getWikidataSitelinks(),
                 place.getPlaceRole(), place.getCuisine(), false, null, place.getAttributes(), place.getNameKo(),
                 place.getTravelerFame());

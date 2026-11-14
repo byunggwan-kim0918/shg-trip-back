@@ -6,6 +6,7 @@ import java.util.Set;
 /**
  * 국내 주소의 광역 단위가 장소의 지역(region)과 어긋나는지 본다.
  * Foursquare 행 중에는 좌표·지역은 부산인데 주소는 다른 도시인 것이 있어, 그 주소로 지역명을 쓰면 설명에 엉뚱한 도시가 나온다.
+ * 감사 쿼리({@code scripts/eval/region-mismatch-audit.sql})가 같은 표를 쓴다.
  */
 final class KoreanAddressRegion {
 
