@@ -21,6 +21,7 @@ import com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
+import com.shg.trip.shgtrip.domain.planning.service.RequiredExperiences;
 import com.shg.trip.shgtrip.domain.planning.service.RouteOptimizer;
 import com.shg.trip.shgtrip.domain.planning.service.ScoreReport;
 import com.shg.trip.shgtrip.domain.planning.service.VectorSearchQueryService;
@@ -172,7 +173,7 @@ public class EvalRunner implements CommandLineRunner {
 
         Integer hubDeadline = RouteOptimizer.departureHubDeadline(args);
         ItineraryRules.Context ruleContext = new ItineraryRules.Context(args.pace(), args.transportPref(),
-                args.startDate(), dayCount, hubDeadline);
+                args.startDate(), dayCount, hubDeadline, RequiredExperiences.placeIds(traced));
         String country = args.country() != null ? args.country() : countryOf(savedSteps);
         ScoreReport saved = scorer.score(new ItineraryScorer.Input(savedSteps, args.pace(), args.transportPref(),
                 args.startDate(), candidates, selection, hubDeadline));

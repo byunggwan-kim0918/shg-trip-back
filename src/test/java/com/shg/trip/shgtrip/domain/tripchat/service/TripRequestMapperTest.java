@@ -98,7 +98,7 @@ class TripRequestMapperTest {
         assertThat(r.request().selectedPlaceIds()).isEmpty();
         assertThat(r.request().description()).contains("숙소: 해운대 쪽 희망").contains("가고 싶은 곳: 블루라인파크");
         assertThat(r.notes().get(Slot.ANCHORS)).contains(GeneratorSupport.LODGING_REFERENCE,
-                "블루라인파크 · " + GeneratorSupport.PLACE_REFERENCE);
+                "블루라인파크 · " + GeneratorSupport.PLACE_BY_AREA);
     }
 
     @Test
@@ -246,6 +246,53 @@ class TripRequestMapperTest {
         assertThat(r.request().selectedPlaceIds()).hasSize(10);
         assertThat(r.notes().get(Slot.ANCHORS)).contains("장소11 · " + GeneratorSupport.PLACES_FULL);
         assertThat(r.request().description()).contains("가고 싶은 곳: 장소11");
+    }
+
+    @Test
+    @DisplayName("이름으로 찾지 못한 꼭 갈 곳은 지역 낱말과 시간대를 필수 경험으로 넘긴다")
+    void unmatchedMustVisitBecomesRequiredExperience() {
+        Events e = Events.busanTrip().clearSlot(Slot.ANCHORS)
+                .user(DraftField.MUST_VISIT, "광안리 야경")
+                .user(DraftField.MUST_VISIT, "해운대 일출")
+                .user(DraftField.MUST_VISIT, "부산 야경")
+                .user(DraftField.MUST_VISIT, "야시장")
+                .user(DraftField.MUST_VISIT, "블루라인파크");
+        Map<String, PlaceMatch> matches = Map.of(PlaceMatcher.key(DraftField.MUST_VISIT, "블루라인파크"),
+                new PlaceMatch(9L, "해운대블루라인파크", "SIGHT"));
+
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+
+        assertThat(r.request().requiredExperiences()).containsExactly(
+                new ItineraryGenerateRequest.RequiredExperience("광안리 야경", "광안리", "evening"),
+                new ItineraryGenerateRequest.RequiredExperience("해운대 일출", "해운대", "morning"));
+        assertThat(r.request().selectedPlaceIds()).containsExactly(9L);
+        assertThat(r.request().description()).contains("가고 싶은 곳: 광안리 야경, 해운대 일출, 부산 야경, 야시장");
+        assertThat(r.notes().get(Slot.ANCHORS)).contains("광안리 야경 · " + GeneratorSupport.PLACE_BY_AREA,
+                "부산 야경 · " + GeneratorSupport.PLACE_REFERENCE, "야시장 · " + GeneratorSupport.PLACE_REFERENCE);
+        assertThat(VALIDATOR.validate(r.request())).isEmpty();
+        assertThat(map(Events.busanTrip()).request().requiredExperiences()).isNull();
+    }
+
+    @Test
+    @DisplayName("지역 낱말은 시간대 낱말·조사·여행지 이름·종류만 있는 낱말을 뺀 나머지다")
+    void areaKeywordSkipsTimingDestinationAndGenericWords() {
+        assertThat(TripRequestMapper.areaKeyword("광안리야경", "부산")).isEqualTo("광안리");
+        assertThat(TripRequestMapper.areaKeyword("광안리에서 야경", "부산")).isEqualTo("광안리");
+        assertThat(TripRequestMapper.areaKeyword("부산 감천문화마을", "부산광역시")).isEqualTo("감천문화마을");
+        assertThat(TripRequestMapper.areaKeyword("해운대 블루라인파크 야경 꼭", "부산")).isEqualTo("해운대 블루라인파크");
+        assertThat(TripRequestMapper.areaKeyword("부산 야경", "부산, 경주")).isNull();
+        assertThat(TripRequestMapper.areaKeyword("제주도 노을", "제주")).isNull();
+        assertThat(TripRequestMapper.areaKeyword("밤바다", "여수")).isNull();
+    }
+
+    @Test
+    @DisplayName("시간대 낱말은 낱말 끝에 올 때만 본다. 이름 앞의 낱말(아침고요수목원)은 시간대가 아니다")
+    void timingOnlyFromWordEnd() {
+        assertThat(GeneratorSupport.experienceTiming("광안리야경")).isEqualTo("evening");
+        assertThat(GeneratorSupport.experienceTiming("해운대 일출")).isEqualTo("morning");
+        assertThat(GeneratorSupport.experienceTiming("일출 야경")).isNull();
+        assertThat(GeneratorSupport.experienceTiming("아침고요수목원")).isNull();
+        assertThat(TripRequestMapper.areaKeyword("아침고요수목원", "가평")).isEqualTo("아침고요수목원");
     }
 
     @Test

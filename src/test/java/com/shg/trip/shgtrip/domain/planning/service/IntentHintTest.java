@@ -129,6 +129,21 @@ class IntentHintTest {
     }
 
     @Test
+    @DisplayName("필수 경험으로 실린 의도는 Sonnet 시간대보다 앞서고 날짜별 보호 상한에 세지 않는다")
+    void requiredExperienceIntentWinsAndSkipsCap() {
+        List<PlaceCandidate> candidates = new ArrayList<>(Itinerary115Fixture.candidates());
+        candidates.set(SONGAK_VIEW - 1, candidates.get(SONGAK_VIEW - 1).withIntent(true, "evening"));
+        // 3일차 비식당 12·13·14 중 13이 필수 경험이라 나머지 둘이 상한 2곳을 쓴다
+        List<PlaceCandidate> out = IntentHints.apply(withIntent(
+                List.of(new SelectionOutput.TimingHint(SONGAK_VIEW, "morning")), List.of(12, 14)), candidates);
+
+        assertThat(out.get(SONGAK_VIEW - 1).intentTime()).isEqualTo("evening");
+        assertThat(out.get(SONGAK_VIEW - 1).intentProtected()).isTrue();
+        assertThat(out.get(12 - 1).intentProtected()).isTrue();
+        assertThat(out.get(14 - 1).intentProtected()).isTrue();
+    }
+
+    @Test
     @DisplayName("보호는 날짜별 상한까지, timing 장소가 highlight보다 먼저 보호된다")
     void protectionIsCappedPerDayWithTimingFirst() {
         List<PlaceCandidate> candidates = Itinerary115Fixture.candidates();

@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.itinerary.dto;
 
 import com.shg.trip.shgtrip.global.validation.ValidDateRange;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 
 import java.math.BigDecimal;
@@ -66,7 +67,11 @@ public record ItineraryGenerateRequest(
         String arrivalTime,
 
         @Pattern(regexp = "([01]\\d|2[0-3]):[0-5]\\d", message = "출발 시각 형식이 올바르지 않습니다.")
-        String departureTime
+        String departureTime,
+
+        // 이름으로 장소를 맞추지 못한 꼭 가고 싶은 곳. 맞춘 장소는 selectedPlaceIds로 온다
+        @Size(max = 5, message = "꼭 하고 싶은 경험은 최대 5개까지 가능합니다.")
+        List<@NotNull(message = "경험 값이 비어 있습니다.") @Valid RequiredExperience> requiredExperiences
 ) {
     public ItineraryGenerateRequest(PlanningMode mode, String destination, List<String> themes, List<String> categories,
                                     String pace, String transportPref, BigDecimal budget, LocalDate startDate,
@@ -75,6 +80,33 @@ public record ItineraryGenerateRequest(
         this(mode, destination, themes, categories, pace, transportPref, budget, startDate, endDate, description,
                 selectedPlaceIds, customPlaceNames, null, null, null, null);
     }
+
+    public ItineraryGenerateRequest(PlanningMode mode, String destination, List<String> themes, List<String> categories,
+                                    String pace, String transportPref, BigDecimal budget, LocalDate startDate,
+                                    LocalDate endDate, String description, List<Long> selectedPlaceIds,
+                                    List<String> customPlaceNames, String companion, Integer partySize,
+                                    String arrivalTime, String departureTime) {
+        this(mode, destination, themes, categories, pace, transportPref, budget, startDate, endDate, description,
+                selectedPlaceIds, customPlaceNames, companion, partySize, arrivalTime, departureTime, null);
+    }
+
+    /**
+     * @param text        사용자가 말한 그대로("광안리 야경"). 안내 문구에 쓴다
+     * @param areaKeyword 후보 이름에서 찾을 지역·장소 낱말("광안리"). 후보 이름이 이것을 담아야 맞춘다
+     * @param timing      morning·evening, 없으면 null
+     */
+    public record RequiredExperience(
+            @NotBlank(message = "경험 내용을 입력해주세요.")
+            @Size(max = 100, message = "경험은 100자 이내여야 합니다.")
+            String text,
+
+            @NotBlank(message = "경험의 지역 키워드가 비어 있습니다.")
+            @Size(max = 50, message = "지역 키워드는 50자 이내여야 합니다.")
+            String areaKeyword,
+
+            @Pattern(regexp = "morning|evening", message = "지원하지 않는 시간대입니다.")
+            String timing
+    ) {}
 
     /** 동행·인원·도착·출발을 요청 문장 끝에 덧붙인 사본. 문장만 읽는 경로(fallback)용. */
     public ItineraryGenerateRequest withTripFactsInDescription() {
@@ -96,7 +128,7 @@ public record ItineraryGenerateRequest(
         String merged = description == null || description.isBlank() ? note : description + " " + note;
         return new ItineraryGenerateRequest(mode, destination, themes, categories, pace, transportPref, budget,
                 startDate, endDate, merged, selectedPlaceIds, customPlaceNames, companion, partySize,
-                arrivalTime, departureTime);
+                arrivalTime, departureTime, requiredExperiences);
     }
 
     public enum PlanningMode {

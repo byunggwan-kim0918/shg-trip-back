@@ -244,6 +244,25 @@ class ItineraryRulesTest {
     }
 
     @Test
+    @DisplayName("필수 경험에 맞춘 장소가 일정에 없을 때만 핵심 위반이다")
+    void requiredExperienceMissingOnlyWhenMatchedPlaceDropped() {
+        StepData beach = new StepData(1, 1, "19:00", "20:00",
+                new PlaceData("광안리해수욕장", null, BEACH, "Busan", "KR", null, null, 501L, null),
+                List.of(), null, null, null, null, null, null);
+        PlaceCandidate tower = new PlaceCandidate(2, 502L, "부산타워", null, TEMPLE, List.of(), "Busan", "KR",
+                BigDecimal.valueOf(35.1), BigDecimal.valueOf(129.0), null, null, 0.9);
+
+        assertThat(rulesOf(rules.evaluate(List.of(beach), List.of(tower),
+                new ItineraryRules.Context("normal", "car", START, 1, null, java.util.Set.of(501L)))))
+                .doesNotContain(Rule.REQUIRED_EXPERIENCE_MISSING);
+        Verdict missing = rules.evaluate(List.of(beach), List.of(tower),
+                new ItineraryRules.Context("normal", "car", START, 1, null, java.util.Set.of(501L, 502L)));
+        assertThat(missing.violations()).filteredOn(v -> v.rule() == Rule.REQUIRED_EXPERIENCE_MISSING)
+                .extracting(ItineraryRules.Violation::message).containsExactly("필수 경험 장소 빠짐(부산타워)");
+        assertThat(missing.core()).isTrue();
+    }
+
+    @Test
     @DisplayName("기록에 남는 판정 JSON에 등급과 HARD·CORE 여부가 들어간다")
     void verdictJsonCarriesSeverity() throws Exception {
         List<StepData> steps = List.of(step(1, 1, "09:00", "10:00", "해변", BEACH, null));

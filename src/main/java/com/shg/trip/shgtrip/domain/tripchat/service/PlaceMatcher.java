@@ -111,8 +111,12 @@ public class PlaceMatcher {
     /** 주소에 여행지 이름이 있어야 한다. "제주도"·"부산시"처럼 붙은 행정 단위는 떼고 본다. */
     static boolean inDestination(String address, String destination) {
         if (address == null) return false;
-        String d = TextNormalizer.key(destination);
-        if (d.length() > 2) d = d.replaceAll("(특별자치도|특별자치시|특별시|광역시|도|시|군)$", "");
+        String d = destinationKey(destination);
         return !d.isEmpty() && TextNormalizer.key(address).contains(d);
+    }
+
+    static String destinationKey(String destination) {
+        String d = TextNormalizer.key(destination);
+        return d.length() > 2 ? d.replaceAll("(특별자치도|특별자치시|특별시|광역시|도|시|군)$", "") : d;
     }
 }

@@ -55,6 +55,39 @@ class IndexResultMapperTest {
     }
 
     @Test
+    @DisplayName("필수 경험으로 의도가 실린 장소도 선택 결과에 없으면 주입된다")
+    void injectRequiredPlaces_requiredExperienceInjected() {
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "Day1근처", "Landmarks and Outdoors > Park", 33.50, 126.50, false),
+                place(2, "Day2근처", "Landmarks and Outdoors > Park", 33.25, 126.40, false),
+                place(3, "광안리해수욕장", "Landmarks and Outdoors > Beach", 33.26, 126.41, false)
+                        .withIntent(true, "evening"));
+        SelectionOutput selection = new SelectionOutput("concept", List.of(
+                new SelectionOutput.DayPlan(1, null, List.of(1), null, null),
+                new SelectionOutput.DayPlan(2, null, List.of(2), null, null)), List.of(), List.of());
+
+        SelectionOutput fixed = mapper.injectRequiredPlaces(selection, candidates);
+
+        assertThat(fixed.days().get(1).placeIndices()).contains(3);
+    }
+
+    @Test
+    @DisplayName("사용자가 고르지 않은 숙소는 의도가 실려 있어도 일정 숙소를 바꾸지 않는다")
+    void injectRequiredPlaces_intentLodgingDoesNotReplaceAccommodation() {
+        List<PlaceCandidate> candidates = List.of(
+                place(1, "Day1근처", "Landmarks and Outdoors > Park", 33.50, 126.50, false),
+                place(2, "Hotel", "Travel and Transportation > Lodging > Hotel", 33.40, 126.45, false),
+                place(3, "호텔 수영장", "Travel and Transportation > Lodging > Resort", 33.41, 126.46, false)
+                        .withIntent(true, "evening"));
+        SelectionOutput selection = new SelectionOutput("concept", List.of(
+                new SelectionOutput.DayPlan(1, null, List.of(1), 2, null)), List.of(), List.of());
+
+        SelectionOutput fixed = mapper.injectRequiredPlaces(selection, candidates);
+
+        assertThat(fixed.days().get(0).accommodationIndex()).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("이미 포함된 필수 장소는 그대로 두되 spare 중복 기재만 정리한다")
     void injectRequiredPlaces_alreadyIncludedOnlyCleansSpare() {
         List<PlaceCandidate> candidates = List.of(

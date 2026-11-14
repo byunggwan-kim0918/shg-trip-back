@@ -30,6 +30,7 @@ final class IntentHints {
      *       userSelected와 달리 영업시간·휴무·시각·귀가 가드는 그대로 받는다</li>
      * </ul>
      * 본선택 장소만, 식당 제외, 날짜별로 timing → highlight 순서로 {@code INTENT_PROTECT_PER_DAY}곳까지 보호한다.
+     * 필수 경험으로 이미 실린 의도({@link RequiredExperiences})는 상한에 세지 않고, 사용자가 말한 시간대가 Sonnet보다 앞선다.
      */
     static List<PlaceCandidate> apply(SelectionOutput selection, List<PlaceCandidate> candidates) {
         if (selection.days() == null) return candidates;
@@ -57,7 +58,7 @@ final class IntentHints {
                 PlaceCandidate c = byIndex(candidates, idx);
                 if (c == null || c.mealEligible()) continue;
                 if (timing.containsKey(idx)) timeOf.put(idx, timing.get(idx));
-                if (c.userSelected()) continue; // 이미 보호돼 있어 상한을 쓰지 않는다
+                if (c.keepsPlace()) continue; // 이미 보호돼 있어 상한을 쓰지 않는다
                 if (kept < INTENT_PROTECT_PER_DAY) {
                     protect.add(idx);
                     kept++;
@@ -68,8 +69,8 @@ final class IntentHints {
 
         List<PlaceCandidate> out = new ArrayList<>(candidates.size());
         for (PlaceCandidate c : candidates) {
-            boolean p = c != null && protect.contains(c.index());
-            String t = c != null ? timeOf.get(c.index()) : null;
+            boolean p = c != null && (protect.contains(c.index()) || c.intentProtected());
+            String t = c == null ? null : c.intentTime() != null ? c.intentTime() : timeOf.get(c.index());
             out.add(p || t != null ? c.withIntent(p, t) : c);
         }
         log.info("요청 의도 반영: 시간대 {} / 보호 {}",

@@ -145,6 +145,40 @@ class ItineraryGenerateRequestValidationTest {
     }
 
     @Test
+    @DisplayName("필수 경험은 5개까지, 지역 낱말이 있고 시간대는 morning·evening만 통과한다")
+    void requiredExperiences() {
+        var ok = new ItineraryGenerateRequest.RequiredExperience("광안리 야경", "광안리", "evening");
+        var noArea = new ItineraryGenerateRequest.RequiredExperience("야경", " ", null);
+        var badTiming = new ItineraryGenerateRequest.RequiredExperience("광안리 야경", "광안리", "night");
+
+        assertThat(messages(withRequired(List.of(ok)))).isEmpty();
+        assertThat(messages(withRequired(java.util.Collections.nCopies(6, ok))))
+                .contains("꼭 하고 싶은 경험은 최대 5개까지 가능합니다.");
+        assertThat(messages(withRequired(List.of(noArea, badTiming))))
+                .contains("경험의 지역 키워드가 비어 있습니다.", "지원하지 않는 시간대입니다.");
+        assertThat(withRequired(List.of(ok)).withTripFactsInDescription().requiredExperiences()).containsExactly(ok);
+    }
+
+    @Test
+    @DisplayName("필수 경험이 없는 옛 요청 JSON도 그대로 읽힌다")
+    void oldRequestJsonWithoutRequiredExperiences() throws Exception {
+        var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().findAndAddModules().build();
+        var req = mapper.readValue("""
+                {"mode":"AUTO","destination":"부산","themes":["ocean"],"categories":["beach"],
+                 "startDate":"%s","endDate":"%s"}
+                """.formatted(base, base.plusDays(2)), ItineraryGenerateRequest.class);
+
+        assertThat(req.requiredExperiences()).isNull();
+        assertThat(messages(req)).isEmpty();
+    }
+
+    private ItineraryGenerateRequest withRequired(List<ItineraryGenerateRequest.RequiredExperience> required) {
+        return new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "부산", List.of("healing"),
+                List.of("attraction"), null, null, null, base, base.plusDays(2), null, null, null,
+                null, null, null, null, required);
+    }
+
+    @Test
     @DisplayName("문장만 읽는 경로용 사본에 동행·인원·도착·출발이 문장으로 붙는다")
     void tripFactsAppendedToDescription() {
         var req = new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "제주도", List.of("healing"),

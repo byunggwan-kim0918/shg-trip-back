@@ -188,6 +188,54 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("필수 경험은 맞춘 후보에 의도를 실어 스케줄·기록에 넘기고, 빠지거나 못 맞춘 경험은 안내한다")
+    @SuppressWarnings("unchecked")
+    void execute_requiredExperiences_attachIntentAndNotify() {
+        ItineraryGenerateRequest withRequired = new ItineraryGenerateRequest(request.mode(), request.destination(),
+                request.themes(), request.categories(), request.pace(), request.transportPref(), request.budget(),
+                request.startDate(), request.endDate(), request.description(), null, null, null, null, null, null,
+                List.of(new ItineraryGenerateRequest.RequiredExperience("메이지신궁 아침", "메이지신궁", "morning"),
+                        new ItineraryGenerateRequest.RequiredExperience("오다이바 야경", "오다이바", "evening")));
+        PlaceCandidate shrine = new PlaceCandidate(2, 101L, "메이지신궁", "시부야구 요요기카미조노초 1-1",
+                "Landmarks and Outdoors > Shrine", List.of(), "Tokyo", "JP", BigDecimal.valueOf(35.6764),
+                BigDecimal.valueOf(139.6993), null, null, 0.93, null, null, null, 60, false, null, null, null, 40,
+                "SIGHT", null, false, null);
+        List<PlaceCandidate> pool = List.of(candidates.get(0), shrine, candidates.get(2));
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(withRequired)).thenReturn(successResult);
+        when(vectorSearchQueryService.search(eq(vectorEnrichedInput), any())).thenReturn(pool);
+        when(fallbackDecider.assess(pool, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of());
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList(), any())).thenReturn(selectionOutput);
+        when(routeOptimizer.schedule(any(), anyList(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(43L);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any())).thenReturn(mockItinerary);
+
+        executor.execute("job-r", withRequired, 1L, emitter);
+
+        ArgumentCaptor<List<PlaceCandidate>> scheduled = ArgumentCaptor.forClass(List.class);
+        verify(routeOptimizer).schedule(any(), scheduled.capture(), any());
+        PlaceCandidate attached = scheduled.getValue().stream()
+                .filter(c -> "메이지신궁".equals(c.name())).findFirst().orElseThrow();
+        assertThat(attached.intentProtected()).isTrue();
+        assertThat(attached.intentTime()).isEqualTo("morning");
+        assertThat(attached.userSelected()).isFalse();
+        verify(traceRecorder).record(any(), eq("job-r"), eq(withRequired), any(), any(), any(),
+                eq(scheduled.getValue()), any(), anyLong(), any());
+
+        ArgumentCaptor<List<String>> notices = ArgumentCaptor.forClass(List.class);
+        verify(indexResultMapper).toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(),
+                notices.capture());
+        assertThat(notices.getValue()).contains("'오다이바 야경'은(는) 장소를 찾지 못해 일정에 넣지 못했어요.",
+                "꼭 가고 싶다고 고른 '메이지신궁 아침'을(를) 일정에 넣지 못했어요.");
+    }
+
+    @Test
     @DisplayName("enrichInput 비현실적 입력: 에러 SSE 전송 후 파이프라인 중단")
     void execute_enrichInvalid_sendsErrorAndStops() {
         when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);

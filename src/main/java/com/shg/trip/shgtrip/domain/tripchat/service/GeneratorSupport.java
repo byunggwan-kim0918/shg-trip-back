@@ -85,6 +85,7 @@ public final class GeneratorSupport {
     public static final String LODGING_NOT_LODGING = "숙소로 등록된 곳이 아니라 참고만 해요.";
     public static final String PLACE_INCLUDED = "일정에 꼭 넣어요.";
     public static final String PLACE_REFERENCE = "이름으로 장소를 찾지 못해 참고만 해요.";
+    public static final String PLACE_BY_AREA = "이 이름이 들어간 명소를 찾아 넣어요. 못 찾으면 일정을 만든 뒤 알려줘요.";
     public static final String PLACE_IS_LODGING = "숙소는 정해둔 숙소로 알려주면 고정할 수 있어요.";
     public static final String PLACES_FULL = "꼭 넣을 장소는 10곳까지라 참고만 해요.";
     public static final String BOOKED_INCLUDED = "일정에 넣지만 예약 시간에 맞춰 고정되지는 않아요.";
@@ -95,6 +96,40 @@ public final class GeneratorSupport {
     public static final String AVOID_PLACES = "피하고 싶은 장소는 아직 반영할 수 없어요.";
     public static final String CONDITIONS_REFERENCE = "음식·활동 같은 조건은 장소를 고를 때 참고만 해요.";
     public static final String APPROX_TIME = "대략적인 시간은 참고만 해요.";
+
+    /** 꼭 가고 싶은 곳에 붙는 시간대 낱말. 생성기가 맞추는 시간대는 아침·저녁 둘뿐이다. */
+    private static final Map<String, String> EXPERIENCE_TIMING_WORDS = Map.of(
+            "야경", "evening", "노을", "evening", "일몰", "evening", "밤", "evening",
+            "일출", "morning", "아침", "morning");
+
+    /** @param timings 떼어 낸 낱말의 시간대 */
+    record TimedWord(String word, java.util.Set<String> timings) {}
+
+    /** 낱말 끝의 시간대 낱말만 뗀다("광안리야경" → 광안리). 앞이나 가운데는 이름의 일부일 수 있다("아침고요수목원"). */
+    static TimedWord splitTiming(String token) {
+        String word = token;
+        java.util.Set<String> timings = new java.util.HashSet<>();
+        boolean stripped = true;
+        while (stripped) {
+            stripped = false;
+            for (Map.Entry<String, String> e : EXPERIENCE_TIMING_WORDS.entrySet()) {
+                if (word.endsWith(e.getKey())) {
+                    word = word.substring(0, word.length() - e.getKey().length());
+                    timings.add(e.getValue());
+                    stripped = true;
+                }
+            }
+        }
+        return new TimedWord(word, timings);
+    }
+
+    /** 아침·저녁 낱말이 함께 나오면 어느 쪽인지 몰라 null이다. */
+    static String experienceTiming(String text) {
+        if (text == null) return null;
+        java.util.Set<String> found = new java.util.HashSet<>();
+        for (String token : text.strip().split("\\s+")) found.addAll(splitTiming(token).timings());
+        return found.size() == 1 ? found.iterator().next() : null;
+    }
 
     /** 국내 enrich 거절 기준(prompts/enrich-input.txt UNREALISTIC_BUDGET) */
     public static final long MIN_BUDGET_PER_DAY = 50_000;

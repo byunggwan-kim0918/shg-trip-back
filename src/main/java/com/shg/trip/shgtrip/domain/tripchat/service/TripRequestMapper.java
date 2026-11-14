@@ -32,6 +32,7 @@ public final class TripRequestMapper {
     static final int MAX_DESTINATION = 50;
     static final long MAX_BUDGET = 100_000_000L;
     private static final int MAX_SELECTED_PLACES = 10;
+    private static final int MAX_REQUIRED_EXPERIENCES = 5;  // ItineraryGenerateRequest requiredExperiences @Size
     private static final String SEPARATOR = " / ";
 
     private TripRequestMapper() {}
@@ -97,7 +98,8 @@ public final class TripRequestMapper {
         if (draft.value(DraftField.WALKING) != null) fragments.add("걷기: " + draft.value(DraftField.WALKING));
 
         Set<Long> placeIds = new LinkedHashSet<>();
-        anchors(draft, matches, placeIds, notes, fragments);
+        List<ItineraryGenerateRequest.RequiredExperience> required = requiredExperiences(draft, matches, destination);
+        anchors(draft, matches, required, placeIds, notes, fragments);
 
         String arrival = time(draft.value(DraftField.ARRIVAL_TIME));
         String departure = time(draft.value(DraftField.DEPARTURE_TIME));
@@ -133,7 +135,8 @@ public final class TripRequestMapper {
                 ? ItineraryGenerateRequest.PlanningMode.AUTO : ItineraryGenerateRequest.PlanningMode.MANUAL;
         ItineraryGenerateRequest request = new ItineraryGenerateRequest(planningMode, destination,
                 themes.stream().limit(10).toList(), categories.stream().limit(10).toList(), pace, transportPref,
-                budget, start, end, description, selected, List.of(), companion, partySize, arrival, departure);
+                budget, start, end, description, selected, List.of(), companion, partySize, arrival, departure,
+                required.isEmpty() ? null : required);
         return new Result(request, blockers, notes, description, days);
     }
 
@@ -207,8 +210,11 @@ public final class TripRequestMapper {
     }
 
     /** 모델이 추론한 숙소·장소는 고정하지 않는다. 사용자가 말한 것만 일정에 강제로 넣는다. */
-    private static void anchors(Draft draft, Map<String, PlaceMatch> matches, Set<Long> placeIds,
+    private static void anchors(Draft draft, Map<String, PlaceMatch> matches,
+                                List<ItineraryGenerateRequest.RequiredExperience> required, Set<Long> placeIds,
                                 Map<Slot, List<String>> notes, List<String> fragments) {
+        Set<String> requiredTexts = new java.util.HashSet<>();
+        required.forEach(r -> requiredTexts.add(r.text()));
         String lodgingState = userValue(draft, DraftField.LODGING_STATE);
         String lodging = userValue(draft, DraftField.LODGING);
         if (lodging != null && "booked".equals(lodgingState)) {
@@ -234,7 +240,9 @@ public final class TripRequestMapper {
                 addNote(notes, Slot.ANCHORS, m.name() + " · " + GeneratorSupport.PLACE_INCLUDED);
             } else {
                 unmatched.add(item.text());
-                addNote(notes, Slot.ANCHORS, item.text() + " · " + (m == null ? GeneratorSupport.PLACE_REFERENCE
+                String unmatchedNote = requiredTexts.contains(TextNormalizer.cap(item.text(), 100))
+                        ? GeneratorSupport.PLACE_BY_AREA : GeneratorSupport.PLACE_REFERENCE;
+                addNote(notes, Slot.ANCHORS, item.text() + " · " + (m == null ? unmatchedNote
                         : "LODGING".equals(m.major()) ? GeneratorSupport.PLACE_IS_LODGING : GeneratorSupport.PLACES_FULL));
             }
         }
@@ -255,6 +263,54 @@ public final class TripRequestMapper {
                 addNote(notes, Slot.ANCHORS, item.text() + " · " + GeneratorSupport.BOOKED_TIME_MISSING);
             }
         }
+    }
+
+    /**
+     * 이름으로 장소를 찾지 못한 꼭 가고 싶은 곳("광안리 야경")을 지역 낱말과 시간대로 넘긴다.
+     * 요청 문장에만 남기면 선택 단계가 그 장소를 우연히 고를 때만 일정에 들어간다.
+     */
+    static List<ItineraryGenerateRequest.RequiredExperience> requiredExperiences(
+            Draft draft, Map<String, PlaceMatch> matches, String destination) {
+        List<ItineraryGenerateRequest.RequiredExperience> out = new ArrayList<>();
+        for (Item item : userItems(draft, DraftField.MUST_VISIT)) {
+            if (out.size() >= MAX_REQUIRED_EXPERIENCES) break;
+            if (matches.containsKey(PlaceMatcher.key(DraftField.MUST_VISIT, item.text()))) continue;
+            String area = areaKeyword(item.text(), destination);
+            if (area == null) continue;
+            out.add(new ItineraryGenerateRequest.RequiredExperience(TextNormalizer.cap(item.text(), 100), area,
+                    GeneratorSupport.experienceTiming(item.text())));
+        }
+        return out;
+    }
+
+    /** 시간대 낱말과 여행지 이름·종류("야시장")만 있는 낱말을 뺀 나머지. 남는 것이 없으면 후보 이름에서 찾을 것이 없다. */
+    static String areaKeyword(String text, String destination) {
+        if (text == null) return null;
+        Set<String> destinations = new java.util.HashSet<>();
+        if (destination != null) {
+            for (String d : destination.split("[,，/·&+]|\\s+")) destinations.add(PlaceMatcher.destinationKey(d));
+        }
+        List<String> kept = new ArrayList<>();
+        for (String token : text.strip().split("\\s+")) {
+            String key = withoutParticle(TextNormalizer.key(GeneratorSupport.splitTiming(token).word()));
+            if (key.length() < 2 || PlaceMatcher.isGeneric(key) || destinations.contains(PlaceMatcher.destinationKey(key))) {
+                continue;
+            }
+            kept.add(key);
+        }
+        return kept.isEmpty() ? null : TextNormalizer.cap(String.join(" ", kept), 50);
+    }
+
+    private static final List<String> TRAILING_PARTICLES = List.of("에서", "까지", "에", "의");
+
+    // "광안리에서"의 조사를 떼야 후보 이름 "광안리해수욕장"에 걸린다.
+    private static String withoutParticle(String key) {
+        for (String particle : TRAILING_PARTICLES) {
+            if (key.endsWith(particle) && key.length() - particle.length() >= 2) {
+                return key.substring(0, key.length() - particle.length());
+            }
+        }
+        return key;
     }
 
     private static BigDecimal budget(Draft draft, String companion, Integer partySize, Integer days,

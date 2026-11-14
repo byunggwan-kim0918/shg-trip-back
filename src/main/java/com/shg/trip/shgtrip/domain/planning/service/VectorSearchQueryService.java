@@ -337,7 +337,7 @@ public class VectorSearchQueryService {
                     index, r.placeId(), r.name(), r.address(), r.category(), r.tags(),
                     r.region(), r.country(), r.latitude(), r.longitude(), r.description(),
                     r.rating(), r.similarityScore(), null, null, null, null, false, null,
-                    PlaceCategoryConstants.extractSubRegion(r.address()), r.userRatingCount(),
+                    PlaceCategoryConstants.subRegionOf(r.address(), r.region()), r.userRatingCount(),
                     r.wikidataSitelinks(), r.placeRole(), r.cuisine(), false, null, r.attributes(), r.nameKo(),
                     r.travelerFame());
             if (CandidatePolicy.roleOf(c) == CandidatePolicy.Role.NOT_VISITABLE) continue;
@@ -967,7 +967,7 @@ public class VectorSearchQueryService {
         int withSubRegion = 0;
         for (int i = 0; i < results.size(); i++) {
             VectorSearchResult r = results.get(i);
-            String subRegion = PlaceCategoryConstants.extractSubRegion(r.address());
+            String subRegion = PlaceCategoryConstants.subRegionOf(r.address(), r.region());
             if (subRegion != null) withSubRegion++;
             candidates.add(new PlaceCandidate(
                     i + 1,  // 1-based index

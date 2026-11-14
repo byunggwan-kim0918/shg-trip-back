@@ -276,6 +276,50 @@ class BatchEnrichSchedulerTest {
     }
 
     @Test
+    @DisplayName("국내 장소 설명의 한글 낱말에 한자·가나가 붙으면 반영하지 않고 실패로 남긴다")
+    void applyEnrichment_koreanDescriptionWithForeignScript_returnsFalse() {
+        Place stay = createPlace(3L, "텐테이블펜션", "관광", "Busan", "KR");
+        Place famous = dining("명동교자", KOREAN_RESTAURANT, "기존 설명", 5);
+
+        assertThat(scheduler.applyEnrichment(stay, """
+                {"tags": ["바다"], "description": "가족 여행에 适합니다."}
+                """)).isFalse();
+        assertThat(scheduler.applyEnrichment(famous, """
+                {"tags": ["칼국수"], "description": "명동의 칼국수 名店입니다."}
+                """)).isFalse();
+        assertThat(stay.getEnrichedAt()).isNull();
+        assertThat(famous.getDescription()).isEqualTo("기존 설명");
+    }
+
+    @Test
+    @DisplayName("장소 이름에 든 한자를 따라 쓴 설명과 가타카나 가운뎃점은 막지 않는다")
+    void applyEnrichment_nameScriptAndMiddleDot_pass() {
+        Place spring = createPlace(6L, "세이천洗耳泉", "관광", "Gyeongju", "KR");
+        Place park = createPlace(7L, "해변공원", "관광", "Busan", "KR");
+
+        assertThat(scheduler.applyEnrichment(spring, """
+                {"tags": ["샘"], "description": "세이천洗耳泉은 맑은 샘물로 알려진 곳입니다."}
+                """)).isTrue();
+        assertThat(scheduler.applyEnrichment(park, """
+                {"tags": ["공원"], "description": "산책・사진 명소로 좋은 바닷가 공원입니다."}
+                """)).isTrue();
+    }
+
+    @Test
+    @DisplayName("괄호로 병기한 한자와 해외 장소 설명의 현지어 이름은 막지 않는다")
+    void applyEnrichment_parenthesizedHanjaAndOverseasNames_pass() {
+        Place temple = createPlace(4L, "불국사", "관광", "Gyeongju", "KR");
+        Place kyoto = createPlace(5L, "킨카쿠지", "관광", "Kyoto", "JP");
+
+        assertThat(scheduler.applyEnrichment(temple, """
+                {"tags": ["사찰"], "description": "신라 시대에 지은 불국사(佛國寺)입니다."}
+                """)).isTrue();
+        assertThat(scheduler.applyEnrichment(kyoto, """
+                {"tags": ["사찰"], "description": "金閣寺는 교토의 대표 사찰입니다."}
+                """)).isTrue();
+    }
+
+    @Test
     @DisplayName("결과 반영: 오류 결과·깨진 행·결과에서 빠진 장소를 모두 실패 목록에 넣는다(다음 청크에서 재제출 방지)")
     void applyResults_everyUnsucceededPlaceIsFailed() {
         Place ok = createPlace(1L, "센소지", "관광", "아사쿠사", "일본");
