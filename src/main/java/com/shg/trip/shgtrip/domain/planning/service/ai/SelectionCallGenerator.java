@@ -398,35 +398,40 @@ public class SelectionCallGenerator {
             appendDayWindow(sb, "1일차", windowFact(start, null, null),
                     ScheduleTuning.sightseeingWindowMinutes(start, null));
         }
-        if (deadline != null) {
+        // 마지막 날에 도시를 옮기면 그날 시간은 도시 순서 줄이 도착·출발을 함께 적는다. 여기서도 적으면 같은 날이 두 번 나온다.
+        if (deadline != null && !transfersOnDay(args, days)) {
             appendDayWindow(sb, days + "일차(마지막 날)", windowFact(null, args.departureTime(), deadline),
                     ScheduleTuning.sightseeingWindowMinutes(null, deadline));
         }
     }
 
+    private static boolean transfersOnDay(ScheduleArgs args, long day) {
+        return CityBlockPlanner.blockPlans(args).stream().skip(1).anyMatch(p -> p.block().firstDay() == day);
+    }
+
     /** 먼 도시를 오가는 여행의 도시 순서와 이동한 날의 시작 시각. 모르면 하루에 두 도시 장소를 섞는다. */
     private static void appendCityOrder(StringBuilder sb, ScheduleArgs args, long days) {
         if (args == null || args.cities() == null) return;
-        List<CityBlockPlanner.Block> blocks = CityBlockPlanner.blocksOf(args.cities());
-        if (blocks.size() < 2) return;
+        List<CityBlockPlanner.BlockPlan> plans = CityBlockPlanner.blockPlans(args);
+        if (plans.size() < 2) return;
         java.util.Map<String, TripCities.City> byName = new java.util.HashMap<>();
         args.cities().cities().forEach(c -> byName.put(c.name(), c));
 
         StringBuilder order = new StringBuilder("- 도시 순서: ");
         List<String> transferDays = new java.util.ArrayList<>();
-        for (int i = 0; i < blocks.size(); i++) {
-            CityBlockPlanner.Block block = blocks.get(i);
+        for (int i = 0; i < plans.size(); i++) {
+            CityBlockPlanner.Block block = plans.get(i).block();
             TripCities.City city = byName.get(block.city());
             if (i > 0) {
-                CityBlockPlanner.IntercityLeg leg = CityBlockPlanner.legBetween(byName.get(blocks.get(i - 1).city()), city);
+                CityBlockPlanner.IntercityLeg leg = plans.get(i).leg();
                 order.append(" → ").append("FLIGHT".equals(leg.mode()) ? "비행기" : "열차").append(" 약 ")
                         .append(durationLabel(leg.minutes())).append(" → ");
                 int start = CityBlockPlanner.arrivalAfter(leg);
                 Integer deadline = block.firstDay() == days ? RouteOptimizer.departureHubDeadline(args) : null;
                 StringBuilder line = new StringBuilder();
                 appendDayWindow(line, block.firstDay() + "일차",
-                        cityName(byName.get(blocks.get(i - 1).city())) + " → " + cityName(city) + " 이동, "
-                                + hhmm(start) + " 도착",
+                        cityName(byName.get(plans.get(i - 1).block().city())) + " → " + cityName(city) + " 이동, "
+                                + windowFact(start, args.departureTime(), deadline),
                         ScheduleTuning.sightseeingWindowMinutes(start, deadline));
                 transferDays.add(line.toString());
             }
