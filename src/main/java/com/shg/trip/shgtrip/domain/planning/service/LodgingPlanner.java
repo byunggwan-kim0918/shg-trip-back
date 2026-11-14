@@ -400,7 +400,7 @@ final class LodgingPlanner {
                         String.format("%.1f", GeoUtils.haversine(coord, hotel)), String.format("%.1f", allowed),
                         day.dayNumber, c != null ? c.name() : idx);
                 it.remove();
-                day.placeIndices.remove(idx);
+                day.drop(idx, DropReason.FAR_FROM_LODGING);
                 spareIndices.addLast(idx);
             }
         }

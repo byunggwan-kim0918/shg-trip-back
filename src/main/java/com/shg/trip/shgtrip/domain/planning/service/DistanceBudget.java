@@ -66,12 +66,13 @@ final class DistanceBudget {
                 usedIndices.remove(idx);
                 usedIndices.add(swap);
                 result.set(worstPos, swap);
+                day.noteSwap(idx, DropReason.DISTANCE, swap);
                 replaceInDay(day, idx, swap);
                 log.info("거리 상한 초과 — 근처 후보로 교체: day={} {} → {}", day.dayNumber,
                         cur != null ? cur.name() : idx, byIndex(candidates, swap).name());
             } else if (isRemovableForBudget(idx, result, candidates)) {
                 result.remove(worstPos);
-                day.placeIndices.remove(idx);
+                day.drop(idx, DropReason.DISTANCE);
                 usedIndices.remove(idx);
                 spare.addLast(idx);
                 log.info("거리 상한 초과 — 제거: day={} {}", day.dayNumber, cur != null ? cur.name() : idx);
@@ -148,7 +149,7 @@ final class DistanceBudget {
             }
 
             Integer idx = seq.remove(pos);
-            day.placeIndices.remove(idx);
+            day.drop(idx, DropReason.DISTANCE);
             spareIndices.addLast(idx);
             PlaceCandidate c = byIndex(candidates, idx);
             log.info("확정 시퀀스 거리 예산 초과({}km/{}km) — 트림: day={} {}",
@@ -212,6 +213,7 @@ final class DistanceBudget {
         if (replacement == null) return false;
 
         seq.set(bestPos, replacement);
+        day.noteSwap(target, DropReason.DISTANCE, replacement);
         replaceInDay(day, target, replacement);
         spareIndices.remove(replacement);
         spareIndices.addLast(target);

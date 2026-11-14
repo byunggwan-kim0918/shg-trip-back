@@ -37,6 +37,11 @@ class DayState {
     boolean resumesAfterTransfer;
     /** 다음 도시로 넘어가기 전날. 구간의 마지막 날이어도 숙소·저녁이 필요하고 출발 허브가 없다. */
     boolean continuesAfter;
+    private final List<Drop> drops = new ArrayList<>();
+    private final java.util.Set<Integer> dropBaseline = new java.util.HashSet<>();
+
+    /** @param replacedBy 그 자리에 대신 넣은 장소. 빼기만 했으면 null. 대신 넣은 장소도 같은 확정에서 다시 빠질 수 있다 */
+    record Drop(int index, DropReason reason, Integer replacedBy) {}
 
     DayState(SelectionOutput.DayPlan plan) {
         this.dayNumber = plan.dayNumber();
@@ -44,6 +49,35 @@ class DayState {
         this.placeIndices = new ArrayList<>(plan.placeIndices() != null ? plan.placeIndices() : List.of());
         this.accommodationIndex = plan.accommodationIndex();
         this.departureHubIndex = plan.departureHubIndex();
+    }
+
+    /** 그날 구성에서 빼고 사유를 남긴다. 전날 숙소처럼 순서에만 끼워 넣은 장소는 구성에 없어 남기지 않는다. */
+    void drop(Integer index, DropReason reason) {
+        if (placeIndices.remove(index)) drops.add(new Drop(index, reason, null));
+    }
+
+    /** 다른 장소로 바꾸기 직전에 부른다. */
+    void noteSwap(Integer index, DropReason reason, Integer replacedBy) {
+        if (placeIndices.contains(index)) drops.add(new Drop(index, reason, replacedBy));
+    }
+
+    /** 지금 구성을 기준으로 뺀 장소를 새로 센다. */
+    void resetDrops() {
+        drops.clear();
+        dropBaseline.clear();
+        dropBaseline.addAll(placeIndices);
+    }
+
+    /**
+     * {@link #resetDrops()} 때 구성에 있다가 지금 없는 장소와 처음 뺀 사유. 대신 넣었다가 다시 뺀 장소는
+     * 원래 구성이 아니라 나오지 않는다.
+     */
+    List<Drop> dropped() {
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        return drops.stream()
+                .filter(d -> dropBaseline.contains(d.index()) && !placeIndices.contains(d.index()))
+                .filter(d -> seen.add(d.index()))
+                .toList();
     }
 
     /** 점심 시간대가 끝난 뒤 도착하거나 끝나기 전에 떠나는 날이면 false. 그날 점심을 요구하지 않는다. */

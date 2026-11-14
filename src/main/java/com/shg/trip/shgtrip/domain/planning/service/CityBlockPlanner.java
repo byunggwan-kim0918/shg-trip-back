@@ -67,25 +67,21 @@ public final class CityBlockPlanner {
                 cityOfIndex.put(c.index(), cities.cityOf(c.latitude().doubleValue(), c.longitude().doubleValue()));
             }
         }
-        Map<String, TripCities.City> cityByName = cities.cities().stream()
-                .collect(Collectors.toMap(TripCities.City::name, Function.identity()));
         Map<Integer, List<Integer>> placesByDay = placesByBlockDay(selection, blocks, cityOfIndex);
 
         List<StepData> steps = new ArrayList<>();
         List<String> unresolved = new ArrayList<>();
         StringBuilder route = new StringBuilder();
-        for (int b = 0; b < blocks.size(); b++) {
-            Block block = blocks.get(b);
+        List<BlockPlan> plans = blockPlans(args);
+        for (int b = 0; b < plans.size(); b++) {
+            BlockPlan plan = plans.get(b);
+            Block block = plan.block();
+            IntercityLeg leg = plan.leg();
             boolean first = b == 0;
-            boolean last = b == blocks.size() - 1;
-            IntercityLeg leg = first ? null
-                    : legBetween(cityByName.get(blocks.get(b - 1).city()), cityByName.get(block.city()));
+            boolean last = b == plans.size() - 1;
 
             BlockInput input = blockInput(selection, candidates, block, placesByDay, cityOfIndex, first, last);
-            ScheduleArgs blockArgs = args.forCityBlock(blockHub(args.hub(), first, last),
-                    first ? args.arrivalTime() : ScheduleTimes.formatMinutes(arrivalAfter(leg)),
-                    last ? args.departureTime() : null, !first, !last);
-            RouteOptimizer.ScheduleResult result = scheduler.schedule(input.selection(), input.candidates(), blockArgs);
+            RouteOptimizer.ScheduleResult result = scheduler.schedule(input.selection(), input.candidates(), plan.args());
             unresolved.addAll(result.unresolved());
             steps.addAll(leg == null ? result.steps() : withLegOnFirstStep(result.steps(), leg));
             route.append(first ? "" : " → ").append(block.city()).append(' ')
@@ -94,6 +90,33 @@ public final class CityBlockPlanner {
         }
         log.info("도시별 일정: {}", route);
         return new RouteOptimizer.ScheduleResult(renumber(steps), unresolved.stream().distinct().toList());
+    }
+
+    /**
+     * @param args 그 구간만 확정할 인자. 도착 거점·도착 시각은 첫 구간에만, 출발 거점·출발 시각은 마지막 구간에만 있다
+     * @param leg  앞 도시에서 넘어오는 이동. 첫 구간은 null
+     */
+    public record BlockPlan(Block block, ScheduleArgs args, IntercityLeg leg) {}
+
+    /** 도시 구간마다 그 구간의 인자와 넘어오는 이동을 일차 순서대로 준다. 일차별 도시를 모르면 비어 있다. */
+    public static List<BlockPlan> blockPlans(ScheduleArgs args) {
+        TripCities cities = args.cities();
+        List<Block> blocks = blocksOf(cities);
+        if (blocks.isEmpty()) return List.of();
+        Map<String, TripCities.City> cityByName = cities.cities().stream()
+                .collect(Collectors.toMap(TripCities.City::name, Function.identity(), (a, b) -> b));
+        List<BlockPlan> plans = new ArrayList<>();
+        for (int b = 0; b < blocks.size(); b++) {
+            Block block = blocks.get(b);
+            boolean first = b == 0;
+            boolean last = b == blocks.size() - 1;
+            IntercityLeg leg = first ? null
+                    : legBetween(cityByName.get(blocks.get(b - 1).city()), cityByName.get(block.city()));
+            plans.add(new BlockPlan(block, args.forCityBlock(blockHub(args.hub(), first, last),
+                    first ? args.arrivalTime() : ScheduleTimes.formatMinutes(arrivalAfter(leg)),
+                    last ? args.departureTime() : null, !first, !last), leg));
+        }
+        return plans;
     }
 
     /** 일차별 도시에서 이어진 구간. 일차 순서대로다. */

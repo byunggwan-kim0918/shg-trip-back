@@ -60,10 +60,28 @@ class SelectionPromptWindowTest {
         String message = generator.buildUserMessage(input(), tokyoCandidate, 4,
                 ScheduleArgs.of(input(), false, null, null, cities));
 
-        assertThat(message).contains("- 도시 순서: 도쿄(1~2일차) → 열차 약 ").contains(" → 오사카(3~4일차)");
-        assertThat(message).contains("- 3일차: 도쿄 → 오사카 이동, ");
+        assertThat(message.lines().filter(l -> l.startsWith("- 도시 순서") || l.startsWith("- 3일차")).toList())
+                .containsExactly(
+                        "- 도시 순서: 도쿄(1~2일차) → 열차 약 3시간 17분 → 오사카(3~4일차). 각 날의 장소·숙소는 그날 도시 후보에서만 고르세요",
+                        "- 3일차: 도쿄 → 오사카 이동, 12:17 도착, 관광 약 6시간");
         assertThat(message).contains("| 도쿄 · ");
         assertThat(message).doesNotContain("지리 구역");
+    }
+
+    @Test
+    @DisplayName("마지막 날에 도시를 옮기면 그날을 도착·출발과 함께 한 줄로만 알린다")
+    void transferOnLastDayUsesDepartureDeadline() {
+        TripCities.City tokyo = new TripCities.City("Tokyo", "도쿄", "JP", 35.6812, 139.7671);
+        TripCities.City osaka = new TripCities.City("Osaka", "오사카", "JP", 34.6937, 135.5023);
+        TripCities cities = new TripCities(List.of(tokyo, osaka), Map.of(1, "Tokyo", 2, "Tokyo", 3, "Tokyo", 4, "Osaka"));
+
+        String message = generator.buildUserMessage(input(), candidates, 4,
+                ScheduleArgs.of(input(), false, null, "20:00", cities));
+
+        assertThat(message.lines().filter(l -> l.startsWith("- 도시 순서") || l.startsWith("- 4일차")).toList())
+                .containsExactly(
+                        "- 도시 순서: 도쿄(1~3일차) → 열차 약 3시간 17분 → 오사카(4일차). 각 날의 장소·숙소는 그날 도시 후보에서만 고르세요",
+                        "- 4일차: 도쿄 → 오사카 이동, 12:17 도착, 20:00 출발, 18:00까지 공항·역 도착, 관광 약 4시간");
     }
 
     @Test

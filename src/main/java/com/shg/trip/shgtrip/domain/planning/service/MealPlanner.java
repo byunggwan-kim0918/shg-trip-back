@@ -270,7 +270,7 @@ final class MealPlanner {
 
         List<Integer> remaining = new ArrayList<>(meals);
         remaining.remove(candidate);
-        day.placeIndices.remove(candidate);
+        day.drop(candidate, DropReason.BREAKFAST);
         spareIndices.addLast(candidate);
         log.info("아침 슬롯 미허용(도착일/숙소 출발 아님) — 식사 1건 제외: day={} {}",
                 day.dayNumber, bc != null ? bc.name() : candidate);
@@ -295,7 +295,7 @@ final class MealPlanner {
 
         List<Integer> remaining = new ArrayList<>(meals);
         remaining.remove(candidate);
-        day.placeIndices.remove(candidate);
+        day.drop(candidate, DropReason.BREAKFAST);
         spareIndices.addLast(candidate);
         log.info("아침 식사 생략(숙소에서 {}km 초과): day={} {}",
                 String.format("%.0f", BREAKFAST_MAX_KM_FROM_ACCOMMODATION), day.dayNumber,
@@ -396,7 +396,7 @@ final class MealPlanner {
         // 어느 슬롯에도 못 들어간 식당을 두면 placeIndices에만 남는 유령이 된다.
         // spare로 돌리면 ensureMealSlots가 그 시각에 열린 식당을 찾고, 못 찾으면 안내가 나간다.
         for (Integer idx : remaining) {
-            day.placeIndices.remove(Integer.valueOf(idx));
+            day.drop(idx, DropReason.NO_MEAL_SLOT);
             spareIndices.addLast(idx);
             PlaceCandidate c = byIndex(candidates, idx);
             log.info("식사 영업시간 불일치 — spare 전환: day={}({}) {} [{}]", day.dayNumber, dow,

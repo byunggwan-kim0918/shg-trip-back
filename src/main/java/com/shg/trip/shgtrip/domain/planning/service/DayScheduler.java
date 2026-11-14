@@ -8,7 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.*;
 import java.util.stream.Collectors;
 
-import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.accommodationCoords;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.centroidOf;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.coordsOf;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.isDiningCand;
@@ -41,32 +40,49 @@ final class DayScheduler {
     static List<StepData> scheduleAll(PlanState s) {
         List<StepData> steps = new ArrayList<>();
         for (int i = 0; i < s.days.size(); i++) {
-            DayState day = s.days.get(i);
-            // 첫날은 도착 허브, 그 외는 전날 묵은 숙소에서 시작한다.
-            double[] startAnchor = day.arrivalHubIndex != null
-                    ? coordsOf(byIndex(s.candidates, day.arrivalHubIndex))
-                    : (i > 0 ? accommodationCoords(s.days.get(i - 1), s.candidates) : null);
-            // 그날 숙소 또는 마지막 날 출발 허브에서 끝난다.
-            double[] endAnchor = day.accommodationIndex != null
-                    ? coordsOf(byIndex(s.candidates, day.accommodationIndex))
-                    : (day.departureHubIndex != null ? coordsOf(byIndex(s.candidates, day.departureHubIndex)) : null);
-
-            // 첫 스텝의 이동 정보와 도착 시각은 전날 숙소를 출발지로 계산한다.
-            PlaceCandidate startFrom = (i > 0 && day.arrivalHubIndex == null
-                    && s.days.get(i - 1).accommodationIndex != null)
-                    ? byIndex(s.candidates, s.days.get(i - 1).accommodationIndex) : null;
-            day.startLodgingIndex = startFrom != null ? startFrom.index() : null;
-
-            List<Integer> ordered = RouteOrdering.orderDay(day, s.candidates, s.pairs, s.highlights, s.rests,
-                    startAnchor, endAnchor);
-            ordered = applyWalkContinuity(ordered, day, s.days, i, s.candidates, s.transportPref);
-            ordered = DistanceBudget.enforceDistanceBudget(day, ordered, s.candidates, s.spare, s.usedIndices,
-                    s.transportPref, s.cfg);
-            double[] dayCentroid = centroidOf(day.placeIndices, s.candidates);
-            steps.addAll(scheduleDay(day, ordered, s.candidates, s.spare, s.cfg,
-                    dayCentroid, s.usedIndices, s.transportPref, startFrom, s.maxPerDay));
+            Integer previousLodging = i > 0 ? s.days.get(i - 1).accommodationIndex : null;
+            steps.addAll(scheduleOne(s, s.days.get(i), previousLodging).steps());
         }
         return steps;
+    }
+
+    /**
+     * @param steps   그날의 확정 스텝
+     * @param dropped 확정 전 그날 구성에 있다가 이 확정에서 빠진 장소
+     */
+    record DayResult(List<StepData> steps, List<DayState.Drop> dropped) {}
+
+    /**
+     * 다른 날에서는 전날 숙소만 읽는다. 후보 번호는 목록 위치와 같아야 하고, 다른 날에 쓴 장소는
+     * {@code s.usedIndices}에 있거나 후보 목록에 없어야 빈 시간 채우기와 대안이 다시 고르지 않는다.
+     *
+     * @param previousLodgingIndex 전날 묵은 숙소. 첫날이거나 전날 숙소가 없으면 null
+     */
+    static DayResult scheduleOne(PlanState s, DayState day, Integer previousLodgingIndex) {
+        day.resetDrops();
+        // 도착 허브가 있으면 허브, 없으면 전날 묵은 숙소에서 시작한다.
+        double[] startAnchor = day.arrivalHubIndex != null
+                ? coordsOf(byIndex(s.candidates, day.arrivalHubIndex))
+                : (previousLodgingIndex != null ? coordsOf(byIndex(s.candidates, previousLodgingIndex)) : null);
+        // 그날 숙소 또는 마지막 날 출발 허브에서 끝난다.
+        double[] endAnchor = day.accommodationIndex != null
+                ? coordsOf(byIndex(s.candidates, day.accommodationIndex))
+                : (day.departureHubIndex != null ? coordsOf(byIndex(s.candidates, day.departureHubIndex)) : null);
+
+        // 첫 스텝의 이동 정보와 도착 시각은 전날 숙소를 출발지로 계산한다.
+        PlaceCandidate startFrom = (day.arrivalHubIndex == null && previousLodgingIndex != null)
+                ? byIndex(s.candidates, previousLodgingIndex) : null;
+        day.startLodgingIndex = startFrom != null ? startFrom.index() : null;
+
+        List<Integer> ordered = RouteOrdering.orderDay(day, s.candidates, s.pairs, s.highlights, s.rests,
+                startAnchor, endAnchor);
+        ordered = applyWalkContinuity(ordered, day, previousLodgingIndex, s.candidates, s.transportPref);
+        ordered = DistanceBudget.enforceDistanceBudget(day, ordered, s.candidates, s.spare, s.usedIndices,
+                s.transportPref, s.cfg);
+        double[] dayCentroid = centroidOf(day.placeIndices, s.candidates);
+        List<StepData> steps = scheduleDay(day, ordered, s.candidates, s.spare, s.cfg,
+                dayCentroid, s.usedIndices, s.transportPref, startFrom, s.maxPerDay);
+        return new DayResult(steps, day.dropped());
     }
 
     /**
@@ -118,7 +134,7 @@ final class DayScheduler {
                 return;
             }
             seq.remove(victim);
-            day.placeIndices.remove(victim);
+            day.drop(victim, DropReason.DEPARTURE_TIME);
             spareIndices.addLast(victim);
             log.info("귀가 시각 초과({} > {}) — 트림: day={} {}",
                     formatMinutes(Math.min(arrival, END_OF_DAY_MINUTES)),
@@ -194,7 +210,7 @@ final class DayScheduler {
         List<Integer> meals = MealPlanner.selectMeals(diningAll, candidates, spareIndices);
         // spare로 보낸 장소를 그날 목록에 남기면 쿼터를 점유해 빈 시간 채우기가 시도되지 않는다.
         for (Integer idx : diningAll) {
-            if (!meals.contains(idx)) day.placeIndices.remove(idx);
+            if (!meals.contains(idx)) day.drop(idx, DropReason.EXTRA_MEAL);
         }
         // 아침 슬롯은 숙소에서 출발하는 날에만 성립한다. 도착일에 두면 공항 옆 식당이 늦은 아침이 된다.
         boolean allowBreakfast = day.arrivalHubIndex == null && startFrom != null
@@ -226,7 +242,7 @@ final class DayScheduler {
                 // 늦게 도착한 날은 오후가 짧아 카페까지 넣으면 저녁이 시간대 밖으로 밀린다
                 if (day.hasUserWindow() && !afternoon.isEmpty()
                         && usedA[0] + resolveVisitMinutes(actCand) + INTRA_BUCKET_TRAVEL_MINUTES > budgets[1]) {
-                    day.placeIndices.remove(idx);
+                    day.drop(idx, DropReason.TIME_BUDGET);
                     spareIndices.addLast(idx);
                     log.info("시간대 예산 초과로 카페 생략: day={} {}", day.dayNumber, nameOf(candidates, idx));
                     continue;
@@ -255,7 +271,7 @@ final class DayScheduler {
                         default -> afternoon.add(idx);
                     }
                 } else {
-                    day.placeIndices.remove(idx);
+                    day.drop(idx, DropReason.TIME_BUDGET);
                     spareIndices.addLast(idx);
                     log.info("시간대 예산 초과로 제외: day={} {} ({}, {}분)", day.dayNumber,
                             actCand != null ? actCand.name() : idx, timePreference(actCand),
@@ -275,7 +291,7 @@ final class DayScheduler {
         // 거치지 않았을 수 있다. 그래서 슬롯 확정 뒤 다시 본다.
         if (breakfastIdx != null && !MealPlanner.isReasonableBreakfast(day, byIndex(candidates, breakfastIdx),
                 startFrom, candidates, transportPref, cfg.morningStart)) {
-            day.placeIndices.remove(breakfastIdx);
+            day.drop(breakfastIdx, DropReason.BREAKFAST);
             spareIndices.addLast(breakfastIdx);
             log.info("아침 식사 생략(숙소에서 멀거나 점심에 붙음): day={} {}", day.dayNumber,
                     nameOf(candidates, breakfastIdx));
@@ -416,7 +432,7 @@ final class DayScheduler {
                 Integer openFrom = OpeningHoursText.earliestStart(
                         cand.openingHours(), day.dayOfWeek, startMin, visitMinutes);
                 if (openFrom != null && (openFrom < 0 || openFrom - startMin > OPENING_WAIT_LIMIT_MINUTES)) {
-                    day.placeIndices.remove(Integer.valueOf(idx));
+                    day.drop(idx, DropReason.CLOSED_AT_TIME);
                     spareIndices.addLast(idx);
                     log.info("영업시간 가드 트림: day={}({}) {} ({} 시작 예정, 영업 [{}])",
                             day.dayNumber, day.dayOfWeek, cand.name(), formatMinutes(startMin),
@@ -439,7 +455,7 @@ final class DayScheduler {
                     latestStart = Math.min(latestStart, LONG_HIKE_LATEST_START_MINUTES);
                 }
                 if (startMin > latestStart) {
-                    day.placeIndices.remove(Integer.valueOf(idx));
+                    day.drop(idx, DropReason.LATE_START);
                     spareIndices.addLast(idx);
                     log.info("시각 가드 트림: day={} {} ({} 시작, 상한 {})", day.dayNumber, cand.name(),
                             formatMinutes(startMin), formatMinutes(latestStart));
@@ -553,13 +569,11 @@ final class DayScheduler {
      * 전날 숙소를 그날 첫 스텝으로 붙여 숙소에서 아침 출발하게 한다. car/any는 차량 이동을 전제로 해 보정하지 않는다.
      * 첫날, 도착 허브가 있는 날, 좌표 불명, 이미 첫 스텝이 그 숙소인 경우는 대상이 아니다.
      */
-    private static List<Integer> applyWalkContinuity(List<Integer> ordered, DayState day, List<DayState> days,
-                                                     int dayIdx, List<PlaceCandidate> candidates, String transportPref) {
-        if (!"walk".equals(transportPref) || dayIdx == 0 || ordered.isEmpty()
-                || day.arrivalHubIndex != null) {
+    private static List<Integer> applyWalkContinuity(List<Integer> ordered, DayState day, Integer prevAccom,
+                                                     List<PlaceCandidate> candidates, String transportPref) {
+        if (!"walk".equals(transportPref) || ordered.isEmpty() || day.arrivalHubIndex != null) {
             return ordered;
         }
-        Integer prevAccom = days.get(dayIdx - 1).accommodationIndex;
         if (prevAccom == null || prevAccom.equals(ordered.get(0))) return ordered;
 
         double[] prevAccomCoord = coordsOf(byIndex(candidates, prevAccom));
