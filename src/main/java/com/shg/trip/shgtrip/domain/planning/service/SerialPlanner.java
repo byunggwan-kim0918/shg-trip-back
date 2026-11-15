@@ -5,6 +5,8 @@ import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -14,6 +16,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -30,8 +33,9 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.MAX_IN
 /**
  * 날짜별로 고른 장소를 그날 안에서만 확정한다. {@link RouteOptimizer}와 달리 날짜 사이로 장소를 옮기거나
  * 유형·카테고리를 맞추지 않고, 하루를 확정한 뒤 끼니·숙소·관광이 빠졌을 때만 그날에 채운다.
- * {@link #plan}은 날짜별 선택 없이 {@link DayPicker}로 날마다 직접 고른다.
+ * {@link #plan}은 날짜를 {@link DayPicker}로 직접 정한다.
  */
+@Slf4j
 public class SerialPlanner {
 
     // 빈 날에 넣은 장소는 확정 시각에 영업하지 않으면 다시 빠진다.
@@ -65,44 +69,71 @@ public class SerialPlanner {
         final Map<Integer, Integer> shortfall = new HashMap<>();
     }
 
+    /** 선택 단계가 날짜별로 놓은 장소를 어떻게 쓸지. */
+    public enum Picks {
+        /** 놓은 날 그대로 확정한다. */
+        AS_PLACED,
+        /** 날짜는 직접 정하고, 같은 거리 안에서는 선택 단계가 고른 장소를 먼저 고른다. */
+        PREFER,
+        /** 날짜는 직접 정하고, 선택 단계가 고른 장소는 따로 대우하지 않는다. */
+        IGNORE
+    }
+
     public Result schedule(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args) {
-        return run(selection, candidates, args, false);
+        return run(selection, candidates, args, Picks.AS_PLACED);
     }
 
     /**
-     * 날짜별 선택 없이 후보 풀에서 날마다 직접 고른다.
+     * 날짜는 직접 정한다. 날마다 기준 장소에서 닿는 범위 안에서 고르고, 요청 의도(highlight·timing)·거점·숙소·예비 장소는
+     * 선택 결과의 것을 쓴다.
      *
-     * @param hints 요청 의도(highlight·timing)만 읽는다. 날짜별 장소는 의도를 싣는 데만 쓰고 고른 날로는 쓰지 않는다
+     * @param selection 날짜 수가 {@code dayCount}와 다르면 요청 의도만 읽고 {@link Picks#IGNORE}로 고른다
      */
-    public Result plan(SelectionOutput hints, List<PlaceCandidate> candidates, ScheduleArgs args, int dayCount) {
+    public Result plan(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args, int dayCount,
+                       Picks picks) {
+        if (selection.days() != null && selection.days().size() == dayCount) {
+            return run(selection, candidates, args, picks);
+        }
+        log.warn("선택 결과의 날짜 수가 여행 일수와 달라 요청 의도만 쓴다: 선택 {}일, 여행 {}일",
+                selection.days() == null ? 0 : selection.days().size(), dayCount);
         List<SelectionOutput.DayPlan> days = IntStream.rangeClosed(1, dayCount)
                 .mapToObj(day -> new SelectionOutput.DayPlan(day, null, List.of(), null, null)).toList();
-        return run(new SelectionOutput("", days, List.of(), List.of()), IntentHints.apply(hints, candidates), args,
-                true);
+        return run(new SelectionOutput("", days, List.of(), List.of()), IntentHints.apply(selection, candidates), args,
+                Picks.IGNORE);
     }
 
-    private Result run(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args, boolean pick) {
+    private Result run(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args, Picks picks) {
         TripNotes notes = new TripNotes();
         CityBlockPlanner.BlockScheduler withinCity =
                 (blockSelection, blockCandidates, blockArgs) -> scheduleWithinCity(blockSelection, blockCandidates,
-                        blockArgs, notes, pick);
+                        blockArgs, notes, picks);
         RouteOptimizer.ScheduleResult result = args.cities() != null
                 ? CityBlockPlanner.schedule(selection, candidates, args, withinCity)
                 : withinCity.schedule(selection, candidates, args);
-        SelectionOutput chosen = pick ? chosen(notes, candidates) : selection;
+        SelectionOutput chosen = picks == Picks.AS_PLACED ? selection : chosen(notes, candidates);
         return new Result(result.steps(), result.unresolved(), reports(chosen, candidates, result.steps(), notes),
                 chosen);
     }
 
     private RouteOptimizer.ScheduleResult scheduleWithinCity(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                                             ScheduleArgs args, TripNotes notes, boolean pick) {
+                                                             ScheduleArgs args, TripNotes notes, Picks picks) {
+        boolean choosesDays = picks != Picks.AS_PLACED;
         List<PlaceCandidate> withIntent = IntentHints.apply(selection, candidates);
         PlanState s = PlanState.of(selection, withIntent, args);
-        Set<Integer> picked = s.days.stream().flatMap(d -> d.placeIndices.stream()).collect(Collectors.toSet());
-        if (pick) {
-            DayPicker.prepare(s, args.hub());
-            s.days.forEach(d -> picked.addAll(d.placeIndices));
+        Set<Integer> placed = s.days.stream().flatMap(d -> d.placeIndices.stream()).filter(Objects::nonNull)
+                .collect(Collectors.toCollection(TreeSet::new));
+        Set<Integer> preferred = picks == Picks.PREFER ? placed : Set.of();
+        // 하루를 마칠 때마다 다시 사용 중으로 잡을 장소.
+        Set<Integer> reserved = new HashSet<>();
+        if (choosesDays) {
+            s.days.forEach(d -> d.placeIndices.clear());
+            // 빈 시간 채우기는 예비 목록만 본다. 직접 고르지 못한 선택 장소도 거기에 있어야 채우기에 쓰인다.
+            s.spare.removeAll(preferred);
+            s.spare.addAll(preferred);
+            DayPicker.prepare(s, args.hub(), preferred);
+            s.days.forEach(d -> reserved.addAll(d.placeIndices));
         } else {
+            reserved.addAll(placed);
             SubstitutionRepair.dedupeMainStepsAcrossItinerary(s.days, s.candidates, s.spare);
             LodgingPlanner.assignHubsAndLodging(s.days, s.candidates, args.hub());
         }
@@ -113,17 +144,22 @@ public class SerialPlanner {
         for (int i = 0; i < s.days.size(); i++) {
             DayState day = s.days.get(i);
             Integer previousLodging = i > 0 ? s.days.get(i - 1).accommodationIndex : null;
-            if (pick) {
+            if (choosesDays) {
                 notes.shortfall.put(day.dayNumber,
-                        DayPicker.fill(s, day, previousLodging, DayState.endsTrip(s.days, i)));
-                picked.addAll(day.placeIndices);
+                        DayPicker.fill(s, day, previousLodging, DayState.endsTrip(s.days, i), preferred));
+                reserved.addAll(day.placeIndices);
                 notes.picks.put(day.dayNumber, day.placeIndices.stream()
                         .map(idx -> byIndex(s.candidates, idx)).filter(Objects::nonNull)
                         .map(SerialPlanner::keyOf).toList());
             }
-            steps.addAll(completeDay(s, day, previousLodging, notes.reasons));
+            steps.addAll(completeDay(s, day, previousLodging, notes.reasons, choosesDays));
             // 거리 트림과 끼니 교체로 뺀 장소는 사용 표시가 풀린다. 그날에는 다시 쓸 수 있지만 다른 날의 빈자리로 들어가면 안 된다.
-            s.usedIndices.addAll(picked);
+            s.usedIndices.addAll(reserved);
+        }
+        if (choosesDays) {
+            Set<Integer> finalPlaces = s.days.stream().flatMap(d -> d.placeIndices.stream()).collect(Collectors.toSet());
+            log.info("날짜 직접 선택: {} / 선택 단계가 놓은 장소 {}곳 중 {}곳 반영", picks, placed.size(),
+                    placed.stream().filter(finalPlaces::contains).count());
         }
         List<String> unresolved = invariantChecker.summarize(s.days, steps, s.pace, s.transportPref, s.candidates,
                 s.cfg);
@@ -131,25 +167,28 @@ public class SerialPlanner {
         return new RouteOptimizer.ScheduleResult(AlternativeBuilder.pruneUsedAndRenumber(steps), unresolved);
     }
 
+    /** @param nearbySpareOnly 그날 기준 장소에서 먼 예비 장소를 그날 보충에서 뺀다 */
     private static List<StepData> completeDay(PlanState s, DayState day, Integer previousLodging,
-                                              Map<DroppedOn, DropReason> reasons) {
+                                              Map<DroppedOn, DropReason> reasons, boolean nearbySpareOnly) {
         Set<Integer> droppedToday = new HashSet<>();
-        List<StepData> steps = scheduleDay(s, day, previousLodging, reasons, droppedToday);
+        List<StepData> steps = scheduleDay(s, day, previousLodging, reasons, droppedToday, nearbySpareOnly);
         for (int attempt = 0; attempt < SEED_ATTEMPTS && seedEmptyDay(s, day, previousLodging, droppedToday);
              attempt++) {
-            steps = scheduleDay(s, day, previousLodging, reasons, droppedToday);
+            steps = scheduleDay(s, day, previousLodging, reasons, droppedToday, nearbySpareOnly);
         }
         InvariantMemo memo = new InvariantMemo();
         for (int pass = 0; pass < MAX_INVARIANT_PASSES && FinalRepair.fillDay(s, day, steps, memo); pass++) {
-            steps = scheduleDay(s, day, previousLodging, reasons, droppedToday);
+            steps = scheduleDay(s, day, previousLodging, reasons, droppedToday, nearbySpareOnly);
             memo.settle(s.days);
         }
         return steps;
     }
 
     private static List<StepData> scheduleDay(PlanState s, DayState day, Integer previousLodging,
-                                              Map<DroppedOn, DropReason> reasons, Set<Integer> droppedToday) {
+                                              Map<DroppedOn, DropReason> reasons, Set<Integer> droppedToday,
+                                              boolean nearbySpareOnly) {
         s.resetSpare();
+        if (nearbySpareOnly) DayPicker.keepSpareNearBase(s, day);
         DayScheduler.DayResult result = DayScheduler.scheduleOne(s, day, previousLodging);
         for (DayState.Drop drop : result.dropped()) {
             droppedToday.add(drop.index());

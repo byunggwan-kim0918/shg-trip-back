@@ -9,6 +9,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
@@ -33,33 +34,50 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.INTRA_
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LUNCH_START;
 
 /**
- * 선택 결과 없이 후보 풀에서 날마다 끼니와 관광지를 고른다. 날마다 기준 장소를 하나 두고, 그날은 기준 장소에서 한 구간으로
- * 닿는 곳만 고른다.
+ * 후보 풀에서 날마다 끼니와 관광지를 고른다. 날마다 기준 장소를 하나 두고, 그날은 기준 장소에서 한 구간으로 닿는 곳만 고른다.
  */
 final class DayPicker {
 
     private static final Comparator<PlaceCandidate> REQUESTED_FIRST =
             Comparator.comparing((PlaceCandidate c) -> !c.keepsPlace());
 
-    private static final Comparator<PlaceCandidate> BY_MERIT = REQUESTED_FIRST
-            .thenComparing(Comparator.comparingDouble((PlaceCandidate c) -> PlaceProminence.of(c)).reversed())
+    private static final Comparator<PlaceCandidate> BY_FAME = Comparator
+            .comparingDouble((PlaceCandidate c) -> PlaceProminence.of(c)).reversed()
             .thenComparing(Comparator.comparingDouble(PlaceCandidate::similarityScore).reversed())
             .thenComparingInt(PlaceCandidate::index);
 
     private DayPicker() {
     }
 
-    /** 날마다 기준 장소를 놓고 숙소를 정한다. 날짜별 구성이 비어 있는 상태에서 한 번 부른다. */
-    static void prepare(PlanState s, TransportationHub hub) {
+    /**
+     * 날마다 기준 장소를 놓고 숙소를 정한다. 날짜별 구성이 비어 있는 상태에서 한 번 부른다.
+     *
+     * @param preferred 선택 단계가 고른 장소의 후보 번호. 없으면 비어 있다
+     */
+    static void prepare(PlanState s, TransportationHub hub, Set<Integer> preferred) {
         // 기준 장소를 거점에서 가까운 순으로 놓으려면 거점이 먼저 있어야 한다.
         LodgingPlanner.assignHubsAndLodging(s.days, s.candidates, hub);
-        placeBases(s);
+        placeBases(s, preferred);
         for (int i = 0; i < s.days.size(); i++) {
             LodgingPlanner.ensureAccommodation(s.days.get(i), s.candidates, DayState.endsTrip(s.days, i));
         }
         // 날마다 가장 가까운 숙소를 잡은 상태라 연박과 숙소 수 상한을 다시 맞춘다.
         LodgingPlanner.assignHubsAndLodging(s.days, s.candidates, hub);
-        keepBasesInReach(s);
+        keepBasesInReach(s, preferred);
+    }
+
+    /**
+     * 그날 기준 장소에서 가까운 고리 밖의 예비 장소를 예비 목록에서 뺀다. 보충은 예비 장소를 거리와 상관없이 먼저 써서,
+     * 두면 가까운 다른 곳 대신 먼 선택 장소가 들어온다.
+     */
+    static void keepSpareNearBase(PlanState s, DayState day) {
+        PlaceCandidate base = baseOf(s, day);
+        if (base == null) return;
+        double near = legCapKm(s) / 2;
+        s.spare.removeIf(idx -> {
+            PlaceCandidate c = byIndex(s.candidates, idx);
+            return c == null || coordsOf(c) == null || km(base, c) > near;
+        });
     }
 
     /**
@@ -69,7 +87,7 @@ final class DayPicker {
      * @param previousLodging 전날 숙소. 아침 구간을 거리 예산에 넣는다
      * @return 하루 관광 하한에서 모자란 수
      */
-    static int fill(PlanState s, DayState day, Integer previousLodging, boolean lastDay) {
+    static int fill(PlanState s, DayState day, Integer previousLodging, boolean lastDay, Set<Integer> preferred) {
         int[] range = ScheduleTuning.sightsPerDay(s.pace);
         int floor = day.hasUserWindow() ? 1 : range[0];
         PlaceCandidate base = baseOf(s, day);
@@ -83,18 +101,18 @@ final class DayPicker {
         Predicate<PlaceCandidate> underTypeCap = c -> c.keepsPlace() || !DiversityRepair.isSpecificType(subTypeOf(c))
                 || typeCount.getOrDefault(subTypeOf(c), 0) < DiversityRepair.typeCapFor(c, s.days.size());
         Predicate<PlaceCandidate> addable = openOnDayFilter(s.startDate, day.dayNumber)
-                .and(c -> !s.usedIndices.contains(c.index()) && coordsOf(c) != null && isSelectable(c))
+                .and(c -> !s.usedIndices.contains(c.index()) && coordsOf(c) != null && selectable(c, preferred))
                 .and(c -> km(base, c) <= cap)
                 .and(c -> !wouldExceedDayBudget(day, c, s.candidates, s.transportPref, cfg));
 
         if (day.lunchInWindow()) {
-            pickMeal(s, day, addable, underTypeCap, typeCount, LUNCH_START, coordsOf(base), cap);
+            pickMeal(s, day, addable, underTypeCap, typeCount, LUNCH_START, coordsOf(base), cap, preferred);
         }
         if (day.dinnerInWindow() && !lastDay) {
             double[] lodging = accommodationCoords(day, s.candidates);
             double[] near = lodging != null && GeoUtils.haversine(lodging, coordsOf(base)) <= cap
                     ? lodging : coordsOf(base);
-            pickMeal(s, day, addable, underTypeCap, typeCount, DINNER_START, near, cap);
+            pickMeal(s, day, addable, underTypeCap, typeCount, DINNER_START, near, cap, preferred);
         }
 
         int meals = (day.lunchInWindow() ? 1 : 0) + (day.dinnerInWindow() ? 1 : 0);
@@ -119,11 +137,11 @@ final class DayPicker {
         // 저녁이 없는 마지막 날은 하루 관광 수를 채워도 일찍 끝나 한 곳 더 고른다.
         boolean oneMore = lastDay && !day.endsEarlyByDeparture();
         // 기준 장소에서 상한의 절반 안에 있는 두 곳은 서로 한 구간 안이다.
-        for (double radius : rings(cap)) {
+        for (Tier tier : tiers(cap, preferred)) {
             while (stops < range[1] || (oneMore && stops == range[1] && endsAt < EARLY_FINISH_MINUTES)) {
                 PlaceCandidate next = s.candidates.stream()
-                        .filter(sight)
-                        .filter(c -> km(base, c) <= radius && fits(left, c))
+                        .filter(sight).filter(tier.pool())
+                        .filter(c -> km(base, c) <= tier.radiusKm() && fits(left, c))
                         .min(byMeritNear(coordsOf(base))).orElse(null);
                 if (next == null) break;
                 addToDay(day, next.index(), s.spare, s.usedIndices);
@@ -137,11 +155,11 @@ final class DayPicker {
     }
 
     // 첫날은 도착 거점, 마지막 날은 출발 거점에서 가까운 곳을 주고 사이 날은 앞날 기준 장소에서 가까운 순으로 잇는다.
-    private static void placeBases(PlanState s) {
+    private static void placeBases(PlanState s, Set<Integer> preferred) {
         List<DayState> open = s.days.stream().filter(d -> !d.tooShortForSightseeing()).toList();
         if (open.isEmpty()) return;
         double cap = legCapKm(s);
-        List<PlaceCandidate> ranked = baseCandidates(s).sorted(BY_MERIT).toList();
+        List<PlaceCandidate> ranked = baseCandidates(s, preferred).sorted(byMerit(preferred)).toList();
 
         // 요청 의도 장소는 서로 가까워도 각자 하루의 기준이 된다.
         List<PlaceCandidate> bases = new ArrayList<>(ranked.stream().filter(PlaceCandidate::keepsPlace)
@@ -169,7 +187,7 @@ final class DayPicker {
     }
 
     // 숙소를 연박으로 합치면 기준 장소가 숙소에서 한 구간 밖에 놓일 수 있고, 기준 장소가 그날 쉬거나 저녁에만 갈 곳일 수 있다.
-    private static void keepBasesInReach(PlanState s) {
+    private static void keepBasesInReach(PlanState s, Set<Integer> preferred) {
         for (int i = 0; i < s.days.size(); i++) {
             DayState day = s.days.get(i);
             PlaceCandidate base = baseOf(s, day);
@@ -183,8 +201,8 @@ final class DayPicker {
                 released = true;
             }
             List<Integer> taken = s.days.stream().flatMap(d -> d.placeIndices.stream()).toList();
-            PlaceCandidate replacement = baseCandidates(s).filter(c -> !taken.contains(c.index()))
-                    .filter(usableOn(s, i)).min(BY_MERIT).orElse(null);
+            PlaceCandidate replacement = baseCandidates(s, preferred).filter(c -> !taken.contains(c.index()))
+                    .filter(usableOn(s, i)).min(byMerit(preferred)).orElse(null);
             if (replacement == null) continue;
             if (released) day.placeIndices.add(0, replacement.index());
             else replaceBase(day, base, replacement);
@@ -224,17 +242,20 @@ final class DayPicker {
 
     private static void pickMeal(PlanState s, DayState day, Predicate<PlaceCandidate> addable,
                                  Predicate<PlaceCandidate> underTypeCap, Map<String, Integer> typeCount,
-                                 int slotStart, double[] near, double cap) {
+                                 int slotStart, double[] near, double cap, Set<Integer> preferred) {
         Predicate<PlaceCandidate> meal = addable.and(PlaceCandidate::mealEligible)
                 .and(c -> isOpenDuring(c, day.dayOfWeek, slotStart, slotStart + DINING_VISIT_MINUTES));
         Predicate<PlaceCandidate> otherKindToday = VarietyLedger.admitsOnDay(day, s.candidates);
         Predicate<PlaceCandidate> fresh = underTypeCap.and(VarietyLedger.avoidsGroupOnDay(day, s.candidates));
         // 그날 같은 종류 끼니는 범위를 넓혀서라도 피한다. 묶음과 여행 전체 반복은 같은 거리 안에서만 피한다.
         for (Predicate<PlaceCandidate> kind : List.<Predicate<PlaceCandidate>>of(otherKindToday, c -> true)) {
-            for (double radius : rings(cap)) {
-                PlaceCandidate pick = s.candidates.stream().filter(meal).filter(kind)
-                        .filter(c -> GeoUtils.haversine(near, coordsOf(c)) <= radius)
-                        .min(Comparator.comparing((PlaceCandidate c) -> !fresh.test(c)).thenComparing(byMeritNear(near)))
+            for (Tier tier : tiers(cap, preferred)) {
+                // 선택 단계가 고른 식당도 묶음·여행 전체 반복이면 같은 고리의 다른 식당에 자리를 내준다.
+                PlaceCandidate pick = s.candidates.stream().filter(meal).filter(kind).filter(tier.pool())
+                        .filter(c -> !tier.selectionPicks() || fresh.test(c))
+                        .filter(c -> GeoUtils.haversine(near, coordsOf(c)) <= tier.radiusKm())
+                        .min(Comparator.comparing((PlaceCandidate c) -> !fresh.test(c))
+                                .thenComparing(byMeritNear(near)))
                         .orElse(null);
                 if (pick != null) {
                     addToDay(day, pick.index(), s.spare, s.usedIndices);
@@ -245,16 +266,38 @@ final class DayPicker {
         }
     }
 
+    // selectionPicks는 선택 단계가 고른 장소만 받는 단계다.
+    private record Tier(double radiusKm, Predicate<PlaceCandidate> pool, boolean selectionPicks) {}
+
+    // 요청 의도 장소는 거리보다 앞서고, 선택 단계의 취향은 거리를 더 쓰지 않는 범위에서만 따른다.
+    private static List<Tier> tiers(double cap, Set<Integer> preferred) {
+        List<Tier> tiers = new ArrayList<>();
+        tiers.add(new Tier(cap, PlaceCandidate::keepsPlace, false));
+        for (double radius : rings(cap)) {
+            if (!preferred.isEmpty()) tiers.add(new Tier(radius, c -> preferred.contains(c.index()), true));
+            tiers.add(new Tier(radius, c -> true, false));
+        }
+        return tiers;
+    }
+
+    private static boolean selectable(PlaceCandidate c, Set<Integer> preferred) {
+        return isSelectable(c, preferred.contains(c.index()));
+    }
+
+    private static Comparator<PlaceCandidate> byMerit(Set<Integer> preferred) {
+        return REQUESTED_FIRST.thenComparing(c -> !preferred.contains(c.index())).thenComparing(BY_FAME);
+    }
+
     // 유명도가 비슷한 식당은 가까운 곳이 이기고, 먼 명소는 유명도 차이가 거리 손해보다 클 때만 이긴다.
     private static Comparator<PlaceCandidate> byMeritNear(double[] from) {
         return REQUESTED_FIRST
                 .thenComparing(Comparator.comparingDouble((PlaceCandidate c) -> PlaceProminence.of(c)
                         - GeoUtils.haversine(from, coordsOf(c)) * GAP_FILL_DETOUR_WEIGHT).reversed())
-                .thenComparing(BY_MERIT);
+                .thenComparing(BY_FAME);
     }
 
-    private static Stream<PlaceCandidate> baseCandidates(PlanState s) {
-        return s.candidates.stream().filter(c -> coordsOf(c) != null && isSelectable(c)
+    private static Stream<PlaceCandidate> baseCandidates(PlanState s, Set<Integer> preferred) {
+        return s.candidates.stream().filter(c -> coordsOf(c) != null && selectable(c, preferred)
                 && CandidatePolicy.roleOf(c).isVisit()
                 && "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(c.category())));
     }

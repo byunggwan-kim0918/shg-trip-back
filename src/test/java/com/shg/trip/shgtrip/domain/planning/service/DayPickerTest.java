@@ -29,7 +29,8 @@ class DayPickerTest {
     private final SerialPlanner planner = new SerialPlanner();
 
     private SerialPlanner.Result plan(TraceFile trace) {
-        return planner.plan(trace.selection(), trace.candidates(), trace.args(), trace.dayCount());
+        return planner.plan(trace.selection(), trace.candidates(), trace.args(), trace.dayCount(),
+                SerialPlanner.Picks.IGNORE);
     }
 
     @Test
@@ -90,7 +91,7 @@ class DayPickerTest {
                 null), new SelectionOutput.DayPlan(2, null, List.of(4), null, null)), List.of(), List.of(),
                 List.of(2, 4), List.of());
 
-        SerialPlanner.Result result = planner.plan(hints, pool, walkArgs(), 2);
+        SerialPlanner.Result result = planner.plan(hints, pool, walkArgs(), 2, SerialPlanner.Picks.IGNORE);
 
         assertThat(result.selection().days()).extracting(d -> d.placeIndices().get(0))
                 .containsExactlyInAnyOrder(2, 4);
@@ -104,7 +105,7 @@ class DayPickerTest {
                 null), new SelectionOutput.DayPlan(2, null, List.of(4), null, null)), List.of(), List.of(),
                 List.of(2), List.of(), List.of(new SelectionOutput.TimingHint(4, "evening")));
 
-        SerialPlanner.Result result = planner.plan(hints, walkablePool(), walkArgs(), 2);
+        SerialPlanner.Result result = planner.plan(hints, walkablePool(), walkArgs(), 2, SerialPlanner.Picks.IGNORE);
 
         assertThat(result.selection().days()).extracting(d -> d.placeIndices().get(0)).containsExactly(4, 2);
     }
@@ -119,7 +120,7 @@ class DayPickerTest {
         SelectionOutput hints = new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null, List.of(14),
                 null, null)), List.of(), List.of(), List.of(14), List.of());
 
-        SerialPlanner.Result result = planner.plan(hints, pool, walkArgs(), 2);
+        SerialPlanner.Result result = planner.plan(hints, pool, walkArgs(), 2, SerialPlanner.Picks.IGNORE);
 
         assertThat(result.selection().days()).flatExtracting(SelectionOutput.DayPlan::placeIndices).contains(14);
     }
@@ -130,7 +131,7 @@ class DayPickerTest {
         List<PlaceCandidate> pool = new ArrayList<>(walkablePool().stream()
                 .map(c -> c.mealEligible() && c.index() <= 11 ? c.asUserSelected() : c).toList());
 
-        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2);
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.IGNORE);
 
         assertThat(result.days()).allSatisfy(d -> assertThat(d.dropped()).isEmpty());
         assertThat(result.steps()).extracting(s -> s.place().name())
@@ -151,11 +152,90 @@ class DayPickerTest {
         ScheduleArgs tight = ScheduleTestArgs.of("tight", "walk", LocalDate.of(2026, 12, 1), List.of(), null, false,
                 List.of());
 
-        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, tight, 1);
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, tight, 1, SerialPlanner.Picks.IGNORE);
 
         assertThat(result.steps()).filteredOn(s -> !"DINING".equals(PlaceCategoryConstants.majorCategory(
                         s.place().category())))
                 .allSatisfy(s -> assertThat(s.startTime()).isLessThan("17:30"));
+    }
+
+    @Test
+    @DisplayName("선택 결과의 날짜 수가 여행 일수와 다르면 선택 장소를 따로 대우하지 않는다")
+    void dayCountMismatchFallsBackToIntentOnly() {
+        List<PlaceCandidate> pool = walkablePool();
+        SelectionOutput oneDay = new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null, List.of(12, 13),
+                null, null)), List.of(), List.of());
+
+        List<Integer> picks = planner.plan(oneDay, pool, walkArgs(), 2, SerialPlanner.Picks.PREFER)
+                .selection().days().get(0).placeIndices();
+
+        assertThat(picks).isNotEmpty().doesNotContain(12, 13);
+    }
+
+    @Test
+    @DisplayName("사용자가 고른 식당은 먼 고리에 있어도 가까운 고리의 다른 식당보다 먼저 고른다")
+    void userSelectedMealInTheFarRingComesFirst() {
+        List<PlaceCandidate> pool = walkablePool();
+        // 기준 장소와 숙소에서 5km 안팎이라 가까운 고리(4km) 밖이고 한 구간(8km) 안이다.
+        pool.add(place(14, "사용자가 고른 먼 식당", MEAL, "MEAL", 37.5760, 127.0365).asUserSelected());
+
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.IGNORE);
+
+        assertThat(result.selection().days()).flatExtracting(SelectionOutput.DayPlan::placeIndices).contains(14);
+    }
+
+    @Test
+    @DisplayName("같은 거리 고리 안에서는 선택 단계가 고른 식당을 먼저 고른다")
+    void prefersSelectionPicksWithinTheSameRing() {
+        List<PlaceCandidate> pool = walkablePool();
+        SelectionOutput selection = selectionPicking(12, 13);
+
+        List<Integer> preferred = planner.plan(selection, pool, walkArgs(), 2, SerialPlanner.Picks.PREFER)
+                .selection().days().get(0).placeIndices();
+        List<Integer> ignored = planner.plan(selection, pool, walkArgs(), 2, SerialPlanner.Picks.IGNORE)
+                .selection().days().get(0).placeIndices();
+
+        assertThat(preferred).contains(12, 13);
+        assertThat(ignored).doesNotContain(12, 13);
+    }
+
+    @Test
+    @DisplayName("선택 단계가 고른 식당이 그날 점심과 같은 묶음이면 같은 고리의 다른 식당을 고른다")
+    void selectionMealYieldsWhenItRepeatsTheGroup() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.set(11, place(12, "바다 횟집", MEAL, "MEAL", 37.5740, 126.9810));
+        pool.set(12, place(13, "항구 조개구이", MEAL, "MEAL", 37.5745, 126.9815));
+
+        List<Integer> dayOne = planner.plan(selectionPicking(12, 13), pool, walkArgs(), 2, SerialPlanner.Picks.PREFER)
+                .selection().days().get(0).placeIndices();
+
+        assertThat(dayOne.stream().filter(idx -> idx == 12 || idx == 13)).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("그날 기준 장소에서 먼 예비 장소는 그날 보충에 쓰이지 않게 예비 목록에서 빠진다")
+    void farSpareIsDroppedForTheDay() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.add(place(14, "먼 식당", MEAL, "MEAL", 37.6300, 126.9800));
+        PlanState s = PlanState.of(new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null, List.of(2),
+                1, null)), List.of(), List.of(9, 14)), pool, walkArgs());
+
+        DayPicker.keepSpareNearBase(s, s.days.get(0));
+
+        assertThat(s.spare).containsExactly(9);
+    }
+
+    @Test
+    @DisplayName("선택 단계가 고른 식당이 먼 고리에 있으면 가까운 고리의 다른 식당을 고른다")
+    void nearerPlacesBeatFarSelectionPicks() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.add(place(14, "먼 식당", MEAL, "MEAL", 37.6300, 126.9800));
+
+        SerialPlanner.Result result = planner.plan(selectionPicking(14), pool, walkArgs(), 2,
+                SerialPlanner.Picks.PREFER);
+
+        assertThat(result.selection().days()).flatExtracting(SelectionOutput.DayPlan::placeIndices)
+                .isNotEmpty().doesNotContain(14);
     }
 
     @Test
@@ -166,7 +246,7 @@ class DayPickerTest {
                 BigDecimal.valueOf(37.5120), BigDecimal.valueOf(127.1020), null, null, 0.9, null, null, null, 60,
                 false, null, null, null, 40, "SIGHT", null, false, null));
 
-        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2);
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.IGNORE);
 
         assertThat(result.selection().days()).flatExtracting(SelectionOutput.DayPlan::placeIndices)
                 .isNotEmpty().doesNotContain(14);
@@ -178,7 +258,7 @@ class DayPickerTest {
     void picksLunchAndDinner() {
         List<PlaceCandidate> pool = walkablePool();
 
-        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2);
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.IGNORE);
 
         SelectionOutput.DayPlan first = result.selection().days().get(0);
         long meals = first.placeIndices().stream().filter(idx -> pool.get(idx - 1).mealEligible()).count();
@@ -195,7 +275,7 @@ class DayPickerTest {
         pool.add(place(3, "점심 식당", MEAL, "MEAL", 37.5780, 126.9790));
         pool.add(place(4, "저녁 식당", MEAL, "MEAL", 37.5770, 126.9810));
 
-        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2);
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.IGNORE);
 
         assertThat(result.days()).extracting(SerialPlanner.DayReport::shortfall).containsExactly(1, 2);
     }
@@ -210,6 +290,12 @@ class DayPickerTest {
 
         assertThat(last.placeIndices().stream().map(idx -> trace.candidates().get(idx - 1))
                 .filter(c -> !c.mealEligible())).hasSizeLessThanOrEqualTo(most + 1);
+    }
+
+    /** 1일차에 주어진 장소를, 2일차에는 아무것도 고르지 않은 선택. */
+    private static SelectionOutput selectionPicking(Integer... dayOnePicks) {
+        return new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null, List.of(dayOnePicks), null, null),
+                new SelectionOutput.DayPlan(2, null, List.of(), null, null)), List.of(), List.of());
     }
 
     /** 숙소 하나와 그 둘레 2km 안의 관광지 여섯, 식당 여섯. */
