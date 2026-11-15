@@ -1,5 +1,7 @@
 package com.shg.trip.shgtrip.domain.tripchat.service;
 
+import com.shg.trip.shgtrip.domain.tripchat.model.PlaceMatch;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -93,9 +95,21 @@ public final class GeneratorSupport {
     public static final String BUDGET_REFERENCE = "예산은 참고만 하고 금액에 맞춰 조정하지는 않아요.";
     public static final String BUDGET_EXCLUDING_LODGING = "숙박을 뺀 예산은 그대로 전달할 수 없어 참고만 해요.";
     public static final String BUDGET_NEEDS_PARTY = "인원을 알려주면 일행 전체 예산으로 계산해요.";
-    public static final String AVOID_PLACES = "피하고 싶은 장소는 아직 반영할 수 없어요.";
+    public static final String AVOID_PLACE_EXCLUDED = "일정과 대안에서 빼요.";
+    public static final String AVOID_PLACE_NOT_FOUND = "이름으로 장소를 찾지 못해 반영하지 못해요.";
+    public static final String AVOID_PLACE_KEPT = "일정에 꼭 넣기로 한 곳이라 빼지 않아요.";
+    public static final String AVOID_PLACE_HUB = "공항·역 같은 교통 거점은 뺄 수 없어요.";
+    public static final String AVOID_PLACES_FULL = "피할 곳은 10곳까지만 뺄 수 있어요.";
     public static final String CONDITIONS_REFERENCE = "음식·활동 같은 조건은 장소를 고를 때 참고만 해요.";
     public static final String APPROX_TIME = "대략적인 시간은 참고만 해요.";
+
+    private static final Map<String, String> MAJOR_LABELS = Map.of("DINING", "식당", "CAFE", "카페", "LODGING", "숙소");
+
+    /** 산 이름("용지봉")이 같은 이름 식당에 맞춰져도 사용자가 알아볼 수 있게 식당·카페·숙소는 종류를 붙인다. */
+    static String placeLabel(PlaceMatch match) {
+        String kind = MAJOR_LABELS.get(match.major());
+        return kind == null ? match.name() : match.name() + "(" + kind + ")";
+    }
 
     /** 꼭 가고 싶은 곳에 붙는 시간대 낱말. 생성기가 맞추는 시간대는 아침·저녁 둘뿐이다. */
     private static final Map<String, String> EXPERIENCE_TIMING_WORDS = Map.of(

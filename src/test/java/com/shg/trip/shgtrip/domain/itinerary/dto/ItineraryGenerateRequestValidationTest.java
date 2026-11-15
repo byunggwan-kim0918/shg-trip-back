@@ -172,10 +172,33 @@ class ItineraryGenerateRequestValidationTest {
         assertThat(messages(req)).isEmpty();
     }
 
+    @Test
+    @DisplayName("피할 장소 id는 JSON 필드 avoidPlaceIds로 읽히고, 10개 초과·빈 값을 막고, 문장용 사본에도 남는다")
+    void avoidPlaceIds() throws Exception {
+        var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().findAndAddModules().build();
+        var req = mapper.readValue("""
+                {"mode":"AUTO","destination":"부산","themes":["ocean"],"categories":["beach"],
+                 "startDate":"%s","endDate":"%s","avoidPlaceIds":[9,12]}
+                """.formatted(base, base.plusDays(2)), ItineraryGenerateRequest.class);
+
+        assertThat(req.avoidPlaceIds()).containsExactly(9L, 12L);
+        assertThat(messages(req)).isEmpty();
+        assertThat(req.withTripFactsInDescription().avoidPlaceIds()).containsExactly(9L, 12L);
+        assertThat(messages(withAvoid(java.util.Collections.nCopies(11, 1L))))
+                .contains("피할 장소는 최대 10개까지 가능합니다.");
+        assertThat(messages(withAvoid(java.util.Arrays.asList(1L, null)))).contains("피할 장소 값이 비어 있습니다.");
+    }
+
+    private ItineraryGenerateRequest withAvoid(List<Long> avoid) {
+        return new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "부산", List.of("healing"),
+                List.of("attraction"), null, null, null, base, base.plusDays(2), null, null, null,
+                "couple", null, null, null, null, avoid);
+    }
+
     private ItineraryGenerateRequest withRequired(List<ItineraryGenerateRequest.RequiredExperience> required) {
         return new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "부산", List.of("healing"),
                 List.of("attraction"), null, null, null, base, base.plusDays(2), null, null, null,
-                null, null, null, null, required);
+                null, null, null, null, required, null);
     }
 
     @Test

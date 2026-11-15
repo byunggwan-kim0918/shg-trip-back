@@ -12,6 +12,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Locale;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -43,6 +45,12 @@ public class PlaceService {
         return placeRepository.searchByKeyword(escapeLike(lowered), lowered,
                         category == null || category.isBlank() ? null : category, unsorted)
                 .map(PlaceResponse::from);
+    }
+
+    public List<PlaceResponse> searchPlacesInRegions(String keyword, Collection<String> regions, int limit) {
+        String lowered = keyword.strip().toLowerCase(Locale.ROOT);
+        return placeRepository.searchByKeywordInRegions(escapeLike(lowered), lowered, regions, PageRequest.of(0, limit))
+                .stream().map(PlaceResponse::from).toList();
     }
 
     /** 사용자가 친 %, _가 와일드카드로 해석되면 모든 장소가 이름 일치 순위로 올라온다. */

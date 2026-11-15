@@ -33,6 +33,7 @@ public final class TripRequestMapper {
     static final long MAX_BUDGET = 100_000_000L;
     private static final int MAX_SELECTED_PLACES = 10;
     private static final int MAX_REQUIRED_EXPERIENCES = 5;  // ItineraryGenerateRequest requiredExperiences @Size
+    private static final int MAX_AVOID_PLACES = 10;         // ItineraryGenerateRequest avoidPlaceIds @Size
     private static final String SEPARATOR = " / ";
 
     private TripRequestMapper() {}
@@ -118,7 +119,7 @@ public final class TripRequestMapper {
         listFragment("못 먹거나 피할 음식", draft.items(DraftField.FOOD_AVOID), fragments, notes);
         listFragment("피하고 싶은 활동", draft.items(DraftField.AVOID_ACTIVITIES), fragments, notes);
         listFragment("기타", draft.items(DraftField.NOTES), fragments, notes);
-        if (!draft.items(DraftField.AVOID_PLACES).isEmpty()) addNote(notes, Slot.EXTRAS, GeneratorSupport.AVOID_PLACES);
+        List<Long> avoidPlaceIds = avoidPlaces(draft, matches, placeIds, notes);
 
         String description = describe(fragments, draft.items(DraftField.AVOID_PLACES));
         if (description != null && description.length() > MAX_DESCRIPTION) {
@@ -136,7 +137,7 @@ public final class TripRequestMapper {
         ItineraryGenerateRequest request = new ItineraryGenerateRequest(planningMode, destination,
                 themes.stream().limit(10).toList(), categories.stream().limit(10).toList(), pace, transportPref,
                 budget, start, end, description, selected, List.of(), companion, partySize, arrival, departure,
-                required.isEmpty() ? null : required);
+                required.isEmpty() ? null : required, avoidPlaceIds.isEmpty() ? null : avoidPlaceIds);
         return new Result(request, blockers, notes, description, days);
     }
 
@@ -237,7 +238,7 @@ public final class TripRequestMapper {
             PlaceMatch m = matches.get(PlaceMatcher.key(DraftField.MUST_VISIT, item.text()));
             if (m != null && !"LODGING".equals(m.major()) && placeIds.size() < MAX_SELECTED_PLACES) {
                 placeIds.add(m.placeId());
-                addNote(notes, Slot.ANCHORS, m.name() + " · " + GeneratorSupport.PLACE_INCLUDED);
+                addNote(notes, Slot.ANCHORS, GeneratorSupport.placeLabel(m) + " · " + GeneratorSupport.PLACE_INCLUDED);
             } else {
                 unmatched.add(item.text());
                 String unmatchedNote = requiredTexts.contains(TextNormalizer.cap(item.text(), 100))
@@ -254,7 +255,7 @@ public final class TripRequestMapper {
             fragments.add("예약: " + item.text() + (when.isBlank() ? "" : " " + when));
             if (m != null && !"LODGING".equals(m.major()) && placeIds.size() < MAX_SELECTED_PLACES) {
                 placeIds.add(m.placeId());
-                addNote(notes, Slot.ANCHORS, m.name() + " · " + GeneratorSupport.BOOKED_INCLUDED);
+                addNote(notes, Slot.ANCHORS, GeneratorSupport.placeLabel(m) + " · " + GeneratorSupport.BOOKED_INCLUDED);
             } else {
                 addNote(notes, Slot.ANCHORS, item.text() + " · "
                         + (m == null ? GeneratorSupport.PLACE_REFERENCE : GeneratorSupport.PLACES_FULL));
@@ -263,6 +264,27 @@ public final class TripRequestMapper {
                 addNote(notes, Slot.ANCHORS, item.text() + " · " + GeneratorSupport.BOOKED_TIME_MISSING);
             }
         }
+    }
+
+    private static List<Long> avoidPlaces(Draft draft, Map<String, PlaceMatch> matches, Set<Long> placeIds,
+                                          Map<Slot, List<String>> notes) {
+        Set<Long> out = new LinkedHashSet<>();
+        for (Item item : userItems(draft, DraftField.AVOID_PLACES)) {
+            PlaceMatch m = matches.get(PlaceMatcher.key(DraftField.AVOID_PLACES, item.text()));
+            if (m == null) {
+                addNote(notes, Slot.EXTRAS, item.text() + " · " + GeneratorSupport.AVOID_PLACE_NOT_FOUND);
+            } else if ("TRANSIT_HUB".equals(m.major())) {
+                addNote(notes, Slot.EXTRAS, m.name() + " · " + GeneratorSupport.AVOID_PLACE_HUB);
+            } else if (placeIds.contains(m.placeId())) {
+                addNote(notes, Slot.EXTRAS, GeneratorSupport.placeLabel(m) + " · " + GeneratorSupport.AVOID_PLACE_KEPT);
+            } else if (out.size() >= MAX_AVOID_PLACES && !out.contains(m.placeId())) {
+                addNote(notes, Slot.EXTRAS, GeneratorSupport.placeLabel(m) + " · " + GeneratorSupport.AVOID_PLACES_FULL);
+            } else {
+                out.add(m.placeId());
+                addNote(notes, Slot.EXTRAS, GeneratorSupport.placeLabel(m) + " · " + GeneratorSupport.AVOID_PLACE_EXCLUDED);
+            }
+        }
+        return List.copyOf(out);
     }
 
     /**

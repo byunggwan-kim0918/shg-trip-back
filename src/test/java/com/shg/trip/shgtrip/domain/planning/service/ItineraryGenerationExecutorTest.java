@@ -109,6 +109,34 @@ class ItineraryGenerationExecutorTest {
         assertThat(bare.fixedNotices()).isEmpty();
     }
 
+    @Test
+    @DisplayName("피할 장소 id를 DB 이름으로 풀어 Sonnet이 지은 일정에서 뺀다")
+    void dropsAvoidedPlacesResolvedFromIds() throws Exception {
+        ItineraryData generated = new ItineraryData("강릉 2박 3일", "강릉", BigDecimal.ZERO, List.of(), List.of(
+                step(1, "경포 호"), step(2, "안목해변")));
+        when(aiService.generateItinerary(any(), any())).thenReturn(generated);
+        when(validationService.validateWithRetry(any(), any(), any())).thenReturn(generated);
+        when(placeRepository.findAllById(List.of(9L))).thenReturn(List.of(
+                com.shg.trip.shgtrip.domain.place.entity.Place.builder().id(9L).name("경포호").build()));
+        Itinerary saved = Itinerary.builder().id(10L).userId(1L).title("강릉 2박 3일").destination("강릉").build();
+        ArgumentCaptor<ItineraryData> stored = ArgumentCaptor.forClass(ItineraryData.class);
+        when(saveHelper.save(stored.capture(), any(), eq(1L), eq(false), isNull(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(saved, null));
+        ItineraryGenerateRequest avoiding = new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO,
+                "강릉", List.of("바다"), List.of("관광"), null, null, null, LocalDate.of(2026, 12, 1),
+                LocalDate.of(2026, 12, 3), "강릉 바다 여행", null, null, null, null, null, null, null, List.of(9L));
+
+        executor.execute("job", avoiding, 1L, emitter);
+
+        assertThat(stored.getValue().steps()).extracting(s -> s.place().name()).containsExactly("안목해변");
+    }
+
+    private static com.shg.trip.shgtrip.domain.planning.dto.StepData step(int order, String name) {
+        return new com.shg.trip.shgtrip.domain.planning.dto.StepData(order, 1, "10:00", "11:00",
+                new com.shg.trip.shgtrip.domain.planning.dto.PlaceData(name, "주소", "관광", "강릉", "KR"), List.of(),
+                "CAR", 10, BigDecimal.ONE, BigDecimal.ZERO, "설명", BigDecimal.ZERO);
+    }
+
     /** 끝난 스트림에 새 연결을 붙여 지금까지 보낸 이벤트 중 error 데이터를 꺼낸다. */
     @SuppressWarnings("unchecked")
     private Map<String, Object> sentError() throws IOException {

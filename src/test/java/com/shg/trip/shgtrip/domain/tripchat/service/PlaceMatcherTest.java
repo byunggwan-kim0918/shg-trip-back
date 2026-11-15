@@ -7,16 +7,21 @@ import com.shg.trip.shgtrip.domain.tripchat.model.DraftField;
 import com.shg.trip.shgtrip.domain.tripchat.model.PlaceMatch;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class PlaceMatcherTest {
@@ -24,6 +29,11 @@ class PlaceMatcherTest {
     private static PlaceResponse place(long id, String name, String address, String category) {
         return new PlaceResponse(id, name, address, null, null, category, null, null, null, null, null, null, null, null,
                 null, null, null);
+    }
+
+    private static PlaceResponse inRegion(long id, String name, String address, String region, String category) {
+        return new PlaceResponse(id, name, address, null, null, category, null, null, null, null, null, region, null,
+                null, null, null, null);
     }
 
     private static PlaceResponse overseas(long id, String name, String nameKo, String region, String category) {
@@ -51,6 +61,75 @@ class PlaceMatcherTest {
         PlaceMatch lodging = matches.get(PlaceMatcher.key(DraftField.LODGING, "파라다이스 호텔"));
         assertThat(lodging.placeId()).isEqualTo(3L);
         assertThat(lodging.major()).isEqualTo("LODGING");
+    }
+
+    @Test
+    @DisplayName("피할 장소도 같은 기준으로 맞추고, 바뀌면 다시 맞춘다")
+    void matchesAvoidPlaces() {
+        PlaceService placeService = mock(PlaceService.class);
+        when(placeService.searchPlaces(any(), any(Pageable.class))).thenReturn(Page.empty());
+        when(placeService.searchPlacesInRegions(eq("감천문화마을"), eq(Set.of("Busan")), anyInt())).thenReturn(List.of(
+                place(4, "감천문화마을", "부산광역시 사하구 감내2로", "Landmarks and Outdoors > Historic Site")));
+        Events trip = Events.of().user(DraftField.DESTINATION, "부산");
+        String before = PlaceMatcher.signature(trip.draft());
+
+        Events avoiding = trip.user(DraftField.AVOID_PLACES, "감천문화마을");
+        Map<String, PlaceMatch> matches = new PlaceMatcher(placeService, Destinations.fromClasspath())
+                .match(avoiding.draft());
+
+        assertThat(matches.get(PlaceMatcher.key(DraftField.AVOID_PLACES, "감천문화마을")).placeId()).isEqualTo(4L);
+        assertThat(PlaceMatcher.signature(avoiding.draft())).isNotEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("피할 장소는 이름이 같거나 남는 부분이 종류 이름인 관광지만 받고, 같은 이름 가게보다 관광지를 먼저 받는다")
+    void avoidPlacePartialNameOnlyForKindSuffix() {
+        PlaceService placeService = mock(PlaceService.class);
+        when(placeService.searchPlaces(any(), any(Pageable.class))).thenReturn(Page.empty());
+        when(placeService.searchPlacesInRegions(eq("남포동"), eq(Set.of("Busan")), anyInt())).thenReturn(List.of(
+                place(5, "남포동 바다횟집", "부산광역시 중구 남포동", "Dining and Drinking > Restaurant"),
+                place(7, "남포동 볼링장", "부산광역시 중구 남포동", "Sports and Recreation > Bowling Alley")));
+        when(placeService.searchPlacesInRegions(eq("광안리"), eq(Set.of("Busan")), anyInt())).thenReturn(List.of(
+                place(6, "광안리해수욕장", "부산광역시 수영구 광안해변로", "Landmarks and Outdoors > Beach")));
+        when(placeService.searchPlacesInRegions(eq("해운대"), eq(Set.of("Busan")), anyInt())).thenReturn(List.of(
+                place(9, "해운대", "부산광역시 해운대구 중동", "Dining and Drinking > Restaurant"),
+                place(10, "해운대해수욕장", "부산광역시 해운대구 우동", "Landmarks and Outdoors > Beach")));
+        when(placeService.searchPlacesInRegions(eq("할매국밥"), eq(Set.of("Busan")), anyInt())).thenReturn(List.of(
+                place(8, "할매국밥", "부산광역시 동구 범일동", "Dining and Drinking > Restaurant")));
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+
+        assertThat(matcher.find("남포동", "부산", true)).isEmpty();
+        assertThat(matcher.find("남포동", "부산", false)).isPresent();
+        assertThat(matcher.find("광안리", "부산", true)).get().extracting(PlaceMatch::placeId).isEqualTo(6L);
+        assertThat(matcher.find("할매국밥", "부산", true)).get().extracting(PlaceMatch::placeId).isEqualTo(8L);
+        assertThat(matcher.find("해운대", "부산", true)).get().extracting(PlaceMatch::placeId).isEqualTo(10L);
+        assertThat(matcher.find("해운대", "부산", false)).get().extracting(PlaceMatch::placeId).isEqualTo(9L);
+    }
+
+    @Test
+    @DisplayName("여행지 지역 안에서 먼저 찾고, 괄호 설명이 붙은 이름도 같은 이름으로 본다")
+    void searchesDestinationRegionFirst() {
+        PlaceService placeService = mock(PlaceService.class);
+        when(placeService.searchPlacesInRegions(eq("용지봉"), eq(Set.of("Daegu")), anyInt())).thenReturn(List.of(
+                inRegion(1655991, "용지봉", "대구광역시 수성구 들안로 9", "Daegu",
+                        "Dining and Drinking > Restaurant > Korean Restaurant"),
+                inRegion(1705804, "용지봉 (634m)", "수성구 범물동 산362", "Daegu", "Landmarks and Outdoors > Mountain")));
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+
+        assertThat(matcher.find("용지봉", "대구", true)).get().extracting(PlaceMatch::placeId).isEqualTo(1705804L);
+        assertThat(matcher.find("용지봉", "대구", false)).get().extracting(PlaceMatch::placeId).isEqualTo(1655991L);
+        verify(placeService, never()).searchPlaces(eq("용지봉"), any(Pageable.class));
+    }
+
+    @Test
+    @DisplayName("여행지 region은 여러 도시를 합치고 해외는 묶음 전체를 넣으며, 모르는 여행지면 비어 있다")
+    void destinationRegions() {
+        PlaceMatcher matcher = new PlaceMatcher(mock(PlaceService.class), Destinations.fromClasspath());
+
+        assertThat(matcher.destinationRegions("강릉 갔다가 경주")).contains("Gangneung", "Gyeongju");
+        assertThat(matcher.destinationRegions("부산, 교토")).contains("Busan", "Osaka", "Kyoto", "Nara");
+        assertThat(matcher.destinationRegions("제주도")).containsExactly("Jeju");
+        assertThat(matcher.destinationRegions("속초")).isEmpty();
     }
 
     @Test
