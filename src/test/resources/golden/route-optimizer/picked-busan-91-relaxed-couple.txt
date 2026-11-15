@@ -1,14 +1,15 @@
 -- metrics --
-  스텝 33 / 숙소 1곳 / 총이동 290km
+  스텝 33 / 숙소 1곳 / 총이동 303km
   연속중복 0 / 최대공백 193분 / 늦은시작 2일 / 미해소 2건
 == day 1 ==
-  #1  08:30-10:00  국립해양박물관 | Arts and Entertainment > Cultural Center | 영도구 | Busan
+  #1  08:30-10:00  유엔기념공원 | Landmarks and Outdoors > Tourist Attraction | - | Busan
       이동: - -분 -km -원
       비용: 0원 / 메모: -
       대안: 부산다이아몬드타워 | Landmarks and Outdoors > Scenic Lookout | 0원
       대안: 금련산전망대 | Landmarks and Outdoors > Scenic Lookout | 0원
+      대안: 다대포 꿈의 낙조분수 | Landmarks and Outdoors > Fountain | 0원
   #2  11:30-12:40  자갈치해물짬뽕 | Dining and Drinking > Restaurant > Asian Restaurant > Chinese Restaurant | - | Busan
-      이동: CAR 10분 6.37km 1912원
+      이동: CAR 14분 8.75km 2624원
       비용: 13000원 / 메모: -
       대안: 아침바다 횟집 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
   #3  12:55-14:05  아가 | Dining and Drinking > Dessert Shop > Gelato Shop | 부산진구 | Busan
@@ -20,7 +21,6 @@
   #5  17:30-18:40  조개공장 | Dining and Drinking > Restaurant > Seafood Restaurant | 부산진구 | Busan
       이동: CAR 10분 6.17km 1851원
       비용: 13000원 / 메모: -
-      대안: 조개 구남 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
   #6  18:41-19:11  롯데호텔 부산 | Travel and Transportation > Lodging | 부산진구 | Busan
       이동: WALK 1분 0.05km 0원
       비용: 120000원 / 메모: -
@@ -31,7 +31,6 @@
   #7  11:30-12:40  짬뽕지존 | Dining and Drinking > Restaurant > Asian Restaurant > Chinese Restaurant | 부산진구 | Busan
       이동: WALK 13분 0.84km 0원
       비용: 13000원 / 메모: -
-      대안: 아침바다 횟집 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
   #8  12:50-14:00  치치타르트 | Dining and Drinking > Bakery | 수영구 | Busan
       이동: CAR 10분 6.46km 1938원
       비용: 13000원 / 메모: -
@@ -41,13 +40,14 @@
   #10 17:30-18:40  부산원조해물탕찜 | Dining and Drinking > Restaurant > Seafood Restaurant | - | Busan
       이동: CAR 11분 6.74km 2021원
       비용: 13000원 / 메모: -
+      대안: 아침바다 횟집 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
       대안: 조개 구남 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
   #11 18:44-19:44  부산국제금융센터 (BIFC) | Landmarks and Outdoors > Structure | - | Busan
       이동: CAR 4분 2.29km 686원
       비용: 0원 / 메모: -
+      대안: 부산다이아몬드타워 | Landmarks and Outdoors > Scenic Lookout | 0원
       대안: 금련산전망대 | Landmarks and Outdoors > Scenic Lookout | 0원
       대안: 빛으로 명상 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 부산아시아드주경기장 (Busan Asiad Main Stadium) | Arts and Entertainment > Stadium > Track Stadium | 0원
   #12 19:47-20:17  롯데호텔 부산 | Travel and Transportation > Lodging | 부산진구 | Busan
       이동: CAR 3분 1.95km 585원
       비용: 120000원 / 메모: -
@@ -73,9 +73,9 @@
   #17 18:45-19:45  광안리해수욕장 | Landmarks and Outdoors > Tourist Attraction | 수영구 | Busan
       이동: CAR 5분 3.11km 933원
       비용: 0원 / 메모: -
+      대안: 부산다이아몬드타워 | Landmarks and Outdoors > Scenic Lookout | 0원
       대안: 다대포 꿈의 낙조분수 | Landmarks and Outdoors > Fountain | 0원
       대안: 빛으로 명상 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 금련산전망대 | Landmarks and Outdoors > Scenic Lookout | 0원
   #18 19:57-20:27  롯데호텔 부산 | Travel and Transportation > Lodging | 부산진구 | Busan
       이동: CAR 12분 7.47km 2241원
       비용: 120000원 / 메모: -
@@ -86,9 +86,9 @@
   #19 08:49-10:19  오륙도 (부산 국가지질공원) | Landmarks and Outdoors > Tourist Attraction | - | Busan
       이동: CAR 19분 12.63km 3788원
       비용: 0원 / 메모: -
+      대안: 부산다이아몬드타워 | Landmarks and Outdoors > Scenic Lookout | 0원
       대안: 이기대해안산책로 | Sports and Recreation > Outdoor Activity | 0원
       대안: 금련산전망대 | Landmarks and Outdoors > Scenic Lookout | 0원
-      대안: 부산다이아몬드타워 | Landmarks and Outdoors > Scenic Lookout | 0원
   #20 11:30-12:40  욜로조개구이 | Dining and Drinking > Restaurant | 영도구 | Busan
       이동: CAR 12분 7.4km 2219원
       비용: 13000원 / 메모: -
@@ -135,14 +135,14 @@
       대안: 텐테이블펜션 | Travel and Transportation > Lodging > Vacation Rental | 120000원
       대안: 반월풀빌라 | Travel and Transportation > Lodging > Vacation Rental | 120000원
 == day 6 ==
-  #30 09:00-10:30  유엔기념공원 | Landmarks and Outdoors > Tourist Attraction | - | Busan
-      이동: CAR 10분 6.31km 1894원
+  #30 09:00-10:30  국립해양박물관 | Arts and Entertainment > Cultural Center | 영도구 | Busan
+      이동: CAR 18분 11.75km 3524원
       비용: 0원 / 메모: -
+      대안: 부산다이아몬드타워 | Landmarks and Outdoors > Scenic Lookout | 0원
       대안: 금련산전망대 | Landmarks and Outdoors > Scenic Lookout | 0원
       대안: 다대포 꿈의 낙조분수 | Landmarks and Outdoors > Fountain | 0원
-      대안: 이기대해안산책로 | Sports and Recreation > Outdoor Activity | 0원
   #31 11:30-12:40  바다당 | Dining and Drinking > Restaurant > Comfort Food Restaurant | Haeundae | Busan
-      이동: CAR 19분 12.49km 3746원
+      이동: CAR 27분 17.85km 5356원
       비용: 13000원 / 메모: -
       대안: 조개 구남 | Dining and Drinking > Restaurant > Seafood Restaurant | 13000원
       대안: 해변짚불곰장어 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
@@ -152,7 +152,7 @@
       비용: 0원 / 메모: -
       대안: 임랑해수욕장 | Landmarks and Outdoors > Tourist Attraction | 0원
       대안: BUSAN X the SKY | Landmarks and Outdoors > Scenic Lookout | 0원
-      대안: 부산다이아몬드타워 | Landmarks and Outdoors > Scenic Lookout | 0원
+      대안: 이기대해안산책로 | Sports and Recreation > Outdoor Activity | 0원
   #33 13:59-15:29  해동용궁사 | Community and Government > Spiritual Center > Buddhist Temple | 기장군 | Busan
       이동: CAR 13분 8.33km 2498원
       비용: 0원 / 메모: -

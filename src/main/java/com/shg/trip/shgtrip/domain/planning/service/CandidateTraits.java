@@ -27,12 +27,19 @@ final class CandidateTraits {
                 && PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country());
     }
 
-    /**
-     * 코드가 선택 단계 대신 고를 수 있는 후보인지. 주소 규칙은 보지 않는다. 걸면 주소가 짧은 서울·오사카 후보 절반이 빠진다.
-     * 요청 의도 장소는 경유형·약한 분류·긴 등산이어도 고른다. 셋은 코드가 스스로 늘리지 않을 곳을 거르는 기준이다.
-     */
     static boolean isSelectable(PlaceCandidate c) {
-        return isVisitSpot(c) && (c.keepsPlace() || (!isViaRoute(c) && isWorthFilling(c)));
+        return isSelectable(c, false);
+    }
+
+    /**
+     * 코드가 날짜에 놓을 수 있는 후보인지. 주소 규칙은 보지 않는다. 걸면 주소가 짧은 서울·오사카 후보 절반이 빠진다.
+     * 요청 의도 장소와 선택 단계가 고른 장소는 경유형·약한 분류·긴 등산이어도 놓는다. 셋은 코드가 스스로 늘리지 않을 곳을
+     * 거르는 기준이다.
+     *
+     * @param pickedBySelection 선택 단계가 날짜에 놓았던 장소
+     */
+    static boolean isSelectable(PlaceCandidate c, boolean pickedBySelection) {
+        return isVisitSpot(c) && (c.keepsPlace() || pickedBySelection || (!isViaRoute(c) && isWorthFilling(c)));
     }
 
     private static boolean isVisitSpot(PlaceCandidate c) {

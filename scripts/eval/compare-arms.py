@@ -6,6 +6,7 @@ python3 -I scripts/eval/compare-arms.py v1/report.csv v2/report.csv
 구간 상한 초과는 풀에 바꿔 넣을 후보가 있던 것만 판정하고, 없던 것은 데이터 한계로 보아 값만 낸다.
 요청 의도 장소에 닿는 구간 초과는 두 수에 함께 들어 있고 따로 값만 낸다.
 관광 하한을 못 채운 날·이른 종료·숙소 수·유명도도 기준 없이 값만 낸다.
+기록된 선택 반영 비율은 선택 단계가 고른 장소가 날짜와 상관없이 일정에 들어간 비율이다.
 같은 날 유지는 B의 선택 단계가 고른 관광지가 그날에 남은 비율이라, B가 직접 고른 팔이면 A의 값과 견주는 수치가 아니다.
 기준을 하나라도 못 넘으면 종료 코드가 1이다.
 """
@@ -28,7 +29,8 @@ GAP_SLACK_MINUTES = 10
 SIGHT_FLOOR = {"tight": 3, "normal": 2, "relaxed": 1}
 
 
-REQUIRED_COLUMNS = ("legs_avoidable", "legs_pool_limited", "legs_requested", "short_days", "picked")
+REQUIRED_COLUMNS = ("legs_avoidable", "legs_pool_limited", "legs_requested", "short_days", "picked", "sel_placed",
+                    "sel_kept")
 
 
 def load(path):
@@ -98,6 +100,7 @@ def measure(rows, daily_rows):
     """daily_rows는 일차별 지표를 낼 일정이다. 한쪽에만 빈 날이 있는 일정을 넣으면 두 팔의 분모가 달라진다."""
     meals = sum(int(r["meals"]) for r in rows)
     picked = sum(int(r["picked"] or 0) for r in rows)
+    selected = sum(int(r["sel_placed"]) for r in rows)
     return {
         "일정": len(rows),
         "점수": mean(float(r["total"]) for r in rows),
@@ -119,6 +122,7 @@ def measure(rows, daily_rows):
         "뒤/앞 점수": back_front(daily_rows),
         "빠진 선택 비율": sum(int(r["dropped"] or 0) for r in rows) / picked if picked else float("nan"),
         "관광 하한을 못 채운 날": sum(int(r["short_days"] or 0) for r in rows),
+        "기록된 선택 반영 비율": sum(int(r["sel_kept"]) for r in rows) / selected if selected else float("nan"),
         "이른 종료 건수": sum(int(r["EARLY_FINISH"]) for r in rows),
         "숙소 수": mean(float(r["lodgings"]) for r in rows),
         "뒤-앞 유명도": late_prominence(daily_rows),

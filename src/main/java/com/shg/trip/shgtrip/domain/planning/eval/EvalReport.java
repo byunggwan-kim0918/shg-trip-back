@@ -350,6 +350,7 @@ final class EvalReport {
         for (ItineraryRules.Rule rule : ItineraryRules.Rule.values()) sb.append(',').append(rule);
         sb.append(",days,pace,transport,multi_city,joined,pool,search_pool,zones,day_scores,day_visits,day_prominence,day_end");
         sb.append(",picked,dropped,filled,drop_reasons,legs_avoidable,legs_pool_limited,legs_requested,short_days");
+        sb.append(",sel_placed,sel_kept");
         sb.append('\n');
         for (EvalRunner.Row r : rows) {
             if (r.saved() != null) line(sb, r, "saved", r.saved(), r.savedRules());
@@ -408,6 +409,9 @@ final class EvalReport {
                 .append(',').append(overCap == null ? "" : overCap.poolLimited())
                 .append(',').append(overCap == null ? "" : overCap.requested())
                 .append(',').append(serial == null ? "" : serial.stream().filter(d -> d.shortfall() > 0).count());
+        EvalRunner.PickUse pickUse = "replayed".equals(source) ? r.pickUse() : null;
+        sb.append(',').append(pickUse == null ? "" : pickUse.placed())
+                .append(',').append(pickUse == null ? "" : pickUse.kept());
         sb.append('\n');
     }
 
