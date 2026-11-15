@@ -367,6 +367,74 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("근처 숙소 보완이 이름 표기만 다른 같은 숙소를 두 번 덧붙이지 않는다")
+    void nearbyLodgingSkipsSamePlaceWrittenDifferently() {
+        PlaceCandidate hotel = new PlaceCandidate(9, 900L, "시부야 호텔", "시부야구 도겐자카 1-1",
+                "Travel and Transportation > Lodging > Hotel", List.of(), "Tokyo", "JP",
+                BigDecimal.valueOf(35.6590), BigDecimal.valueOf(139.7005), null, null, 0.8);
+        PlaceCandidate hotelTwin = new PlaceCandidate(10, 901L, "시부야 호텔 (Shibuya Hotel)", "도겐자카 1-1",
+                "Travel and Transportation > Lodging > Hotel", List.of(), "Tokyo", "JP",
+                BigDecimal.valueOf(35.6592), BigDecimal.valueOf(139.7007), null, null, 0.8);
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
+        when(vectorSearchQueryService.search(eq(vectorEnrichedInput), any())).thenReturn(candidates);
+        when(vectorSearchQueryService.searchAccommodationsNear(any(), any(), anyDouble(), anyInt(), anyInt()))
+                .thenReturn(List.of(hotel, hotelTwin));
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of());
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList(), any())).thenReturn(selectionOutput);
+        when(routeOptimizer.schedule(any(), anyList(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(49L);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
+
+        executor.execute("job-l", request, 1L, emitter);
+
+        ArgumentCaptor<List<PlaceCandidate>> scheduled = ArgumentCaptor.forClass(List.class);
+        verify(routeOptimizer).schedule(any(), scheduled.capture(), any());
+        assertThat(scheduled.getValue()).extracting(PlaceCandidate::name)
+                .contains("시부야 호텔").doesNotContain("시부야 호텔 (Shibuya Hotel)");
+    }
+
+    @Test
+    @DisplayName("날짜별 예비 후보가 이름 표기만 다른 이미 있는 후보면 덧붙이지 않는다")
+    @SuppressWarnings("unchecked")
+    void reserveSkipsSamePlaceWrittenDifferently() {
+        PlaceCandidate twin = new PlaceCandidate(1, 501L, "센소지 (浅草寺)", "주소", "관광", List.of("사찰"), "아사쿠사",
+                "일본", BigDecimal.valueOf(35.7150), BigDecimal.valueOf(139.7969), null, null, 0.7);
+        PlaceCandidate udon = new PlaceCandidate(1, 502L, "우동 신", "주소", "식당", List.of("우동"), "시부야", "일본",
+                BigDecimal.valueOf(35.6590), BigDecimal.valueOf(139.7020), null, null, 0.7);
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
+        when(vectorSearchQueryService.search(any(), any())).thenReturn(candidates);
+        when(vectorSearchQueryService.searchNearEach(any(), any(), anyList(), anyDouble(), anyInt()))
+                .thenReturn(List.of(List.of(twin, udon)));
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
+        when(selectionCallGenerator.selectPlaces(any(), anyList(), any())).thenReturn(selectionOutput);
+        when(routeOptimizer.schedule(any(), anyList(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(48L);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
+
+        executor.execute("job-t", request, 1L, emitter);
+
+        ArgumentCaptor<List<PlaceCandidate>> scheduled = ArgumentCaptor.forClass(List.class);
+        verify(routeOptimizer).schedule(any(), scheduled.capture(), any());
+        assertThat(scheduled.getValue()).extracting(PlaceCandidate::name)
+                .contains("센소지", "우동 신").doesNotContain("센소지 (浅草寺)");
+    }
+
+    @Test
     @DisplayName("피할 장소는 선택 단계 전 풀·날짜별 예비 후보·근처 숙소 검색 모두에서 빠지고, 출처만 다른 같은 장소도 빠진다")
     @SuppressWarnings("unchecked")
     void avoidedPlacesNeverReachSelectionOrSchedule() {
@@ -714,6 +782,65 @@ class OptimizedGenerationExecutorTest {
 
         assertThat(executor.dedupePhysicalCandidates(List.of(palace, museum, peace, peaceMuseum)))
                 .extracting(PlaceCandidate::placeId).containsExactly(41L, 43L, 44L);
+    }
+
+    @Test
+    @DisplayName("이름 표기만 다른 출처별 행은 언어판·보강 정보가 많은 행, 같으면 짧은 이름 행 하나만 남긴다")
+    void dedupe_mergesSamePlaceWrittenDifferently() {
+        PlaceCandidate prefixed = koreanRow(1, 51L, "경주 첨성대", "Landmarks and Outdoors > Tourist Attraction",
+                "Gyeongju", 35.8347, 129.2190, 31, "SIGHT");
+        PlaceCandidate plain = koreanRow(2, 52L, "첨성대", "Landmarks and Outdoors > Historic and Protected Site",
+                "Gyeongju", 35.8352, 129.2191, 31, "SIGHT");
+        PlaceCandidate market = koreanRow(3, 53L, "부산 기장시장", "Retail > Market", "Busan", 35.2445, 129.2222, 0,
+                "MARKET");
+        PlaceCandidate bareMarket = koreanRow(4, 54L, "기장시장", "Retail > Market", "Busan", 35.2446, 129.2223, 0,
+                null);
+        PlaceCandidate spaced = koreanRow(5, 56L, "제주 곶자왈도립공원", "Landmarks and Outdoors > Park", "Jeju",
+                33.3134, 126.2767, 0, "SIGHT");
+        PlaceCandidate park = koreanRow(6, 55L, "제주곶자왈도립공원", "Landmarks and Outdoors > Tourist Attraction",
+                "Jeju", 33.3133, 126.2766, 2, "SIGHT");
+
+        PlaceCandidate soup = new PlaceCandidate(7, 60L, "부산 할매국밥", "x", "Dining and Drinking > Restaurant",
+                List.of(), "Busan", "KR", BigDecimal.valueOf(35.1000), BigDecimal.valueOf(129.0300), null, null, 0.5,
+                null, null, null, null, false, null, null, null, 0, "MEAL", "SOUP", false, null, null, null);
+        PlaceCandidate bareSoup = new PlaceCandidate(8, 61L, "할매국밥", "x", "Dining and Drinking > Restaurant",
+                List.of(), "Busan", "KR", BigDecimal.valueOf(35.1002), BigDecimal.valueOf(129.0302), null, null, 0.5,
+                null, null, null, null, false, null, null, null, 0, "MEAL", null, false, null, null, null);
+
+        PlaceCandidate fishMarket = koreanRow(9, 62L, "자갈치시장 (Jagalchi Market)", "Retail > Market", "Busan", 35.0966,
+                129.0306, 0, "MARKET");
+        PlaceCandidate namesake = new PlaceCandidate(10, 63L, "자갈치시장", "x", "Dining and Drinking > Restaurant",
+                List.of(), "Busan", "KR", BigDecimal.valueOf(35.0968), BigDecimal.valueOf(129.0308), null, null, 0.5,
+                null, null, null, 70, false, null, null, null, 0, "MEAL", "SEAFOOD", false, null, null, null);
+
+        List<PlaceCandidate> kept = executor.dedupePhysicalCandidates(
+                List.of(prefixed, plain, market, bareMarket, spaced, park, soup, bareSoup, fishMarket, namesake));
+
+        assertThat(kept).extracting(PlaceCandidate::placeId).containsExactly(52L, 53L, 55L, 60L, 62L, 63L);
+        assertThat(kept).extracting(PlaceCandidate::index).containsExactly(1, 2, 3, 4, 5, 6);
+    }
+
+    @Test
+    @DisplayName("사용자가 고른 행은 같은 장소의 다른 행보다 정보가 적어도 남기고, 고른 행끼리는 합치지 않는다")
+    void dedupe_keepsUserSelectedRowOfSamePlace() {
+        PlaceCandidate chosen = koreanRow(1, 57L, "수원박물관 Suwon Museum",
+                "Arts and Entertainment > Museum > History Museum", "Suwon", 37.2875, 127.0257, 0, null).asUserSelected();
+        PlaceCandidate museum = koreanRow(2, 58L, "수원박물관", "Arts and Entertainment > Cultural Center", "Suwon",
+                37.2877, 127.0259, 4, "SIGHT");
+        PlaceCandidate alsoChosen = koreanRow(3, 59L, "수원박물관", "Arts and Entertainment > Museum", "Suwon",
+                37.2876, 127.0258, 0, null).asUserSelected();
+
+        assertThat(OptimizedGenerationExecutor.mergeSamePlaces(List.of(chosen, museum)))
+                .extracting(PlaceCandidate::placeId).containsExactly(57L);
+        assertThat(OptimizedGenerationExecutor.mergeSamePlaces(List.of(chosen, museum, alsoChosen)))
+                .extracting(PlaceCandidate::placeId).containsExactlyInAnyOrder(57L, 59L);
+    }
+
+    private static PlaceCandidate koreanRow(int index, long id, String name, String category, String region,
+                                            double lat, double lng, int sitelinks, String role) {
+        return new PlaceCandidate(index, id, name, "x", category, List.of(), region, "KR", BigDecimal.valueOf(lat),
+                BigDecimal.valueOf(lng), null, null, 0.5, null, null, null, null, false, null, null, null, sitelinks,
+                role, null, false, null, null, null);
     }
 
     @Test

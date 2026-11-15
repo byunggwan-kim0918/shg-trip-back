@@ -147,4 +147,22 @@ class PlaceIdentityTest {
         assertThat(PlaceIdentity.sameByName("명동교자",
                 place(44, "명동교자 2", RESTAURANT, "Seoul", 37.5630, 126.9855, 0))).isFalse();
     }
+
+    @Test
+    @DisplayName("이름 키는 대소문자·띄어쓰기·문장부호만 지우고 지역·대분류로 나누며, 괄호 설명·영문 병기·짧은 이름은 묶지 않는다")
+    void nameKey() {
+        String park = "Landmarks and Outdoors > Park";
+        String cafe = "Dining and Drinking > Cafe";
+
+        assertThat(PlaceIdentity.nameKey("제주곶자왈도립공원", "Jeju", park))
+                .isEqualTo(PlaceIdentity.nameKey("제주 곶자왈도립공원", "Jeju", park));
+        assertThat(PlaceIdentity.nameKey("Café de Flore", "Seoul", cafe))
+                .isNotEqualTo(PlaceIdentity.nameKey("Café Paul", "Seoul", cafe));
+        assertThat(PlaceIdentity.nameKey("에버랜드 (주토피아)", "Yongin", park))
+                .isNotEqualTo(PlaceIdentity.nameKey("에버랜드", "Yongin", park));
+        assertThat(PlaceIdentity.nameKey("자갈치시장", "Busan", RESTAURANT))
+                .isNotEqualTo(PlaceIdentity.nameKey("자갈치시장", "Busan", "Retail > Market"));
+        assertThat(PlaceIdentity.nameKey("회", "Busan", RESTAURANT)).isNull();
+        assertThat(PlaceIdentity.nameKey(" ", "Busan", RESTAURANT)).isNull();
+    }
 }

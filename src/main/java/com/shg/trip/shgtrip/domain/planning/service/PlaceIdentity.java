@@ -33,6 +33,7 @@ public final class PlaceIdentity {
      */
     private static final double SAME_NAME_STAY_KM = 0.1;
     private static final int MIN_BARE_NAME = 2;
+    private static final Pattern NAME_SEPARATORS = Pattern.compile("[\\s\\p{Punct}\\p{IsPunctuation}]+");
     private static final Pattern TRAILING_NOTE = Pattern.compile("\\s*[(（\\[][^()（）\\[\\]]*[)）\\]]\\s*$");
     /** 영어 이름 꼬리. 괄호로 감싼 병기("東京ドームシティ (Tokyo Dome City)")도 받는다. */
     private static final Pattern LATIN_TAIL = Pattern.compile("[\\s(（]+[A-Za-z0-9][A-Za-z0-9 .,'’&()（）/-]*");
@@ -69,6 +70,16 @@ public final class PlaceIdentity {
         addForms(mine, name, other.region());
         return overlaps(mine, bareNames(other)) || isBilingualTwin(name, other)
                 || (other.name() != null && isBilingualName(other.name().strip(), name.strip()));
+    }
+
+    /**
+     * 같은 지역·대분류에서 대소문자·띄어쓰기·문장부호만 지운 원래 이름, 너무 짧으면 null. 괄호 설명·영문 병기를 떼면 하위 시설
+     * ("에버랜드 (주토피아)")과 다른 가게("Café …")까지 묶이고, 보강 한국어 이름은 다른 장소에도 같게 붙어 쓰지 않는다.
+     */
+    static String nameKey(String name, String region, String category) {
+        String compact = name == null ? "" : compact(name);
+        if (compact.length() < MIN_BARE_NAME) return null;
+        return region + "|" + PlaceCategoryConstants.majorCategory(category) + "|" + compact;
     }
 
     /** 이름 끝 괄호 설명("용지봉 (634m)")과 앞에 붙은 그 지역 도시 이름("강릉 경포대")을 뗀 이름. null이면 빈 문자열이다. */
@@ -118,7 +129,7 @@ public final class PlaceIdentity {
     }
 
     private static String compact(String name) {
-        return name.toLowerCase(Locale.ROOT).replaceAll("[\\s\\p{Punct}\\p{IsPunctuation}]+", "");
+        return NAME_SEPARATORS.matcher(name.toLowerCase(Locale.ROOT)).replaceAll("");
     }
 
     private static boolean isBilingualTwin(String name, PlaceCandidate base) {

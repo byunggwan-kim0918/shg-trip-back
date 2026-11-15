@@ -454,7 +454,7 @@ public class OptimizedGenerationExecutor {
             for (List<PlaceCandidate> found : vectorSearchQueryService.searchNearEach(
                     input, role.getKey(), centers, radius, role.getValue())) {
                 for (PlaceCandidate c : excludeUnwanted(found, exclusions, input)) {
-                    if (!addIfNew(known, c)) continue;
+                    if (!addIfNew(known, result, c)) continue;
                     result.add(reindexCandidate(c, result.size() + 1));
                 }
             }
@@ -507,7 +507,7 @@ public class OptimizedGenerationExecutor {
             List<PlaceCandidate> extra = vectorSearchQueryService.searchAccommodationsNear(
                     input, centroid, LOCAL_STAY_RADIUS_KM, LOCAL_STAY_LIMIT, result.size() + 1);
             for (PlaceCandidate c : excludeUnwanted(extra, exclusions, input)) {
-                if (!addIfNew(knownPlaceIds, c)) continue; // 이미 있는 숙소
+                if (!addIfNew(knownPlaceIds, result, c)) continue; // 이미 있는 숙소
                 result.add(reindexCandidate(c, result.size() + 1));
             }
         }
@@ -679,6 +679,7 @@ public class OptimizedGenerationExecutor {
         representatives = dropStoresInsideVenue(representatives);
         representatives = dropWikidataTwins(representatives);
         representatives = dropNestedWikidataItems(representatives);
+        representatives = mergeSamePlaces(representatives);
 
         representatives.sort(Comparator.comparingInt(PlaceCandidate::index));
         List<PlaceCandidate> result = new ArrayList<>(representatives.size());
@@ -747,6 +748,48 @@ public class OptimizedGenerationExecutor {
         return result;
     }
 
+    /** 남는 행의 언어판·보강 칸을 인기 순위와 시각 계산이 쓰고 이름은 화면에 그대로 나와, 정보가 많고 꾸밈 없는 행을 남긴다. */
+    private static final Comparator<PlaceCandidate> SAME_PLACE_KEEP = Comparator
+            .comparing(PlaceCandidate::userSelected)
+            .thenComparingInt((PlaceCandidate c) -> c.wikidataSitelinks() == null ? 0 : c.wikidataSitelinks())
+            .thenComparingInt(OptimizedGenerationExecutor::enrichedFields)
+            .thenComparing(OptimizedGenerationExecutor::isTrustedCategory)
+            .thenComparing(OptimizedGenerationExecutor::hasKoreanName)
+            .thenComparing(Comparator.comparingInt((PlaceCandidate c) -> compactName(c).length()).reversed())
+            .thenComparing(Comparator.comparingInt(PlaceCandidate::index).reversed());
+
+    /**
+     * 이름 표기만 다른 출처별 행("경주 첨성대"·"첨성대")은 좌표·이름 키를 지나가 같은 곳이 스텝과 대안에 따로 나온다.
+     * 남긴 행과만 비교해 비슷한 이름끼리 이어 붙지 않게 하고, 명소 이름을 딴 식당이 명소를 밀어내지 않게 대분류가 같을 때만 합친다.
+     */
+    static List<PlaceCandidate> mergeSamePlaces(List<PlaceCandidate> candidates) {
+        List<PlaceCandidate> kept = new ArrayList<>(candidates.size());
+        for (PlaceCandidate c : candidates.stream().sorted(SAME_PLACE_KEEP.reversed()).toList()) {
+            PlaceCandidate twin = null;
+            Optional<PlaceIdentity.Basis> basis = Optional.empty();
+            for (int i = 0; i < kept.size() && twin == null && !c.userSelected(); i++) {
+                basis = sameMajor(c, kept.get(i)) ? PlaceIdentity.sameAs(c, kept.get(i)) : Optional.empty();
+                if (basis.isPresent()) twin = kept.get(i);
+            }
+            if (twin == null) {
+                kept.add(c);
+            } else {
+                log.info("같은 장소 행 합침: {}(id={}) → {}(id={}), 근거 {}", c.name(), c.placeId(), twin.name(),
+                        twin.placeId(), basis.get());
+            }
+        }
+        return kept;
+    }
+
+    private static boolean sameMajor(PlaceCandidate a, PlaceCandidate b) {
+        return PlaceCategoryConstants.majorCategory(a.category()).equals(PlaceCategoryConstants.majorCategory(b.category()));
+    }
+
+    private static int enrichedFields(PlaceCandidate c) {
+        return (c.placeRole() != null ? 1 : 0) + (c.cuisine() != null ? 1 : 0) + (c.attributes() != null ? 1 : 0)
+                + (c.recommendedDurationMinutes() != null ? 1 : 0);
+    }
+
     private static boolean isRetail(PlaceCandidate c) {
         return c.category() != null && c.category().toLowerCase().startsWith("retail");
     }
@@ -802,6 +845,11 @@ public class OptimizedGenerationExecutor {
         return keys;
     }
 
+    /** 이름 표기만 다른 출처별 행은 키가 달라 이미 있는 후보와 같은 장소인지 따로 본다. */
+    private boolean addIfNew(Set<String> keys, List<PlaceCandidate> pool, PlaceCandidate c) {
+        return pool.stream().noneMatch(p -> PlaceIdentity.sameAs(c, p).isPresent()) && addIfNew(keys, c);
+    }
+
     private boolean addIfNew(Set<String> keys, PlaceCandidate c) {
         List<String> mine = new ArrayList<>(3);
         if (c.placeId() != null) mine.add("id:" + c.placeId());
@@ -828,14 +876,14 @@ public class OptimizedGenerationExecutor {
                 && !(c.latitude().signum() == 0 && c.longitude().signum() == 0);
     }
 
-    private boolean hasKoreanName(PlaceCandidate c) {
+    private static boolean hasKoreanName(PlaceCandidate c) {
         if (c.nameKo() != null && !c.nameKo().isBlank()) return true;
         return c.name() != null && c.name().codePoints()
                 .anyMatch(cp -> Character.UnicodeScript.of(cp) == Character.UnicodeScript.HANGUL);
     }
 
     /** TRANSIT_HUB로 분류됐으나 이름(원문·한국어)에 허브 신호가 없으면 오분류로 본다. */
-    private boolean isTrustedCategory(PlaceCandidate c) {
+    private static boolean isTrustedCategory(PlaceCandidate c) {
         boolean isHub = "TRANSIT_HUB".equals(PlaceCategoryConstants.majorCategory(c.category()));
         return !(isHub && !PlaceCategoryConstants.hasTransitNameSignal(c.name())
                 && !PlaceCategoryConstants.hasTransitNameSignal(c.nameKo()));
@@ -843,7 +891,7 @@ public class OptimizedGenerationExecutor {
 
     /**
      * 덧붙인 후보 중 앞선 후보와 같은 위키데이터 항목이거나, 다른 후보 건물 안 매장이거나, 앞선 후보와 명소 중복 행인 것을 뺀다.
-     * 출처별 행·매장은 이름·좌표가 달라 addIfNew를 통과한다.
+     * 후보에는 Wikidata 항목 id가 없어, 이름이 다른 같은 항목 행은 DB에서 항목 id를 읽어야 걸러진다.
      * 덧붙인 후보는 선택에 없어 번호를 다시 매겨도 된다.
      */
     List<PlaceCandidate> dropAppendedSameWikidataItem(List<PlaceCandidate> candidates, int baseSize) {

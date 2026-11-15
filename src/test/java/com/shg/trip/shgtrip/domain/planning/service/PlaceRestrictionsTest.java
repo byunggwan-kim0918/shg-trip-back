@@ -250,6 +250,56 @@ class PlaceRestrictionsTest {
     }
 
     @Test
+    @DisplayName("출처별 행 중 한쪽에만 요리 분류가 있어도 같은 장소로 보이는 행은 함께 뺀다")
+    void excludesTwinOfRestrictedRow() {
+        PlaceCandidate tagged = at(dining("할매집", "SEAFOOD", "식당", "해산물"), 11L, 35.1631, 129.1636);
+        PlaceCandidate untagged = at(dining("할매집", "KOREAN_SET", "식당", "한식"), 12L, 35.1634, 129.1639);
+        PlaceCandidate sameBuilding = at(dining("명동교자", "NOODLE", "식당", "칼국수"), 13L, 35.1631, 129.1636);
+        PlaceCandidate chosenTwin = at(dining("할매집", "KOREAN_SET", "식당"), 14L, 35.1632, 129.1637).asUserSelected();
+
+        assertThat(PlaceRestrictions.of(List.of(SEAFOOD)).exclude(List.of(tagged, untagged, sameBuilding, chosenTwin)))
+                .containsExactly(sameBuilding, chosenTwin);
+    }
+
+    @Test
+    @DisplayName("같은 이름이어도 대분류가 다른 시장과 영문 병기가 붙은 다른 표기는 남기고, 같은 이름 행은 멀어도 함께 뺀다")
+    void twinPropagationScope() {
+        PlaceCandidate seafoodRow = at(dining("자갈치시장", "SEAFOOD", "식당", "해산물"), 21L, 35.0966, 129.0306);
+        PlaceCandidate market = at(place("자갈치시장", "Retail > Market", List.of("해산물"), null, "MARKET", null), 22L,
+                35.0967, 129.0307);
+        PlaceCandidate tagged = at(dining("할매집", "SEAFOOD", "식당", "해산물"), 23L, 35.1631, 129.1636);
+        PlaceCandidate spaced = at(dining("할매 집", "KOREAN_SET", "식당"), 24L, 35.1632, 129.1637);
+        PlaceCandidate farBranch = at(dining("할매집", "KOREAN_SET", "식당"), 25L, 35.2500, 129.2200);
+        PlaceCandidate bilingual = at(dining("할매집 Halmae House", "KOREAN_SET", "식당"), 26L, 35.1633, 129.1638);
+
+        assertThat(PlaceRestrictions.of(List.of(SEAFOOD))
+                .exclude(List.of(seafoodRow, market, tagged, spaced, farBranch, bilingual)))
+                .extracting(PlaceCandidate::placeId).containsExactly(22L, 26L);
+    }
+
+    @Test
+    @DisplayName("박물관 기관 항목에 걸린 조건은 같은 곳의 장소 항목(궁궐)으로 옮기지 않는다")
+    void keepsSiteOfRestrictedInstitution() {
+        PlaceCandidate palace = item(41L, "故宫", "Landmarks and Outdoors > Palace", 39.9163, 116.3972, 106);
+        PlaceCandidate museum = item(42L, "故宫博物院", "Arts and Entertainment > Museum", 39.9180, 116.3970, 20);
+
+        assertThat(PlaceIdentity.sameAs(palace, museum)).isPresent();
+        assertThat(PlaceRestrictions.of(List.of(MUSEUM)).exclude(List.of(palace, museum))).containsExactly(palace);
+    }
+
+    private static PlaceCandidate item(long id, String name, String category, double lat, double lng, int sitelinks) {
+        return new PlaceCandidate(1, id, name, "주소", category, List.of(), "Beijing", "CN", BigDecimal.valueOf(lat),
+                BigDecimal.valueOf(lng), null, null, 0.8, null, null, null, null, false, null, null, null, sitelinks,
+                "SIGHT", null, false, null, null, null);
+    }
+
+    private static PlaceCandidate at(PlaceCandidate c, long id, double lat, double lng) {
+        return new PlaceCandidate(c.index(), id, c.name(), c.address(), c.category(), c.tags(), c.region(),
+                c.country(), BigDecimal.valueOf(lat), BigDecimal.valueOf(lng), null, null, 0.8, null, null, null, null,
+                false, null, null, null, null, c.placeRole(), c.cuisine(), false, null, c.attributes(), null);
+    }
+
+    @Test
     @DisplayName("요리 분류도 종류 태그도 없는 식당만 종류 미상으로 본다")
     void unknownFood() {
         PlaceRestrictions seafood = PlaceRestrictions.of(List.of(SEAFOOD));
