@@ -351,6 +351,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     /**
      * 보강 컬럼만 쓴다. 엔티티째 저장하면 결과를 기다린 동안(최대 하루) 바뀐 컬럼을 그때 읽은 값으로 되돌린다.
      * 배열은 chr(31)로 이은 문자열로 받고, name_ko는 비어 있을 때만 채운다(Wikidata 라벨·보정표 우선).
+     * 주재료는 옛 태그·설명을 보고 받은 답이라 지운다.
      */
     @Modifying
     @Transactional
@@ -368,6 +369,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 name_ko = COALESCE(name_ko, CAST(:nameKo AS varchar)),
                 traveler_fame = COALESCE(CAST(:fame AS smallint), traveler_fame),
                 enriched_at = CAST(:enrichedAt AS timestamptz),
+                attributes = attributes - 'ingredients',
                 updated_at = now()
              WHERE id = :id
             """, nativeQuery = true)
@@ -455,7 +457,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     /**
      * 총칭 "Restaurant"로 적재된 TourAPI 음식점의 업종 카테고리를 갱신한다. category가 임베딩 텍스트에
      * 들어가므로 임베딩을 비워 다음 배치가 다시 만들게 한다. 보강 결과(태그·역할·음식 종류)도 옛 업종
-     * 기준이라 함께 비운다. 안 비우면 베이커리로 바뀐 행에 "식당" 태그가 남아 식사도 카페도 아닌 상태가 된다.
+     * 기준이라 함께 비운다(주재료 포함). 안 비우면 베이커리로 바뀐 행에 "식당" 태그가 남아 식사도 카페도 아닌 상태가 된다.
      * 배치 호출이라 트랜잭션이 필요하다.
      *
      * @return 고친 행 수
@@ -465,7 +467,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     @Query(value = """
             UPDATE places
             SET category = :category, embedding = NULL, enriched_at = NULL, place_role = NULL, cuisine = NULL,
-                updated_at = now()
+                attributes = attributes - 'ingredients', updated_at = now()
             WHERE name = :name AND region = :region AND source = 'tourapi'
               AND category = 'Dining and Drinking > Restaurant'
             """, nativeQuery = true)
@@ -640,7 +642,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * 속성 분류만 교체한다. 엔티티 save는 배치 대기(수 시간) 전에 읽은 값으로 행 전체를 덮어써
      * 그사이 갱신된 last_candidate_at·TourAPI 원문(official)을 되돌린다.
      *
-     * @param classifiedJson official을 뺀 {@link com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes} JSON
+     * @param classifiedJson official·주재료를 뺀 {@link com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes} JSON
      */
     @Modifying
     @Transactional
@@ -654,6 +656,47 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             """, nativeQuery = true)
     int writeAttributeClassification(@Param("id") Long id, @Param("classifiedJson") String classifiedJson,
                                      @Param("version") short version);
+
+    /**
+     * 주재료를 아직 묻지 않은 끼니·술집 식당과 간식·노점. 태그·설명이 물을 근거라 v1 보강을 마친 행만 고른다.
+     * 역할·업종이 없는 식음료 행은 생성 단계({@code CandidatePolicy.estimateRole})가 이름으로 끼니를 가려 넓게 넣는다.
+     */
+    String INGREDIENT_TARGETS = """
+            active AND region IN (:regions) AND enriched_at IS NOT NULL
+              AND (attributes IS NULL OR attributes -> 'ingredients' IS NULL)
+              AND (place_role IN ('MEAL', 'BAR')
+                   OR (place_role = 'CAFE' AND (attributes ->> 'venue' = 'SNACK' OR category ILIKE '%snack place%'
+                       OR category ILIKE '%food truck%' OR category ILIKE '%food stand%'))
+                   OR (place_role IS NULL AND attributes ->> 'lodgingType' IS NULL
+                       AND (attributes ->> 'venue' IN ('MEAL', 'BAR', 'SNACK')
+                            OR (attributes ->> 'venue' IS NULL AND category ILIKE 'Dining and Drinking%'))))
+            """;
+
+    @Query(value = "SELECT * FROM places WHERE " + INGREDIENT_TARGETS + """
+              AND id NOT IN (:excludedIds)
+            ORDER BY last_candidate_at DESC NULLS LAST, COALESCE(wikidata_sitelinks, 0) DESC, id
+            """, nativeQuery = true)
+    List<Place> findIngredientTargetsInRegions(@Param("regions") List<String> regions,
+                                               @Param("excludedIds") Collection<Long> excludedIds,
+                                               Pageable pageable);
+
+    @Query(value = "SELECT COUNT(*) FROM places WHERE " + INGREDIENT_TARGETS, nativeQuery = true)
+    long countIngredientTargetsInRegions(@Param("regions") List<String> regions);
+
+    /**
+     * 주재료 키만 넣는다. 속성 보강·TourAPI 원문이 쓰는 다른 키는 그대로 둔다.
+     *
+     * @param ingredientsJson {@link com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes#INGREDIENTS} 값의 JSON 배열
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places
+            SET attributes = COALESCE(attributes, CAST('{}' AS jsonb))
+                             || jsonb_build_object('ingredients', CAST(:ingredientsJson AS jsonb))
+            WHERE id = :id
+            """, nativeQuery = true)
+    int writeIngredients(@Param("id") Long id, @Param("ingredientsJson") String ingredientsJson);
 
     /**
      * TourAPI 매칭 대상 (id, name, category, latitude, longitude). 후보 등장·인기 장소 중 아직 시도하지 않은 것.
@@ -699,13 +742,19 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /**
      * 상세 원문을 attributes.official에 넣고, 판독된 영업시간·요금만 덮어쓴다(null이면 기존 값 유지).
-     * 분류 키는 건드리지 않는다.
+     * 분류 키는 건드리지 않는다. 대표 메뉴({@code IngredientEnrichment.MENU_FIELDS})가 바뀌면 주재료는
+     * 그 메뉴를 보고 다시 묻도록 지운다.
      */
     @Modifying
     @Transactional
     @Query(value = """
             UPDATE places
-            SET attributes = COALESCE(attributes, CAST('{}' AS jsonb))
+            SET attributes = (CASE WHEN attributes -> 'official' ->> 'firstmenu'
+                                            IS DISTINCT FROM CAST(:officialJson AS jsonb) ->> 'firstmenu'
+                                        OR attributes -> 'official' ->> 'treatmenu'
+                                            IS DISTINCT FROM CAST(:officialJson AS jsonb) ->> 'treatmenu'
+                                   THEN COALESCE(attributes, CAST('{}' AS jsonb)) - 'ingredients'
+                                   ELSE COALESCE(attributes, CAST('{}' AS jsonb)) END)
                              || jsonb_build_object('official', CAST(:officialJson AS jsonb)),
                 opening_hours = COALESCE(CAST(:hours AS varchar), opening_hours),
                 opening_hours_source = CASE WHEN CAST(:hours AS varchar) IS NULL THEN opening_hours_source
@@ -798,8 +847,8 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * <p>enriched_at IS NOT NULL이면 tags/description을 덮어쓰지 않는다. CSV의 tags는 카테고리 복사·파편이라
      * LLM 보강 결과보다 항상 저품질이다. name도 CSV 영문명이 기존 한글명을 되돌리지 않도록 CASE 가드를 둔다.
      *
-     * <p>카테고리가 바뀌면 임베딩·역할·음식 종류·보강 시각을 비운다. 전부 옛 카테고리 기준이라
-     * 남겨 두면 다음 배치가 다시 만들지 않는다. 이름이 바뀌면 임베딩·음식 종류·보강 시각·한국어 이름을 비운다.
+     * <p>카테고리가 바뀌면 임베딩·역할·음식 종류·주재료·보강 시각을 비운다. 전부 옛 카테고리 기준이라
+     * 남겨 두면 다음 배치가 다시 만들지 않는다. 이름이 바뀌면 임베딩·음식 종류·주재료·보강 시각·한국어 이름을 비운다.
      *
      * <p>월간 추출에서 빠져 꺼진 행(deactivated_reason = 'stale')이 다시 나오면 되살린다.
      * 정책으로 끈 행('policy')은 그대로 둔다.
@@ -830,6 +879,9 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 cuisine = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
                                     OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
                                THEN NULL ELSE places.cuisine END,
+                attributes = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                                       OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
+                                  THEN places.attributes - 'ingredients' ELSE places.attributes END,
                 enriched_at = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
                                         OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
                                    THEN NULL ELSE places.enriched_at END,

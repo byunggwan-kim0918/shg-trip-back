@@ -136,7 +136,12 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
 
         // 보강이 tags/description을 채우고 임베딩을 초기화하므로 임베딩보다 먼저 돌아야 같은 실행에 반영된다.
         if (enrichEnabled) {
-            log.info("[3/4] {} 배치 보강 시작", batchEnrichScheduler.attributeMode() ? "속성(v2)" : "태그/설명");
+            BatchEnrichScheduler.Mode mode = batchEnrichScheduler.mode();
+            log.info("[3/4] {} 배치 보강 시작", mode == null ? "알 수 없는 모드의" : switch (mode) {
+                case ATTRIBUTES -> "속성(v2)";
+                case INGREDIENTS -> "식당 주재료";
+                case V1 -> "태그/설명";
+            });
             stage("[3/4] 배치 보강", batchEnrichScheduler::enrich);
         } else {
             log.info("[3/4] 태그/설명 배치 보강 건너뜀 (batch.enrich.enabled=false)");

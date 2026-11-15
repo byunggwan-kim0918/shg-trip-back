@@ -14,6 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class BatchJobRunnerTest {
@@ -79,6 +80,7 @@ class BatchJobRunnerTest {
     void run_wikidataRunsBeforeEnrich() throws Exception {
         ReflectionTestUtils.setField(batchJobRunner, "wikidataEnabled", true);
         ReflectionTestUtils.setField(batchJobRunner, "enrichEnabled", true);
+        when(batchEnrichScheduler.mode()).thenReturn(BatchEnrichScheduler.Mode.V1);
 
         batchJobRunner.run();
 
@@ -93,6 +95,18 @@ class BatchJobRunnerTest {
     @DisplayName("한 단계가 실패해도 다음 단계는 돌고, 종료 코드는 1이다")
     void failedStageKeepsGoingAndExitsNonZero() throws Exception {
         doThrow(new BatchStageFailed("CSV 읽기 실패")).when(foursquareSeeder).seed();
+
+        batchJobRunner.run();
+
+        verify(embeddingBatchJob).execute();
+        assertThat(batchJobRunner.getExitCode()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("보강 모드 값을 알 수 없으면 보강 단계가 실패로 남고 임베딩은 돈다")
+    void unknownEnrichModeFailsOnlyThatStage() throws Exception {
+        ReflectionTestUtils.setField(batchJobRunner, "enrichEnabled", true);
+        doThrow(new BatchStageFailed("알 수 없는 batch.enrich.mode")).when(batchEnrichScheduler).enrich();
 
         batchJobRunner.run();
 

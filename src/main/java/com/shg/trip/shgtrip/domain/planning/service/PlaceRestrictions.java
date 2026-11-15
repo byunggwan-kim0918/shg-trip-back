@@ -126,7 +126,8 @@ final class PlaceRestrictions {
         String role = r.placeRole();
         if (!"MEAL".equals(role) && !(role == null
                 && "DINING".equals(PlaceCategoryConstants.majorCategory(r.category())))) return false;
-        return r.cuisine() == null && (r.tags() == null || r.tags().stream()
+        boolean knowsIngredients = r.attributes() != null && r.attributes().knowsIngredients();
+        return r.cuisine() == null && !knowsIngredients && (r.tags() == null || r.tags().stream()
                 .allMatch(t -> t == null || GENERIC_FOOD_TAGS.contains(t.strip())));
     }
 
@@ -226,7 +227,7 @@ final class PlaceRestrictions {
     private static boolean servesFood(PlaceRestriction r, Facts f) {
         return switch (r) {
             // 타코야키는 공용 분류가 반복 상한용으로 따로 세지만 문어 요리다.
-            case SEAFOOD -> "SEAFOOD".equals(f.cuisine()) || f.tags().contains(SEAFOOD_TAG)
+            case SEAFOOD -> "SEAFOOD".equals(f.cuisine()) || f.tags().contains(SEAFOOD_TAG) || f.ingredient("SEAFOOD")
                     || "seafood".equals(PlaceCategoryConstants.mealGroup(f.dish())) || "takoyaki".equals(f.dish())
                     || SEAFOOD_LEAVES.contains(f.leaf())
                     || f.sushi() || f.tags().stream().anyMatch(RAW_FISH_TAGS::contains)
@@ -236,7 +237,8 @@ final class PlaceRestrictions {
             case PORK -> f.pork();
             case BEEF -> f.beef();
             case CHICKEN -> f.chicken();
-            case MEAT -> f.grill() || f.pork() || f.beef() || f.chicken();
+            case MEAT -> "MEAT".equals(f.cuisine()) || (f.guessesMeat() && f.grill()) || f.pork() || f.beef() || f.chicken()
+                    || PlaceAttributes.MEAT_INGREDIENTS.stream().anyMatch(f::ingredient);
             default -> false;
         };
     }
@@ -337,17 +339,17 @@ final class PlaceRestrictions {
 
         // 닭갈비처럼 닭 요리에 붙은 구이 낱말은 돼지·소로 추정하지 않는다.
         boolean pork() {
-            return tags.contains(PORK_TAG) || namesPork() || (guessesMeat() && grill() && !namesBeef()
+            return tags.contains(PORK_TAG) || ingredient("PORK") || namesPork() || (guessesMeat() && grill() && !namesBeef()
                     && !BEEF_LEAVES.contains(leaf) && !chicken());
         }
 
         boolean beef() {
-            return tags.contains(BEEF_TAG) || namesBeef() || (guessesMeat() && !namesPork()
+            return tags.contains(BEEF_TAG) || ingredient("BEEF") || namesBeef() || (guessesMeat() && !namesPork()
                     && (BEEF_LEAVES.contains(leaf) || (grill() && !chicken())));
         }
 
         boolean chicken() {
-            return tags.contains(CHICKEN_TAG) || mentionsAny(PlaceCategoryConstants.CHICKEN_WORDS)
+            return tags.contains(CHICKEN_TAG) || ingredient("CHICKEN") || mentionsAny(PlaceCategoryConstants.CHICKEN_WORDS)
                     || mentionsAny(CHICKEN_DISH_WORDS) || (guessesMeat() && CHICKEN_LEAVES.contains(leaf));
         }
 
@@ -356,9 +358,17 @@ final class PlaceRestrictions {
                     || mentionsAny(PlaceCategoryConstants.GRILL_WORDS);
         }
 
-        /** Foursquare는 흑돼지 구이집도 steakhouse로 두어 리프·구이 추정은 갈래 태그와 반대쪽 고기 이름이 없을 때만 쓴다. */
+        boolean ingredient(String kind) {
+            return attributes != null && attributes.hasIngredient(kind);
+        }
+
+        /**
+         * Foursquare는 흑돼지 구이집도 steakhouse로 두어 리프·구이 추정은 갈래 태그·보강 주재료처럼 재료를 아는 근거와
+         * 반대쪽 고기 이름이 없을 때만 쓴다.
+         */
         private boolean guessesMeat() {
-            return !tags.contains(PORK_TAG) && !tags.contains(BEEF_TAG) && !tags.contains(CHICKEN_TAG);
+            return !tags.contains(PORK_TAG) && !tags.contains(BEEF_TAG) && !tags.contains(CHICKEN_TAG)
+                    && (attributes == null || !attributes.knowsIngredients());
         }
 
         private boolean namesPork() {

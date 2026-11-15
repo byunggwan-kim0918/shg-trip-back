@@ -18,6 +18,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * 배치 쿼리(Wikidata 매칭·보강 대상)를 실제 PostgreSQL에서 확인한다.
@@ -61,6 +62,159 @@ class PlaceRepositoryBatchQueryTest {
                     .setParameter(1, saved.getId()).executeUpdate();
         }
         return saved;
+    }
+
+    private Place saveWithRole(String name, String role, boolean recentCandidate) {
+        Place p = save(name, "Dining and Drinking > Restaurant", null, true);
+        em.createNativeQuery("UPDATE places SET place_role = ?, last_candidate_at = ? WHERE id = ?")
+                .setParameter(1, role)
+                .setParameter(2, recentCandidate ? OffsetDateTime.now() : null)
+                .setParameter(3, p.getId()).executeUpdate();
+        return p;
+    }
+
+    @Test
+    @DisplayName("주재료 대상은 끼니·술집 중 아직 묻지 않은 행이고, 쓰기는 원문·분류 키를 지키며 속성 보강도 주재료를 남긴다")
+    void ingredientTargetsAndWrites() {
+        Place soup = saveWithRole("큰집 설렁탕", "MEAL", true);
+        Place bar = saveWithRole("광안리 포차", "BAR", false);
+        saveWithRole("카페 소요", "CAFE", true);
+        Place asked = saveWithRole("비빔밥집", "MEAL", true);
+        placeRepository.writeIngredients(asked.getId(), "[]");
+        em.createNativeQuery("UPDATE places SET attributes = CAST(? AS jsonb) WHERE id = ?")
+                .setParameter(1, "{\"official\":{\"firstmenu\":\"설렁탕\"}}")
+                .setParameter(2, soup.getId()).executeUpdate();
+
+        assertThat(placeRepository.findIngredientTargetsInRegions(List.of(REGION), List.of(-1L), PageRequest.of(0, 10)))
+                .extracting(Place::getId).containsExactly(soup.getId(), bar.getId());
+        assertThat(placeRepository.countIngredientTargetsInRegions(List.of(REGION))).isEqualTo(2);
+        assertThat(placeRepository.findIngredientTargetsInRegions(List.of(REGION), List.of(soup.getId()),
+                PageRequest.of(0, 10))).extracting(Place::getId).containsExactly(bar.getId());
+
+        placeRepository.writeIngredients(soup.getId(), "[\"BEEF\"]");
+        placeRepository.writeAttributeClassification(soup.getId(), "{\"venue\":\"MEAL\"}", (short) 2);
+        em.clear();
+
+        Place reloaded = placeRepository.findById(soup.getId()).orElseThrow();
+        assertThat(reloaded.getAttributes().ingredients()).containsExactly("BEEF");
+        assertThat(reloaded.getAttributes().official()).containsEntry("firstmenu", "설렁탕");
+        assertThat(reloaded.getAttributes().venue()).isEqualTo("MEAL");
+        assertThat(placeRepository.findIngredientTargetsInRegions(List.of(REGION), List.of(-1L), PageRequest.of(0, 10)))
+                .extracting(Place::getId).containsExactly(bar.getId());
+    }
+
+    @Test
+    @DisplayName("쉬어 가는 자리로 쓰는 간식 노점은 주재료 대상이고 카페·베이커리는 아니다")
+    void ingredientTargetsIncludeSnackStands() {
+        Place stand = saveWithRole("胡椒餅", "CAFE", true);
+        Place cafe = saveWithRole("카페 소요", "CAFE", true);
+        Place guessedSnack = saveWithRole("떡볶이 노점", "CAFE", false);
+        em.createNativeQuery("UPDATE places SET category = 'Dining and Drinking > Snack Place' WHERE id = ?")
+                .setParameter(1, stand.getId()).executeUpdate();
+        em.createNativeQuery("UPDATE places SET attributes = CAST('{\"venue\":\"SNACK\"}' AS jsonb) WHERE id = ?")
+                .setParameter(1, guessedSnack.getId()).executeUpdate();
+
+        assertThat(placeRepository.findIngredientTargetsInRegions(List.of(REGION), List.of(-1L), PageRequest.of(0, 10)))
+                .extracting(Place::getId).containsExactly(stand.getId(), guessedSnack.getId())
+                .doesNotContain(cafe.getId());
+        assertThat(placeRepository.countIngredientTargetsInRegions(List.of(REGION))).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("v1 보강을 마친 행만 묻고, 역할이 아직 없으면 보강 업종으로, 업종도 없으면 식음료 카테고리로 고른다")
+    void ingredientTargetsIncludeRowsWithoutRole() {
+        Place venueMeal = save("국수집", "Dining and Drinking > Restaurant", null, true);
+        Place unclassified = save("한식당", "Dining and Drinking > Restaurant > Korean Restaurant", null, true);
+        Place unclassifiedCafe = save("동네 커피", "Dining and Drinking > Cafe, Coffee, and Tea House", null, true);
+        save("미보강 식당", "Dining and Drinking > Restaurant > Korean Restaurant", null, false);
+        Place venueCafe = save("카페 소요", "Dining and Drinking > Restaurant", null, true);
+        Place lodging = save("한옥스테이 식당", "Dining and Drinking > Restaurant", null, true);
+        save("해변", "Landmarks and Outdoors > Beach", null, true);
+        em.createNativeQuery("UPDATE places SET attributes = CAST(? AS jsonb) WHERE id = ?")
+                .setParameter(1, "{\"venue\":\"MEAL\"}").setParameter(2, venueMeal.getId()).executeUpdate();
+        em.createNativeQuery("UPDATE places SET attributes = CAST(? AS jsonb) WHERE id = ?")
+                .setParameter(1, "{\"venue\":\"CAFE\"}").setParameter(2, venueCafe.getId()).executeUpdate();
+        em.createNativeQuery("UPDATE places SET attributes = CAST(? AS jsonb) WHERE id = ?")
+                .setParameter(1, "{\"lodgingType\":\"HOTEL\"}").setParameter(2, lodging.getId()).executeUpdate();
+
+        assertThat(placeRepository.findIngredientTargetsInRegions(List.of(REGION), List.of(-1L), PageRequest.of(0, 10)))
+                .extracting(Place::getId)
+                .containsExactlyInAnyOrder(venueMeal.getId(), unclassified.getId(), unclassifiedCafe.getId());
+        assertThat(placeRepository.countIngredientTargetsInRegions(List.of(REGION))).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("Foursquare 재적재에서 업종이나 원문 이름이 바뀌면 주재료를 지우고, 그대로면 남긴다")
+    void foursquareUpsertClearsIngredientsOnChange() {
+        upsert("zz-fsq-ing-cat", "饭店");
+        upsert("zz-fsq-ing-name", "饭店");
+        upsert("zz-fsq-ing-same", "饭店");
+        for (String fsqId : List.of("zz-fsq-ing-cat", "zz-fsq-ing-name", "zz-fsq-ing-same")) {
+            em.createNativeQuery("""
+                    UPDATE places SET attributes = CAST('{"venue":"MEAL","ingredients":["PORK"]}' AS jsonb)
+                    WHERE fsq_place_id = ?""").setParameter(1, fsqId).executeUpdate();
+        }
+
+        placeRepository.upsertFoursquarePlace("zz-fsq-ing-cat", "饭店", "", BigDecimal.valueOf(31.23),
+                BigDecimal.valueOf(121.47), "CN", REGION, "Dining and Drinking > BBQ Joint", "{}", "", null);
+        upsert("zz-fsq-ing-name", "烤肉店");
+        upsert("zz-fsq-ing-same", "饭店");
+        em.flush();
+        em.clear();
+
+        assertThat(attributesOf("zz-fsq-ing-cat")).isEqualTo("{\"venue\": \"MEAL\"}");
+        assertThat(attributesOf("zz-fsq-ing-name")).isEqualTo("{\"venue\": \"MEAL\"}");
+        assertThat(attributesOf("zz-fsq-ing-same")).isEqualTo("{\"venue\": \"MEAL\", \"ingredients\": [\"PORK\"]}");
+    }
+
+    private String attributesOf(String fsqId) {
+        return (String) em.createNativeQuery("SELECT CAST(attributes AS text) FROM places WHERE fsq_place_id = ?")
+                .setParameter(1, fsqId).getSingleResult();
+    }
+
+    @Test
+    @DisplayName("attributes에는 객체나 NULL만 들어간다")
+    void attributesMustBeObject() {
+        Place p = saveWithRole("국밥집", "MEAL", true);
+
+        assertThatThrownBy(() -> em.createNativeQuery("UPDATE places SET attributes = CAST('null' AS jsonb) WHERE id = ?")
+                .setParameter(1, p.getId()).executeUpdate())
+                .hasStackTraceContaining("chk_places_attributes_object");
+    }
+
+    @Test
+    @DisplayName("업종 카테고리를 고치거나 대표 메뉴가 바뀌거나 v1이 태그를 다시 쓰면 주재료를 지워 다시 묻게 한다")
+    void ingredientsClearedWhenInputsChange() {
+        Place tourapi = saveWithRole("빵굽는마을", "MEAL", true);
+        Place detailed = saveWithRole("향원복집", "MEAL", true);
+        em.createNativeQuery("UPDATE places SET source = 'tourapi' WHERE id = ?")
+                .setParameter(1, tourapi.getId()).executeUpdate();
+        placeRepository.writeIngredients(tourapi.getId(), "[\"PORK\"]");
+        placeRepository.writeIngredients(detailed.getId(), "[]");
+        placeRepository.writeAttributeClassification(detailed.getId(), "{\"venue\":\"MEAL\"}", (short) 2);
+
+        placeRepository.refineGenericTourApiDiningCategory("빵굽는마을", REGION, "Dining and Drinking > Bakery");
+        placeRepository.writeTourApiDetail(detailed.getId(), "{\"firstmenu\":\"복회\"}", null, null);
+        em.clear();
+
+        assertThat(placeRepository.findById(tourapi.getId()).orElseThrow().getAttributes().ingredients()).isNull();
+        Place reloaded = placeRepository.findById(detailed.getId()).orElseThrow();
+        assertThat(reloaded.getAttributes().ingredients()).isNull();
+        assertThat(reloaded.getAttributes().venue()).isEqualTo("MEAL");
+        assertThat(reloaded.getAttributes().official()).containsEntry("firstmenu", "복회");
+
+        placeRepository.writeIngredients(detailed.getId(), "[\"SEAFOOD\"]");
+        placeRepository.writeTourApiDetail(detailed.getId(), "{\"firstmenu\":\"복회\",\"usetime\":\"09:00\"}", null, null);
+        em.clear();
+        Place sameMenu = placeRepository.findById(detailed.getId()).orElseThrow();
+        assertThat(sameMenu.getAttributes().ingredients()).containsExactly("SEAFOOD");
+
+        sameMenu.enrichWith(List.of("식당", "복국"), "복어 요리집", List.of("lunch"), null, null);
+        placeRepository.writeEnrichment(sameMenu);
+        em.clear();
+        Place reEnriched = placeRepository.findById(detailed.getId()).orElseThrow();
+        assertThat(reEnriched.getAttributes().ingredients()).isNull();
+        assertThat(reEnriched.getAttributes().official()).containsEntry("firstmenu", "복회");
     }
 
     @Test

@@ -50,6 +50,10 @@ class PlaceRestrictionsTest {
                 null, null, c.placeRole(), c.cuisine(), false, null, c.attributes(), null);
     }
 
+    private static PlaceAttributes ingredients(String... kinds) {
+        return new PlaceAttributes("MEAL", null, null, null, null, null, null, List.of(kinds));
+    }
+
     private static PlaceAttributes type(String subType) {
         return new PlaceAttributes(null, subType, null, null, null, null, null);
     }
@@ -147,6 +151,43 @@ class PlaceRestrictionsTest {
                         type("street")), false),
                 Arguments.of(SEAFOOD, place("부산역", "Travel and Transportation > Transport Hub > Train Station",
                         List.of("해산물"), null, null, null), false),
+                // 보강 주재료는 요리 형태로만 분류된 식당의 고기 종류를 채우고, 고기 종류를 알면 구이 추정을 하지 않는다
+                Arguments.of(BEEF, place("큰집 설렁탕", RESTAURANT, List.of("식당", "설렁탕", "탕·국밥"), "SOUP", "MEAL",
+                        ingredients("BEEF")), true),
+                Arguments.of(BEEF, place("큰집 설렁탕", RESTAURANT, List.of("식당", "설렁탕", "탕·국밥"), "SOUP", "MEAL",
+                        null), false),
+                Arguments.of(PORK, place("큰집 설렁탕", RESTAURANT, List.of("식당", "설렁탕", "탕·국밥"), "SOUP", "MEAL",
+                        ingredients("BEEF")), false),
+                Arguments.of(BEEF, place("명가갈비", "Dining and Drinking > Restaurant > Steakhouse", List.of("식당", "갈비"),
+                        "MEAT", "MEAL", ingredients("PORK")), false),
+                Arguments.of(PORK, place("명가갈비", "Dining and Drinking > Restaurant > Steakhouse", List.of("식당", "갈비"),
+                        "MEAT", "MEAL", ingredients("PORK")), true),
+                Arguments.of(PORK, place("한일관", RESTAURANT, List.of("식당", "불고기", "한식"), "KOREAN_SET", "MEAL",
+                        null), true),
+                Arguments.of(PORK, place("한일관", RESTAURANT, List.of("식당", "불고기", "한식"), "KOREAN_SET", "MEAL",
+                        ingredients("BEEF")), false),
+                Arguments.of(PORK, place("조개구이 명가", "Dining and Drinking > Restaurant > Korean BBQ Restaurant",
+                        List.of("식당", "조개구이"), null, "MEAL", ingredients("SEAFOOD")), false),
+                Arguments.of(MEAT, place("조개구이 명가", "Dining and Drinking > Restaurant > Korean BBQ Restaurant",
+                        List.of("식당", "조개구이"), null, "MEAL", ingredients("SEAFOOD")), false),
+                Arguments.of(MEAT, place("조개구이 명가", "Dining and Drinking > Restaurant > Korean BBQ Restaurant",
+                        List.of("식당", "조개구이"), null, "MEAL", null), true),
+                Arguments.of(MEAT, place("숯불 명가", "Dining and Drinking > Restaurant > Korean BBQ Restaurant",
+                        List.of("식당"), "MEAT", "MEAL", ingredients("SEAFOOD")), true),
+                Arguments.of(MEAT, place("신장 양꼬치", RESTAURANT, List.of("식당", "양꼬치"), "CHINESE", "MEAL",
+                        ingredients("LAMB")), true),
+                Arguments.of(MEAT, place("제주 말고기", RESTAURANT, List.of("식당", "말고기"), "KOREAN_SET", "MEAL",
+                        ingredients("OTHER_MEAT")), true),
+                Arguments.of(MEAT, place("하남오리탕", RESTAURANT, List.of("식당", "오리탕"), "SOUP", "MEAL",
+                        ingredients("DUCK")), true),
+                Arguments.of(PORK, place("하남오리탕", RESTAURANT, List.of("식당", "오리탕"), "SOUP", "MEAL",
+                        ingredients("DUCK")), false),
+                Arguments.of(CHICKEN, place("영미식당", RESTAURANT, List.of("식당", "한식"), "KOREAN_SET", "MEAL",
+                        ingredients("CHICKEN")), true),
+                Arguments.of(SEAFOOD, place("영미식당", RESTAURANT, List.of("식당", "한식"), "KOREAN_SET", "MEAL",
+                        ingredients("SEAFOOD")), true),
+                Arguments.of(PORK, place("원조갈비", RESTAURANT, List.of("식당", "한식"), "MEAT", "MEAL", ingredients()),
+                        true),
                 // 고기 갈래 태그가 없으면 이름·태그의 고기 낱말로 돼지·소·닭을 나눈다
                 Arguments.of(BEEF, place("터줏집돼지국밥", "Dining and Drinking > Restaurant",
                         List.of("식당", "돼지국밥", "탕·국밥"), "SOUP", "MEAL", null), false),
@@ -307,6 +348,9 @@ class PlaceRestrictionsTest {
         assertThat(seafood.isUnknownFood(result("이름없는식당", null, List.of("식당", "한식")))).isTrue();
         assertThat(seafood.isUnknownFood(result("명동교자", "NOODLE", List.of("식당", "칼국수")))).isFalse();
         assertThat(seafood.isUnknownFood(result("가게", null, List.of("칼국수")))).isFalse();
+        assertThat(seafood.isUnknownFood(new VectorSearchResult(3L, "이름없는식당", "주소", RESTAURANT, List.of("식당"),
+                "Busan", "KR", BigDecimal.ONE, BigDecimal.ONE, null, null, null, null, 0.8, "MEAL", null, null,
+                ingredients("BEEF")))).isFalse();
         assertThat(PlaceRestrictions.of(List.of(HIKING))
                 .isUnknownFood(result("이름없는식당", null, List.of("식당")))).isFalse();
         assertThat(seafood.isUnknownFood(new VectorSearchResult(2L, "카페 소요", "주소", "Dining and Drinking > Cafe",

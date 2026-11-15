@@ -39,6 +39,7 @@ public class BatchEnrichScheduler {
     private static final double MAX_FAILURE_RATIO = 0.2;
 
     private static final String BATCH_API_URL = "https://api.anthropic.com/v1/messages/batches";
+    private static final String CUSTOM_ID_PREFIX = "place_";
     private static final int MAX_RETRIES = 3;
     /** 실행에서 제외한 실패 id 상한. 대상 조회의 NOT IN 바인드 파라미터 한도(pgjdbc 32767)보다 작아야 한다. */
     static final int MAX_EXCLUDED_IDS = 20_000;
@@ -111,10 +112,22 @@ public class BatchEnrichScheduler {
 
     /**
      * v1: 미보강 장소의 태그·설명·역할 보강. v2: 속성만 분류({@link AttributeEnrichment}).
-     * 운영 배치가 켜져 있어 기본값은 v1이다. v2는 대상·비용이 달라 명시적으로 켤 때만 돈다.
+     * ingredients: 식당 주재료만({@link IngredientEnrichment}).
+     * 운영 배치가 켜져 있어 기본값은 v1이다. v2·ingredients는 대상·비용이 달라 명시적으로 켤 때만 돈다.
      */
     @Value("${batch.enrich.mode:v1}")
     private String mode;
+
+    enum Mode {
+        V1("v1"), ATTRIBUTES("v2"), INGREDIENTS("ingredients");
+
+        /** batch.enrich.mode 설정값 */
+        final String value;
+
+        Mode(String value) {
+            this.value = value;
+        }
+    }
 
     /** 동시에 제출해 기다리는 묶음 수. 묶음마다 10초 간격으로 상태를 조회해 이 수만큼 Batch API 요청이 늘어난다. */
     @Value("${batch.enrich.parallel-chunks:5}")
@@ -162,6 +175,9 @@ public class BatchEnrichScheduler {
      * 모든 요청이 실패할 때 수만 건을 헛돌지 않게 한다.
      */
     public void enrich() {
+        if (mode() == null) {
+            throw new BatchStageFailed("알 수 없는 batch.enrich.mode=" + mode + " (v1, v2, ingredients 중 하나)");
+        }
         if (anthropicApiKey == null || anthropicApiKey.isBlank()) {
             log.warn("Anthropic API key가 설정되지 않았습니다. 배치 보강을 건너뜁니다.");
             return;
@@ -174,26 +190,24 @@ public class BatchEnrichScheduler {
         }
 
         List<String> regions = parseRegions();
-        if (mode != null && !mode.isBlank() && !attributeMode() && !"v1".equalsIgnoreCase(mode.trim())) {
-            log.warn("알 수 없는 batch.enrich.mode={} — v1로 실행합니다", mode);
-        }
-        if (attributeMode() && regions.isEmpty()) {
-            log.warn("속성 보강(v2)은 batch.enrich.regions가 필요합니다. 건너뜁니다.");
+        if (mode() != Mode.V1 && regions.isEmpty()) {
+            log.warn("속성·주재료 보강(mode={})은 batch.enrich.regions가 필요합니다. 건너뜁니다.", mode().value);
             return;
         }
         log.info("BatchEnrichScheduler 시작 - mode={}, chunkSize={}, regions={}, maxPerRegion={}, category={}",
-                attributeMode() ? "v2" : "v1", chunkSize, regions.isEmpty() ? "전체" : regions,
+                mode().value, chunkSize, regions.isEmpty() ? "전체" : regions,
                 maxPerRegion > 0 ? maxPerRegion : "무제한", categoryPrefix.isEmpty() ? "전체" : categoryPrefix);
-        if (attributeMode()) {
+        if (mode() == Mode.ATTRIBUTES) {
             log.info("속성 보강 대상 {}건", placeRepository.countAttributeTargetsInRegions(regions));
+        } else if (mode() == Mode.INGREDIENTS) {
+            log.info("주재료 보강 대상 {}건", placeRepository.countIngredientTargetsInRegions(regions));
         } else {
             long waiting = placeRepository.countEnrichWaitingForWikidata();
             // batch.wikidata.countries 밖 국가, 한국 50곳 미만 지역, 좌표·지역 없는 행은 계속 기다려 로그로 드러낸다(지역 무관 전체 건수).
             if (waiting > 0) log.warn("Wikidata 매칭 전이라 보강을 미룬 장소 {}건", waiting);
+            long exhausted = placeRepository.countEnrichExhausted();
+            if (exhausted > 0) log.warn("보강 응답이 3번 실패해 제외된 장소 {}건", exhausted);
         }
-
-        long exhausted = placeRepository.countEnrichExhausted();
-        if (exhausted > 0) log.warn("보강 응답이 3번 실패해 제외된 장소 {}건", exhausted);
 
         long deadline = System.currentTimeMillis() + maxDuration.toMillis();
         runDeadlineMs = deadline;
@@ -236,12 +250,14 @@ public class BatchEnrichScheduler {
             }
             // NOT IN에 빈 컬렉션을 넘기지 않는다(존재할 수 없는 id로 대신한다).
             Collection<Long> excluded = excludedIds.isEmpty() ? List.of(-1L) : excludedIds;
-            List<Place> places = attributeMode()
-                    ? placeRepository.findAttributeTargetsInRegions(regions, excluded, PageRequest.of(0, pageSize))
-                    : regions.isEmpty()
-                    ? placeRepository.findEnrichTargets(categoryPrefix, excluded, PageRequest.of(0, pageSize))
-                    : placeRepository.findEnrichTargetsInRegions(regions, categoryPrefix, excluded,
-                    PageRequest.of(0, pageSize));
+            PageRequest page = PageRequest.of(0, pageSize);
+            List<Place> places = switch (mode()) {
+                case ATTRIBUTES -> placeRepository.findAttributeTargetsInRegions(regions, excluded, page);
+                case INGREDIENTS -> placeRepository.findIngredientTargetsInRegions(regions, excluded, page);
+                case V1 -> regions.isEmpty()
+                        ? placeRepository.findEnrichTargets(categoryPrefix, excluded, page)
+                        : placeRepository.findEnrichTargetsInRegions(regions, categoryPrefix, excluded, page);
+            };
 
             if (places.isEmpty()) {
                 break;
@@ -276,8 +292,10 @@ public class BatchEnrichScheduler {
         totals[1] += failed;
     }
 
-    boolean attributeMode() {
-        return mode != null && "v2".equalsIgnoreCase(mode.trim());
+    /** 비어 있으면 v1이고, 알 수 없는 값이면 null이다. */
+    Mode mode() {
+        String value = mode == null || mode.isBlank() ? Mode.V1.value : mode.trim().toLowerCase(Locale.ROOT);
+        return Arrays.stream(Mode.values()).filter(m -> m.value.equals(value)).findFirst().orElse(null);
     }
 
     private List<String> parseRegions() {
@@ -310,10 +328,26 @@ public class BatchEnrichScheduler {
                     failedBatches++;
                     continue;
                 }
-                List<Place> pending = placeRepository.findAllById(placeIdsIn(jsonl)).stream()
+                Mode resultMode = modeOf(jsonl);
+                if (resultMode != null && resultMode != mode()) {
+                    log.error("배치 결과 모드({})가 실행 모드({})와 다름 - batchId={}. BATCH_ENRICH_MODE를 맞춰 다시 반영",
+                            resultMode.value, mode().value, batchId);
+                    failedBatches++;
+                    continue;
+                }
+                Map<Long, String> inputKeys = inputKeysIn(jsonl);
+                List<Place> unanswered = placeRepository.findAllById(List.copyOf(inputKeys.keySet())).stream()
                         .filter(this::stillPending)
                         .toList();
-                if (pending.isEmpty()) log.warn("재반영할 장소 없음(모두 이미 반영됨) - batchId={}, mode={}", batchId, mode);
+                List<Place> pending = unanswered.stream()
+                        .filter(p -> inputKeys.get(p.getId()) == null
+                                || inputKeys.get(p.getId()).equals(IngredientEnrichment.inputKey(p)))
+                        .toList();
+                if (pending.size() < unanswered.size()) {
+                    log.info("결과를 기다리는 사이 입력이 바뀐 장소 {}건은 반영하지 않음(다음 실행에서 다시 물음) - batchId={}",
+                            unanswered.size() - pending.size(), batchId);
+                }
+                if (pending.isEmpty()) log.warn("재반영할 장소 없음(모두 이미 반영됨) - batchId={}, mode={}", batchId, mode().value);
                 ChunkResult result = applyResults(jsonl, pending, false);
                 succeeded += result.success();
                 failed += result.failed();
@@ -328,9 +362,33 @@ public class BatchEnrichScheduler {
         }
     }
 
+    /** 결과를 만든 모드. 가를 수 있는 성공 행이 없으면 null이다. */
+    Mode modeOf(String jsonl) {
+        for (String line : jsonl.split("\n")) {
+            if (line.isBlank()) continue;
+            try {
+                JsonNode result = objectMapper.readTree(line).path("result");
+                if (!"succeeded".equals(result.path("type").asText())) continue;
+                for (JsonNode block : result.path("message").path("content")) {
+                    String type = block.path("type").asText();
+                    String tool = block.path("name").asText();
+                    if ("tool_use".equals(type) && AttributeEnrichment.TOOL_NAME.equals(tool)) return Mode.ATTRIBUTES;
+                    if ("tool_use".equals(type) && IngredientEnrichment.TOOL_NAME.equals(tool)) return Mode.INGREDIENTS;
+                    if ("text".equals(type)) return Mode.V1;
+                }
+            } catch (Exception e) {
+                log.warn("결과 행 모드 읽기 실패: {}", e.getMessage());
+            }
+        }
+        return null;
+    }
+
     private boolean stillPending(Place p) {
-        if (!attributeMode()) return p.getEnrichedAt() == null;
-        return p.getEnrichVersion() == null || p.getEnrichVersion() < AttributeEnrichment.VERSION;
+        return switch (mode()) {
+            case V1 -> p.getEnrichedAt() == null;
+            case ATTRIBUTES -> p.getEnrichVersion() == null || p.getEnrichVersion() < AttributeEnrichment.VERSION;
+            case INGREDIENTS -> p.getAttributes() == null || p.getAttributes().ingredients() == null;
+        };
     }
 
     /** 끝난 배치의 결과 JSONL. 끝나지 않았거나 실패면 null. */
@@ -339,18 +397,44 @@ public class BatchEnrichScheduler {
         return poll.resultsUrl() == null ? null : downloadResults(poll.resultsUrl());
     }
 
-    List<Long> placeIdsIn(String jsonl) {
-        List<Long> ids = new ArrayList<>();
+    /** 결과 행의 장소 id → 요청 입력 지문(주재료 모드만, 없으면 null). */
+    Map<Long, String> inputKeysIn(String jsonl) {
+        Map<Long, String> keys = new LinkedHashMap<>();
         for (String line : jsonl.split("\n")) {
             if (line.isBlank()) continue;
             try {
                 String customId = objectMapper.readTree(line).path("custom_id").asText("");
-                if (customId.startsWith("place_")) ids.add(Long.parseLong(customId.substring("place_".length())));
+                Long id = placeIdOf(customId);
+                if (id != null) keys.put(id, inputKeyOf(customId));
             } catch (Exception e) {
                 log.warn("결과 행 custom_id 읽기 실패: {}", e.getMessage());
             }
         }
-        return ids;
+        return keys;
+    }
+
+    static String customId(Place place, Mode mode) {
+        return CUSTOM_ID_PREFIX + place.getId()
+                + (mode == Mode.INGREDIENTS ? "_" + IngredientEnrichment.inputKey(place) : "");
+    }
+
+    /** {@code place_{id}} 또는 {@code place_{id}_{입력 지문}}의 id. 형식이 다르면 null. */
+    static Long placeIdOf(String customId) {
+        if (customId == null || !customId.startsWith(CUSTOM_ID_PREFIX)) return null;
+        String rest = customId.substring(CUSTOM_ID_PREFIX.length());
+        int sep = rest.indexOf('_');
+        try {
+            return Long.parseLong(sep < 0 ? rest : rest.substring(0, sep));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    static String inputKeyOf(String customId) {
+        if (customId == null || !customId.startsWith(CUSTOM_ID_PREFIX)) return null;
+        String rest = customId.substring(CUSTOM_ID_PREFIX.length());
+        int sep = rest.indexOf('_');
+        return sep < 0 ? null : rest.substring(sep + 1);
     }
 
     /** 결과는 chunks와 같은 순서다. 묶음 처리 중 예외는 그 묶음 전부를 실패로 돌려준다. */
@@ -410,26 +494,18 @@ public class BatchEnrichScheduler {
         List<Map<String, Object>> requests = new ArrayList<>();
 
         for (Place place : places) {
-            if (attributeMode()) {
-                requests.add(Map.of("custom_id", "place_" + place.getId(),
-                        "params", AttributeEnrichment.requestParams(place, enrichModel)));
-                continue;
-            }
-            String prompt = buildEnrichPrompt(place);
-            Map<String, Object> request = Map.of(
-                    "custom_id", "place_" + place.getId(),
-                    "params", Map.of(
-                            "model", enrichModel,
-                            "max_tokens", 1024,
-                            // Haiku 5.5는 thinking이 기본으로 켜진다. 단순 JSON 생성엔 불필요하고,
-                            // 켜두면 thinking 토큰이 max_tokens를 잡아먹어 JSON이 잘린다.
-                            "thinking", Map.of("type", "disabled"),
-                            "messages", List.of(
-                                    Map.of("role", "user", "content", prompt)
-                            )
-                    )
-            );
-            requests.add(request);
+            Map<String, Object> params = switch (mode()) {
+                case ATTRIBUTES -> AttributeEnrichment.requestParams(place, enrichModel);
+                case INGREDIENTS -> IngredientEnrichment.requestParams(place, enrichModel);
+                case V1 -> Map.of(
+                        "model", enrichModel,
+                        "max_tokens", 1024,
+                        // Haiku 5.5는 thinking이 기본으로 켜진다. 단순 JSON 생성엔 불필요하고,
+                        // 켜두면 thinking 토큰이 max_tokens를 잡아먹어 JSON이 잘린다.
+                        "thinking", Map.of("type", "disabled"),
+                        "messages", List.of(Map.of("role", "user", "content", buildEnrichPrompt(place))));
+            };
+            requests.add(Map.of("custom_id", customId(place, mode()), "params", params));
         }
 
         return requests;
@@ -726,6 +802,7 @@ public class BatchEnrichScheduler {
         int seen = 0;
         long[] usage = new long[4]; // input, output, cache read, cache write
         int unclassifiable = 0;
+        Map<String, Integer> ingredientCounts = new TreeMap<>();
 
         for (String line : jsonl.split("\n")) {
             if (line.isBlank()) continue;
@@ -733,8 +810,8 @@ public class BatchEnrichScheduler {
             try {
                 JsonNode resultNode = objectMapper.readTree(line);
                 String customId = resultNode.get("custom_id").asText();
-                Long placeId = Long.parseLong(customId.replace("place_", ""));
-                Place place = placeMap.get(placeId);
+                Long placeId = placeIdOf(customId);
+                Place place = placeId == null ? null : placeMap.get(placeId);
 
                 if (place == null) {
                     log.warn("결과에 매칭되는 장소 없음 - customId={}", customId);
@@ -752,7 +829,20 @@ public class BatchEnrichScheduler {
                 }
 
                 addUsage(usage, resultBody.path("message").path("usage"));
-                if (attributeMode()) {
+                if (mode() == Mode.INGREDIENTS) {
+                    List<String> ingredients = IngredientEnrichment.interpret(resultBody.get("message"));
+                    if (ingredients == null) {
+                        log.warn("주재료 응답 없음 또는 잘림 - placeId={}", placeId);
+                        unreadableIds.add(placeId);
+                        continue;
+                    }
+                    if (ingredients.isEmpty()) unclassifiable++;
+                    ingredients.forEach(kind -> ingredientCounts.merge(kind, 1, Integer::sum));
+                    placeRepository.writeIngredients(placeId, objectMapper.writeValueAsString(ingredients));
+                    succeededIds.add(placeId);
+                    continue;
+                }
+                if (mode() == Mode.ATTRIBUTES) {
                     PlaceAttributes attributes =
                             AttributeEnrichment.interpret(resultBody.get("message"), place.getCategory());
                     if (attributes == null) {
@@ -788,8 +878,8 @@ public class BatchEnrichScheduler {
         }
 
         // 보강분을 비워 두고 마지막 임베딩 단계에서 채우면 보강이 도는 내내 벡터 검색에서 빠진다.
-        // 재임베딩에 실패한 것만 비워 임베딩 단계가 다시 잡게 한다. 속성 보강은 임베딩 텍스트를 바꾸지 않는다.
-        if (!succeededIds.isEmpty() && !attributeMode()) {
+        // 재임베딩에 실패한 것만 비워 임베딩 단계가 다시 잡게 한다. 속성·주재료 보강은 임베딩 텍스트를 바꾸지 않는다.
+        if (!succeededIds.isEmpty() && mode() == Mode.V1) {
             List<Place> enriched = succeededIds.stream().map(placeMap::get).toList();
             List<Long> notReembedded = embeddingBatchJob.reembed(enriched);
             if (!notReembedded.isEmpty()) {
@@ -801,13 +891,14 @@ public class BatchEnrichScheduler {
         List<Long> failedIds = places.stream().map(Place::getId).filter(id -> !succeeded.contains(id)).toList();
         Set<Long> placeFaults = new HashSet<>(unreadableIds);
         if (!succeededIds.isEmpty()) placeFaults.addAll(erroredIds);
-        if (countAttempts && !placeFaults.isEmpty() && !attributeMode()) {
+        if (countAttempts && !placeFaults.isEmpty() && mode() == Mode.V1) {
             try {
                 placeRepository.incrementEnrichAttempts(placeFaults);
             } catch (Exception e) {
                 log.warn("보강 실패 횟수 기록 실패: {}", e.getMessage());
             }
         }
+        if (!ingredientCounts.isEmpty()) log.info("주재료 분포: {}", ingredientCounts);
         boolean allExpired = succeededIds.isEmpty() && seen > 0 && expiredOrCanceled == seen;
         log.info("배치 결과 처리 완료 - 성공: {}건(분류 없음 {}건), 실패: {}건, 토큰 input={} output={} 캐시읽음={} 캐시쓰기={}",
                 succeededIds.size(), unclassifiable, failedIds.size(), usage[0], usage[1], usage[2], usage[3]);
