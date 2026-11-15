@@ -19,6 +19,7 @@ import com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy;
 import com.shg.trip.shgtrip.domain.planning.service.GeoCluster;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
+import com.shg.trip.shgtrip.domain.planning.service.OverCapLegs;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.domain.planning.service.RequiredExperiences;
 import com.shg.trip.shgtrip.domain.planning.service.RouteOptimizer;
@@ -52,6 +53,8 @@ import java.util.*;
  * / rejected: 관문에서 막혀 일정 없이 남은 기록을 다시 돌려 rejected-{기록 id}.txt로 남긴다(eval.ids는 기록 id).
  *
  * <p>{@code --eval.pipeline}: 재실행에 쓸 확정 단계. v1(기본)은 {@link RouteOptimizer}, v2는 {@link SerialPlanner}다.
+ * {@code --eval.selection}: recorded(기본)는 기록된 선택을 쓰고, picker는 기록의 요청 의도 장소만 받아 후보 풀에서 코드가
+ * 날마다 직접 고른다(v2만).
  *
  * <p>{@code --eval.refresh-attributes}: 기록의 후보에 DB의 현재 속성·영업시간을 덮어쓴다.
  * off(기본) 그대로 / score 채점에만 / all 재실행 입력과 채점 모두.
@@ -97,6 +100,9 @@ public class EvalRunner implements CommandLineRunner {
     @Value("${eval.pipeline:v1}")
     private String pipeline;
 
+    @Value("${eval.selection:recorded}")
+    private String selectionSource;
+
     @Override
     @Transactional(readOnly = true)
     public void run(String... args) throws Exception {
@@ -108,6 +114,12 @@ public class EvalRunner implements CommandLineRunner {
         }
         if ("v2".equals(pipeline) && !Set.of("files", "corpus", "replay").contains(mode)) {
             throw new IllegalArgumentException("eval.pipeline=v2는 재실행하는 모드(files|corpus|replay)에서만 쓴다: " + mode);
+        }
+        if (!Set.of("recorded", "picker").contains(selectionSource)) {
+            throw new IllegalArgumentException("eval.selection은 recorded|picker: " + selectionSource);
+        }
+        if ("picker".equals(selectionSource) && !"v2".equals(pipeline)) {
+            throw new IllegalArgumentException("eval.selection=picker는 eval.pipeline=v2에서만 쓴다");
         }
         if ("pool".equals(mode)) {
             dumpPools();
@@ -190,11 +202,12 @@ public class EvalRunner implements CommandLineRunner {
         Path dir = Path.of(outDir);
         Files.createDirectories(dir);
         String label = mode + ("off".equals(refreshAttributes) ? "" : ", refresh=" + refreshAttributes)
-                + ("v1".equals(pipeline) ? "" : ", pipeline=" + pipeline);
+                + ("v1".equals(pipeline) ? "" : ", pipeline=" + pipeline)
+                + ("recorded".equals(selectionSource) ? "" : ", selection=" + selectionSource);
         Files.writeString(dir.resolve("report.md"), EvalReport.markdown(label, rows));
         Files.writeString(dir.resolve("report.csv"), EvalReport.csv(rows));
-        log.info("평가 완료: mode={}, refresh={}, pipeline={}, 일정 {}건 → {}", mode, refreshAttributes, pipeline,
-                rows.size(), dir.toAbsolutePath());
+        log.info("평가 완료: mode={}, refresh={}, pipeline={}, selection={}, 일정 {}건 → {}", mode,
+                refreshAttributes, pipeline, selectionSource, rows.size(), dir.toAbsolutePath());
 
         System.exit(SpringApplication.exit(context, () -> 0));
     }
@@ -209,7 +222,7 @@ public class EvalRunner implements CommandLineRunner {
             ItineraryRules.Verdict savedRules = rules.evaluate(savedSteps, fromPlaces,
                     new ItineraryRules.Context(null, null, itinerary.getStartDate(), dayCount, null));
             return new Row(itinerary.getId(), itinerary.getDestination(), countryOf(savedSteps), false,
-                    saved, null, null, savedRules, null, Trip.untraced(dayCount), null);
+                    saved, null, null, savedRules, null, Trip.untraced(dayCount), null, null);
         }
 
         List<PlaceCandidate> traced = objectMapper.readValue(trace.getCandidates(), new TypeReference<>() {});
@@ -241,11 +254,14 @@ public class EvalRunner implements CommandLineRunner {
                 args.transportPref(), args.startDate(), candidates, selection, hubDeadline)) : null;
         ItineraryRules.Verdict savedRules = hasSaved ? rules.evaluate(savedSteps, candidates, ruleContext) : null;
         if (!replay) {
-            return new Row(itineraryId, destination, country, true, saved, null, null, savedRules, null, trip, null);
+            return new Row(itineraryId, destination, country, true, saved, null, null, savedRules, null, trip, null,
+                    null);
         }
 
-        SerialPlanner.Result serial = "v2".equals(pipeline)
-                ? serialPlanner.schedule(selection, scheduleInput, args) : null;
+        SerialPlanner.Result serial = !"v2".equals(pipeline) ? null
+                : "picker".equals(selectionSource) ? serialPlanner.plan(selection, scheduleInput, args, dayCount)
+                : serialPlanner.schedule(selection, scheduleInput, args);
+        SelectionOutput replayedSelection = scoringSelection(selection, serial);
         List<StepData> replayedSteps = serial != null ? serial.steps()
                 : routeOptimizer.schedule(selection, scheduleInput, args).steps();
         if (dumpSteps) {
@@ -255,10 +271,24 @@ public class EvalRunner implements CommandLineRunner {
                     "== 저장본\n" + renderSteps(savedSteps) + "\n== 재실행\n" + renderSteps(replayedSteps));
         }
         ScoreReport replayed = scorer.score(new ItineraryScorer.Input(replayedSteps, args.pace(),
-                args.transportPref(), args.startDate(), candidates, selection, hubDeadline));
+                args.transportPref(), args.startDate(), candidates, replayedSelection, hubDeadline));
         return new Row(itineraryId, destination, country, true, saved, replayed,
                 hasSaved ? sameRoute(savedSteps, replayedSteps) : null, savedRules,
-                rules.evaluate(replayedSteps, candidates, ruleContext), trip, serial == null ? null : serial.days());
+                rules.evaluate(replayedSteps, candidates, ruleContext), trip, serial == null ? null : serial.days(),
+                OverCapLegs.count(replayedSteps, candidates, args.transportPref(), args.pace(),
+                        requestedIndices(selection)));
+    }
+
+    /** 직접 고른 팔도 기록의 highlight·timing으로 채점해야 의도 점수가 공짜로 오르지 않는다. 날짜별 장소는 재실행이 고른 것이다. */
+    static SelectionOutput scoringSelection(SelectionOutput recorded, SerialPlanner.Result serial) {
+        return serial == null ? recorded : recorded.withDays(serial.selection().days());
+    }
+
+    /** 요청 의도 장소의 후보 번호. 채점기의 의도 점수가 보는 highlight·timing과 같다. */
+    static Set<Integer> requestedIndices(SelectionOutput selection) {
+        Set<Integer> out = new HashSet<>(selection.highlightIndices() == null ? List.of() : selection.highlightIndices());
+        if (selection.timing() != null) selection.timing().forEach(t -> out.add(t.index()));
+        return out;
     }
 
     private static String countryOf(List<StepData> steps) {
@@ -357,10 +387,12 @@ public class EvalRunner implements CommandLineRunner {
     /**
      * @param saved      이어 붙인 입력({@link Trip#joined})은 저장본이 없어 null이다
      * @param serialDays v2로 재실행했을 때의 날짜별 결과. 아니면 null
+     * @param overCap    재실행 결과의 구간 상한 초과 분류. 재실행하지 않았으면 null
      */
     record Row(Long itineraryId, String destination, String country, boolean hasTrace, ScoreReport saved,
                ScoreReport replayed, Boolean sameRoute, ItineraryRules.Verdict savedRules,
-               ItineraryRules.Verdict replayedRules, Trip trip, List<SerialPlanner.DayReport> serialDays) {
+               ItineraryRules.Verdict replayedRules, Trip trip, List<SerialPlanner.DayReport> serialDays,
+               OverCapLegs.Count overCap) {
 
         /** 현재 코드의 결과. 재실행하지 않았으면 저장본이다. */
         ScoreReport current() {

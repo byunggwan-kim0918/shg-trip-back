@@ -23,6 +23,24 @@ class SerialPlannerGoldenMasterTest {
         assertMatchesSnapshot("serial-seoul-busan-6d-city-blocks", JoinedSeoulBusanFixture.load());
     }
 
+    @Test
+    @DisplayName("운영 기록 91의 후보 풀과 요청 의도로 날마다 직접 고른 일정이 스냅샷과 일치한다")
+    void busan91PickedMatchesSnapshot() throws IOException {
+        TraceFile trace = Itinerary91Fixture.load();
+        SerialPlanner.Result result = planner.plan(trace.selection(), trace.candidates(), trace.args(), trace.dayCount());
+        RouteOptimizerGoldenMasterTest.assertMatchesSnapshot("picked-busan-91-relaxed-couple",
+                new RouteOptimizer.ScheduleResult(result.steps(), result.unresolved()));
+    }
+
+    @Test
+    @DisplayName("서울·부산 여러 도시의 후보 풀과 요청 의도로 날마다 직접 고른 일정이 스냅샷과 일치한다")
+    void seoulBusanPickedMatchesSnapshot() throws IOException {
+        TraceFile trace = JoinedSeoulBusanFixture.load();
+        SerialPlanner.Result result = planner.plan(trace.selection(), trace.candidates(), trace.args(), trace.dayCount());
+        RouteOptimizerGoldenMasterTest.assertMatchesSnapshot("picked-seoul-busan-6d-city-blocks",
+                new RouteOptimizer.ScheduleResult(result.steps(), result.unresolved()));
+    }
+
     private void assertMatchesSnapshot(String name, TraceFile trace) throws IOException {
         SerialPlanner.Result result = planner.schedule(trace.selection(), trace.candidates(), trace.args());
         RouteOptimizerGoldenMasterTest.assertMatchesSnapshot(name,
