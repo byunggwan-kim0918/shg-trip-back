@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
+import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.planning.dto.*;
 import com.shg.trip.shgtrip.domain.planning.service.ai.SelectionCallGenerator;
@@ -244,13 +245,135 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("피할 조건은 검색 입력에 실리고, 선택 단계 전 풀과 날짜별 예비 후보에서도 빠진다")
+    @SuppressWarnings("unchecked")
+    void restrictionsReachSearchAndPool() {
+        List<PlaceRestriction> restrictions = List.of(
+                PlaceRestriction.SEAFOOD,
+                PlaceRestriction.SHOPPING);
+        ItineraryGenerateRequest restricted = new ItineraryGenerateRequest(request.mode(), request.destination(),
+                request.themes(), request.categories(), request.pace(), request.transportPref(), request.budget(),
+                request.startDate(), request.endDate(), request.description(), null, null, null, null, null, null,
+                null, null, restrictions);
+        PlaceCandidate sushi = new PlaceCandidate(4, 201L, "스시잔마이", "주소", "Dining and Drinking > Restaurant",
+                List.of("초밥"), "Tokyo", "JP", BigDecimal.valueOf(35.66), BigDecimal.valueOf(139.70), null, null, 0.7);
+        PlaceCandidate mall = new PlaceCandidate(5, 202L, "시부야 파르코", "주소", "Retail > Shopping Mall",
+                List.of(), "Tokyo", "JP", BigDecimal.valueOf(35.66), BigDecimal.valueOf(139.69), null, null, 0.7);
+        PlaceCandidate ramen = new PlaceCandidate(1, 203L, "아후리 라멘", "주소", "Dining and Drinking > Restaurant",
+                List.of("라멘", "면요리"), "Tokyo", "JP", BigDecimal.valueOf(35.67), BigDecimal.valueOf(139.70), null,
+                null, 0.7);
+        List<PlaceCandidate> pool = new java.util.ArrayList<>(candidates);
+        pool.add(sushi);
+        pool.add(mall);
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(restricted)).thenReturn(successResult);
+        when(vectorSearchQueryService.search(any(), any())).thenReturn(pool);
+        when(vectorSearchQueryService.searchNearEach(any(), any(), anyList(), anyDouble(), anyInt()))
+                .thenReturn(List.of(List.of(sushi, ramen)));
+        when(fallbackDecider.assess(pool, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
+        when(placeRepository.findAllById(anyList())).thenReturn(List.of());
+        when(selectionCallGenerator.selectPlaces(any(), anyList(), any())).thenReturn(selectionOutput);
+        when(routeOptimizer.schedule(any(), anyList(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(46L);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
+
+        executor.execute("job-r", restricted, 1L, emitter);
+
+        ArgumentCaptor<VectorEnrichedInput> searched = ArgumentCaptor.forClass(VectorEnrichedInput.class);
+        verify(vectorSearchQueryService).search(searched.capture(), any());
+        assertThat(searched.getValue().restrictions()).isEqualTo(restrictions);
+        ArgumentCaptor<List<PlaceCandidate>> seen = ArgumentCaptor.forClass(List.class);
+        verify(selectionCallGenerator).selectPlaces(any(), seen.capture(), any());
+        assertThat(seen.getValue()).extracting(PlaceCandidate::name).doesNotContain("스시잔마이", "시부야 파르코");
+        ArgumentCaptor<List<PlaceCandidate>> scheduled = ArgumentCaptor.forClass(List.class);
+        verify(routeOptimizer).schedule(any(), scheduled.capture(), any());
+        assertThat(scheduled.getValue()).extracting(PlaceCandidate::name)
+                .contains("아후리 라멘").doesNotContain("스시잔마이", "시부야 파르코");
+    }
+
+    @Test
+    @DisplayName("날짜별 예비 후보의 등산 판정은 DB 체류 시간을 채운 뒤에 한다")
+    @SuppressWarnings("unchecked")
+    void reserveHikingUsesStoredDuration() {
+        ItineraryGenerateRequest restricted = new ItineraryGenerateRequest(request.mode(), request.destination(),
+                request.themes(), request.categories(), request.pace(), request.transportPref(), request.budget(),
+                request.startDate(), request.endDate(), request.description(), null, null, null, null, null, null,
+                null, null, List.of(PlaceRestriction.HIKING));
+        PlaceCandidate shortClimb = new PlaceCandidate(1, 301L, "봉래산 산책길", "주소",
+                "Landmarks and Outdoors > Mountain", List.of("산책"), "Tokyo", "JP", BigDecimal.valueOf(35.66),
+                BigDecimal.valueOf(139.70), null, null, 0.7);
+        PlaceCandidate longClimb = new PlaceCandidate(1, 302L, "관악산", "주소", "Landmarks and Outdoors",
+                List.of("등산"), "Tokyo", "JP", BigDecimal.valueOf(35.67), BigDecimal.valueOf(139.71), null, null, 0.7);
+        Map<Long, Integer> storedMinutes = Map.of(301L, 60, 302L, 300);
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(restricted)).thenReturn(successResult);
+        when(vectorSearchQueryService.search(any(), any())).thenReturn(candidates);
+        when(vectorSearchQueryService.searchNearEach(any(), any(), anyList(), anyDouble(), anyInt()))
+                .thenReturn(List.of(List.of(shortClimb, longClimb)));
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
+        when(placeRepository.findAllById(anyList())).thenAnswer(inv -> {
+            java.util.Collection<Long> ids = inv.getArgument(0);
+            return ids.stream().filter(storedMinutes::containsKey).map(id -> com.shg.trip.shgtrip.domain.place.entity.Place
+                    .builder().id(id)
+                    .name(id == 301L ? shortClimb.name() : longClimb.name())
+                    .category(id == 301L ? shortClimb.category() : longClimb.category())
+                    .tags(id == 301L ? shortClimb.tags() : longClimb.tags()).region("Tokyo").country("JP")
+                    .latitude(BigDecimal.valueOf(35.66)).longitude(BigDecimal.valueOf(139.70))
+                    .recommendedDurationMinutes(storedMinutes.get(id)).build()).toList();
+        });
+        when(selectionCallGenerator.selectPlaces(any(), anyList(), any())).thenReturn(selectionOutput);
+        when(routeOptimizer.schedule(any(), anyList(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(47L);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
+
+        executor.execute("job-h", restricted, 1L, emitter);
+
+        ArgumentCaptor<List<PlaceCandidate>> scheduled = ArgumentCaptor.forClass(List.class);
+        verify(routeOptimizer).schedule(any(), scheduled.capture(), any());
+        assertThat(scheduled.getValue()).extracting(PlaceCandidate::name)
+                .contains("봉래산 산책길").doesNotContain("관악산");
+    }
+
+    @Test
+    @DisplayName("예비 후보에서 조건에 걸린 곳을 빼면 뒤 후보 번호를 이어 붙이고, 조건이 없으면 목록을 그대로 둔다")
+    void restrictedAppendedKeepsIndicesContiguous() {
+        PlaceCandidate base = new PlaceCandidate(1, 401L, "센소지", "주소", "Landmarks and Outdoors", List.of(),
+                "Tokyo", "JP", BigDecimal.valueOf(35.71), BigDecimal.valueOf(139.79), null, null, 0.7);
+        PlaceCandidate crab = new PlaceCandidate(2, 402L, "카니도라쿠", "주소", "Dining and Drinking > Restaurant",
+                List.of("게", "해산물"), "Tokyo", "JP", BigDecimal.valueOf(35.71), BigDecimal.valueOf(139.79), null,
+                null, 0.7);
+        PlaceCandidate udon = new PlaceCandidate(3, 403L, "우동집", "주소", "Dining and Drinking > Restaurant",
+                List.of("우동"), "Tokyo", "JP", BigDecimal.valueOf(35.71), BigDecimal.valueOf(139.79), null, null, 0.7);
+        List<PlaceCandidate> all = List.of(base, crab, udon);
+
+        List<PlaceCandidate> kept = OptimizedGenerationExecutor.excludeRestrictedAppended(all, 1,
+                PlaceRestrictions.of(List.of(PlaceRestriction.SEAFOOD)));
+
+        assertThat(kept).extracting(PlaceCandidate::name).containsExactly("센소지", "우동집");
+        assertThat(kept).extracting(PlaceCandidate::index).containsExactly(1, 2);
+        assertThat(OptimizedGenerationExecutor.excludeRestrictedAppended(all, 1, PlaceRestrictions.NONE)).isSameAs(all);
+    }
+
+    @Test
     @DisplayName("피할 장소는 선택 단계 전 풀·날짜별 예비 후보·근처 숙소 검색 모두에서 빠지고, 출처만 다른 같은 장소도 빠진다")
     @SuppressWarnings("unchecked")
     void avoidedPlacesNeverReachSelectionOrSchedule() {
         ItineraryGenerateRequest avoiding = new ItineraryGenerateRequest(request.mode(), request.destination(),
                 request.themes(), request.categories(), request.pace(), request.transportPref(), request.budget(),
                 request.startDate(), request.endDate(), request.description(), null, null, null, null, null, null,
-                null, List.of(102L));
+                null, List.of(102L), null);
         com.shg.trip.shgtrip.domain.place.entity.Place ichiran = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
                 .id(102L).name("이치란 라멘").address("시부야구 진난 1-22-7").category("식당").region("시부야")
                 .latitude(BigDecimal.valueOf(35.6580)).longitude(BigDecimal.valueOf(139.7016)).build();
@@ -300,7 +423,7 @@ class OptimizedGenerationExecutorTest {
                 request.themes(), request.categories(), request.pace(), request.transportPref(), request.budget(),
                 request.startDate(), request.endDate(), request.description(), null, null, null, null, null, null,
                 List.of(new ItineraryGenerateRequest.RequiredExperience("메이지신궁 아침", "메이지신궁", "morning"),
-                        new ItineraryGenerateRequest.RequiredExperience("오다이바 야경", "오다이바", "evening")), null);
+                        new ItineraryGenerateRequest.RequiredExperience("오다이바 야경", "오다이바", "evening")), null, null);
         PlaceCandidate shrine = new PlaceCandidate(2, 101L, "메이지신궁", "시부야구 요요기카미조노초 1-1",
                 "Landmarks and Outdoors > Shrine", List.of(), "Tokyo", "JP", BigDecimal.valueOf(35.6764),
                 BigDecimal.valueOf(139.6993), null, null, 0.93, null, null, null, 60, false, null, null, null, 40,

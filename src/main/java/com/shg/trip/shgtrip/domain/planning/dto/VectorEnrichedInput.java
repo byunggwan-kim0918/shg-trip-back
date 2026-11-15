@@ -1,5 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.dto;
 
+import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -28,8 +30,23 @@ public record VectorEnrichedInput(
         Map<String, String> categorySearchQueries,
         CompanionType companionType, // enrich가 description에서 추론하고, 모르면 UNKNOWN
         Integer partySize,           // 모르면 null이고 비용은 1인 기준
-        List<String> ferryOnlyAreas  // 배로만 가는 부속섬의 주소 토큰(예: "우도면"). 후보에서 기본 제외
+        List<String> ferryOnlyAreas, // 배로만 가는 부속섬의 주소 토큰(예: "우도면"). 후보에서 기본 제외
+        List<PlaceRestriction> restrictions // 요청의 못 먹는 음식·피할 활동, 없으면 null
 ) {
+    public VectorEnrichedInput(String destination, List<String> themes, List<String> categories, String pace,
+                               String transportPref, BigDecimal budget, LocalDate startDate, LocalDate endDate,
+                               String description, List<Long> selectedPlaceIds, String normalizedDestination,
+                               String country, List<String> regions, List<String> searchTags,
+                               Map<String, List<String>> regionAllocation, String budgetRange, String seasonContext,
+                               String enrichedContext, TransportationHub transportationHub,
+                               Map<String, String> categorySearchQueries, CompanionType companionType,
+                               Integer partySize, List<String> ferryOnlyAreas) {
+        this(destination, themes, categories, pace, transportPref, budget, startDate, endDate, description,
+                selectedPlaceIds, normalizedDestination, country, regions, searchTags, regionAllocation, budgetRange,
+                seasonContext, enrichedContext, transportationHub, categorySearchQueries, companionType, partySize,
+                ferryOnlyAreas, null);
+    }
+
     /** 동행 유형. 숙소 유형(도미토리 제외)·비용 인원·선택 프롬프트에 쓴다. */
     public enum CompanionType {
         SOLO, COUPLE, FAMILY, FRIENDS, SENIOR, UNKNOWN;
@@ -95,14 +112,21 @@ public record VectorEnrichedInput(
         return new VectorEnrichedInput(destination, themes, categories, pace, transportPref, budget, startDate, endDate,
                 description, selectedPlaceIds, normalizedDestination, country, regions, searchTags, regionAllocation,
                 budgetRange, seasonContext, enrichedContext, transportationHub, categorySearchQueries,
-                companion != null ? companion : companionType, resolvedParty, ferryOnlyAreas);
+                companion != null ? companion : companionType, resolvedParty, ferryOnlyAreas, restrictions);
+    }
+
+    public VectorEnrichedInput withRestrictions(List<PlaceRestriction> newRestrictions) {
+        return new VectorEnrichedInput(destination, themes, categories, pace, transportPref, budget, startDate, endDate,
+                description, selectedPlaceIds, normalizedDestination, country, regions, searchTags, regionAllocation,
+                budgetRange, seasonContext, enrichedContext, transportationHub, categorySearchQueries,
+                companionType, partySize, ferryOnlyAreas, newRestrictions);
     }
 
     public VectorEnrichedInput withTransportPref(String newTransportPref) {
         return new VectorEnrichedInput(destination, themes, categories, pace, newTransportPref, budget, startDate, endDate,
                 description, selectedPlaceIds, normalizedDestination, country, regions, searchTags, regionAllocation,
                 budgetRange, seasonContext, enrichedContext, transportationHub, categorySearchQueries,
-                companionType, partySize, ferryOnlyAreas);
+                companionType, partySize, ferryOnlyAreas, restrictions);
     }
 
     /**
@@ -115,7 +139,8 @@ public record VectorEnrichedInput(
         return new VectorEnrichedInput(destination, themes, categories, pace, transportPref, budget,
                 startDate.plusDays(firstDay - 1L), startDate.plusDays(lastDay - 1L), description, selectedPlaceIds,
                 normalizedDestination, country, cityRegions, searchTags, blockAllocation, budgetRange, seasonContext,
-                enrichedContext, transportationHub, categorySearchQueries, companionType, partySize, ferryOnlyAreas);
+                enrichedContext, transportationHub, categorySearchQueries, companionType, partySize, ferryOnlyAreas,
+                restrictions);
     }
 
     /** null-safe 동행 유형. */

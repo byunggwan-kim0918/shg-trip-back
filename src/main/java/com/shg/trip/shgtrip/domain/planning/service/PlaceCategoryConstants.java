@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * 장소 카테고리 분류 키워드 상수. 검색·조립·검증이 같은 판정을 보도록 한 곳에 둔다.
@@ -139,6 +140,14 @@ public final class PlaceCategoryConstants {
     private static final List<String> ALCOHOL_VENUES = List.of(
             "brewery", "winery", "distillery", "meadery", "cidery", "izakaya", "sake bar");
     private static final List<String> BAR_TAGS = List.of("술집", "호프", "주점", "포차", "이자카야");
+    private static final List<String> BAR_NAME_WORDS = List.of("居酒屋", "izakaya");
+
+    /** 보강 전 술집은 카테고리가 총칭 식당이라 이름으로만 알 수 있다. */
+    public static boolean isBarName(String name) {
+        if (name == null) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        return BAR_TAGS.stream().anyMatch(lower::contains) || BAR_NAME_WORDS.stream().anyMatch(lower::contains);
+    }
 
     /**
      * 체류시간 휴리스틱(분). {@code recommended_duration_minutes}가 없을 때의 폴백이고 값은 제주 유형별 중앙값이다.
@@ -638,6 +647,15 @@ public final class PlaceCategoryConstants {
             "기타", "other", "general"
     );
 
+    /** 못 먹는 고기 조건은 돼지·소·닭을 나눠 봐야 해서 고기 낱말을 나눠 둔다. */
+    static final List<String> PORK_WORDS = List.of("흑돼지", "돼지", "삼겹", "오겹", "돈가", "뒷고기", "족발", "보쌈",
+            "pork", "とんかつ");
+    static final List<String> BEEF_WORDS = List.of("한우", "소고기", "갈비탕", "스테이크", "beef", "steak", "牛排");
+    /** 돼지·소 어느 쪽인지 이름만으로는 모르는 구이. */
+    static final List<String> GRILL_WORDS = List.of("갈비", "불고기", "야키니쿠", "焼肉", "烤肉", "烧烤", "燒烤",
+            "thịt nướng");
+    static final List<String> CHICKEN_WORDS = List.of("치킨", "닭", "chicken", "焼鳥", "やきとり", "鸡", "雞", "gà");
+
     /**
      * 세부 유형 → 판별 키워드(한/영/일). 앞에 오는 항목이 우선한다(더 구체적인 것 먼저).
      * 값은 소문자 부분 문자열 매칭이며, 오탐이 잦은 한 글자 접미사(산·봉·사)는 별도 규칙으로 다룬다.
@@ -647,10 +665,8 @@ public final class PlaceCategoryConstants {
         // ── 음식 유형(식당 세부 분류) ──
         // 유형 상한·대안 매칭이 이 값을 공유하므로 지형 키워드보다 먼저 판정한다.
         // 여행자에게 흑돼지 구이와 한우 구이는 같은 고기 끼니라 돼지·소를 한 종류로 센다.
-        SUB_TYPE_KEYWORDS.put("meat", List.of("흑돼지", "돼지", "삼겹", "오겹", "돈가", "뒷고기",
-                "족발", "보쌈", "pork", "한우", "소고기", "갈비", "불고기", "스테이크",
-                "야키니쿠", "beef", "steak", "焼肉", "とんかつ", "烤肉", "烧烤", "燒烤", "牛排", "thịt nướng"));
-        SUB_TYPE_KEYWORDS.put("chicken", List.of("치킨", "닭", "chicken", "焼鳥", "やきとり", "鸡", "雞", "gà"));
+        SUB_TYPE_KEYWORDS.put("meat", Stream.of(PORK_WORDS, BEEF_WORDS, GRILL_WORDS).flatMap(List::stream).toList());
+        SUB_TYPE_KEYWORDS.put("chicken", CHICKEN_WORDS);
         SUB_TYPE_KEYWORDS.put("seafood", List.of("해물", "해산물", "회", "물회", "전복", "갈치",
                 "고등어", "조개", "장어", "seafood", "sushi", "초밥", "寿司", "鮨", "刺身", "海鲜", "海鮮", "壽司",
                 "hải sản"));

@@ -124,7 +124,7 @@ class ItineraryGenerationExecutorTest {
                 .thenReturn(new ItinerarySaveHelper.Saved(saved, null));
         ItineraryGenerateRequest avoiding = new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO,
                 "강릉", List.of("바다"), List.of("관광"), null, null, null, LocalDate.of(2026, 12, 1),
-                LocalDate.of(2026, 12, 3), "강릉 바다 여행", null, null, null, null, null, null, null, List.of(9L));
+                LocalDate.of(2026, 12, 3), "강릉 바다 여행", null, null, null, null, null, null, null, List.of(9L), null);
 
         executor.execute("job", avoiding, 1L, emitter);
 

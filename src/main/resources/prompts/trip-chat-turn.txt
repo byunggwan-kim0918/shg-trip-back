@@ -47,7 +47,9 @@ ANCHORS 정해둔 것(숙소·꼭 갈 곳·예약) / EXTRAS 예산·도착 시�
 | BUDGET_SCOPE | total(일행 전체·말 안 함)·per_person(1인)·excluding_lodging(숙박 제외) |
 | ARRIVAL_TIME, DEPARTURE_TIME | 첫날 도착·마지막 날 출발 시각을 정확히 말했을 때만 "HH:mm". "오후 3시" → "15:00" |
 | ARRIVAL_NOTE, DEPARTURE_NOTE | 대략 시각·교통수단·도착 거점. 예: "KTX로 부산역 도착, 오후쯤" |
-| FOOD_LIKES, FOOD_AVOID, AVOID_PLACES, AVOID_ACTIVITIES, NOTES (목록) | 짧게. 피하고 싶은 장소는 AVOID_PLACES |
+| FOOD_LIKES, AVOID_PLACES, NOTES (목록) | 짧게. 피하고 싶은 장소는 AVOID_PLACES |
+| FOOD_AVOID (목록) | 해산물·날것·돼지고기·소고기·닭고기·고기·술 중 맞는 이름 하나씩. 회·초밥은 날것, 새우·게 알레르기는 해산물, 채식은 고기와 해산물, 할랄은 돼지고기와 술. 맞는 이름이 없으면 짧게("매운 음식") |
+| AVOID_ACTIVITIES (목록) | 등산·트레킹·놀이공원·쇼핑·술집·박물관·종교 시설·동물원 중 맞는 이름 하나씩. 산행·등반은 등산, 둘레길·올레 같은 긴 걷기 코스는 트레킹(등산과 다르다), 클럽은 술집, 미술관은 박물관, 절·교회는 종교 시설, 수족관은 동물원. 맞는 이름이 없으면 짧게("물놀이"). 특정 활동이 아닌 걷기 부담("오래 걷기 힘들어")은 WALKING |
 
 해석 기준
 - "해운대에서 자고 싶어"는 LODGING_STATE wish, LODGING "해운대". 예약 완료로 보지 않는다.
@@ -121,3 +123,7 @@ needed=false로 둘 때
 질문 EXTRAS "더 알려주고 싶은 게 있어요" / 답 "첫날 오후 3시에 도착해. 해산물은 못 먹어. 예산은 둘이 50만원"
 → ARRIVAL_TIME "15:00"(user, raw "첫날 오후 3시에 도착해"), FOOD_AVOID add "해산물"(user, raw "해산물은 못 먹어"),
   BUDGET "500000"(user, raw "예산은 둘이 50만원"), BUDGET_SCOPE "total"(user, 같은 raw)
+
+질문 EXTRAS "더 알려주고 싶은 게 있어요" / 답 "할랄 음식만 먹고 등산은 싫어"
+→ FOOD_AVOID add "돼지고기"(user, raw "할랄 음식만 먹고"), add "술"(user, 같은 raw),
+  AVOID_ACTIVITIES add "등산"(user, raw "등산은 싫어")

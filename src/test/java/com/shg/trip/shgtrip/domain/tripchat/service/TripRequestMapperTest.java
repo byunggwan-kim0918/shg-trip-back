@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.tripchat.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
+import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.tripchat.model.Draft;
 import com.shg.trip.shgtrip.domain.tripchat.model.DraftField;
 import com.shg.trip.shgtrip.domain.tripchat.model.FieldStatus;
@@ -10,11 +11,18 @@ import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.io.ClassPathResource;
 
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -114,6 +122,115 @@ class TripRequestMapperTest {
         assertThat(r.request().description()).doesNotContain("감천").contains("못 먹거나 피할 음식: 해산물");
         assertThat(r.request().avoidPlaceIds()).isNull();
         assertThat(r.notes().get(Slot.EXTRAS)).contains("감천문화마을 · " + GeneratorSupport.AVOID_PLACE_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("못 먹는 음식·피할 활동은 정해진 종류면 추론한 항목까지 조건으로 보내고, 그 밖은 참고만 한다고 안내한다")
+    void restrictionsFromChatItems() {
+        Events e = Events.busanTrip()
+                .user(DraftField.FOOD_AVOID, "해산물").user(DraftField.FOOD_AVOID, "술")
+                .user(DraftField.FOOD_AVOID, "매운 음식").inferred(DraftField.FOOD_AVOID, "돼지고기")
+                .user(DraftField.AVOID_ACTIVITIES, "등산").user(DraftField.AVOID_ACTIVITIES, "종교 시설")
+                .user(DraftField.AVOID_ACTIVITIES, "술집");
+
+        TripRequestMapper.Result r = map(e);
+
+        assertThat(r.request().restrictions()).containsExactly(PlaceRestriction.SEAFOOD, PlaceRestriction.NIGHTLIFE,
+                PlaceRestriction.PORK, PlaceRestriction.HIKING, PlaceRestriction.RELIGIOUS);
+        assertThat(r.notes().get(Slot.EXTRAS)).contains(
+                "해산물 · " + GeneratorSupport.FOOD_EXCLUDED, "술 · " + GeneratorSupport.BAR_EXCLUDED,
+                "매운 음식 · " + GeneratorSupport.RESTRICTION_REFERENCE,
+                "돼지고기 · " + GeneratorSupport.FOOD_EXCLUDED,
+                "등산 · " + GeneratorSupport.HIKING_EXCLUDED, "종교 시설 · " + GeneratorSupport.ACTIVITY_EXCLUDED,
+                "술집 · " + GeneratorSupport.BAR_EXCLUDED);
+        assertThat(r.request().description()).contains("못 먹거나 피할 음식: 해산물, 술, 매운 음식, 돼지고기",
+                "피하고 싶은 활동: 등산, 종교 시설, 술집");
+        assertThat(VALIDATOR.validate(r.request())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("모델이 종류 이름 뒤에 말을 덧붙이거나 여러 개를 적어도 알아보고, 먹을 수 있다는 말과 다른 낱말 속 이름은 맞추지 않는다")
+    void restrictionNamesWithExtraWords() {
+        assertThat(GeneratorSupport.restrictionsOf("해산물 알레르기")).containsExactly(PlaceRestriction.SEAFOOD);
+        assertThat(GeneratorSupport.restrictionsOf("종교 시설")).containsExactly(PlaceRestriction.RELIGIOUS);
+        assertThat(GeneratorSupport.restrictionsOf("트레킹")).containsExactly(PlaceRestriction.TREKKING);
+        assertThat(GeneratorSupport.restrictionNote(PlaceRestriction.TREKKING)).isEqualTo(GeneratorSupport.TREKKING_EXCLUDED);
+        assertThat(GeneratorSupport.restrictionsOf("술")).containsExactly(PlaceRestriction.NIGHTLIFE);
+        assertThat(GeneratorSupport.restrictionsOf("돼지고기, 소고기"))
+                .containsExactly(PlaceRestriction.PORK, PlaceRestriction.BEEF);
+        assertThat(GeneratorSupport.restrictionsOf("해산물은 괜찮고 매운 거")).isEmpty();
+        assertThat(GeneratorSupport.restrictionsOf("해산물은 괜찮은데 매운 건 못 먹어요")).isEmpty();
+        assertThat(GeneratorSupport.restrictionsOf("해산물 안 좋아함")).containsExactly(PlaceRestriction.SEAFOOD);
+        assertThat(GeneratorSupport.restrictionsOf("등산은 싫어")).containsExactly(PlaceRestriction.HIKING);
+        assertThat(GeneratorSupport.restrictionsOf("놀이공원 말고")).containsExactly(PlaceRestriction.THEME_PARK);
+        assertThat(GeneratorSupport.restrictionsOf("쇼핑센터")).containsExactly(PlaceRestriction.SHOPPING);
+        assertThat(GeneratorSupport.restrictionsOf("트레킹 코스")).containsExactly(PlaceRestriction.TREKKING);
+        assertThat(GeneratorSupport.restrictionsOf("돼지고기 요리")).containsExactly(PlaceRestriction.PORK);
+        assertThat(GeneratorSupport.restrictionsOf("놀이공원 같은 곳")).containsExactly(PlaceRestriction.THEME_PARK);
+        assertThat(GeneratorSupport.restrictionsOf("날것(회)")).containsExactly(PlaceRestriction.RAW);
+        assertThat(GeneratorSupport.restrictionsOf("술집 같은 곳")).containsExactly(PlaceRestriction.NIGHTLIFE);
+        assertThat(GeneratorSupport.restrictionsOf("등산이나 트레킹"))
+                .containsExactly(PlaceRestriction.HIKING, PlaceRestriction.TREKKING);
+        assertThat(GeneratorSupport.restrictionsOf("박물관 근처 카페")).isEmpty();
+        assertThat(GeneratorSupport.restrictionsOf("고기국수")).isEmpty();
+        assertThat(GeneratorSupport.restrictionsOf("미술관 관람")).isEmpty();
+        assertThat(GeneratorSupport.restrictionsOf("물고기")).isEmpty();
+        assertThat(GeneratorSupport.restrictionsOf("매운 음식")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("모든 조건 종류는 대화에서 고를 이름이 있다")
+    void everyRestrictionHasChatName() {
+        for (PlaceRestriction r : PlaceRestriction.values()) {
+            String label = GeneratorSupport.restrictionLabel(r);
+            assertThat(label).as(r.name()).isNotEqualTo(r.name());
+            assertThat(GeneratorSupport.restrictionsOf(label)).as(label).containsExactly(r);
+        }
+    }
+
+    @Test
+    @DisplayName("대화 프롬프트가 적게 하는 이름은 모두 조건 종류로 알아보고, 모든 종류가 프롬프트에 나온다")
+    void promptNamesMatchRestrictions() throws IOException {
+        String prompt = new ClassPathResource("prompts/trip-chat-turn.txt")
+                .getContentAsString(StandardCharsets.UTF_8);
+        Matcher rows = Pattern
+                .compile("\\| (?:FOOD_AVOID|AVOID_ACTIVITIES) \\(목록\\) \\| (.+?) 중 맞는 이름").matcher(prompt);
+        Set<PlaceRestriction> named = EnumSet.noneOf(PlaceRestriction.class);
+        int rowCount = 0;
+        while (rows.find()) {
+            rowCount++;
+            for (String name : rows.group(1).split("·")) {
+                List<PlaceRestriction> found = GeneratorSupport.restrictionsOf(name);
+                assertThat(found).as(name).hasSize(1);
+                named.addAll(found);
+            }
+        }
+        assertThat(rowCount).isEqualTo(2);
+        assertThat(named).containsExactlyInAnyOrder(PlaceRestriction.values());
+    }
+
+    @Test
+    @DisplayName("한 항목에 종류가 여럿이면 종류마다 이름을 붙여 따로 안내한다")
+    void multipleRestrictionsInOneItem() {
+        Events e = Events.busanTrip().user(DraftField.AVOID_ACTIVITIES, "술집, 등산");
+
+        TripRequestMapper.Result r = map(e);
+
+        assertThat(r.request().restrictions()).containsExactly(PlaceRestriction.NIGHTLIFE, PlaceRestriction.HIKING);
+        assertThat(r.notes().get(Slot.EXTRAS)).contains("술집 · " + GeneratorSupport.BAR_EXCLUDED,
+                "등산 · " + GeneratorSupport.HIKING_EXCLUDED);
+    }
+
+    @Test
+    @DisplayName("좋아하는 음식 안내는 참고만 한다고 하고, 못 먹는 음식은 뺀다고 따로 안내한다")
+    void likesAndAvoidsGetSeparateNotes() {
+        Events e = Events.busanTrip().user(DraftField.FOOD_LIKES, "국밥").user(DraftField.FOOD_AVOID, "해산물");
+
+        TripRequestMapper.Result r = map(e);
+
+        assertThat(r.notes().get(Slot.EXTRAS)).contains(GeneratorSupport.CONDITIONS_REFERENCE,
+                "해산물 · " + GeneratorSupport.FOOD_EXCLUDED);
+        assertThat(GeneratorSupport.CONDITIONS_REFERENCE).doesNotContain("활동");
     }
 
     @Test

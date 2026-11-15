@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
 import com.shg.trip.shgtrip.domain.planning.dto.ItineraryData;
@@ -36,7 +37,8 @@ class FallbackBlockedPlaceTest {
                 step(0, "성산일출봉", List.of(alt("제주러브랜드"), alt("섭지코지"))),
                 step(1, "제주러브랜드", List.of()));
 
-        ItineraryData result = ItineraryGenerationExecutor.withoutBlockedPlaces(data, List.of(), AvoidedPlaces.NONE);
+        ItineraryData result = ItineraryGenerationExecutor.withoutBlockedPlaces(data, List.of(), AvoidedPlaces.NONE,
+                PlaceRestrictions.NONE);
 
         assertThat(result.steps()).extracting(s -> s.place().name()).containsExactly("성산일출봉");
         assertThat(result.steps().get(0).alternatives()).extracting(AlternativeData::name).containsExactly("섭지코지");
@@ -48,7 +50,8 @@ class FallbackBlockedPlaceTest {
         Place chosen = Place.builder().name("제주러브랜드").build();
         ItineraryData data = itinerary(step(0, "제주러브랜드", List.of()));
 
-        ItineraryData result = ItineraryGenerationExecutor.withoutBlockedPlaces(data, List.of(chosen), AvoidedPlaces.NONE);
+        ItineraryData result = ItineraryGenerationExecutor.withoutBlockedPlaces(data, List.of(chosen), AvoidedPlaces.NONE,
+                PlaceRestrictions.NONE);
 
         assertThat(result.steps()).hasSize(1);
     }
@@ -63,10 +66,35 @@ class FallbackBlockedPlaceTest {
                 "Landmarks and Outdoors > Historic Site", List.of(), "Busan", "KR", BigDecimal.valueOf(35.0975),
                 BigDecimal.valueOf(129.0106), null, null, 0.5)));
 
-        ItineraryData result = ItineraryGenerationExecutor.withoutBlockedPlaces(data, List.of(), avoided);
+        ItineraryData result = ItineraryGenerationExecutor.withoutBlockedPlaces(data, List.of(), avoided,
+                PlaceRestrictions.NONE);
 
         assertThat(result.steps()).extracting(s -> s.place().name()).containsExactly("성산일출봉");
         assertThat(result.steps().get(0).alternatives()).extracting(AlternativeData::name).containsExactly("섭지코지");
+    }
+
+    @Test
+    @DisplayName("못 먹는 음식·피할 활동은 이름과 모델이 붙인 종류로 스텝과 대안에서 뺀다")
+    void dropsRestrictedPlaces() {
+        ItineraryData data = itinerary(
+                step(0, "섭지코지", List.of(alt("해운대 횟집", "맛집"), alt("올레국수", "맛집"))),
+                stepOf(1, "한라산 등산로", "관광"));
+
+        ItineraryData result = ItineraryGenerationExecutor.withoutBlockedPlaces(data, List.of(), AvoidedPlaces.NONE,
+                PlaceRestrictions.of(List.of(PlaceRestriction.SEAFOOD,
+                        PlaceRestriction.HIKING)));
+
+        assertThat(result.steps()).extracting(s -> s.place().name()).containsExactly("섭지코지");
+        assertThat(result.steps().get(0).alternatives()).extracting(AlternativeData::name).containsExactly("올레국수");
+    }
+
+    private static StepData stepOf(int order, String name, String kind) {
+        return new StepData(order, 1, "10:00", "11:00", new PlaceData(name, "주소", kind, "제주", "KR"),
+                List.of(), "CAR", 10, BigDecimal.ONE, BigDecimal.ZERO, "설명", BigDecimal.ZERO);
+    }
+
+    private static AlternativeData alt(String name, String kind) {
+        return new AlternativeData(name, "주소", kind, "제주", "KR", "설명", BigDecimal.ZERO);
     }
 
     @Test
@@ -78,7 +106,8 @@ class FallbackBlockedPlaceTest {
                 step(2, "섭지코지", List.of()),
                 step(3, "우도", List.of()));
 
-        ItineraryData result = ItineraryGenerationExecutor.withoutBlockedPlaces(data, List.of(), AvoidedPlaces.NONE);
+        ItineraryData result = ItineraryGenerationExecutor.withoutBlockedPlaces(data, List.of(), AvoidedPlaces.NONE,
+                PlaceRestrictions.NONE);
 
         assertThat(result.steps()).extracting(s -> s.place().name()).containsExactly("성산일출봉", "섭지코지", "우도");
         assertThat(result.steps().get(1).transportationMode()).isNull();

@@ -75,7 +75,11 @@ public record ItineraryGenerateRequest(
 
         // selectedPlaceIds에도 있는 장소는 빼지 않는다
         @Size(max = 10, message = "피할 장소는 최대 10개까지 가능합니다.")
-        List<@NotNull(message = "피할 장소 값이 비어 있습니다.") Long> avoidPlaceIds
+        List<@NotNull(message = "피할 장소 값이 비어 있습니다.") Long> avoidPlaceIds,
+
+        // 못 먹는 음식·피할 활동. selectedPlaceIds에 있는 장소는 해당해도 빼지 않는다
+        @Size(max = 20, message = "피할 조건은 최대 20개까지 가능합니다.")
+        List<@NotNull(message = "피할 조건 값이 비어 있습니다.") PlaceRestriction> restrictions
 ) {
     public ItineraryGenerateRequest(PlanningMode mode, String destination, List<String> themes, List<String> categories,
                                     String pace, String transportPref, BigDecimal budget, LocalDate startDate,
@@ -91,7 +95,7 @@ public record ItineraryGenerateRequest(
                                     List<String> customPlaceNames, String companion, Integer partySize,
                                     String arrivalTime, String departureTime) {
         this(mode, destination, themes, categories, pace, transportPref, budget, startDate, endDate, description,
-                selectedPlaceIds, customPlaceNames, companion, partySize, arrivalTime, departureTime, null, null);
+                selectedPlaceIds, customPlaceNames, companion, partySize, arrivalTime, departureTime, null, null, null);
     }
 
     /**
@@ -132,7 +136,7 @@ public record ItineraryGenerateRequest(
         String merged = description == null || description.isBlank() ? note : description + " " + note;
         return new ItineraryGenerateRequest(mode, destination, themes, categories, pace, transportPref, budget,
                 startDate, endDate, merged, selectedPlaceIds, customPlaceNames, companion, partySize,
-                arrivalTime, departureTime, requiredExperiences, avoidPlaceIds);
+                arrivalTime, departureTime, requiredExperiences, avoidPlaceIds, restrictions);
     }
 
     public enum PlanningMode {
