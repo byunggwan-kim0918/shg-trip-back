@@ -28,6 +28,20 @@ class MealCuisineKeyTest {
     }
 
     @Test
+    @DisplayName("못 먹는 고기 조건이 나눠 보는 요리도 세부 유형은 그대로다")
+    void restrictionWordsKeepSubTypes() {
+        String restaurant = "Dining and Drinking > Restaurant";
+        assertThat(PlaceCategoryConstants.subType("춘천명동닭갈비", restaurant, List.of("식당", "닭갈비"), null))
+                .isEqualTo("meat");
+        assertThat(PlaceCategoryConstants.subType("호탕한갈비탕", restaurant, List.of("식당", "탕·국밥"), null))
+                .isEqualTo("meat");
+        assertThat(PlaceCategoryConstants.subType("참이맛감자탕", restaurant, List.of("식당", "탕·국밥"), null))
+                .isEqualTo("soup");
+        assertThat(PlaceCategoryConstants.subType("토속촌 삼계탕", restaurant, List.of("삼계탕"), null))
+                .isEqualTo("soup");
+    }
+
+    @Test
     @DisplayName("구체적 종류가 다르면 다른 키 — 해산물·면은 고기와 따로 센다")
     void differentCuisinesStaySeparate() {
         assertThat(PlaceCategoryConstants.subType("고서방 짬뽕",

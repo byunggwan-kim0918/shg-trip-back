@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.tripchat.service;
 
+import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.tripchat.model.PlaceMatch;
 
 import java.util.LinkedHashMap;
@@ -96,14 +97,75 @@ public final class GeneratorSupport {
     public static final String BUDGET_EXCLUDING_LODGING = "숙박을 뺀 예산은 그대로 전달할 수 없어 참고만 해요.";
     public static final String BUDGET_NEEDS_PARTY = "인원을 알려주면 일행 전체 예산으로 계산해요.";
     public static final String AVOID_PLACE_EXCLUDED = "일정과 대안에서 빼요.";
-    public static final String AVOID_PLACE_NOT_FOUND = "이름으로 장소를 찾지 못해 반영하지 못해요.";
+    public static final String AVOID_PLACE_NOT_FOUND = "이름으로 장소를 찾지 못해 빼지 못해요.";
     public static final String AVOID_PLACE_KEPT = "일정에 꼭 넣기로 한 곳이라 빼지 않아요.";
-    public static final String AVOID_PLACE_HUB = "공항·역 같은 교통 거점은 뺄 수 없어요.";
+    public static final String AVOID_PLACE_HUB = "공항·역은 뺄 수 없어요.";
     public static final String AVOID_PLACES_FULL = "피할 곳은 10곳까지만 뺄 수 있어요.";
-    public static final String CONDITIONS_REFERENCE = "음식·활동 같은 조건은 장소를 고를 때 참고만 해요.";
+    public static final String CONDITIONS_REFERENCE = "좋아하는 음식이나 기타 요청은 장소를 고를 때 참고만 해요.";
     public static final String APPROX_TIME = "대략적인 시간은 참고만 해요.";
+    public static final String FOOD_EXCLUDED = "이 음식을 주로 파는 식당은 빼요. 다른 메뉴에 들어 있을 수는 있어요.";
+    public static final String BAR_EXCLUDED = "술집은 일정과 대안에서 빼요.";
+    public static final String HIKING_EXCLUDED = "산에 오르는 등산 코스는 빼요. 둘레길 같은 걷는 길이나 낮은 산은 남을 수 있어요.";
+    public static final String TREKKING_EXCLUDED = "오래 걷는 트레킹 코스는 빼요. 짧은 산책로는 남을 수 있어요.";
+    public static final String ACTIVITY_EXCLUDED = "일정과 대안에서 빼요.";
+    public static final String RESTRICTION_REFERENCE = "따로 걸러 내지 못해 참고만 해요.";
 
     private static final Map<String, String> MAJOR_LABELS = Map.of("DINING", "식당", "CAFE", "카페", "LODGING", "숙소");
+
+    /** 대화 프롬프트(trip-chat-turn.txt)가 못 먹는 음식·피할 활동을 이 이름으로 정리한다. 안내에는 종류마다 첫 이름을 쓴다. */
+    private static final Map<String, PlaceRestriction> RESTRICTION_LABELS = labeled(
+            Map.entry("해산물", PlaceRestriction.SEAFOOD), Map.entry("날것", PlaceRestriction.RAW),
+            Map.entry("돼지고기", PlaceRestriction.PORK), Map.entry("소고기", PlaceRestriction.BEEF),
+            Map.entry("닭고기", PlaceRestriction.CHICKEN), Map.entry("고기", PlaceRestriction.MEAT),
+            Map.entry("술집", PlaceRestriction.NIGHTLIFE), Map.entry("술", PlaceRestriction.NIGHTLIFE),
+            Map.entry("등산", PlaceRestriction.HIKING), Map.entry("트레킹", PlaceRestriction.TREKKING),
+            Map.entry("놀이공원", PlaceRestriction.THEME_PARK), Map.entry("쇼핑", PlaceRestriction.SHOPPING),
+            Map.entry("박물관", PlaceRestriction.MUSEUM), Map.entry("종교 시설", PlaceRestriction.RELIGIOUS),
+            Map.entry("동물원", PlaceRestriction.ZOO_AQUARIUM));
+    private static final Map<String, PlaceRestriction> RESTRICTION_NAMES = RESTRICTION_LABELS.entrySet().stream()
+            .collect(java.util.stream.Collectors.toMap(e -> TextNormalizer.key(e.getKey()), Map.Entry::getValue));
+
+    /** 뒤에 말을 덧붙여도("해산물 알레르기") 알아볼 이름. 고기·술은 "고기국수"·"술빵"에 걸려 넣지 않는다. */
+    private static final List<String> PREFIX_NAMES = List.of("해산물", "날것", "돼지고기", "소고기", "닭고기", "술집",
+            "등산", "트레킹", "놀이공원", "쇼핑", "박물관", "종교시설", "동물원");
+    private static final java.util.regex.Pattern ITEM_SEPARATOR =
+            java.util.regex.Pattern.compile("[,·/]|(?:이랑|랑|하고|와|과|및|그리고|이나|또는)\\s+");
+    /**
+     * 이름 바로 뒤에 붙어도 피한다는 뜻인 말("트레킹 코스", "해산물 알레르기", "등산은 싫어"). "해산물은 괜찮은데"처럼
+     * 다른 말이 붙으면 피한다는 뜻인지 알 수 없어 맞추지 않는다.
+     */
+    private static final java.util.regex.Pattern AVOIDING_TAIL = java.util.regex.Pattern.compile(
+            "(?:코스|몰|센터|류|요리|음식|종류|같은곳|같은데|같은거)?(?:[은는이가도을를])?"
+                    + "(?:(?:알레르기|알러지|못|안|싫|별로|빼|제외|말고).*)?");
+
+    /** 한 항목에 이름을 여러 개 적어도("돼지고기, 소고기") 모두 맞춘다. 정해진 종류가 없으면 빈 목록. */
+    static List<PlaceRestriction> restrictionsOf(String itemText) {
+        PlaceRestriction exact = RESTRICTION_NAMES.get(TextNormalizer.key(itemText));
+        if (exact != null) return List.of(exact);
+        if (itemText == null) return List.of();
+        return ITEM_SEPARATOR.splitAsStream(itemText.replaceAll("\\(.*?\\)", " ")).map(TextNormalizer::key)
+                .map(part -> RESTRICTION_NAMES.containsKey(part) ? part : PREFIX_NAMES.stream()
+                        .filter(name -> part.startsWith(name)
+                                && AVOIDING_TAIL.matcher(part.substring(name.length())).matches())
+                        .findFirst().orElse(null))
+                .filter(java.util.Objects::nonNull).map(RESTRICTION_NAMES::get).distinct().toList();
+    }
+
+    /** 한 항목에 종류가 여럿이면 안내를 종류마다 따로 쓴다. */
+    static String restrictionLabel(PlaceRestriction r) {
+        return RESTRICTION_LABELS.entrySet().stream().filter(e -> e.getValue() == r).findFirst()
+                .map(Map.Entry::getKey).orElse(r.name());
+    }
+
+    static String restrictionNote(PlaceRestriction r) {
+        return switch (r) {
+            case SEAFOOD, RAW, PORK, BEEF, CHICKEN, MEAT -> FOOD_EXCLUDED;
+            case NIGHTLIFE -> BAR_EXCLUDED;
+            case HIKING -> HIKING_EXCLUDED;
+            case TREKKING -> TREKKING_EXCLUDED;
+            default -> ACTIVITY_EXCLUDED;
+        };
+    }
 
     /** 산 이름("용지봉")이 같은 이름 식당에 맞춰져도 사용자가 알아볼 수 있게 식당·카페·숙소는 종류를 붙인다. */
     static String placeLabel(PlaceMatch match) {
@@ -147,6 +209,13 @@ public final class GeneratorSupport {
 
     /** 국내 enrich 거절 기준(prompts/enrich-input.txt UNREALISTIC_BUDGET) */
     public static final long MIN_BUDGET_PER_DAY = 50_000;
+
+    @SafeVarargs
+    private static Map<String, PlaceRestriction> labeled(Map.Entry<String, PlaceRestriction>... entries) {
+        Map<String, PlaceRestriction> m = new LinkedHashMap<>();
+        for (Map.Entry<String, PlaceRestriction> e : entries) m.put(e.getKey(), e.getValue());
+        return java.util.Collections.unmodifiableMap(m);
+    }
 
     private static Map<String, String> labels(String... pairs) {
         Map<String, String> m = new LinkedHashMap<>();

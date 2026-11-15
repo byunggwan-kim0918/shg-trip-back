@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.tripchat.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
+import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.itinerary.dto.WizardOptionIds;
 import com.shg.trip.shgtrip.domain.tripchat.model.Draft;
 import com.shg.trip.shgtrip.domain.tripchat.model.Draft.Fact;
@@ -116,8 +117,9 @@ public final class TripRequestMapper {
         BigDecimal budget = budget(draft, companion, partySize, days, notes, fragments, blockers);
 
         listFragment("좋아하는 음식", draft.items(DraftField.FOOD_LIKES), fragments, notes);
-        listFragment("못 먹거나 피할 음식", draft.items(DraftField.FOOD_AVOID), fragments, notes);
-        listFragment("피하고 싶은 활동", draft.items(DraftField.AVOID_ACTIVITIES), fragments, notes);
+        List<PlaceRestriction> restrictions = new ArrayList<>();
+        restrictionFragment("못 먹거나 피할 음식", draft.items(DraftField.FOOD_AVOID), restrictions, fragments, notes);
+        restrictionFragment("피하고 싶은 활동", draft.items(DraftField.AVOID_ACTIVITIES), restrictions, fragments, notes);
         listFragment("기타", draft.items(DraftField.NOTES), fragments, notes);
         List<Long> avoidPlaceIds = avoidPlaces(draft, matches, placeIds, notes);
 
@@ -137,7 +139,8 @@ public final class TripRequestMapper {
         ItineraryGenerateRequest request = new ItineraryGenerateRequest(planningMode, destination,
                 themes.stream().limit(10).toList(), categories.stream().limit(10).toList(), pace, transportPref,
                 budget, start, end, description, selected, List.of(), companion, partySize, arrival, departure,
-                required.isEmpty() ? null : required, avoidPlaceIds.isEmpty() ? null : avoidPlaceIds);
+                required.isEmpty() ? null : required, avoidPlaceIds.isEmpty() ? null : avoidPlaceIds,
+                restrictions.isEmpty() ? null : List.copyOf(restrictions));
         return new Result(request, blockers, notes, description, days);
     }
 
@@ -392,6 +395,27 @@ public final class TripRequestMapper {
         if (items.isEmpty()) return;
         fragments.add(label + ": " + String.join(", ", items.stream().map(Item::text).toList()));
         addNote(notes, Slot.EXTRAS, GeneratorSupport.CONDITIONS_REFERENCE);
+    }
+
+    /**
+     * 모델이 추론한 항목도 조건으로 보낸다. 확인 화면에 빼는 안내로 보여 사용자가 고칠 수 있다.
+     */
+    private static void restrictionFragment(String label, List<Item> items, List<PlaceRestriction> restrictions,
+                                            List<String> fragments, Map<Slot, List<String>> notes) {
+        if (items.isEmpty()) return;
+        fragments.add(label + ": " + String.join(", ", items.stream().map(Item::text).toList()));
+        for (Item item : items) {
+            List<PlaceRestriction> found = GeneratorSupport.restrictionsOf(item.text());
+            found.stream().filter(r -> !restrictions.contains(r)).forEach(restrictions::add);
+            if (found.isEmpty()) {
+                addNote(notes, Slot.EXTRAS, item.text() + " · " + GeneratorSupport.RESTRICTION_REFERENCE);
+            } else if (found.size() == 1) {
+                addNote(notes, Slot.EXTRAS, item.text() + " · " + GeneratorSupport.restrictionNote(found.get(0)));
+            } else {
+                found.forEach(r -> addNote(notes, Slot.EXTRAS,
+                        GeneratorSupport.restrictionLabel(r) + " · " + GeneratorSupport.restrictionNote(r)));
+            }
+        }
     }
 
     /** 생성기는 요청 문장에 이름이 나온 명소를 후보에 더하므로, 피하고 싶다는 장소 이름이 든 조각은 보내지 않는다. */

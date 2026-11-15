@@ -28,7 +28,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.*;
-import java.util.function.Predicate;
+import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -75,6 +75,7 @@ public class ItineraryGenerationExecutor {
             if (cancellationRegistry.isCancelled(jobId)) return;
             List<Place> selectedPlaces = resolveSelectedPlaces(request);
             AvoidedPlaces avoided = AvoidedPlaces.load(placeRepository, request.avoidPlaceIds());
+            PlaceRestrictions restrictions = PlaceRestrictions.of(request.restrictions());
 
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendProgress(emitter, 50, "장소 탐색 중...", "GENERATING");
@@ -87,7 +88,7 @@ public class ItineraryGenerationExecutor {
                     () -> validationService.validateWithRetry(itineraryData, enrichedInput, selectedPlaces));
 
             validateSelectedPlacesIncluded(validated, selectedPlaces);
-            ItineraryData allowed = withoutBlockedPlaces(validated, selectedPlaces, avoided);
+            ItineraryData allowed = withoutBlockedPlaces(validated, selectedPlaces, avoided, restrictions);
 
             sendStepStream(emitter, allowed.steps());
 
@@ -128,16 +129,17 @@ public class ItineraryGenerationExecutor {
                 request.startDate(), days, ScheduleTimes.departureHubDeadline(request.departureTime(), null)), List.of());
     }
 
-    /** 이 경로는 Sonnet이 이름을 직접 지어 후보 정책과 피할 장소 제외를 거치지 않는다. 사용자가 고른 장소는 남긴다. */
-    static ItineraryData withoutBlockedPlaces(ItineraryData data, List<Place> selectedPlaces, AvoidedPlaces avoided) {
+    /** 이 경로는 Sonnet이 이름을 직접 지어 후보 정책과 피할 장소·조건 제외를 거치지 않는다. 사용자가 고른 장소는 남긴다. */
+    static ItineraryData withoutBlockedPlaces(ItineraryData data, List<Place> selectedPlaces, AvoidedPlaces avoided,
+                                              PlaceRestrictions restrictions) {
         if (data.steps() == null) return data;
         Set<String> chosen = selectedPlaces.stream().map(Place::getName).collect(Collectors.toSet());
-        Predicate<String> blocked = name -> name != null && !chosen.contains(name)
-                && (CandidatePolicy.isBlocked(name) || avoided.blocksName(name));
+        BiPredicate<String, String> blocked = (name, kind) -> name != null && !chosen.contains(name)
+                && (CandidatePolicy.isBlocked(name) || avoided.blocksName(name) || restrictions.blocksName(name, kind));
         List<StepData> steps = new ArrayList<>();
         Integer droppedDay = null;
         for (StepData s : data.steps()) {
-            if (s.place() != null && blocked.test(s.place().name())) {
+            if (s.place() != null && blocked.test(s.place().name(), s.place().category())) {
                 droppedDay = s.dayNumber();
                 continue;
             }
@@ -145,7 +147,7 @@ public class ItineraryGenerationExecutor {
             boolean legFromDropped = Objects.equals(droppedDay, s.dayNumber());
             droppedDay = null;
             List<AlternativeData> alts = s.alternatives() == null ? null
-                    : s.alternatives().stream().filter(a -> !blocked.test(a.name())).toList();
+                    : s.alternatives().stream().filter(a -> !blocked.test(a.name(), a.category())).toList();
             steps.add(new StepData(s.stepOrder(), s.dayNumber(), s.startTime(), s.endTime(), s.place(), alts,
                     legFromDropped ? null : s.transportationMode(),
                     legFromDropped ? null : s.transportationDuration(),

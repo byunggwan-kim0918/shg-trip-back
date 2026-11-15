@@ -189,16 +189,45 @@ class ItineraryGenerateRequestValidationTest {
         assertThat(messages(withAvoid(java.util.Arrays.asList(1L, null)))).contains("피할 장소 값이 비어 있습니다.");
     }
 
+    @Test
+    @DisplayName("피할 조건은 JSON 필드 restrictions로 읽히고, 모르는 값·20개 초과·빈 값을 막고, 문장용 사본에도 남는다")
+    void restrictions() throws Exception {
+        var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().findAndAddModules().build();
+        String json = """
+                {"mode":"AUTO","destination":"부산","themes":["ocean"],"categories":["beach"],
+                 "startDate":"%s","endDate":"%s","restrictions":[%s]}
+                """;
+        var req = mapper.readValue(json.formatted(base, base.plusDays(2), "\"SEAFOOD\",\"HIKING\""),
+                ItineraryGenerateRequest.class);
+
+        assertThat(req.restrictions()).containsExactly(PlaceRestriction.SEAFOOD, PlaceRestriction.HIKING);
+        assertThat(messages(req)).isEmpty();
+        assertThat(req.withTripFactsInDescription().restrictions()).isEqualTo(req.restrictions());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> mapper.readValue(
+                        json.formatted(base, base.plusDays(2), "\"FISH\""), ItineraryGenerateRequest.class))
+                .isInstanceOf(com.fasterxml.jackson.databind.exc.InvalidFormatException.class);
+        assertThat(messages(withRestrictions(java.util.Collections.nCopies(21, PlaceRestriction.PORK))))
+                .contains("피할 조건은 최대 20개까지 가능합니다.");
+        assertThat(messages(withRestrictions(java.util.Arrays.asList(PlaceRestriction.PORK, null))))
+                .contains("피할 조건 값이 비어 있습니다.");
+    }
+
+    private ItineraryGenerateRequest withRestrictions(List<PlaceRestriction> restrictions) {
+        return new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "부산", List.of("healing"),
+                List.of("attraction"), null, null, null, base, base.plusDays(2), null, null, null,
+                null, null, null, null, null, null, restrictions);
+    }
+
     private ItineraryGenerateRequest withAvoid(List<Long> avoid) {
         return new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "부산", List.of("healing"),
                 List.of("attraction"), null, null, null, base, base.plusDays(2), null, null, null,
-                "couple", null, null, null, null, avoid);
+                "couple", null, null, null, null, avoid, null);
     }
 
     private ItineraryGenerateRequest withRequired(List<ItineraryGenerateRequest.RequiredExperience> required) {
         return new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "부산", List.of("healing"),
                 List.of("attraction"), null, null, null, base, base.plusDays(2), null, null, null,
-                null, null, null, null, required, null);
+                null, null, null, null, required, null, null);
     }
 
     @Test

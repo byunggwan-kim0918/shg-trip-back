@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.embedding.EmbeddingService;
 import com.shg.trip.shgtrip.domain.place.vector.PlaceVectorSearchService;
@@ -1154,6 +1155,34 @@ class VectorSearchQueryServiceTest {
 
             assertThat(accepted).containsExactly(
                     "흑돼지구이 1호점", "흑돼지구이 2호점", "흑돼지구이 3호점", "흑돼지구이 4호점");
+        }
+
+        private VectorSearchResult dining(String name, String cuisine, double similarity) {
+            return new VectorSearchResult((long) name.hashCode(), name, name + " 주소",
+                    "Dining and Drinking > Restaurant", List.of(), "Busan", "KR", BigDecimal.valueOf(35.1),
+                    BigDecimal.valueOf(129.0), null, BigDecimal.valueOf(4.3), null, null, similarity, "MEAL", cuisine,
+                    null, null);
+        }
+
+        @Test
+        @DisplayName("못 먹는 음식은 자르기 전에 빼서 다른 식당으로 자리를 채우고, 종류를 모르는 식당은 뒤로 미룬다")
+        void restrictionsRefillWindow() {
+            List<VectorSearchResult> raw = new java.util.ArrayList<>();
+            double sim = 0.90;
+            for (int i = 1; i <= 6; i++) raw.add(dining("광안횟집 " + i, "SEAFOOD", sim -= 0.01));
+            raw.add(dining("이름없는식당", null, sim -= 0.01));
+            raw.add(dining("밀면집", "NOODLE", sim -= 0.01));
+            raw.add(dining("돼지국밥집", "SOUP", sim -= 0.01));
+            raw.add(dining("흑돼지집", "MEAT", sim -= 0.01));
+
+            List<String> restricted = service.applyThresholdAndRank(restaurantSlot, raw, 3,
+                    PlaceRestrictions.of(List.of(PlaceRestriction.SEAFOOD)))
+                    .stream().map(s -> s.result().name()).toList();
+            List<String> plain = service.applyThresholdAndRank(restaurantSlot, raw, 3).stream()
+                    .map(s -> s.result().name()).toList();
+
+            assertThat(restricted).containsExactlyInAnyOrder("밀면집", "돼지국밥집", "흑돼지집");
+            assertThat(plain).anyMatch(n -> n.startsWith("광안횟집"));
         }
 
         @Test

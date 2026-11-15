@@ -154,6 +154,7 @@ public class VectorSearchQueryService {
     }
 
     private List<PlaceCandidate> searchWithin(VectorEnrichedInput input) {
+        PlaceRestrictions restrictions = PlaceRestrictions.of(input.restrictions());
         int totalLimit = calculateTotalLimit(input);
         List<SearchSlot> slots = SearchQueryBuilder.buildSearchSlots(input);
         Map<String, Integer> slotLimits = buildSlotLimits(slots, totalLimit, calculateTripDays(input));
@@ -218,7 +219,7 @@ public class VectorSearchQueryService {
             if (raw.isEmpty()) continue;
 
             int limit = slotLimits.getOrDefault(slot.key(), MIN_PER_ATTRACTION_SLOT);
-            for (ScoredResult scored : applyThresholdAndRank(slot, raw, limit)) {
+            for (ScoredResult scored : applyThresholdAndRank(slot, raw, limit, restrictions)) {
                 Long placeId = scored.result().placeId();
                 if (placeId == null) {
                     withoutId.add(scored);
@@ -323,7 +324,8 @@ public class VectorSearchQueryService {
         long queryStart = System.nanoTime();
         List<VectorSearchResult> raw = placeVectorSearchService.search(request);
         long queryMs = elapsedMs(queryStart);
-        List<ScoredResult> accepted = applyThresholdAndRank(slot, raw, limit);
+        List<ScoredResult> accepted = applyThresholdAndRank(slot, raw, limit,
+                PlaceRestrictions.of(input.restrictions()));
 
         List<PlaceCandidate> result = new ArrayList<>(accepted.size());
         int index = startIndex;
@@ -355,14 +357,25 @@ public class VectorSearchQueryService {
      * 후보가 줄어든 이유를 사후에 추적하도록 반환/탈락 수를 슬롯별로 로그에 남긴다.
      */
     List<ScoredResult> applyThresholdAndRank(SearchSlot slot, List<VectorSearchResult> raw, int limit) {
+        return applyThresholdAndRank(slot, raw, limit, PlaceRestrictions.NONE);
+    }
+
+    /** 못 먹는 음식·피할 활동은 자르기 전에 빼야 그 자리가 다른 후보로 채워진다. */
+    List<ScoredResult> applyThresholdAndRank(SearchSlot slot, List<VectorSearchResult> raw, int limit,
+                                             PlaceRestrictions restrictions) {
         double minSimilarity = PlaceCategoryConstants.minSimilarity(slot.role());
         String slotMajor = PlaceCategoryConstants.slotMajorCategory(slot.role());
 
         List<VectorSearchResult> passed = new ArrayList<>();
         int dropped = 0;
+        List<String> restricted = new ArrayList<>();
         for (VectorSearchResult r : raw) {
             if (r.similarityScore() < thresholdFor(r, slotMajor, minSimilarity, exemptsIconic(slot))) {
                 dropped++;
+                continue;
+            }
+            if (restrictions.violatedBy(r) != null) {
+                restricted.add(r.name());
                 continue;
             }
             passed.add(r);
@@ -381,14 +394,22 @@ public class VectorSearchQueryService {
             kept.sort(Comparator.<ScoredResult>comparingDouble(sr -> prominence(sr.result(), n0)).reversed()
                     .thenComparing(Comparator.comparingDouble(ScoredResult::score).reversed()));
         }
+        // 종류를 모르는 식당은 못 먹는 음식일 수 있어 아는 식당이 모자랄 때만 쓴다.
+        if (!restrictions.isEmpty()) {
+            kept.sort(Comparator.comparing((ScoredResult sr) -> restrictions.isUnknownFood(sr.result())));
+        }
         kept = dropSameWikidataItem(kept);
         List<ScoredResult> accepted = isDiversitySlot(slot.role())
                 ? selectWithSubTypeDiversity(kept, limit)
                 : kept.size() > limit ? new ArrayList<>(kept.subList(0, limit)) : kept;
 
-        log.info("슬롯 검색: key={}, role={}, 조회={}, 임계탈락={}, 채택={} (임계값={}, 인기도미상 중립={})",
-                slot.key(), slot.role(), raw.size(), dropped, accepted.size(),
+        log.info("슬롯 검색: key={}, role={}, 조회={}, 임계탈락={}, 조건제외={}, 채택={} (임계값={}, 인기도미상 중립={})",
+                slot.key(), slot.role(), raw.size(), dropped, restricted.size(), accepted.size(),
                 String.format("%.2f", minSimilarity), String.format("%.2f", neutral));
+        if (!restricted.isEmpty()) {
+            log.info("슬롯 {} 피할 조건 제외 {}곳: {}", slot.key(), restricted.size(),
+                    restricted.subList(0, Math.min(8, restricted.size())));
+        }
         return accepted;
     }
 
@@ -824,7 +845,8 @@ public class VectorSearchQueryService {
             for (String landmark : landmarks) {
                 List<VectorSearchResult> raw = placeVectorSearchService.search(
                         buildRequest(input, vectors.get(i), List.of(landmark), slot, overfetchFor(slot.role(), limit), true));
-                for (ScoredResult scored : applyThresholdAndRank(slot, dedupeByPlace(raw), limit)) {
+                for (ScoredResult scored : applyThresholdAndRank(slot, dedupeByPlace(raw), limit,
+                        PlaceRestrictions.of(input.restrictions()))) {
                     Long id = scored.result().placeId();
                     if (id != null && known.add(id)) out.add(scored.result());
                 }

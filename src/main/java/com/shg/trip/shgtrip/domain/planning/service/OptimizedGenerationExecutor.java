@@ -90,7 +90,8 @@ public class OptimizedGenerationExecutor {
             }
 
             VectorEnrichedInput.CompanionType chosen = VectorEnrichedInput.companionOf(request.companion());
-            VectorEnrichedInput withCompanion = enrichResult.enrichedInput().withCompanion(chosen,
+            VectorEnrichedInput withCompanion = enrichResult.enrichedInput().withRestrictions(request.restrictions())
+                    .withCompanion(chosen,
                     request.partySize() != null ? request.partySize() : VectorEnrichedInput.defaultPartySize(chosen));
             boolean carWithoutLicense = isCarWithoutKoreanLicense(withCompanion);
             VectorEnrichedInput enrichedInput = carWithoutLicense ? withCompanion.withTransportPref("any") : withCompanion;
@@ -185,7 +186,8 @@ public class OptimizedGenerationExecutor {
             final List<String> ferryTokens = FerryAreaFilter.activeTokens(enrichedInput.ferryOnlyAreas(),
                     enrichedInput.description(), request.customPlaceNames(), candidates);
             final PoolExclusions exclusions = new PoolExclusions(ferryTokens,
-                    AvoidedPlaces.load(placeRepository, request.avoidPlaceIds()));
+                    AvoidedPlaces.load(placeRepository, request.avoidPlaceIds()),
+                    PlaceRestrictions.of(request.restrictions()));
             // 제외 조건을 거친 뒤에 숙소 보완 여부를 판단하고, 보완 숙소도 같은 조건을 거친다(두 번째 exclude).
             final List<PlaceCandidate> enrichedCandidates = appendGateways(dedupePhysicalCandidates(
                     excludeUnwanted(ensureAccommodationCandidates(
@@ -210,9 +212,10 @@ public class OptimizedGenerationExecutor {
             // 숙소 배정보다 먼저 돌려야 새로 찾은 숙소가 배정 대상에 들어간다. selectionOutput이 인덱스를 참조하므로 뒤에 이어 붙인다.
             // 덧붙인 후보는 벡터 검색 결과라 체류시간·시간대·입장료가 비어 있어 DB 값으로 채운다.
             final List<PlaceCandidate> candidatesWithLocalStays = dropAppendedSameWikidataItem(
-                    enrichCandidatesFromDb(appendNearbyReserve(
+                    excludeRestrictedAppended(enrichCandidatesFromDb(appendNearbyReserve(
                             appendNearbyAccommodations(enrichedCandidates, dayComposition, enrichedInput, exclusions),
-                            dayComposition, enrichedInput, exclusions)),
+                            dayComposition, enrichedInput, exclusions.withoutRestrictions())),
+                            enrichedCandidates.size(), exclusions.restrictions()),
                     enrichedCandidates.size());
 
             final RequiredExperiences.Match requiredExperiences =
@@ -399,13 +402,28 @@ public class OptimizedGenerationExecutor {
         return kept;
     }
 
-    record PoolExclusions(List<String> ferryTokens, AvoidedPlaces avoided) {}
+    record PoolExclusions(List<String> ferryTokens, AvoidedPlaces avoided, PlaceRestrictions restrictions) {
+        PoolExclusions withoutRestrictions() {
+            return new PoolExclusions(ferryTokens, avoided, PlaceRestrictions.NONE);
+        }
+    }
+
+    /** 날짜별 예비 후보는 검색 결과라 DB 체류 시간을 채운 뒤에야 등산·트레킹을 판정할 수 있다. */
+    static List<PlaceCandidate> excludeRestrictedAppended(List<PlaceCandidate> candidates, int baseSize,
+                                                          PlaceRestrictions restrictions) {
+        if (restrictions.isEmpty() || candidates.size() <= baseSize) return candidates;
+        List<PlaceCandidate> result = new ArrayList<>(candidates.subList(0, baseSize));
+        for (PlaceCandidate c : restrictions.exclude(candidates.subList(baseSize, candidates.size()))) {
+            result.add(c.reindexed(result.size() + 1));
+        }
+        return result;
+    }
 
     /** 관문을 뺀 모든 후보 추가 경로(검색 풀·숙소 보완·날짜별 예비·근처 숙소)가 거친다. 한 경로만 막으면 다른 경로로 다시 들어온다. */
     private List<PlaceCandidate> excludeUnwanted(List<PlaceCandidate> candidates, PoolExclusions exclusions,
                                                  VectorEnrichedInput input) {
-        return excludeDormLodging(exclusions.avoided().exclude(
-                FerryAreaFilter.exclude(candidates, exclusions.ferryTokens())), input);
+        return excludeDormLodging(exclusions.restrictions().exclude(exclusions.avoided().exclude(
+                FerryAreaFilter.exclude(candidates, exclusions.ferryTokens()))), input);
     }
 
     /** 이동수단별 예비 후보 검색 반경(km). 도보는 걸어서 들를 만한 거리만. */
