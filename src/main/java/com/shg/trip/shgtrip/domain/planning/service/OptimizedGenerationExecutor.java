@@ -28,7 +28,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Function;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -185,12 +184,14 @@ public class OptimizedGenerationExecutor {
             // 배로만 가는 부속섬 장소는 사용자가 원할 때만 남긴다. 토큰 검증은 풀 전체로 한 번 한다.
             final List<String> ferryTokens = FerryAreaFilter.activeTokens(enrichedInput.ferryOnlyAreas(),
                     enrichedInput.description(), request.customPlaceNames(), candidates);
-            // 다인실 숙소를 뺀 뒤에 보완 여부를 판단하고, 보완 숙소도 같은 필터를 거친다(두 번째 exclude).
+            final PoolExclusions exclusions = new PoolExclusions(ferryTokens,
+                    AvoidedPlaces.load(placeRepository, request.avoidPlaceIds()));
+            // 제외 조건을 거친 뒤에 숙소 보완 여부를 판단하고, 보완 숙소도 같은 조건을 거친다(두 번째 exclude).
             final List<PlaceCandidate> enrichedCandidates = appendGateways(dedupePhysicalCandidates(
-                    FerryAreaFilter.exclude(ensureAccommodationCandidates(
-                            excludeDormLodging(FerryAreaFilter.exclude(enrichCandidatesFromDb(candidates),
-                                    ferryTokens), enrichedInput),
-                            enrichedInput.regions(), enrichedInput), ferryTokens)), enrichedInput.regions());
+                    excludeUnwanted(ensureAccommodationCandidates(
+                            excludeUnwanted(enrichCandidatesFromDb(candidates), exclusions, enrichedInput),
+                            enrichedInput.regions(), enrichedInput), exclusions, enrichedInput)),
+                    enrichedInput.regions());
             stageMark = logStage("sync", stageMark);
 
             // [50%] Call 1: Sonnet selectPlaces
@@ -210,8 +211,8 @@ public class OptimizedGenerationExecutor {
             // 덧붙인 후보는 벡터 검색 결과라 체류시간·시간대·입장료가 비어 있어 DB 값으로 채운다.
             final List<PlaceCandidate> candidatesWithLocalStays = dropAppendedSameWikidataItem(
                     enrichCandidatesFromDb(appendNearbyReserve(
-                            appendNearbyAccommodations(enrichedCandidates, dayComposition, enrichedInput, ferryTokens),
-                            dayComposition, enrichedInput, ferryTokens)),
+                            appendNearbyAccommodations(enrichedCandidates, dayComposition, enrichedInput, exclusions),
+                            dayComposition, enrichedInput, exclusions)),
                     enrichedCandidates.size());
 
             final RequiredExperiences.Match requiredExperiences =
@@ -384,12 +385,7 @@ public class OptimizedGenerationExecutor {
         return "DINING".equals(major) || "CAFE".equals(major) || "ATTRACTION".equals(major);
     }
 
-    /**
-     * 커플·가족 여행이면 다인실 숙소(게스트하우스·호스텔)를 후보에서 뺀다. 사용자가 직접 고른 숙소는 남긴다.
-     *
-     * <p>숙소가 들어오는 세 경로(검색 풀·DB 보완·day별 근처 검색)가 모두 거쳐야 한다. 한 경로만 막으면
-     * 나머지 경로로 같은 숙소가 다시 들어온다.
-     */
+    /** 커플·가족 여행이면 다인실 숙소(게스트하우스·호스텔)를 후보에서 뺀다. 사용자가 직접 고른 숙소는 남긴다. */
     private List<PlaceCandidate> excludeDormLodging(List<PlaceCandidate> candidates, VectorEnrichedInput input) {
         if (input == null || !input.companion().avoidsDormLodging()) return candidates;
         List<PlaceCandidate> kept = candidates.stream()
@@ -401,6 +397,15 @@ public class OptimizedGenerationExecutor {
             log.info("다인실 숙소 제외({}): {}개 → {}개", input.companion(), candidates.size(), kept.size());
         }
         return kept;
+    }
+
+    record PoolExclusions(List<String> ferryTokens, AvoidedPlaces avoided) {}
+
+    /** 관문을 뺀 모든 후보 추가 경로(검색 풀·숙소 보완·날짜별 예비·근처 숙소)가 거친다. 한 경로만 막으면 다른 경로로 다시 들어온다. */
+    private List<PlaceCandidate> excludeUnwanted(List<PlaceCandidate> candidates, PoolExclusions exclusions,
+                                                 VectorEnrichedInput input) {
+        return excludeDormLodging(exclusions.avoided().exclude(
+                FerryAreaFilter.exclude(candidates, exclusions.ferryTokens())), input);
     }
 
     /** 이동수단별 예비 후보 검색 반경(km). 도보는 걸어서 들를 만한 거리만. */
@@ -417,10 +422,10 @@ public class OptimizedGenerationExecutor {
 
     /**
      * 날짜별 방문지 중심 근처의 예비 후보를 덧붙인다. SelectionOutput에는 넣지 않아 RouteOptimizer의 미사용 후보
-     * 경로(빈 시간 채우기·끼니 보충·교체)만 쓴다. 숙소 보완과 같은 필터(다인실·도선 섬)를 거친다.
+     * 경로(빈 시간 채우기·끼니 보충·교체)만 쓴다.
      */
     private List<PlaceCandidate> appendNearbyReserve(List<PlaceCandidate> candidates, SelectionOutput selection,
-                                                     VectorEnrichedInput input, List<String> ferryTokens) {
+                                                     VectorEnrichedInput input, PoolExclusions exclusions) {
         if (selection == null || selection.days() == null || selection.days().isEmpty()) return candidates;
         List<double[]> centers = selection.days().stream().map(d -> activityCentroid(d, candidates)).toList();
         double radius = reserveRadiusKm(input.transportPref());
@@ -430,7 +435,7 @@ public class OptimizedGenerationExecutor {
         for (Map.Entry<PlaceCategoryConstants.SearchRole, Integer> role : RESERVE_PER_DAY) {
             for (List<PlaceCandidate> found : vectorSearchQueryService.searchNearEach(
                     input, role.getKey(), centers, radius, role.getValue())) {
-                for (PlaceCandidate c : excludeDormLodging(FerryAreaFilter.exclude(found, ferryTokens), input)) {
+                for (PlaceCandidate c : excludeUnwanted(found, exclusions, input)) {
                     if (!addIfNew(known, c)) continue;
                     result.add(reindexCandidate(c, result.size() + 1));
                 }
@@ -455,7 +460,7 @@ public class OptimizedGenerationExecutor {
     private List<PlaceCandidate> appendNearbyAccommodations(List<PlaceCandidate> candidates,
                                                             SelectionOutput selection,
                                                             VectorEnrichedInput input,
-                                                            List<String> ferryTokens) {
+                                                            PoolExclusions exclusions) {
         if (selection == null || selection.days() == null || selection.days().isEmpty()) return candidates;
 
         List<PlaceCandidate> lodgings = candidates.stream()
@@ -483,7 +488,7 @@ public class OptimizedGenerationExecutor {
                             : "가장 가까운 숙소가 " + String.format("%.0f", nearest) + "km");
             List<PlaceCandidate> extra = vectorSearchQueryService.searchAccommodationsNear(
                     input, centroid, LOCAL_STAY_RADIUS_KM, LOCAL_STAY_LIMIT, result.size() + 1);
-            for (PlaceCandidate c : excludeDormLodging(FerryAreaFilter.exclude(extra, ferryTokens), input)) {
+            for (PlaceCandidate c : excludeUnwanted(extra, exclusions, input)) {
                 if (!addIfNew(knownPlaceIds, c)) continue; // 이미 있는 숙소
                 result.add(reindexCandidate(c, result.size() + 1));
             }
@@ -696,12 +701,6 @@ public class OptimizedGenerationExecutor {
                         c.latitude().doubleValue(), c.longitude().doubleValue()) <= STORE_INSIDE_VENUE_KM);
     }
 
-    private static final double WIKIDATA_TWIN_KM = 1.0;
-    /** 영어 이름 꼬리. 괄호로 감싼 병기("東京ドームシティ (Tokyo Dome City)")도 받는다. */
-    private static final Pattern LATIN_TAIL = Pattern.compile("[\\s(（]+[A-Za-z0-9][A-Za-z0-9 .,'’&()（）/-]*");
-    /** 구역 명소 이름으로 시작하는 FSQ 행은 그 구역 안 가게("アメリカ村 Club DROP")다. */
-    private static final Set<String> AREA_LEAVES = Set.of("pedestrian plaza", "plaza");
-
     /**
      * Wikidata 명소와 이름이 같거나 그 이름 뒤에 영어 이름만 붙은("饒河街觀光夜市 Raohe St. Night Market") 항목 없는 행을
      * 뺀다. 이름 키가 항목 행에만 언어판 수를 붙여 같은 이름이어도 위 병합을 지나간다.
@@ -709,7 +708,7 @@ public class OptimizedGenerationExecutor {
     static List<PlaceCandidate> dropWikidataTwins(List<PlaceCandidate> candidates) {
         List<PlaceCandidate> result = new ArrayList<>(candidates.size());
         for (PlaceCandidate c : candidates) {
-            if (candidates.stream().anyMatch(item -> isWikidataTwin(c, item))) {
+            if (candidates.stream().anyMatch(item -> PlaceIdentity.isWikidataTwin(c, item))) {
                 log.info("명소 중복 행 제외: {}", c.name());
             } else {
                 result.add(c);
@@ -718,70 +717,16 @@ public class OptimizedGenerationExecutor {
         return result;
     }
 
-    static boolean isWikidataTwin(PlaceCandidate twin, PlaceCandidate item) {
-        if (twin == item || twin.userSelected() || !isWikidataItem(item) || isWikidataItem(twin)) return false;
-        if (twin.name() == null || item.name() == null || !Objects.equals(twin.region(), item.region())) return false;
-        String base = item.name().strip();
-        String name = twin.name().strip();
-        boolean sameName = name.equalsIgnoreCase(base);
-        boolean bilingual = !sameName && base.chars().anyMatch(ch -> ch >= 0x80) && name.startsWith(base)
-                && LATIN_TAIL.matcher(name.substring(base.length())).matches();
-        if (!sameName && !bilingual) return false;
-        if ((bilingual && isAreaLeaf(item.category())) || !PlaceCategoryConstants.majorCategory(item.category())
-                .equals(PlaceCategoryConstants.majorCategory(twin.category()))) {
-            return false;
-        }
-        return hasCoords(twin) && hasCoords(item)
-                && GeoUtils.haversine(item.latitude().doubleValue(), item.longitude().doubleValue(),
-                        twin.latitude().doubleValue(), twin.longitude().doubleValue()) <= WIKIDATA_TWIN_KM;
-    }
-
-    /** 장소 항목과 그곳의 박물관 기관 항목(故宫·故宫博物院)은 Wikidata 항목이 달라도 같은 곳이다. */
-    private static final Pattern MUSEUM_INSTITUTION_SUFFIX = Pattern.compile("博物院|博物館|博物馆");
-
     static List<PlaceCandidate> dropNestedWikidataItems(List<PlaceCandidate> candidates) {
         List<PlaceCandidate> result = new ArrayList<>(candidates.size());
         for (PlaceCandidate c : candidates) {
-            if (candidates.stream().anyMatch(other -> isNestedWikidataItem(c, other))) {
+            if (candidates.stream().anyMatch(other -> PlaceIdentity.isNestedWikidataItem(c, other))) {
                 log.info("같은 장소의 다른 항목 제외: {}", c.name());
             } else {
                 result.add(c);
             }
         }
         return result;
-    }
-
-    /** dropped가 kept와 같은 곳을 가리키는 다른 항목이고 둘 중 덜 알려진 쪽인가. 같으면 짧은 이름(장소)을 남긴다. */
-    static boolean isNestedWikidataItem(PlaceCandidate dropped, PlaceCandidate kept) {
-        if (dropped == kept || dropped.userSelected() || !isWikidataItem(dropped) || !isWikidataItem(kept)) return false;
-        if (dropped.name() == null || kept.name() == null || !Objects.equals(dropped.region(), kept.region())) return false;
-        String a = dropped.name().strip();
-        String b = kept.name().strip();
-        String shorter = a.length() <= b.length() ? a : b;
-        String longer = a.length() <= b.length() ? b : a;
-        if (shorter.equals(longer) || !longer.startsWith(shorter)
-                || !MUSEUM_INSTITUTION_SUFFIX.matcher(longer.substring(shorter.length())).matches()) {
-            return false;
-        }
-        if (!PlaceCategoryConstants.majorCategory(dropped.category())
-                .equals(PlaceCategoryConstants.majorCategory(kept.category()))
-                || !hasCoords(dropped) || !hasCoords(kept)
-                || GeoUtils.haversine(dropped.latitude().doubleValue(), dropped.longitude().doubleValue(),
-                        kept.latitude().doubleValue(), kept.longitude().doubleValue()) > WIKIDATA_TWIN_KM) {
-            return false;
-        }
-        int droppedLinks = dropped.wikidataSitelinks();
-        int keptLinks = kept.wikidataSitelinks();
-        return droppedLinks < keptLinks || (droppedLinks == keptLinks && a.length() > b.length());
-    }
-
-    private static boolean isWikidataItem(PlaceCandidate c) {
-        return c.wikidataSitelinks() != null && c.wikidataSitelinks() > 0;
-    }
-
-    private static boolean isAreaLeaf(String category) {
-        if (category == null) return false;
-        return AREA_LEAVES.contains(category.substring(category.lastIndexOf('>') + 1).strip().toLowerCase(Locale.ROOT));
     }
 
     private static boolean isRetail(PlaceCandidate c) {
@@ -900,8 +845,8 @@ public class OptimizedGenerationExecutor {
             String qid = qidById.get(c.placeId());
             if (qid != null && !seen.add(qid)) continue;
             if (isStoreInsideVenue(c, candidates)) continue;
-            if (result.stream().anyMatch(r -> isWikidataTwin(c, r) || isWikidataTwin(r, c)
-                    || isNestedWikidataItem(c, r) || isNestedWikidataItem(r, c))) continue;
+            if (result.stream().anyMatch(r -> PlaceIdentity.isWikidataTwin(c, r) || PlaceIdentity.isWikidataTwin(r, c)
+                    || PlaceIdentity.isNestedWikidataItem(c, r) || PlaceIdentity.isNestedWikidataItem(r, c))) continue;
             result.add(reindexCandidate(c, result.size() + 1));
         }
         if (result.size() < candidates.size()) {
@@ -1170,23 +1115,9 @@ public class OptimizedGenerationExecutor {
         List<PlaceCandidate> result = new ArrayList<>(candidates);
         int nextIndex = candidates.size() + 1;
         for (Place hotel : saneHotels) {
-            result.add(toCandidate(hotel, nextIndex++));
+            result.add(PlaceCandidates.of(hotel, nextIndex++));
         }
         return result;
-    }
-
-    private static PlaceCandidate toCandidate(Place place, int index) {
-        return new PlaceCandidate(
-                index, place.getId(), place.getName(), place.getAddress(),
-                place.getCategory(), place.getTags(), place.getRegion(), place.getCountry(),
-                place.getLatitude(), place.getLongitude(), place.getDescription(),
-                place.getRating(), 0.0, null, place.getOpeningHours(),
-                place.getRecommendedTimeSlots(), place.getRecommendedDurationMinutes(),
-                false, KrwRates.admissionWon(place),
-                PlaceCategoryConstants.subRegionOf(place.getAddress(), place.getRegion()),
-                place.getUserRatingCount(), place.getWikidataSitelinks(),
-                place.getPlaceRole(), place.getCuisine(), false, null, place.getAttributes(), place.getNameKo(),
-                place.getTravelerFame());
     }
 
     /**
@@ -1210,7 +1141,7 @@ public class OptimizedGenerationExecutor {
         int removedHubs = candidates.size() - result.size();
         Set<String> known = knownKeys(result);
         for (Place gateway : gateways) {
-            PlaceCandidate c = toCandidate(gateway, result.size() + 1);
+            PlaceCandidate c = PlaceCandidates.of(gateway, result.size() + 1);
             if (addIfNew(known, c)) result.add(c);
         }
         log.info("관문 허브 {}곳 추가, 그 밖의 교통 허브 후보 {}곳 제외", result.size() - (candidates.size() - removedHubs),

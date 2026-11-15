@@ -1,0 +1,211 @@
+package com.shg.trip.shgtrip.domain.planning.service;
+
+import com.shg.trip.shgtrip.domain.place.destination.Destination;
+import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
+import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
+import com.shg.trip.shgtrip.global.util.GeoUtils;
+
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/**
+ * 출처(관광공사·Foursquare·Wikidata)가 다른 두 장소 행이 같은 곳인지 본다.
+ * 출처별 행은 이름 표기·좌표·언어판 표지가 조금씩 달라 id나 중복 키 하나로는 같은 곳을 놓친다.
+ */
+public final class PlaceIdentity {
+
+    private PlaceIdentity() {}
+
+    enum Basis { PLACE_ID, SAME_CELL, SAME_NAME, BARE_NAME, WIKIDATA_ITEM }
+
+    private static final double WIKIDATA_TWIN_KM = 1.0;
+    /** 출처별 같은 가게 행의 좌표 차이 범위. 이름이 같아도 이보다 멀면 체인의 다른 지점이나 다른 가게다. */
+    private static final double SAME_NAME_KM = 1.0;
+    /** 산·성곽처럼 넓은 야외 명소는 출처마다 좌표가 수 km 다르다. */
+    private static final double OUTDOOR_SAME_NAME_KM = 5.0;
+    /**
+     * 리조트·서원처럼 출처마다 숙소와 관광지로 갈린 같은 곳의 좌표 차이 범위(수 m~수십 m).
+     * 관광지·가게와 이름이 같은 숙소는 이 거리 안일 때만 같은 곳이다.
+     */
+    private static final double SAME_NAME_STAY_KM = 0.1;
+    private static final int MIN_BARE_NAME = 2;
+    private static final Pattern TRAILING_NOTE = Pattern.compile("\\s*[(（\\[][^()（）\\[\\]]*[)）\\]]\\s*$");
+    /** 영어 이름 꼬리. 괄호로 감싼 병기("東京ドームシティ (Tokyo Dome City)")도 받는다. */
+    private static final Pattern LATIN_TAIL = Pattern.compile("[\\s(（]+[A-Za-z0-9][A-Za-z0-9 .,'’&()（）/-]*");
+    /** 구역 명소 이름으로 시작하는 FSQ 행은 그 구역 안 가게("アメリカ村 Club DROP")다. */
+    private static final Set<String> AREA_LEAVES = Set.of("pedestrian plaza", "plaza");
+    /** 장소 항목과 그곳의 박물관 기관 항목(故宫·故宫博物院)은 Wikidata 항목이 달라도 같은 곳이다. */
+    private static final Pattern MUSEUM_INSTITUTION_SUFFIX = Pattern.compile("博物院|博物館|博物馆");
+
+    static Optional<Basis> sameAs(PlaceCandidate a, PlaceCandidate b) {
+        if (a.placeId() != null && a.placeId().equals(b.placeId())) return Optional.of(Basis.PLACE_ID);
+        String majorA = PlaceCategoryConstants.majorCategory(a.category());
+        String majorB = PlaceCategoryConstants.majorCategory(b.category());
+        // 건물 안 식당과 같은 좌표 칸의 호텔·역은 다른 곳이다.
+        if (majorA.equals(majorB) && sameCell(a, b)) return Optional.of(Basis.SAME_CELL);
+        if (Objects.equals(a.region(), b.region()) && namesCrossCategory(a, majorA, b, majorB)
+                && withinKm(a, b, isOutdoor(a) && isOutdoor(b) ? OUTDOOR_SAME_NAME_KM : SAME_NAME_KM)) {
+            if (overlaps(names(a), names(b))) return Optional.of(Basis.SAME_NAME);
+            if (overlaps(bareNames(a), bareNames(b))) return Optional.of(Basis.BARE_NAME);
+            // 명소 이름 뒤에 영문을 붙인 근처 가게("광화문 market")는 다른 곳이다.
+            if (majorA.equals(majorB) && (isBilingualTwin(a.name(), b) || isBilingualTwin(b.name(), a))) {
+                return Optional.of(Basis.BARE_NAME);
+            }
+        }
+        if (isWikidataTwin(a, b) || isWikidataTwin(b, a) || isNestedWikidataItem(a, b) || isNestedWikidataItem(b, a)) {
+            return Optional.of(Basis.WIKIDATA_ITEM);
+        }
+        return Optional.empty();
+    }
+
+    /** fallback 경로의 모델 출력처럼 좌표가 없는 장소가 other와 같은 곳인가. 거리를 볼 수 없어 숙소·체인도 이름만으로 본다. */
+    static boolean sameByName(String name, PlaceCandidate other) {
+        if (name == null) return false;
+        Set<String> mine = new HashSet<>();
+        addForms(mine, name, other.region());
+        return overlaps(mine, bareNames(other)) || isBilingualTwin(name, other)
+                || (other.name() != null && isBilingualName(other.name().strip(), name.strip()));
+    }
+
+    /** 이름 끝 괄호 설명("용지봉 (634m)")과 앞에 붙은 그 지역 도시 이름("강릉 경포대")을 뗀 이름. null이면 빈 문자열이다. */
+    public static String bareName(String name, String region) {
+        if (name == null) return "";
+        String bare = TRAILING_NOTE.matcher(name.strip()).replaceFirst("");
+        String city = DomesticCities.find(region).map(Destination::nameKo).orElse(null);
+        if (city != null && bare.length() > city.length() && bare.startsWith(city)
+                && Character.isWhitespace(bare.charAt(city.length()))) {
+            bare = bare.substring(city.length()).strip();
+        }
+        return bare;
+    }
+
+    // 역·공항은 도착·출발 거점이라 이름이 같아도 다른 곳으로 본다.
+    private static boolean namesCrossCategory(PlaceCandidate a, String majorA, PlaceCandidate b, String majorB) {
+        if (majorA.equals(majorB)) return true;
+        if (isHub(majorA) || isHub(majorB)) return false;
+        if (!"LODGING".equals(majorA) && !"LODGING".equals(majorB)) return true;
+        return withinKm(a, b, SAME_NAME_STAY_KM);
+    }
+
+    private static boolean isHub(String major) {
+        return "TRANSIT_HUB".equals(major);
+    }
+
+    private static Set<String> names(PlaceCandidate c) {
+        Set<String> forms = new HashSet<>(2);
+        for (String n : new String[]{c.name(), c.nameKo()}) {
+            if (n != null && !n.isBlank()) forms.add(compact(n));
+        }
+        return forms;
+    }
+
+    private static Set<String> bareNames(PlaceCandidate c) {
+        Set<String> forms = new HashSet<>(4);
+        for (String n : new String[]{c.name(), c.nameKo()}) {
+            if (n != null && !n.isBlank()) addForms(forms, n, c.region());
+        }
+        return forms;
+    }
+
+    private static void addForms(Set<String> forms, String name, String region) {
+        forms.add(compact(name));
+        String bare = compact(bareName(name, region));
+        if (bare.length() >= MIN_BARE_NAME) forms.add(bare);
+    }
+
+    private static String compact(String name) {
+        return name.toLowerCase(Locale.ROOT).replaceAll("[\\s\\p{Punct}\\p{IsPunctuation}]+", "");
+    }
+
+    private static boolean isBilingualTwin(String name, PlaceCandidate base) {
+        return name != null && base.name() != null && !isAreaLeaf(base.category())
+                && isBilingualName(name.strip(), base.name().strip());
+    }
+
+    // 숫자로 시작하는 꼬리("명동교자 2")는 같은 가게의 다른 지점이다.
+    private static boolean isBilingualName(String name, String base) {
+        return isBilingualOf(name, base)
+                && name.substring(base.length()).replaceAll("^[\\s(（]+", "").matches("^[A-Za-z].*");
+    }
+
+    private static boolean isOutdoor(PlaceCandidate c) {
+        return c.category() != null && c.category().toLowerCase(Locale.ROOT).startsWith("landmarks and outdoors");
+    }
+
+    /** 한글·한자 이름 뒤에 영문·숫자 꼬리만 붙었는가("해동용궁사 Haedong Yonggungsa Temple"). */
+    private static boolean isBilingualOf(String name, String base) {
+        return base.chars().anyMatch(ch -> ch >= 0x80) && name.startsWith(base)
+                && LATIN_TAIL.matcher(name.substring(base.length())).matches();
+    }
+
+    private static boolean overlaps(Set<String> a, Set<String> b) {
+        return a.stream().anyMatch(b::contains);
+    }
+
+    private static boolean sameCell(PlaceCandidate a, PlaceCandidate b) {
+        return hasCoords(a) && hasCoords(b)
+                && Math.round(a.latitude().doubleValue() * 10000) == Math.round(b.latitude().doubleValue() * 10000)
+                && Math.round(a.longitude().doubleValue() * 10000) == Math.round(b.longitude().doubleValue() * 10000);
+    }
+
+    private static boolean withinKm(PlaceCandidate a, PlaceCandidate b, double km) {
+        return hasCoords(a) && hasCoords(b)
+                && GeoUtils.haversine(a.latitude().doubleValue(), a.longitude().doubleValue(),
+                        b.latitude().doubleValue(), b.longitude().doubleValue()) <= km;
+    }
+
+    static boolean isWikidataTwin(PlaceCandidate twin, PlaceCandidate item) {
+        if (twin == item || twin.userSelected() || !isWikidataItem(item) || isWikidataItem(twin)) return false;
+        if (twin.name() == null || item.name() == null || !Objects.equals(twin.region(), item.region())) return false;
+        String base = item.name().strip();
+        String name = twin.name().strip();
+        boolean sameName = name.equalsIgnoreCase(base);
+        boolean bilingual = !sameName && isBilingualOf(name, base);
+        if (!sameName && !bilingual) return false;
+        if ((bilingual && isAreaLeaf(item.category())) || !PlaceCategoryConstants.majorCategory(item.category())
+                .equals(PlaceCategoryConstants.majorCategory(twin.category()))) {
+            return false;
+        }
+        return withinKm(twin, item, WIKIDATA_TWIN_KM);
+    }
+
+    /** dropped가 kept와 같은 곳을 가리키는 다른 항목이고 둘 중 덜 알려진 쪽인가. 같으면 짧은 이름(장소)을 남긴다. */
+    static boolean isNestedWikidataItem(PlaceCandidate dropped, PlaceCandidate kept) {
+        if (dropped == kept || dropped.userSelected() || !isWikidataItem(dropped) || !isWikidataItem(kept)) return false;
+        if (dropped.name() == null || kept.name() == null || !Objects.equals(dropped.region(), kept.region())) return false;
+        String a = dropped.name().strip();
+        String b = kept.name().strip();
+        String shorter = a.length() <= b.length() ? a : b;
+        String longer = a.length() <= b.length() ? b : a;
+        if (shorter.equals(longer) || !longer.startsWith(shorter)
+                || !MUSEUM_INSTITUTION_SUFFIX.matcher(longer.substring(shorter.length())).matches()) {
+            return false;
+        }
+        if (!PlaceCategoryConstants.majorCategory(dropped.category())
+                .equals(PlaceCategoryConstants.majorCategory(kept.category()))
+                || !withinKm(dropped, kept, WIKIDATA_TWIN_KM)) {
+            return false;
+        }
+        int droppedLinks = dropped.wikidataSitelinks();
+        int keptLinks = kept.wikidataSitelinks();
+        return droppedLinks < keptLinks || (droppedLinks == keptLinks && a.length() > b.length());
+    }
+
+    private static boolean isWikidataItem(PlaceCandidate c) {
+        return c.wikidataSitelinks() != null && c.wikidataSitelinks() > 0;
+    }
+
+    private static boolean isAreaLeaf(String category) {
+        if (category == null) return false;
+        return AREA_LEAVES.contains(category.substring(category.lastIndexOf('>') + 1).strip().toLowerCase(Locale.ROOT));
+    }
+
+    private static boolean hasCoords(PlaceCandidate c) {
+        return c.latitude() != null && c.longitude() != null
+                && !GeoUtils.isZeroCoord(c.latitude(), c.longitude());
+    }
+}

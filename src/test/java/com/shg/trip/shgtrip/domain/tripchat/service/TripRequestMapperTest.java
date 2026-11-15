@@ -112,7 +112,60 @@ class TripRequestMapperTest {
         TripRequestMapper.Result r = map(e);
 
         assertThat(r.request().description()).doesNotContain("감천").contains("못 먹거나 피할 음식: 해산물");
-        assertThat(r.notes().get(Slot.EXTRAS)).contains(GeneratorSupport.AVOID_PLACES);
+        assertThat(r.request().avoidPlaceIds()).isNull();
+        assertThat(r.notes().get(Slot.EXTRAS)).contains("감천문화마을 · " + GeneratorSupport.AVOID_PLACE_NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("이름이 맞은 피할 장소는 id로 보내고, 꼭 넣을 장소와 겹치면 빼지 않는다")
+    void matchedAvoidPlacesAreSentById() {
+        Events e = Events.busanTrip().clearSlot(Slot.ANCHORS)
+                .user(DraftField.MUST_VISIT, "해운대해수욕장")
+                .user(DraftField.MUST_VISIT, "개미집")
+                .user(DraftField.AVOID_PLACES, "감천문화마을")
+                .user(DraftField.AVOID_PLACES, "해운대")
+                .user(DraftField.AVOID_PLACES, "부산역")
+                .user(DraftField.AVOID_PLACES, "할매국밥");
+        Map<String, PlaceMatch> matches = Map.of(
+                PlaceMatcher.key(DraftField.MUST_VISIT, "해운대해수욕장"), new PlaceMatch(5L, "해운대해수욕장", "ATTRACTION"),
+                PlaceMatcher.key(DraftField.MUST_VISIT, "개미집"), new PlaceMatch(6L, "개미집", "DINING"),
+                PlaceMatcher.key(DraftField.AVOID_PLACES, "감천문화마을"), new PlaceMatch(9L, "감천문화마을", "ATTRACTION"),
+                PlaceMatcher.key(DraftField.AVOID_PLACES, "해운대"), new PlaceMatch(5L, "해운대해수욕장", "ATTRACTION"),
+                PlaceMatcher.key(DraftField.AVOID_PLACES, "부산역"), new PlaceMatch(3L, "부산역", "TRANSIT_HUB"),
+                PlaceMatcher.key(DraftField.AVOID_PLACES, "할매국밥"), new PlaceMatch(8L, "할매국밥", "DINING"));
+
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+
+        assertThat(r.request().avoidPlaceIds()).containsExactly(9L, 8L);
+        assertThat(r.request().selectedPlaceIds()).containsExactly(5L, 6L);
+        assertThat(r.request().description()).doesNotContain("감천");
+        assertThat(r.notes().get(Slot.ANCHORS)).contains("해운대해수욕장 · " + GeneratorSupport.PLACE_INCLUDED,
+                "개미집(식당) · " + GeneratorSupport.PLACE_INCLUDED);
+        assertThat(r.notes().get(Slot.EXTRAS)).contains("감천문화마을 · " + GeneratorSupport.AVOID_PLACE_EXCLUDED,
+                "해운대해수욕장 · " + GeneratorSupport.AVOID_PLACE_KEPT, "부산역 · " + GeneratorSupport.AVOID_PLACE_HUB,
+                "할매국밥(식당) · " + GeneratorSupport.AVOID_PLACE_EXCLUDED);
+        assertThat(VALIDATOR.validate(r.request())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("피할 장소는 10곳까지 보내고, 이미 넣은 장소를 다시 말한 것은 상한 안내 없이 넘긴다")
+    void avoidPlacesAreCappedAtTen() {
+        Events e = Events.busanTrip();
+        java.util.Map<String, PlaceMatch> matches = new java.util.HashMap<>();
+        for (int i = 1; i <= 10; i++) {
+            e.user(DraftField.AVOID_PLACES, "장소" + i);
+            matches.put(PlaceMatcher.key(DraftField.AVOID_PLACES, "장소" + i), new PlaceMatch((long) i, "장소" + i, "ATTRACTION"));
+        }
+        e.user(DraftField.AVOID_PLACES, "장소1 다시").user(DraftField.AVOID_PLACES, "열한번째");
+        matches.put(PlaceMatcher.key(DraftField.AVOID_PLACES, "장소1 다시"), new PlaceMatch(1L, "장소1", "ATTRACTION"));
+        matches.put(PlaceMatcher.key(DraftField.AVOID_PLACES, "열한번째"), new PlaceMatch(11L, "열한번째", "ATTRACTION"));
+
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+
+        assertThat(r.request().avoidPlaceIds()).hasSize(10).doesNotContain(11L);
+        assertThat(r.notes().get(Slot.EXTRAS)).contains("열한번째 · " + GeneratorSupport.AVOID_PLACES_FULL)
+                .doesNotContain("장소1 · " + GeneratorSupport.AVOID_PLACES_FULL);
+        assertThat(VALIDATOR.validate(r.request())).isEmpty();
     }
 
     @Test

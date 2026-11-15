@@ -77,22 +77,16 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             """)
     List<Place> findActiveByNameLike(@Param("name") String name, Pageable pageable);
 
-    /**
-     * 평점은 대부분 비어 있어 평점순이면 설명에만 키워드가 든 장소가 실제 명소보다 앞선다.
-     * 순서를 쿼리가 정하므로 Pageable에 정렬을 넣으면 안 된다.
-     *
-     * @param keyword  소문자로 바꾸고 LIKE 와일드카드(\\, %, _)를 이스케이프한 값
-     * @param category null이면 전체
-     */
-    @Query(value = """
-            SELECT p FROM Place p
-            WHERE p.active = true
+    String KEYWORD_MATCH = """
+            p.active = true
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
-              AND (:category IS NULL OR p.category = :category)
               AND (LOWER(p.name) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
                 OR LOWER(p.nameKo) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
                 OR LOWER(p.address) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
                 OR LOWER(p.description) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')
+            """;
+
+    String KEYWORD_RANK = """
             ORDER BY CASE
                        WHEN LOWER(p.name) = :exact OR LOWER(p.nameKo) = :exact THEN 0
                        WHEN LOWER(p.name) LIKE CONCAT(:keyword, ' (%') ESCAPE '\\' THEN 0
@@ -106,21 +100,30 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                      p.rating DESC NULLS LAST,
                      LENGTH(p.name),
                      p.id
-            """,
-            countQuery = """
-            SELECT COUNT(p) FROM Place p
-            WHERE p.active = true
-              AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
-              AND (:category IS NULL OR p.category = :category)
-              AND (LOWER(p.name) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
-                OR LOWER(p.nameKo) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
-                OR LOWER(p.address) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
-                OR LOWER(p.description) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')
-            """)
+            """;
+
+    /**
+     * 평점은 대부분 비어 있어 평점순이면 설명에만 키워드가 든 장소가 실제 명소보다 앞선다.
+     * 순서를 쿼리가 정하므로 Pageable에 정렬을 넣으면 안 된다.
+     *
+     * @param keyword  소문자로 바꾸고 LIKE 와일드카드(\\, %, _)를 이스케이프한 값
+     * @param category null이면 전체
+     */
+    @Query(value = "SELECT p FROM Place p WHERE " + KEYWORD_MATCH
+            + " AND (:category IS NULL OR p.category = :category) " + KEYWORD_RANK,
+            countQuery = "SELECT COUNT(p) FROM Place p WHERE " + KEYWORD_MATCH
+            + " AND (:category IS NULL OR p.category = :category)")
     Page<Place> searchByKeyword(@Param("keyword") String keyword,
                                 @Param("exact") String exact,
                                 @Param("category") String category,
                                 Pageable pageable);
+
+    /** {@link #searchByKeyword}와 같은 조건·순서를 여행지 지역 안에서만 쓴다. */
+    @Query("SELECT p FROM Place p WHERE " + KEYWORD_MATCH + " AND p.region IN :regions " + KEYWORD_RANK)
+    List<Place> searchByKeywordInRegions(@Param("keyword") String keyword,
+                                         @Param("exact") String exact,
+                                         @Param("regions") Collection<String> regions,
+                                         Pageable pageable);
 
     @Query("""
             SELECT p FROM Place p
@@ -227,6 +230,15 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                AND latitude IS NOT NULL AND longitude IS NOT NULL
             """, nativeQuery = true)
     int resetWikidataForRegion(@Param("region") String region);
+
+    /** 같은 Wikidata 항목의 출처별 행. 언어판 조건은 부분 인덱스 idx_places_region_sitelinks를 타게 한다. */
+    @Query("""
+            SELECT p FROM Place p
+             WHERE p.active = true AND p.wikidataSitelinks > 0
+               AND p.region IN :regions AND p.wikidataId IN :qids
+            """)
+    List<Place> findActiveByWikidataIds(@Param("qids") Collection<String> qids,
+                                        @Param("regions") Collection<String> regions);
 
     /**
      * 이미 DB에 있는 Wikidata 항목 id(활성·비활성 모두). 명소 적재의 재실행 중복 방지용.
