@@ -171,7 +171,43 @@ Step Functions (월 1회)
           (임베딩 텍스트가 tags/description을 포함하므로 재임베딩 없이는 검색에 미반영)
         → 결과 반영만 다시 할 때: BATCH_ENRICH_RESUME_BATCH_ID="msgbatch_a,msgbatch_b" — 결과의 custom_id로 장소를
           읽어 반영하고 새 보강은 하지 않는다(재제출·재과금 없음, Anthropic 결과 보관 29일). 그 사이 보강된 행은
-          덮지 않고(v2는 속성 버전 기준) 실패 횟수도 올리지 않는다
+          덮지 않고(v2는 속성 버전, ingredients는 주재료 키 기준) 실패 횟수도 올리지 않는다. ingredients 결과는
+          custom_id(place_{id}_{입력 지문})로 요청 입력을 확인해 그사이 이름·업종·태그·메뉴가 바뀐 장소에는 쓰지 않는다.
+          결과 파일의 모드(도구 이름)가 BATCH_ENRICH_MODE와 다르면 반영하지 않고 실패로 끝낸다
+        → 모드(BATCH_ENRICH_MODE, 기본 v1): v2는 후보 등장·인기 장소의 속성(업종·세부 유형·등산 난이도 등)만,
+          ingredients는 끼니·술집 역할 식당의 주재료(attributes.ingredients: PORK·BEEF·CHICKEN·DUCK·LAMB·OTHER_MEAT·
+          SEAFOOD)만 분류한다. 둘 다 BATCH_ENRICH_REGIONS가 필요하고 해당 JSONB 키만 바꿔 태그·설명·임베딩은 그대로다.
+          주재료는 못 먹는 음식 조건(PlaceRestrictions)이 읽는다. 태그는 주재료와 요리 형태(탕·국밥·면요리)를 한 갈래로만
+          적어 설렁탕·돈카츠의 고기 종류가 남지 않는다. 빈 목록은 "물었고 고를 것 없음"이라 다시 묻지 않는다.
+          월간 파이프라인은 v1만 돌아 새로 들어온 식당의 주재료는 ingredients를 따로 돌려야 채워진다.
+          대상은 끼니·술집 역할과 쉬어 가는 자리로 쓰는 간식·노점(snack place·food truck·food stand, 보강 업종 SNACK)이다.
+          v1 보강(태그·설명)을 마친 행만 묻고, v1이 태그·설명을 다시 쓰면 주재료를 지운다.
+          역할이 아직 없는 행은 보강 업종(MEAL·BAR·SNACK)으로, 업종도 없으면 식음료 카테고리 전체로 고른다.
+          모드 값을 알 수 없으면(오타 등) v1로 돌지 않고 보강 단계가 실패한다
+        → ingredients 실행 절차
+          · 이 단계만: BATCH_ENRICH_ENABLED=true BATCH_ENRICH_MODE=ingredients BATCH_ENRICH_REGIONS=<지역들>
+            BATCH_FOURSQUARE_ENABLED=false BATCH_GATEWAYS_ENABLED=false BATCH_ROLE_BACKFILL_ENABLED=false
+            BATCH_COMMONS_IMAGES_ENABLED=false BATCH_NAME_KO_OVERRIDES_ENABLED=false
+            BATCH_TOURAPI_ENABLED=false BATCH_TOURAPI_IMAGE_BACKFILL=false BATCH_WIKIDATA_ENABLED=false
+            BATCH_WIKIDATA_LANDMARKS_ENABLED=false (운영 태스크 정의가 이 넷을 켜 둔다. 임베딩 단계는 늘 돌지만 바뀐 행이 없다)
+          · 실행 전 확인: v1 보강을 못 받는 식당(실패 3회·Wikidata 매칭 대기)은 주재료도 묻지 않는다. 건수가 크면
+            대상 조건을 넓힐지 정한다(v1이 나중에 태그를 쓰면 주재료를 지워 넓혀도 틀린 답이 남지 않는다)
+            SELECT count(*) FILTER (WHERE enrich_attempts >= 3),
+                   count(*) FILTER (WHERE enrich_attempts < 3 AND wikidata_matched_at IS NULL)
+            FROM places WHERE active AND enriched_at IS NULL AND category LIKE 'Dining and Drinking%'
+              AND (place_role IS NULL OR place_role <> 'NOT_VISITABLE')
+          · 첫 실행은 BATCH_ENRICH_MAX_PER_REGION으로 견본만 돌리고 로그의 "주재료 보강 대상 N건"과 "주재료 분포"를 본다.
+            요청당 입력 약 300토큰 + 시스템 프롬프트 캐시 읽기 약 1,300토큰, 출력 약 40토큰
+          · TourAPI 상세(BATCH_TOURAPI_DETAIL_ENABLED)를 먼저 돌린다(같은 실행에서 켜도 보강보다 먼저 돈다). 상세 원문의
+            대표 메뉴(firstmenu·treatmenu)가 바뀌면 그 메뉴를 보고 다시 묻도록 주재료를 지운다. 업종 카테고리를 고친 행
+            (refineGenericTourApiDiningCategory)과 Foursquare 재적재에서 업종·원문 이름이 바뀐 행도 지운다
+          · 반영 뒤 확인: 고깃집 중 돼지·소 한쪽만 받은 곳을 훑어본다(돼지갈비·한우 전문점은 정상이라 건수보다 목록)
+            SELECT name, attributes -> 'ingredients' FROM places
+            WHERE (category ILIKE '%bbq%' OR name ~ '갈비|막창|곱창|焼肉') AND name !~ '갈비탕'
+              AND attributes -> 'ingredients' ?| array['PORK','BEEF'] AND NOT attributes -> 'ingredients' ?& array['PORK','BEEF']
+            ORDER BY last_candidate_at DESC NULLS LAST LIMIT 100
+          · 프롬프트를 고쳐 다시 물을 때: UPDATE places SET attributes = attributes - 'ingredients'
+            WHERE region IN (...) AND attributes ? 'ingredients'
         ※ recommended_time_slots는 DayTiming.timePreference()가 소비 —
           야간 골프장 같은 시간대 부적합 배치 방지
   [3/4-이름] NameKoOverrideJob.run()  (batch.name-ko-overrides.enabled, 기본 true)

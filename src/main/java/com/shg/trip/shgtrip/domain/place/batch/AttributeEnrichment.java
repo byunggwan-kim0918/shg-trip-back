@@ -74,18 +74,7 @@ final class AttributeEnrichment {
     }
 
     static Map<String, Object> requestParams(Place place, String model) {
-        return Map.of(
-                "model", model,
-                "max_tokens", MAX_TOKENS,
-                // Haiku 5.5는 thinking이 기본으로 켜져 max_tokens를 잡아먹는다
-                "thinking", Map.of("type", "disabled"),
-                "system", List.of(Map.of(
-                        "type", "text",
-                        "text", SYSTEM_PROMPT,
-                        "cache_control", Map.of("type", "ephemeral"))),
-                "tools", List.of(toolDefinition()),
-                "tool_choice", Map.of("type", "tool", "name", TOOL_NAME),
-                "messages", List.of(Map.of("role", "user", "content", userMessage(place))));
+        return ForcedToolCall.params(model, MAX_TOKENS, SYSTEM_PROMPT, toolDefinition(), userMessage(place));
     }
 
     static String userMessage(Place place) {
@@ -117,8 +106,7 @@ final class AttributeEnrichment {
      * <p>업종은 카테고리가 구체적이면 카테고리 판정을 따르고, "Restaurant" 같은 총칭일 때만 모델 값을 쓴다.
      */
     static PlaceAttributes interpret(JsonNode message, String category) {
-        if (message == null || "max_tokens".equals(message.path("stop_reason").asText())) return null;
-        JsonNode input = toolInput(message);
+        JsonNode input = ForcedToolCall.input(message, TOOL_NAME);
         if (input == null || !input.isObject()) return null;
         String venue = text(input, "venue");
         DiningEnrichment.Venue byCategory = DiningEnrichment.venueOf(category);
@@ -127,16 +115,6 @@ final class AttributeEnrichment {
                 text(input, "hike_level"), text(input, "lodging_type"),
                 input.path("breakfast").isBoolean() ? input.get("breakfast").booleanValue() : null,
                 null).normalized();
-    }
-
-    private static JsonNode toolInput(JsonNode message) {
-        if (message == null) return null;
-        for (JsonNode block : message.path("content")) {
-            if ("tool_use".equals(block.path("type").asText()) && TOOL_NAME.equals(block.path("name").asText())) {
-                return block.get("input");
-            }
-        }
-        return null;
     }
 
     private static String text(JsonNode node, String field) {
