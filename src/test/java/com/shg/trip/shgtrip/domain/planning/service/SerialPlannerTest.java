@@ -71,15 +71,15 @@ class SerialPlannerTest {
     @DisplayName("부산 5박 6일 기록의 날짜별 집계가 고정돼 있다")
     void reportsForBusanTrip() {
         assertThat(schedule(Itinerary91Fixture.load()).days()).containsExactly(
-                new SerialPlanner.DayReport(1, 4, List.of(), 1),
-                new SerialPlanner.DayReport(2, 5, List.of(), 0),
+                new SerialPlanner.DayReport(1, 4, List.of(), 1, 0),
+                new SerialPlanner.DayReport(2, 5, List.of(), 0, 0),
                 new SerialPlanner.DayReport(3, 5,
-                        List.of(new SerialPlanner.Dropped("이기대해안산책로", DropReason.TIME_BUDGET)), 1),
+                        List.of(new SerialPlanner.Dropped("이기대해안산책로", DropReason.TIME_BUDGET)), 1, 0),
                 new SerialPlanner.DayReport(4, 5,
-                        List.of(new SerialPlanner.Dropped("부산타워 (Busan Tower)", DropReason.CLOSED_AT_TIME)), 1),
+                        List.of(new SerialPlanner.Dropped("부산타워 (Busan Tower)", DropReason.CLOSED_AT_TIME)), 1, 0),
                 new SerialPlanner.DayReport(5, 5,
-                        List.of(new SerialPlanner.Dropped("범어사(부산)", DropReason.TIME_BUDGET)), 1),
-                new SerialPlanner.DayReport(6, 3, List.of(), 1));
+                        List.of(new SerialPlanner.Dropped("범어사(부산)", DropReason.TIME_BUDGET)), 1, 0),
+                new SerialPlanner.DayReport(6, 3, List.of(), 1, 0));
     }
 
     @Test

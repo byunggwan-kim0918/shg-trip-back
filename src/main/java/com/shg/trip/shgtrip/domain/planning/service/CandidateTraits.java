@@ -22,15 +22,34 @@ final class CandidateTraits {
      * 자동 보충으로 방문 스텝에 넣어도 되는 후보인지. 경유형은 Sonnet이 고른 것만 두고 코드가 늘리지 않는다.
      */
     static boolean isVisitableFill(PlaceCandidate c) {
+        // 행정 지정 구역·주소 불명 레코드는 어떤 보충 경로로도 넣지 않는다(공용 게이트).
+        return isVisitSpot(c) && !isViaRoute(c) && isWorthFilling(c)
+                && PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country());
+    }
+
+    /**
+     * 코드가 선택 단계 대신 고를 수 있는 후보인지. 주소 규칙은 보지 않는다. 걸면 주소가 짧은 서울·오사카 후보 절반이 빠진다.
+     * 요청 의도 장소는 경유형·약한 분류·긴 등산이어도 고른다. 셋은 코드가 스스로 늘리지 않을 곳을 거르는 기준이다.
+     */
+    static boolean isSelectable(PlaceCandidate c) {
+        return isVisitSpot(c) && (c.keepsPlace() || (!isViaRoute(c) && isWorthFilling(c)));
+    }
+
+    private static boolean isVisitSpot(PlaceCandidate c) {
         // 역할 판정은 CandidatePolicy 한 곳에서 한다. 경로마다 따로 거르면 한 경로로 비방문지가 샌다.
         if (!CandidatePolicy.roleOf(c).isFillable()) return false;
-        // 행정 지정 구역·주소 불명 레코드는 어떤 보충 경로로도 넣지 않는다(공용 게이트).
-        if (!PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country())) return false;
-        if (PlaceCategoryConstants.isViaRoute(c.attributes(), c.name(), c.category(), c.tags())) return false;
+        if (PlaceCategoryConstants.isAdministrativeZone(c.name())) return false;
         // 선택 단계에서 뺀 집합 POI를 최종 패스가 활동으로 되살리지 않게 자동 보충에서도 뺀다.
         if (PlaceCategoryConstants.isAggregatePoi(c.name(), c.category())) return false;
         // 여객시설은 카테고리가 관광지로 오적재돼 있어도 방문지가 아니다.
-        if (PlaceCategoryConstants.isPassengerFacility(c.name())) return false;
+        return !PlaceCategoryConstants.isPassengerFacility(c.name());
+    }
+
+    private static boolean isViaRoute(PlaceCandidate c) {
+        return PlaceCategoryConstants.isViaRoute(c.attributes(), c.name(), c.category(), c.tags());
+    }
+
+    private static boolean isWorthFilling(PlaceCandidate c) {
         // 약한 분류는 언어판·알려진 정도로 명소임이 드러날 때만 보충한다(상하이 타워는 "Structure"다).
         if (PlaceCategoryConstants.isWeakFill(c.category())
                 && !isNotable(PlaceProminence.effectiveSitelinks(c.wikidataSitelinks(), c.travelerFame()))) {

@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.planning.eval;
 import com.shg.trip.shgtrip.domain.planning.service.DropReason;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
+import com.shg.trip.shgtrip.domain.planning.service.OverCapLegs;
 import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
 import com.shg.trip.shgtrip.domain.planning.service.ScoreReport;
 import com.shg.trip.shgtrip.domain.planning.service.SerialPlanner;
@@ -89,7 +90,13 @@ final class EvalReport {
         sb.append("\n## 날짜별 확정에서 빠진 선택\n\n");
         sb.append("- 고른 장소 ").append(picked).append(", 빠진 장소 ").append(dropped)
                 .append(picked == 0 ? "" : String.format(Locale.ROOT, "(%.1f%%)", 100.0 * dropped / picked))
-                .append(", 코드가 채운 장소 ").append(filled).append("\n\n");
+                .append(", 코드가 채운 장소 ").append(filled).append('\n');
+        long shortDays = days.stream().filter(d -> d.shortfall() > 0).count();
+        if (shortDays > 0) {
+            sb.append("- 직접 고른 날 가운데 하루 관광 하한을 못 채운 날 ").append(shortDays).append("일(전체 ")
+                    .append(days.size()).append("일)\n");
+        }
+        sb.append('\n');
         sb.append("| 사유 | 건수 |\n|---|---|\n");
         byReason.forEach((reason, count) -> sb.append("| ").append(reason).append(" | ").append(count).append(" |\n"));
     }
@@ -342,7 +349,7 @@ final class EvalReport {
         sb.append(",rules_hard,rules_core,meals,unknown_meals");
         for (ItineraryRules.Rule rule : ItineraryRules.Rule.values()) sb.append(',').append(rule);
         sb.append(",days,pace,transport,multi_city,joined,pool,search_pool,zones,day_scores,day_visits,day_prominence,day_end");
-        sb.append(",picked,dropped,filled,drop_reasons");
+        sb.append(",picked,dropped,filled,drop_reasons,legs_avoidable,legs_pool_limited,legs_requested,short_days");
         sb.append('\n');
         for (EvalRunner.Row r : rows) {
             if (r.saved() != null) line(sb, r, "saved", r.saved(), r.savedRules());
@@ -396,6 +403,11 @@ final class EvalReport {
                     .append(',').append(dropReasons(serial).entrySet().stream()
                             .map(e -> e.getKey() + ":" + e.getValue()).collect(Collectors.joining(";")));
         }
+        OverCapLegs.Count overCap = "replayed".equals(source) ? r.overCap() : null;
+        sb.append(',').append(overCap == null ? "" : overCap.avoidable())
+                .append(',').append(overCap == null ? "" : overCap.poolLimited())
+                .append(',').append(overCap == null ? "" : overCap.requested())
+                .append(',').append(serial == null ? "" : serial.stream().filter(d -> d.shortfall() > 0).count());
         sb.append('\n');
     }
 

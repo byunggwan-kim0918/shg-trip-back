@@ -3,7 +3,10 @@
 python3 -I scripts/eval/compare-arms.py v1/report.csv v2/report.csv
 앞이 기준(A), 뒤가 견줄 쪽(B)이다. 국내 실기록의 재실행 줄만 본다.
 전체는 지표마다 기준으로 판정하고, 4일 이상은 일정 수가 적어 일정별 점수가 오른 수와 내린 수로 판정한다.
-이른 종료·숙소 수·유명도는 기준 없이 값만 낸다.
+구간 상한 초과는 풀에 바꿔 넣을 후보가 있던 것만 판정하고, 없던 것은 데이터 한계로 보아 값만 낸다.
+요청 의도 장소에 닿는 구간 초과는 두 수에 함께 들어 있고 따로 값만 낸다.
+관광 하한을 못 채운 날·이른 종료·숙소 수·유명도도 기준 없이 값만 낸다.
+같은 날 유지는 B의 선택 단계가 고른 관광지가 그날에 남은 비율이라, B가 직접 고른 팔이면 A의 값과 견주는 수치가 아니다.
 기준을 하나라도 못 넘으면 종료 코드가 1이다.
 """
 import csv
@@ -25,9 +28,16 @@ GAP_SLACK_MINUTES = 10
 SIGHT_FLOOR = {"tight": 3, "normal": 2, "relaxed": 1}
 
 
+REQUIRED_COLUMNS = ("legs_avoidable", "legs_pool_limited", "legs_requested", "short_days", "picked")
+
+
 def load(path):
     with open(path, encoding="utf-8") as f:
-        return {r["itinerary_id"]: r for r in csv.DictReader(f)
+        reader = csv.DictReader(f)
+        missing = [c for c in REQUIRED_COLUMNS if c not in (reader.fieldnames or [])]
+        if missing:
+            raise SystemExit(f"{path}: 지금 빌드로 다시 만든 보고서가 아니다(열 없음: {', '.join(missing)})")
+        return {r["itinerary_id"]: r for r in reader
                 if r["source"] == "replayed" and r["country"] == "KR" and r["joined"] == "false"}
 
 
@@ -95,6 +105,9 @@ def measure(rows, daily_rows):
         "HARD": sum(r["rules_hard"] == "true" for r in rows),
         "조정 필요": sum(r["rules_core"] == "true" or r["rules_hard"] == "true" for r in rows),
         "거리 위반 일정": count(rows, "LEG_OVER_CAP", "DAY_DISTANCE_OVER_CAP"),
+        "피할 수 있던 구간 초과": sum(int(r["legs_avoidable"]) for r in rows),
+        "풀에 대안이 없던 구간 초과": sum(int(r["legs_pool_limited"]) for r in rows),
+        "요청 의도 장소에 닿는 구간 초과": sum(int(r["legs_requested"]) for r in rows),
         "끼니 누락 일정": count(rows, "LUNCH_MISSING", "DINNER_MISSING"),
         "숙소로 끝나지 않는 일정": count(rows, "NOT_ENDING_AT_LODGING"),
         "식사 외 활동 없는 일정": count(rows, "NO_NON_FOOD_ACTIVITY"),
@@ -105,6 +118,7 @@ def measure(rows, daily_rows):
         "최대 공백(분)": mean(float(r["maxGapMinutes"]) for r in rows),
         "뒤/앞 점수": back_front(daily_rows),
         "빠진 선택 비율": sum(int(r["dropped"] or 0) for r in rows) / picked if picked else float("nan"),
+        "관광 하한을 못 채운 날": sum(int(r["short_days"] or 0) for r in rows),
         "이른 종료 건수": sum(int(r["EARLY_FINISH"]) for r in rows),
         "숙소 수": mean(float(r["lodgings"]) for r in rows),
         "뒤-앞 유명도": late_prominence(daily_rows),
@@ -119,7 +133,8 @@ def verdicts(a, b):
     """지표 → (기준 문구, 통과 여부). 견줄 값이 없는 지표는 판정하지 않는다."""
     checks = {
         "같은 날 유지": (f"{RETENTION_MIN} 이상", b["같은 날 유지"] >= RETENTION_MIN),
-        "거리 위반 일정": ("A의 절반 이하", b["거리 위반 일정"] <= a["거리 위반 일정"] / 2),
+        "거리 위반 일정": no_more_than(a, b, "거리 위반 일정"),
+        "피할 수 있던 구간 초과": ("A의 절반 이하", b["피할 수 있던 구간 초과"] <= a["피할 수 있던 구간 초과"] / 2),
         "끼니 누락 일정": no_more_than(a, b, "끼니 누락 일정"),
         "숙소로 끝나지 않는 일정": no_more_than(a, b, "숙소로 끝나지 않는 일정"),
         "식사 외 활동 없는 일정": no_more_than(a, b, "식사 외 활동 없는 일정"),
