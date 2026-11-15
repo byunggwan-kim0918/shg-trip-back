@@ -210,6 +210,9 @@ public class VectorSearchQueryService {
         log.info("검색 시간: 임베딩 {}ms, DB 합계 {}ms, 슬롯별 {}", embedMs,
                 dbMsBySlot.values().stream().mapToLong(Long::longValue).sum(), dbMsBySlot);
 
+        // 조건에 걸린 행과 이름이 같은 출처별 행이 다른 슬롯 결과에 있어도 빠지게 모든 슬롯의 결과로 키를 만든다.
+        Set<String> twinKeys = restrictions.twinKeys(rawBySlot.values().stream().flatMap(List::stream).toList());
+
         // 관광 하위유형끼리 같은 장소가 걸리므로 placeId 기준으로 최고 점수만 유지한다.
         Map<Long, ScoredResult> bestByPlace = new LinkedHashMap<>();
         List<ScoredResult> withoutId = new ArrayList<>();
@@ -219,7 +222,7 @@ public class VectorSearchQueryService {
             if (raw.isEmpty()) continue;
 
             int limit = slotLimits.getOrDefault(slot.key(), MIN_PER_ATTRACTION_SLOT);
-            for (ScoredResult scored : applyThresholdAndRank(slot, raw, limit, restrictions)) {
+            for (ScoredResult scored : applyThresholdAndRank(slot, raw, limit, restrictions, twinKeys)) {
                 Long placeId = scored.result().placeId();
                 if (placeId == null) {
                     withoutId.add(scored);
@@ -360,9 +363,17 @@ public class VectorSearchQueryService {
         return applyThresholdAndRank(slot, raw, limit, PlaceRestrictions.NONE);
     }
 
-    /** 못 먹는 음식·피할 활동은 자르기 전에 빼야 그 자리가 다른 후보로 채워진다. */
     List<ScoredResult> applyThresholdAndRank(SearchSlot slot, List<VectorSearchResult> raw, int limit,
                                              PlaceRestrictions restrictions) {
+        return applyThresholdAndRank(slot, raw, limit, restrictions, restrictions.twinKeys(raw));
+    }
+
+    /**
+     * 못 먹는 음식·피할 활동은 자르기 전에 빼야 그 자리가 다른 후보로 채워진다.
+     * twinKeys는 걸린 행의 이름 키({@link PlaceRestrictions#twinKeys})이고, 이름이 같은 행도 함께 뺀다.
+     */
+    List<ScoredResult> applyThresholdAndRank(SearchSlot slot, List<VectorSearchResult> raw, int limit,
+                                             PlaceRestrictions restrictions, Set<String> twinKeys) {
         double minSimilarity = PlaceCategoryConstants.minSimilarity(slot.role());
         String slotMajor = PlaceCategoryConstants.slotMajorCategory(slot.role());
 
@@ -374,7 +385,7 @@ public class VectorSearchQueryService {
                 dropped++;
                 continue;
             }
-            if (restrictions.violatedBy(r) != null) {
+            if (restrictions.violatedBy(r) != null || restrictions.sharesName(r, twinKeys)) {
                 restricted.add(r.name());
                 continue;
             }

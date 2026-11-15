@@ -22,6 +22,7 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -206,6 +207,28 @@ class VectorSearchQueryServiceTest {
                 assertThat(req.categories()).isNull();
                 assertThat(req.excludedCategoryPatterns()).isNotEmpty();
             }
+        }
+
+        @Test
+        @DisplayName("한 슬롯에서 피할 조건에 걸린 가게와 이름이 같은 행은 다른 슬롯에서도 빠진다")
+        void search_dropsRestrictedTwinAcrossSlots() {
+            VectorEnrichedInput input = createBasicInput(3).withRestrictions(List.of(PlaceRestriction.SEAFOOD));
+            givenBatchEmbeddings();
+            VectorSearchResult tagged = new VectorSearchResult(1L, "할매집", "주소", "Dining and Drinking > Restaurant",
+                    List.of("해산물"), "시부야", "일본", BigDecimal.valueOf(35.6), BigDecimal.valueOf(139.7), "설명",
+                    BigDecimal.valueOf(4.0), 0.80);
+            VectorSearchResult untagged = new VectorSearchResult(2L, "할매집", "주소", "Dining and Drinking > Restaurant",
+                    List.of(), "시부야", "일본", BigDecimal.valueOf(35.6), BigDecimal.valueOf(139.7), "설명",
+                    BigDecimal.valueOf(4.0), 0.80);
+            VectorSearchResult noodle = new VectorSearchResult(3L, "밀면집", "주소", "Dining and Drinking > Restaurant",
+                    List.of("밀면"), "시부야", "일본", BigDecimal.valueOf(35.61), BigDecimal.valueOf(139.71), "설명",
+                    BigDecimal.valueOf(4.0), 0.80);
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class)))
+                    .willReturn(List.of(tagged), List.of(untagged, noodle));
+
+            List<PlaceCandidate> result = service.search(input);
+
+            assertThat(result).extracting(PlaceCandidate::name).contains("밀면집").doesNotContain("할매집");
         }
 
         @Test
@@ -1183,6 +1206,36 @@ class VectorSearchQueryServiceTest {
 
             assertThat(restricted).containsExactlyInAnyOrder("밀면집", "돼지국밥집", "흑돼지집");
             assertThat(plain).anyMatch(n -> n.startsWith("광안횟집"));
+        }
+
+        @Test
+        @DisplayName("출처별 같은 가게 행은 요리 분류가 한쪽에만 있어도 이름이 같으면 함께 뺀다")
+        void restrictionsDropSameNameRowWithoutCuisine() {
+            List<VectorSearchResult> raw = List.of(dining("할매집", "SEAFOOD", 0.90), dining("할매집 ", null, 0.89),
+                    dining("밀면집", "NOODLE", 0.88));
+
+            List<String> accepted = service.applyThresholdAndRank(restaurantSlot, raw, 5,
+                    PlaceRestrictions.of(List.of(PlaceRestriction.SEAFOOD)))
+                    .stream().map(s -> s.result().name()).toList();
+
+            assertThat(accepted).containsExactly("밀면집");
+        }
+
+        @Test
+        @DisplayName("임계값 아래 행이나 다른 슬롯에서 걸린 행과 이름이 같은 행도 뺀다")
+        void restrictionsDropTwinOfRowsOutsideThisWindow() {
+            List<VectorSearchResult> raw = List.of(dining("할매집", "SEAFOOD", 0.10), dining("할매집", null, 0.89),
+                    dining("밀면집", "NOODLE", 0.88), dining("소문난집", null, 0.87));
+            PlaceRestrictions seafood = PlaceRestrictions.of(List.of(PlaceRestriction.SEAFOOD));
+            Set<String> otherSlot = seafood.twinKeys(List.of(dining("소문난집", "SEAFOOD", 0.90)));
+
+            List<String> ownWindow = service.applyThresholdAndRank(restaurantSlot, raw, 5, seafood)
+                    .stream().map(s -> s.result().name()).toList();
+            List<String> shared = service.applyThresholdAndRank(restaurantSlot, raw, 5, seafood, otherSlot)
+                    .stream().map(s -> s.result().name()).toList();
+
+            assertThat(ownWindow).containsExactlyInAnyOrder("밀면집", "소문난집");
+            assertThat(shared).contains("밀면집").doesNotContain("소문난집");
         }
 
         @Test

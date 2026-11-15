@@ -9,6 +9,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -132,15 +133,55 @@ final class PlaceRestrictions {
     List<PlaceCandidate> exclude(List<PlaceCandidate> candidates) {
         if (restrictions.isEmpty()) return candidates;
         List<PlaceCandidate> kept = new ArrayList<>(candidates.size());
+        List<PlaceCandidate> hits = new ArrayList<>();
         for (PlaceCandidate c : candidates) {
             PlaceRestriction hit = c.userSelected() ? null : violatedBy(c);
             if (hit == null) {
                 kept.add(c);
             } else {
+                hits.add(c);
                 log.info("피할 조건 제외: {}(id={}) ← {}", c.name(), c.placeId(), hit);
             }
         }
-        return kept;
+        if (hits.isEmpty()) return kept;
+        Set<String> keys = new HashSet<>();
+        hits.forEach(h -> addKey(keys, PlaceIdentity.nameKey(h.name(), h.region(), h.category())));
+        List<PlaceCandidate> result = new ArrayList<>(kept.size());
+        for (PlaceCandidate c : kept) {
+            if (!c.userSelected() && sharesName(c.name(), c.region(), c.category(), keys)) {
+                log.info("피할 조건 제외: {}(id={}) ← 같은 이름 행", c.name(), c.placeId());
+            } else {
+                result.add(c);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 걸린 검색 결과의 이름 키. 출처별 같은 가게 행은 한쪽에만 요리 분류·등산 난이도가 붙어 있어, 같은 지역·대분류에서
+     * 이름이 같은 행도 거리와 상관없이 함께 뺀다. 같은 이름 체인 지점은 같은 음식을 판다.
+     */
+    Set<String> twinKeys(Collection<VectorSearchResult> results) {
+        if (restrictions.isEmpty()) return Set.of();
+        Set<String> keys = new HashSet<>();
+        for (VectorSearchResult r : results) {
+            if (violatedBy(r) != null) addKey(keys, PlaceIdentity.nameKey(r.name(), r.region(), r.category()));
+        }
+        return keys;
+    }
+
+    boolean sharesName(VectorSearchResult r, Set<String> keys) {
+        return sharesName(r.name(), r.region(), r.category(), keys);
+    }
+
+    private static boolean sharesName(String name, String region, String category, Set<String> keys) {
+        if (keys.isEmpty()) return false;
+        String key = PlaceIdentity.nameKey(name, region, category);
+        return key != null && keys.contains(key);
+    }
+
+    private static void addKey(Set<String> keys, String key) {
+        if (key != null) keys.add(key);
     }
 
     /** fallback 경로의 모델 출력은 이름과 모델이 붙인 종류("맛집"·"쇼핑")뿐이다. */
