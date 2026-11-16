@@ -24,7 +24,8 @@ class EvalRunnerScoringTest {
     void pickedArmKeepsTheRecordedIntent() {
         SelectionOutput picked = new SelectionOutput("", List.of(
                 new SelectionOutput.DayPlan(1, null, List.of(5, 6), null, null)), List.of(), List.of());
-        SerialPlanner.Result serial = new SerialPlanner.Result(List.of(), List.of(), List.of(), picked);
+        SerialPlanner.Result serial = new SerialPlanner.Result(List.of(), List.of(), List.of(), picked,
+                java.util.Map.of());
 
         SelectionOutput scoring = EvalRunner.scoringSelection(RECORDED, serial);
 

@@ -56,6 +56,8 @@ public class OptimizedGenerationExecutor {
     private final GenerationTraceRecorder traceRecorder;
     private final Destinations destinations;
     private final PlanningCountries planningCountries;
+    private final PlanningPipeline planningPipeline;
+    private final SerialPlanner serialPlanner;
 
     /** 한국 운전면허(국제운전면허 포함)로 운전할 수 없는 나라. 자동차 요청은 택시·차량 호출로 본다. */
     private static final Set<String> NO_KOREAN_LICENSE_COUNTRIES = Set.of("CN", "VN");
@@ -230,16 +232,17 @@ public class OptimizedGenerationExecutor {
             if (cancellationRegistry.isCancelled(jobId)) return;
             sendSseEvent(emitter, "OPTIMIZING", 65, "동선과 시간을 확정하고 있습니다...");
 
-            RouteOptimizer.ScheduleResult scheduleResult = executeWithHeartbeat(emitter,
-                    () -> routeOptimizer.schedule(selectionOutput, scheduleCandidates, scheduleArgs));
-            List<StepData> fixedSteps = scaleCostsForParty(scheduleResult.steps(), enrichedInput.partySize());
+            final Scheduled scheduled = executeWithHeartbeat(emitter, () -> scheduleDays(selectionOutput,
+                    scheduleCandidates, scheduleArgs, enrichedInput, exclusions, (int) days));
+            final List<PlaceCandidate> plannedCandidates = scheduled.candidates();
+            List<StepData> fixedSteps = scaleCostsForParty(scheduled.steps(), enrichedInput.partySize());
             List<String> unplaced = new ArrayList<>(unresolvedNames);
             unplaced.addAll(RequiredExperiences.unplaced(requiredExperiences, fixedSteps));
             List<String> fixedNotices = new ArrayList<>(pickNotices);
             fixedNotices.addAll(mustVisitNotices(unplaced, missingUserSelected(scheduleCandidates, fixedSteps)));
             QualityGate.PlanContext planContext = new QualityGate.PlanContext(
                     ruleContext(scheduleArgs, days, requiredExperiences.places()), fixedNotices);
-            ItineraryRules.Verdict preview = previewQuality(fixedSteps, scheduleCandidates, planContext.rules());
+            ItineraryRules.Verdict preview = previewQuality(fixedSteps, plannedCandidates, planContext.rules());
             List<String> qualityNotices = QualityGate.mergedNotices(preview, planContext);
 
             // 인위적 sleep을 넣으면 SSE 스레드가 blocking된다.
@@ -265,7 +268,7 @@ public class OptimizedGenerationExecutor {
             if (!validationResult.valid()) {
                 log.error("Optimized 경로 구조 검증 실패 (결정론적 로직 버그 가능성): {}", validationResult.failureReason());
                 traceRecorder.recordRejected(userId, jobId, request, enrichedInput, rawSelectionOutput,
-                        selectionOutput, scheduleCandidates, enrichedCandidates.size(), scheduleArgs,
+                        selectionOutput, plannedCandidates, enrichedCandidates.size(), scheduleArgs, scheduled.by(),
                         (System.nanoTime() - pipelineStart) / 1_000_000, preview,
                         "구조 검증: " + validationResult.failureReason());
                 // 서버 쪽 결함이라 미차감 한도에 세지 않는다.
@@ -284,7 +287,7 @@ public class OptimizedGenerationExecutor {
                 result = saveHelper.save(draftData, legacyInput, userId, true, destinationReference, planContext);
             } catch (QualityGate.Rejected e) {
                 traceRecorder.recordRejected(userId, jobId, request, enrichedInput, rawSelectionOutput,
-                        selectionOutput, scheduleCandidates, enrichedCandidates.size(), scheduleArgs,
+                        selectionOutput, plannedCandidates, enrichedCandidates.size(), scheduleArgs, scheduled.by(),
                         (System.nanoTime() - pipelineStart) / 1_000_000, e.verdict(), null);
                 sendSseError(emitter, e.getErrorCode().getCode(), rejectionMessage(e, userId));
                 return;
@@ -293,7 +296,7 @@ public class OptimizedGenerationExecutor {
             stageMark = logStage("save", stageMark);
             // 완료 전송보다 먼저 남긴다. 뒤에 남기면 그 사이 지운 일정의 기록(요청 문장 포함)이 삭제를 피해 남는다.
             traceRecorder.record(saved, jobId, request, enrichedInput, rawSelectionOutput,
-                    selectionOutput, scheduleCandidates, enrichedCandidates.size(), scheduleArgs,
+                    selectionOutput, plannedCandidates, enrichedCandidates.size(), scheduleArgs, scheduled.by(),
                     (System.nanoTime() - pipelineStart) / 1_000_000, result.verdict());
 
             // [100%] 구조 완료. emitter는 story-ready까지 닫지 않는다.
@@ -327,6 +330,51 @@ public class OptimizedGenerationExecutor {
     }
 
     // ── Private helpers ──
+
+    /** @param candidates 확정에 쓴 후보. v2는 날짜별 기준 장소 둘레에서 찾은 후보를 뒤에 덧붙인다 */
+    private record Scheduled(List<StepData> steps, List<PlaceCandidate> candidates, ScheduledBy by) {
+    }
+
+    // 선택 단계의 보완 후보는 선택한 날짜 둘레에서만 찾아, v2가 다시 짠 날의 기준 장소 근처에는 식당이 모자란다.
+    private Scheduled scheduleDays(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args,
+                                   VectorEnrichedInput input, PoolExclusions exclusions, int dayCount) {
+        if (!planningPipeline.serialFor(input.country())) {
+            return new Scheduled(routeOptimizer.schedule(selection, candidates, args).steps(), candidates,
+                    ScheduledBy.V1);
+        }
+        try {
+            SerialPlanner.Result first = serialPlanner.plan(selection, candidates, args, dayCount,
+                    SerialPlanner.Picks.PREFER);
+            List<PlaceCandidate> withReserve = appendReserveAroundAnchors(candidates, first.anchors(), input,
+                    exclusions);
+            SerialPlanner.Result result = withReserve.size() == candidates.size() ? first
+                    : serialPlanner.plan(selection, withReserve, args, dayCount, SerialPlanner.Picks.PREFER);
+            return new Scheduled(result.steps(), withReserve,
+                    new ScheduledBy(ScheduledBy.Pipeline.V2, result.selection()));
+        } catch (RuntimeException e) {
+            log.error("v2 확정 실패, 이 생성은 v1으로 확정: country={}, days={}", input.country(), dayCount, e);
+            return new Scheduled(routeOptimizer.schedule(selection, candidates, args).steps(), candidates,
+                    new ScheduledBy(ScheduledBy.Pipeline.V2_FALLBACK, null));
+        }
+    }
+
+    /** 덧붙인 후보는 검색 결과라 DB 값으로 채운다. 앞쪽 후보는 필수 경험 표시가 붙어 있어 다시 채우면 표시가 지워진다. */
+    private List<PlaceCandidate> appendReserveAroundAnchors(List<PlaceCandidate> candidates,
+                                                            Map<Integer, double[]> anchors, VectorEnrichedInput input,
+                                                            PoolExclusions exclusions) {
+        if (anchors.isEmpty()) return candidates;
+        int baseSize = candidates.size();
+        List<DayCenter> centers = anchors.entrySet().stream().map(e -> new DayCenter(e.getKey(), e.getValue())).toList();
+        List<PlaceCandidate> appended = appendReserveNear(
+                appendAccommodationsNear(candidates, centers, input, exclusions),
+                List.copyOf(anchors.values()), DayPicker.nearRingKm(input.transportPref(), input.pace()), input,
+                exclusions.withoutRestrictions());
+        if (appended.size() == baseSize) return candidates;
+        List<PlaceCandidate> enriched = new ArrayList<>(appended.subList(0, baseSize));
+        enriched.addAll(enrichCandidatesFromDb(appended.subList(baseSize, appended.size())));
+        return dropAppendedSameWikidataItem(excludeRestrictedAppended(enriched, baseSize, exclusions.restrictions()),
+                baseSize);
+    }
 
     /** 이번 거부로 미차감 한도에 닿았으면 다시 만들라는 말 대신 한도 안내를 쓴다. */
     private String rejectionMessage(QualityGate.Rejected e, Long userId) {
@@ -452,8 +500,12 @@ public class OptimizedGenerationExecutor {
                                                      VectorEnrichedInput input, PoolExclusions exclusions) {
         if (selection == null || selection.days() == null || selection.days().isEmpty()) return candidates;
         List<double[]> centers = selection.days().stream().map(d -> activityCentroid(d, candidates)).toList();
-        double radius = reserveRadiusKm(input.transportPref());
+        return appendReserveNear(candidates, centers, reserveRadiusKm(input.transportPref()), input, exclusions);
+    }
 
+    private List<PlaceCandidate> appendReserveNear(List<PlaceCandidate> candidates, List<double[]> centers,
+                                                   double radius, VectorEnrichedInput input,
+                                                   PoolExclusions exclusions) {
         List<PlaceCandidate> result = new ArrayList<>(candidates);
         Set<String> known = knownKeys(candidates);
         for (Map.Entry<PlaceCategoryConstants.SearchRole, Integer> role : RESERVE_PER_DAY) {
@@ -486,7 +538,17 @@ public class OptimizedGenerationExecutor {
                                                             VectorEnrichedInput input,
                                                             PoolExclusions exclusions) {
         if (selection == null || selection.days() == null || selection.days().isEmpty()) return candidates;
+        List<DayCenter> centers = selection.days().stream()
+                .map(day -> new DayCenter(day.dayNumber(), dayCentroid(day, candidates))).toList();
+        return appendAccommodationsNear(candidates, centers, input, exclusions);
+    }
 
+    /** @param center 그날 중심. null이면 그날은 보완하지 않는다 */
+    private record DayCenter(int dayNumber, double[] center) {
+    }
+
+    private List<PlaceCandidate> appendAccommodationsNear(List<PlaceCandidate> candidates, List<DayCenter> centers,
+                                                          VectorEnrichedInput input, PoolExclusions exclusions) {
         List<PlaceCandidate> lodgings = candidates.stream()
                 .filter(c -> "LODGING".equals(PlaceCategoryConstants.majorCategory(c.category())))
                 .filter(OptimizedGenerationExecutor::hasValidCoords)
@@ -495,8 +557,8 @@ public class OptimizedGenerationExecutor {
         List<PlaceCandidate> result = new ArrayList<>(candidates);
         Set<String> knownPlaceIds = knownKeys(candidates);
 
-        for (SelectionOutput.DayPlan day : selection.days()) {
-            double[] centroid = dayCentroid(day, candidates);
+        for (DayCenter day : centers) {
+            double[] centroid = day.center();
             if (centroid == null) continue;
 
             double nearest = lodgings.stream()

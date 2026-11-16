@@ -96,6 +96,22 @@ class GenerationTraceRepositoryIntegrationTest {
     }
 
     @Test
+    @DisplayName("확정 방식과 날짜별 선택을 저장하고, 이 열 이전 기록은 null로 읽는다")
+    void pipelineAndDayPicksAreOptional() {
+        Long serial = traceRepository.save(GenerationTrace.builder().userId(userId).jobId("job-v2")
+                .traceVersion(1).request("{}").enrichedInput("{}").selectionRaw("{}").selectionFinal("{}")
+                .candidates("[]").scheduleArgs("{}").pipeline("v2")
+                .dayPicks("{\"days\":[{\"dayNumber\":1,\"placeIndices\":[3,5]}]}").build()).getId();
+        Long older = traceRepository.save(trace(null)).getId();
+
+        GenerationTrace loaded = traceRepository.findById(serial).orElseThrow();
+        assertThat(loaded.getPipeline()).isEqualTo("v2");
+        assertThat(loaded.getDayPicks()).contains("\"placeIndices\"");
+        assertThat(traceRepository.findById(older).orElseThrow().getPipeline()).isNull();
+        assertThat(traceRepository.findById(older).orElseThrow().getDayPicks()).isNull();
+    }
+
+    @Test
     @DisplayName("일정 없는 기록은 여러 건 둘 수 있고, 한 일정의 기록은 하나뿐이다")
     void uniquePerItineraryOnly() {
         traceRepository.save(trace(null));

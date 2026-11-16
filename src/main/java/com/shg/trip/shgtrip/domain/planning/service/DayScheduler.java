@@ -280,6 +280,15 @@ final class DayScheduler {
             }
         }
 
+        // 기준 장소 둘레를 하루로 묶으면 아침에만 성립하는 곳이 숙소에서 가까운 다른 곳 뒤로 밀려 시각 가드에 잘린다.
+        // 도보 연속성 보정이 맨 앞에 붙인 전날 숙소는 출발점이라 옮기지 않는다.
+        if (day.morningOnlyFirst) {
+            PlaceCandidate head = morning.isEmpty() ? null : byIndex(candidates, morning.get(0));
+            int from = head != null && PlaceCategoryConstants.isAccommodation(head.category()) ? 1 : 0;
+            morning.subList(from, morning.size()).sort(Comparator.comparing(
+                    idx -> timePreference(byIndex(candidates, idx)) != TimePreference.MORNING_ONLY));
+        }
+
         // 버킷 경계를 알아야 점심이 오전·오후 활동 사이 우회를 최소화하는지 판정할 수 있어 버킷 확정 뒤에 식사 슬롯을 정한다.
         // 그날 중심 최근접으로 고르면 오전 → 점심 → 오후가 동서로 왕복한다.
         MealSlots slots = MealPlanner.assignMealSlots(meals, day, candidates, morning, afternoon, startFrom,

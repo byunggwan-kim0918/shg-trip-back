@@ -41,9 +41,9 @@ public class GenerationTraceRecorder {
     public void record(Itinerary saved, String jobId, ItineraryGenerateRequest request,
                        VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
                        SelectionOutput finalSelection, List<PlaceCandidate> candidates, int searchPoolSize,
-                       ScheduleArgs args, long totalMs, ItineraryRules.Verdict quality) {
+                       ScheduleArgs args, ScheduledBy scheduledBy, long totalMs, ItineraryRules.Verdict quality) {
         write(saved.getId(), saved.getUserId(), saved, jobId, request, enrichedInput, rawSelection, finalSelection,
-                candidates, searchPoolSize, args, totalMs, quality, null);
+                candidates, searchPoolSize, args, scheduledBy, totalMs, quality, null);
     }
 
     /**
@@ -56,15 +56,17 @@ public class GenerationTraceRecorder {
     public void recordRejected(Long userId, String jobId, ItineraryGenerateRequest request,
                                VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
                                SelectionOutput finalSelection, List<PlaceCandidate> candidates, int searchPoolSize,
-                               ScheduleArgs args, long totalMs, ItineraryRules.Verdict quality, String rejectReason) {
+                               ScheduleArgs args, ScheduledBy scheduledBy, long totalMs,
+                               ItineraryRules.Verdict quality, String rejectReason) {
         write(null, userId, null, jobId, request, enrichedInput, rawSelection, finalSelection,
-                candidates, searchPoolSize, args, totalMs, quality, rejectReason);
+                candidates, searchPoolSize, args, scheduledBy, totalMs, quality, rejectReason);
     }
 
     private void write(Long itineraryId, Long userId, Itinerary saved, String jobId, ItineraryGenerateRequest request,
                        VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
                        SelectionOutput finalSelection, List<PlaceCandidate> candidates, int searchPoolSize,
-                       ScheduleArgs args, long totalMs, ItineraryRules.Verdict quality, String rejectReason) {
+                       ScheduleArgs args, ScheduledBy scheduledBy, long totalMs, ItineraryRules.Verdict quality,
+                       String rejectReason) {
         try {
             GenerationTrace trace = GenerationTrace.builder()
                     .itineraryId(itineraryId)
@@ -83,6 +85,8 @@ public class GenerationTraceRecorder {
                     .totalMs(totalMs)
                     .score(scoreJson(quality, rejectReason, jobId))
                     .generatedSteps(saved == null ? null : snapshotJson(saved))
+                    .pipeline(scheduledBy.pipeline().label())
+                    .dayPicks(scheduledBy.dayPicks() == null ? null : json(scheduledBy.dayPicks()))
                     .build();
             // 요청 문장이 들어 있어 탈퇴가 trace를 지운 뒤에 들어가면 안 된다.
             transactionTemplate.executeWithoutResult(status -> {
