@@ -119,7 +119,8 @@ final class DayScheduler {
             if (victim == null) {
                 for (int i = seq.size() - 1; i >= 0; i--) {
                     Integer idx = seq.get(i);
-                    if (isSameIndex(day.departureHubIndex, idx) || isSameIndex(day.arrivalHubIndex, idx)) continue;
+                    if (isSameIndex(day.departureHubIndex, idx) || isSameIndex(day.arrivalHubIndex, idx)
+                            || isSameIndex(day.startLodgingIndex, idx)) continue;
                     if (!userDeadline && (isSameIndex(breakfastIdx, idx) || isSameIndex(lunchIdx, idx)
                             || isSameIndex(dinnerIdx, idx))) continue;
                     PlaceCandidate c = byIndex(candidates, idx);
@@ -221,16 +222,25 @@ final class DayScheduler {
         Set<Integer> mealSet = new HashSet<>(diningAll);
 
         // 비식사 활동을 시간대 적합성(야외=주간, Bar=저녁)을 지키며 오전/오후/저녁 버킷에 나누고, 못 넣는 활동은 spare로 트림한다.
+        // 숙소가 활동 버킷에 들면 시간대 성향에 따라 아침 출발이 저녁으로, 체크인이 오후로 가서 하루가 숙소 밖에서 끝난다.
+        Integer morningDeparture = day.startLodgingIndex != null
+                && !isSameIndex(day.accommodationIndex, day.startLodgingIndex)
+                && orderedMain.contains(day.startLodgingIndex) ? day.startLodgingIndex : null;
         List<Integer> activities = orderedMain.stream()
-                .filter(idx -> !mealSet.contains(idx))
+                .filter(idx -> !mealSet.contains(idx) && !isSameIndex(day.accommodationIndex, idx)
+                        && !idx.equals(morningDeparture))
                 .collect(Collectors.toList());
         int[] budgets = dayBudgets(day, cfg, meals.size(), arrivalLeadMinutes(day, orderedMain, candidates, transportPref));
-        // 도착 허브는 활동 목록에 없지만 오전 시간을 먹는다. 빼지 않으면 오전 예산이 부풀어 점심이 창 밖으로 밀린다.
+        // 도착 허브와 아침 출발 숙소는 활동 목록에 없지만 오전 시간을 먹는다. 빼지 않으면 오전 예산이 부풀어 점심이 창 밖으로 밀린다.
         if (day.arrivalHubIndex != null) {
             PlaceCandidate hub = byIndex(candidates, day.arrivalHubIndex);
             if (hub != null) {
                 budgets[0] = Math.max(0, budgets[0] - resolveVisitMinutes(hub) - INTRA_BUCKET_TRAVEL_MINUTES);
             }
+        }
+        // 숙소를 나서는 이동은 다음 활동이 자기 몫의 이동 여유로 낸다.
+        if (morningDeparture != null) {
+            budgets[0] = Math.max(0, budgets[0] - MORNING_DEPARTURE_MINUTES);
         }
         // 버킷은 실제 체류시간으로 채워야 시계와 용량이 어긋나지 않는다.
         int[] usedM = {0}, usedA = {0}, usedE = {0};
@@ -281,11 +291,8 @@ final class DayScheduler {
         }
 
         // 기준 장소 둘레를 하루로 묶으면 아침에만 성립하는 곳이 숙소에서 가까운 다른 곳 뒤로 밀려 시각 가드에 잘린다.
-        // 도보 연속성 보정이 맨 앞에 붙인 전날 숙소는 출발점이라 옮기지 않는다.
         if (day.morningOnlyFirst) {
-            PlaceCandidate head = morning.isEmpty() ? null : byIndex(candidates, morning.get(0));
-            int from = head != null && PlaceCategoryConstants.isAccommodation(head.category()) ? 1 : 0;
-            morning.subList(from, morning.size()).sort(Comparator.comparing(
+            morning.sort(Comparator.comparing(
                     idx -> timePreference(byIndex(candidates, idx)) != TimePreference.MORNING_ONLY));
         }
 
@@ -318,20 +325,17 @@ final class DayScheduler {
         MealPlanner.separateFoodSteps(day, afternoon, candidates, dinnerIdx != null, "저녁");
         MealPlanner.separateFoodSteps(day, evening, candidates, false, null);
 
-        // 최종 시퀀스: 허브 → 아침 → 오전활동 → 점심 → 오후활동 → 저녁 → 저녁활동 → 숙소 → 출발허브
+        // 최종 시퀀스: 허브 또는 전날 숙소 → 아침 → 오전활동 → 점심 → 오후활동 → 저녁 → 저녁활동 → 숙소 → 출발허브
         List<Integer> seq = new ArrayList<>();
         if (day.arrivalHubIndex != null) seq.add(day.arrivalHubIndex);
+        if (morningDeparture != null) seq.add(morningDeparture);
         if (breakfastIdx != null) seq.add(breakfastIdx);
         seq.addAll(morning);
         if (lunchIdx != null) seq.add(lunchIdx);
         seq.addAll(afternoon);
         if (dinnerIdx != null) seq.add(dinnerIdx);
         seq.addAll(evening);
-        // 도보 연속성 보정이 전날 숙소를 첫 스텝으로 붙이면 같은 인덱스가 이미 있어,
-        // 무조건 덧붙이면 같은 장소가 두 스텝이 되고 숙박비도 두 번 계산된다.
-        if (day.accommodationIndex != null && !seq.contains(day.accommodationIndex)) {
-            seq.add(day.accommodationIndex);
-        }
+        if (day.accommodationIndex != null) seq.add(day.accommodationIndex);
         if (day.departureHubIndex != null && !seq.contains(day.departureHubIndex)) {
             seq.add(day.departureHubIndex);
         }
@@ -343,6 +347,7 @@ final class DayScheduler {
         if (lunchIdx != null) protectedIdx.add(lunchIdx);
         if (dinnerIdx != null) protectedIdx.add(dinnerIdx);
         if (day.arrivalHubIndex != null) protectedIdx.add(day.arrivalHubIndex);
+        if (morningDeparture != null) protectedIdx.add(morningDeparture);
         if (day.accommodationIndex != null) protectedIdx.add(day.accommodationIndex);
         if (day.departureHubIndex != null) protectedIdx.add(day.departureHubIndex);
         for (Integer idx : seq) {
@@ -401,12 +406,11 @@ final class DayScheduler {
             if (breakfastIdx != null && idx == breakfastIdx) currentMinutes = Math.max(currentMinutes, cfg.morningStart);
             if (lunchIdx != null && idx == lunchIdx) currentMinutes = Math.max(currentMinutes, LUNCH_START);
             if (dinnerIdx != null && idx == dinnerIdx) currentMinutes = Math.max(currentMinutes, DINNER_START);
-            if (!cand.mealEligible() && timePreference(cand) == TimePreference.EVENING) {
+            boolean isMorningDeparture = isSameIndex(morningDeparture, idx);
+            // 보강이 저녁 시간대로 적은 숙소는 아침 출발까지 저녁 활동 시작 시각으로 밀린다.
+            if (!cand.mealEligible() && !isMorningDeparture && timePreference(cand) == TimePreference.EVENING) {
                 currentMinutes = Math.max(currentMinutes, EVENING_ACTIVITY_EARLIEST_START);
             }
-
-            boolean isMorningDeparture = prev == null && day.arrivalHubIndex == null
-                    && PlaceCategoryConstants.isAccommodation(cand.category());
             int visitMinutes;
             if (isSameIndex(day.departureHubIndex, idx)) {
                 // 귀가 허브는 탑승 수속 시간이라 관광 기본값을 쓰면 종료가 그만큼 밀린다.
@@ -431,6 +435,7 @@ final class DayScheduler {
             // 버킷은 분 예산만 세서 시계가 밀리면 정상 배치된 장소도 한밤중에 시작할 수 있어 확정 시각으로 다시 거른다.
             // 식사·허브·숙소·사용자 필수 장소는 구조상 빼지 않는다.
             boolean fixedSlot = isSameIndex(day.arrivalHubIndex, idx)
+                    || isSameIndex(morningDeparture, idx)
                     || isSameIndex(day.departureHubIndex, idx)
                     || isSameIndex(day.accommodationIndex, idx)
                     || isSameIndex(breakfastIdx, idx)
@@ -499,7 +504,7 @@ final class DayScheduler {
      * 같은 장소가 <b>바로 연달아</b> 두 스텝으로 들어간 경우를 제거한다(출력 경계 안전망).
      *
      * <p>버킷·식사 슬롯·갭 보충·숙소 배정이 각자 시퀀스에 장소를 넣어 같은 인덱스를 집을 수 있다.
-     * 인접 중복은 항상 오류라 마지막에 한 번 더 거른다. 떨어진 같은 장소(아침 숙소 출발 → 밤 체크인)는 정상이다.
+     * 인접 중복은 항상 오류라 마지막에 한 번 더 거른다.
      */
     private static List<StepData> dropAdjacentDuplicates(List<StepData> steps, DayState day) {
         List<StepData> result = new ArrayList<>(steps.size());
@@ -577,13 +582,16 @@ final class DayScheduler {
      * 도보 선호일 때 익일 첫 방문지가 전날 숙소에서 도보권({@link ScheduleTuning#WALK_CONTINUITY_THRESHOLD_KM})을 벗어나면
      * 전날 숙소를 그날 첫 스텝으로 붙여 숙소에서 아침 출발하게 한다. car/any는 차량 이동을 전제로 해 보정하지 않는다.
      * 첫날, 도착 허브가 있는 날, 좌표 불명, 이미 첫 스텝이 그 숙소인 경우는 대상이 아니다.
+     * 같은 숙소에 연박하는 날도 대상이 아니다. 출발 구간은 전날 숙소를 출발지로 둔 첫 스텝이 보여 준다.
      */
     private static List<Integer> applyWalkContinuity(List<Integer> ordered, DayState day, Integer prevAccom,
                                                      List<PlaceCandidate> candidates, String transportPref) {
         if (!"walk".equals(transportPref) || ordered.isEmpty() || day.arrivalHubIndex != null) {
             return ordered;
         }
-        if (prevAccom == null || prevAccom.equals(ordered.get(0))) return ordered;
+        if (prevAccom == null || prevAccom.equals(ordered.get(0)) || prevAccom.equals(day.accommodationIndex)) {
+            return ordered;
+        }
 
         double[] prevAccomCoord = coordsOf(byIndex(candidates, prevAccom));
         double[] firstCoord = coordsOf(byIndex(candidates, ordered.get(0)));

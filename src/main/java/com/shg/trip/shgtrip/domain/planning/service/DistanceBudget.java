@@ -209,7 +209,8 @@ final class DistanceBudget {
         // 교체 후보: 같은 대분류 + 앞뒤 이웃 경유 거리가 현재의 절반 미만
         double[] prev = bestPos + offset - 1 >= 0 ? coords.get(bestPos + offset - 1) : null;
         double[] next = bestPos + offset + 1 < coords.size() ? coords.get(bestPos + offset + 1) : null;
-        Integer replacement = pickCloserSameMajorSpare(day, seq, candidates, spareIndices, targetCand, prev, next);
+        Integer replacement = pickCloserSameMajorSpare(day, seq, candidates, spareIndices, usedIndices, targetCand,
+                prev, next);
         if (replacement == null) return false;
 
         seq.set(bestPos, replacement);
@@ -226,12 +227,14 @@ final class DistanceBudget {
 
     /** 같은 대분류 spare 중 prev→후보→next 경유 거리가 현재의 절반 미만인 가장 가까운 후보. */
     private static Integer pickCloserSameMajorSpare(DayState day, List<Integer> seq, List<PlaceCandidate> candidates,
-                                                    Deque<Integer> spareIndices, PlaceCandidate target,
-                                                    double[] prev, double[] next) {
+                                                    Deque<Integer> spareIndices, Set<Integer> usedIndices,
+                                                    PlaceCandidate target, double[] prev, double[] next) {
         double currentDetour = detourVia(prev, coordsOf(target), next);
         Predicate<PlaceCandidate> variety = VarietyLedger.admitsReplacing(day, target.index(), candidates);
         Set<Integer> inSeq = new HashSet<>(seq);
+        // 날짜별 확정은 뒷날 장소를 사용 표시로만 잡아 두어 spare에 남아 있을 수 있다.
         return spareIndices.stream()
+                .filter(i -> !usedIndices.contains(i))
                 .map(i -> byIndex(candidates, i))
                 .filter(Objects::nonNull)
                 .filter(c -> !inSeq.contains(c.index()))

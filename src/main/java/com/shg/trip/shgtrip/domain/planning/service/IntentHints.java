@@ -3,9 +3,12 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
+import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.LocalDate;
 import java.util.*;
+import java.util.function.Predicate;
 
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.nameOf;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.placeKey;
@@ -121,5 +124,61 @@ final class IntentHints {
                         day.dayNumber, prev.dayNumber, c.name());
             }
         }
+    }
+
+    /**
+     * 사용자가 출발 시각을 준 마지막 날에서 사용자가 고른 방문지(끼니·숙소·허브 제외) 하나를 전날로 옮긴다.
+     * 출발 거점에서 가장 먼 곳부터 옮기고, 전날이 그곳의 휴무일이거나 관광할 시간이 없는 날이면 옮기지 않는다.
+     *
+     * <p>전날의 일반 활동 하나와 맞바꾼다. 그대로 얹으면 전날 시간이 넘쳐 저녁이 밀린다.
+     *
+     * @return 옮긴 장소가 있으면 true
+     */
+    static boolean moveUserPickOffDeadlineDay(List<DayState> days, List<PlaceCandidate> candidates,
+                                              LocalDate startDate) {
+        if (days.size() < 2) return false;
+        DayState last = days.get(days.size() - 1);
+        DayState prev = days.get(days.size() - 2);
+        if (last.departureDeadline == null || last.departureHubIndex == null || prev.tooShortForSightseeing()) {
+            return false;
+        }
+        double[] hub = CandidateGeo.coordsOf(byIndex(candidates, last.departureHubIndex));
+        Predicate<PlaceCandidate> openBefore = PlanEdits.openOnDayFilter(startDate, prev.dayNumber);
+        Integer idx = last.placeIndices.stream()
+                .filter(i -> {
+                    PlaceCandidate c = byIndex(candidates, i);
+                    return isMovableVisit(c) && c.userSelected() && openBefore.test(c);
+                })
+                .max(Comparator.comparingDouble(i -> kmFrom(hub, byIndex(candidates, i), -1)))
+                .orElse(null);
+        if (idx == null) return false;
+        Integer swap = prev.placeIndices.stream()
+                .filter(i -> {
+                    PlaceCandidate p = byIndex(candidates, i);
+                    return isMovableVisit(p) && !p.keepsPlace() && !PlanEdits.isSameIndex(prev.cafeStopIndex, i)
+                            && !prev.coverageCriticalIndices.contains(i);
+                })
+                .min(Comparator.comparingDouble(i -> kmFrom(hub, byIndex(candidates, i), Double.MAX_VALUE)))
+                .orElse(null);
+        last.placeIndices.remove(idx);
+        prev.placeIndices.add(idx);
+        if (swap != null) {
+            prev.placeIndices.remove(swap);
+            last.placeIndices.add(swap);
+        }
+        log.info("사용자가 고른 장소를 출발 시각이 있는 마지막 날에서 전날로 이동: day={} → day={} {} (맞바꾼 장소 {})",
+                last.dayNumber, prev.dayNumber, nameOf(candidates, idx), swap != null ? nameOf(candidates, swap) : "없음");
+        return true;
+    }
+
+    private static double kmFrom(double[] from, PlaceCandidate c, double unknown) {
+        double[] to = CandidateGeo.coordsOf(c);
+        return from == null || to == null ? unknown : GeoUtils.haversine(from, to);
+    }
+
+    private static boolean isMovableVisit(PlaceCandidate c) {
+        if (c == null || c.mealEligible()) return false;
+        String major = PlaceCategoryConstants.majorCategory(c.category());
+        return !"LODGING".equals(major) && !"TRANSIT_HUB".equals(major);
     }
 }

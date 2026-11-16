@@ -56,7 +56,8 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
 
         List<String> regions = request.regions();
 
-        if (regions != null && regions.size() > REGION_SPLIT_THRESHOLD) {
+        // 반경 검색을 지역별 몫으로 나누면 반경이 SQL에 걸리지 않아 지역마다 먼 상위만 받고 호출부에서 다 버려진다.
+        if (regions != null && regions.size() > REGION_SPLIT_THRESHOLD && request.center() == null) {
             return searchByRegions(request);
         }
 
@@ -82,7 +83,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                   AND (p.place_role IS NULL OR p.place_role NOT IN ('NOT_VISITABLE', 'TRANSIT'))
                   AND p.category NOT ILIKE 'Travel and Transportation%'
                   AND p.category NOT ILIKE 'Dining and Drinking%'
-                ORDER BY p.wikidata_sitelinks DESC
+                ORDER BY p.wikidata_sitelinks DESC, p.id
                 LIMIT ?
                 """;
         String vectorString = toVectorString(queryVector);
@@ -224,6 +225,10 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         if (regions != null && regions.size() == 1) {
             where.append("  AND p.region = ?\n");
             whereParams.add(regions.get(0));
+        } else if (regions != null && regions.size() > 1) {
+            where.append("  AND p.region IN (").append(String.join(", ", Collections.nCopies(regions.size(), "?")))
+                    .append(")\n");
+            whereParams.addAll(regions);
         }
 
         appendCategoryExclusions(where, whereParams, request.excludedCategoryPatterns());
@@ -269,7 +274,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
                 + "  AND COALESCE(p.place_role, '') NOT IN ('TRANSIT', 'LODGING')\n"
                 + "ORDER BY COALESCE(p.wikidata_id, p.name), p.tourapi_content_id IS NOT NULL DESC,"
                 + " p.wikidata_sitelinks DESC, p.place_role = 'SIGHT' DESC, p.id) seed\n"
-                + "ORDER BY seed.tourism_listed DESC, seed.wikidata_sitelinks DESC\nLIMIT ?)";
+                + "ORDER BY seed.tourism_listed DESC, seed.wikidata_sitelinks DESC, seed.id\nLIMIT ?)";
 
         List<Object> params = new ArrayList<>();
         params.add(vectorString);          // 1번 갈래 SELECT의 similarity_score

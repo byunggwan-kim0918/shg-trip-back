@@ -77,6 +77,7 @@ public class RouteOptimizer {
         Map<Integer, Integer> protectedHome = protectedHomes(s.days, s.candidates);
         List<StepData> steps = DayScheduler.scheduleAll(s);
         steps = restoreDroppedProtected(s, steps, protectedHome);
+        steps = keepDepartureDeadline(s, steps);
         steps = enforceFinalInvariants(s, steps);
         List<String> unresolved = invariantChecker.summarize(s.days, steps, s.pace, s.transportPref, s.candidates, s.cfg);
 
@@ -208,6 +209,33 @@ public class RouteOptimizer {
             }
         }
         return steps;
+    }
+
+    /**
+     * 사용자가 고른 장소 때문에 마지막 날 출발 시각을 놓치면 그 장소를 하나씩 전날로 옮겨 다시 확정한다.
+     * 귀가 시각 트림은 사용자가 고른 장소를 자르지 않고, 출발을 놓치면 생성이 HARD로 막혀 전날 끼니가 밀려도 옮기는 쪽을 택한다.
+     */
+    private static List<StepData> keepDepartureDeadline(PlanState s, List<StepData> steps) {
+        if (s.days.size() < 2) return steps;
+        DayState last = s.days.get(s.days.size() - 1);
+        if (!missesDeparture(s, steps, last)) return steps;
+        PlanState.Checkpoint checkpoint = s.checkpoint();
+        int moved = 0;
+        while (IntentHints.moveUserPickOffDeadlineDay(s.days, s.candidates, s.startDate)) {
+            moved++;
+            s.resetSpare();
+            List<StepData> tried = DayScheduler.scheduleAll(s);
+            if (!missesDeparture(s, tried, last)) return tried;
+        }
+        if (moved == 0) return steps;
+        log.info("사용자가 고른 장소 {}곳을 옮겨도 출발 시각을 지키지 못해 되돌림: day={}", moved, last.dayNumber);
+        s.restore(checkpoint);
+        return steps;
+    }
+
+    private static boolean missesDeparture(PlanState s, List<StepData> steps, DayState day) {
+        return InvariantChecker.missesDeparture(
+                steps.stream().filter(st -> st.dayNumber() == day.dayNumber).toList(), s.candidates, day);
     }
 
     private static Set<Integer> placedProtected(List<DayState> days, Map<Integer, Integer> protectedHome) {

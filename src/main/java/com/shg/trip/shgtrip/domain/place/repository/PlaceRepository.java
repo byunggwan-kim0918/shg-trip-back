@@ -161,7 +161,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND p.active = true
               AND p.mergedIntoId IS NULL
-            ORDER BY p.rating DESC NULLS LAST
+            ORDER BY p.rating DESC NULLS LAST, p.id
             """)
     List<Place> findTopAccommodationsByRegions(@Param("regions") List<String> regions, Pageable pageable);
 

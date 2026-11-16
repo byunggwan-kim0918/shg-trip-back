@@ -11,7 +11,10 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTimes.toMinutesOrZero;
@@ -55,6 +58,17 @@ class DaySchedulerTest {
         PlanState s = PlanState.of(new SelectionOutput("하루", List.of(plan), List.of(), spare), candidates, args);
         s.beginScheduling();
         return s;
+    }
+
+    /** {@link #oneDayPool}에서 그날 장소를 모두 전날 숙소의 도보권 밖으로 옮긴 것. */
+    private static List<PlaceCandidate> walkDayPool() {
+        List<PlaceCandidate> pool = oneDayPool();
+        pool.set(1, place(2, "궁", SIGHT, "SIGHT", 37.5980, 126.9800));
+        pool.set(2, place(3, "한옥마을", SIGHT, "SIGHT", 37.6020, 126.9790));
+        pool.set(3, place(4, "점심 식당", MEAL, "MEAL", 37.5990, 126.9810));
+        pool.set(4, place(5, "저녁 식당", MEAL, "MEAL", 37.6005, 126.9830));
+        pool.set(5, place(6, "그날 호텔", HOTEL, "LODGING", 37.6010, 126.9840));
+        return pool;
     }
 
     private static List<DropReason> reasons(DayScheduler.DayResult result) {
@@ -122,6 +136,68 @@ class DaySchedulerTest {
         assertThat(names.get(0)).isEqualTo("전날 호텔");
         assertThat(names.get(1)).isEqualTo("일출 명소");
         assertThat(names).containsOnlyOnce("전날 호텔");
+    }
+
+    @Test
+    @DisplayName("그날 숙소가 하루 구성에 섞여 있어도 체크인은 마지막 한 번이다")
+    void checkInStaysLastWhenLodgingIsAmongPicks() {
+        PlanState s = midTripDay(oneDayPool(), List.of(2, HOTEL_TODAY, 4, 3, 5));
+
+        List<String> names = DayScheduler.scheduleOne(s, s.days.get(0), PREVIOUS_HOTEL).steps().stream()
+                .map(step -> step.place().name()).toList();
+
+        assertThat(names).endsWith("그날 호텔").containsOnlyOnce("그날 호텔");
+    }
+
+    @Test
+    @DisplayName("도보 여행에서 숙소를 바꾸는 날의 아침 출발은 숙소 시간대가 저녁으로 보강돼 있어도 맨 앞이다")
+    void walkCheckoutLeadsTheDayEvenForEveningLodging() {
+        List<PlaceCandidate> pool = walkDayPool();
+        pool.set(0, new PlaceCandidate(1, 1L, "전날 호텔", "서울 종로구", HOTEL, List.of(), "Seoul", "KR",
+                BigDecimal.valueOf(37.5700), BigDecimal.valueOf(126.9830), null, null, 0.8, null, null,
+                List.of("저녁"), 60, false, null, null, null, null, "LODGING", null, false, null));
+        PlanState s = oneDay(pool, new SelectionOutput.DayPlan(3, null, List.of(2, 3, 4, 5), HOTEL_TODAY, null),
+                List.of(), "walk", null);
+
+        List<StepData> steps = DayScheduler.scheduleOne(s, s.days.get(0), PREVIOUS_HOTEL).steps();
+
+        assertThat(steps.get(0).place().name()).isEqualTo("전날 호텔");
+        assertThat(toMinutesOrZero(steps.get(0).startTime())).isLessThan(ScheduleTuning.LUNCH_START);
+        assertThat(steps.get(steps.size() - 1).place().name()).isEqualTo("그날 호텔");
+    }
+
+    @Test
+    @DisplayName("도보 여행에서 같은 숙소에 연박하는 날은 아침 출발 스텝 없이 저녁 체크인으로 끝난다")
+    void walkStayInSameLodgingEndsAtLodging() {
+        PlanState s = oneDay(walkDayPool(), new SelectionOutput.DayPlan(3, null, List.of(2, 3, 4, 5),
+                PREVIOUS_HOTEL, null), List.of(), "walk", null);
+
+        List<String> names = DayScheduler.scheduleOne(s, s.days.get(0), PREVIOUS_HOTEL).steps().stream()
+                .map(step -> step.place().name()).toList();
+
+        assertThat(names).endsWith("전날 호텔").containsOnlyOnce("전날 호텔");
+    }
+
+    @Test
+    @DisplayName("모두 보호된 날의 거리 교체는 다른 날 몫으로 잡아 둔 예비 장소를 쓰지 않는다")
+    void distanceSwapSkipsPlacesReservedForOtherDays() {
+        List<PlaceCandidate> pool = oneDayPool();
+        pool.add(place(7, "먼 전망대", SIGHT, "SIGHT", 36.3500, 127.3800));
+        pool.add(place(8, "가까운 사적지", SIGHT, "SIGHT", 37.5750, 126.9800));
+
+        assertThat(swapFarSight(pool, Set.of())).contains(8).doesNotContain(7);
+        assertThat(swapFarSight(pool, Set.of(8))).contains(7).doesNotContain(8);
+    }
+
+    /** 궁·먼 전망대·한옥마을을 모두 보호한 채 거리 예산을 맞춘 순서. 예비 후보는 가까운 사적지 하나다. */
+    private static List<Integer> swapFarSight(List<PlaceCandidate> pool, Set<Integer> reservedElsewhere) {
+        DayState day = new DayState(new SelectionOutput.DayPlan(3, null, new ArrayList<>(List.of(2, 7, 3)), null, null));
+        List<Integer> seq = new ArrayList<>(List.of(2, 7, 3));
+        Set<Integer> used = new HashSet<>(List.of(2, 7, 3));
+        used.addAll(reservedElsewhere);
+        DistanceBudget.trimSequenceOverBudget(day, seq, pool, new ArrayDeque<>(List.of(8)), "car", Set.of(2, 7, 3),
+                null, new ScheduleConfig(9 * 60, 22 * 60, 0, false, "normal"), Set.of(), used);
+        return seq;
     }
 
     @Test
@@ -276,8 +352,8 @@ class DaySchedulerTest {
     }
 
     @Test
-    @DisplayName("도보 여행에서 순서 앞에 끼워 넣은 전날 숙소는 잘려도 뺀 목록에 나오지 않는다")
-    void walkAnchorIsNotReportedAsDropped() {
+    @DisplayName("도보 여행에서 앞에 붙인 전날 숙소는 프런트 운영시간과 관계없이 아침 출발로 남고 뺀 목록에 나오지 않는다")
+    void walkAnchorIgnoresFrontDeskHours() {
         List<PlaceCandidate> pool = oneDayPool();
         pool.set(0, place(1, "전날 호텔", HOTEL, "LODGING", 37.6100, 126.9830, 60, "목요일: 오후 3:00 ~ 오후 11:00"));
         PlanState s = oneDay(pool, new SelectionOutput.DayPlan(3, null, List.of(2, 4, 3, 5), HOTEL_TODAY, null),
@@ -285,14 +361,8 @@ class DaySchedulerTest {
 
         DayScheduler.DayResult result = DayScheduler.scheduleOne(s, s.days.get(0), PREVIOUS_HOTEL);
 
-        assertThat(result.steps()).extracting(step -> step.place().name()).doesNotContain("전날 호텔");
+        assertThat(result.steps().get(0).place().name()).isEqualTo("전날 호텔");
         assertThat(result.dropped()).isEmpty();
-
-        pool.set(0, place(1, "전날 호텔", HOTEL, "LODGING", 37.6100, 126.9830));
-        PlanState open = oneDay(pool, new SelectionOutput.DayPlan(3, null, List.of(2, 4, 3, 5), HOTEL_TODAY, null),
-                List.of(), "walk", null);
-        assertThat(DayScheduler.scheduleOne(open, open.days.get(0), PREVIOUS_HOTEL).steps().get(0).place().name())
-                .isEqualTo("전날 호텔");
     }
 
     @Test

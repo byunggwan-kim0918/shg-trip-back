@@ -1,6 +1,6 @@
 -- metrics --
-  스텝 36 / 숙소 2곳 / 총이동 642km
-  연속중복 0 / 최대공백 152분 / 늦은시작 1일 / 미해소 5건
+  스텝 36 / 숙소 2곳 / 총이동 620km
+  연속중복 0 / 최대공백 161분 / 늦은시작 1일 / 미해소 5건
 == day 1 ==
   #1  09:00-10:30  경복궁 | Landmarks and Outdoors > Tourist Attraction | 종로구 | Seoul
       이동: - -분 -km -원
@@ -109,7 +109,6 @@
       이동: CAR 3분 1.79km 1434원
       비용: 0원 / 메모: -
       대안: 대신종합시장 | Retail > Market | 0원
-      대안: 영주시장 | Retail > Market | 0원
       대안: 초량전통시장 | Retail > Market | 0원
   #23 14:50-15:50  신동아수산물종합시장 | Retail > Food and Beverage Retail > Fish Market | - | Busan
       이동: CAR 3분 1.42km 1140원
@@ -142,49 +141,50 @@
       비용: 13000원 / 메모: -
       대안: 영동밀면&돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
       대안: 몽실종가돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
-  #29 13:05-13:35  한화리조트 해운대 | Travel and Transportation > Lodging > Resort | 해운대구 | Busan
-      이동: CAR 25분 16.24km 12990원
-      비용: 200000원 / 메모: -
-      대안: 팔라티움 해운대 바이 소노펠리체 | Travel and Transportation > Lodging | 120000원
-      대안: 호텔아쿠아펠리스 스파&리조트 | Travel and Transportation > Lodging > Hotel | 200000원
-  #30 13:59-14:59  국제시장 먹자골목 | Landmarks and Outdoors > Tourist Attraction | - | Busan
-      이동: CAR 24분 15.86km 12686원
+  #29 12:46-13:46  국제시장 먹자골목 | Landmarks and Outdoors > Tourist Attraction | - | Busan
+      이동: WALK 6분 0.39km 0원
       비용: 0원 / 메모: -
       대안: 대신종합시장 | Retail > Market | 0원
       대안: 초량전통시장 | Retail > Market | 0원
-      대안: 영주시장 | Retail > Market | 0원
+  #30 13:49-14:49  영주시장 | Retail > Market | - | Busan
+      이동: CAR 3분 1.87km 1494원
+      비용: 0원 / 메모: -
+      대안: 부전시장 | Retail > Market | 0원
+      대안: 브레드포럼 | Retail > Food and Beverage Retail | 0원
   #31 17:30-18:40  큰집돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Busan
-      이동: CAR 15분 9.71km 7765원
+      이동: CAR 13분 8.09km 6468원
       비용: 13000원 / 메모: -
       대안: 부산토박이 돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
       대안: 부산제일합천돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
   #32 18:50-20:20  서면먹자골목 | Landmarks and Outdoors > Tourist Attraction | 부산진구 | Busan
       이동: CAR 10분 6.14km 4914원
       비용: 0원 / 메모: -
-      대안: 부전시장 | Retail > Market | 0원
       대안: 양정시장 | Retail > Market | 0원
-      대안: 브레드포럼 | Retail > Food and Beverage Retail | 0원
+      대안: 오방맛길 | Landmarks and Outdoors > Tourist Attraction | 0원
+      대안: 부산아시아드주경기장 (Busan Asiad Main Stadium) | Arts and Entertainment > Stadium > Track Stadium | 0원
+  #33 20:36-21:06  한화리조트 해운대 | Travel and Transportation > Lodging > Resort | 해운대구 | Busan
+      이동: CAR 16분 10.3km 8237원
+      비용: 200000원 / 메모: -
+      대안: 팔라티움 해운대 바이 소노펠리체 | Travel and Transportation > Lodging | 120000원
+      대안: 호텔아쿠아펠리스 스파&리조트 | Travel and Transportation > Lodging > Hotel | 200000원
 == day 6 ==
-  #33 09:04-10:34  Haeridan-Gil | Event > Marketplace > Street Food Gathering | - | Busan
+  #34 09:04-10:34  Haeridan-Gil | Event > Marketplace > Street Food Gathering | - | Busan
       이동: CAR 4분 2.09km 1675원
       비용: 0원 / 메모: -
+      대안: 좌동재래시장 | Retail > Market | 0원
       대안: 망미단길 | Landmarks and Outdoors > Tourist Attraction | 0원
       대안: 밀락더마켓 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 광안시장 | Retail > Food and Beverage Retail > Farmers Market | 0원
-  #34 11:30-12:40  합천돼지국밥 | Dining and Drinking > Restaurant | - | Busan
+  #35 11:30-12:40  합천돼지국밥 | Dining and Drinking > Restaurant | - | Busan
       이동: WALK 6분 0.36km 0원
       비용: 13000원 / 메모: -
       대안: 부산24시수제순대돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
       대안: 부산토박이 돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
-  #35 12:45-13:55  코코호도 해운대장산점 | Dining and Drinking > Bakery | - | Busan
+  #36 12:45-13:55  코코호도 해운대장산점 | Dining and Drinking > Bakery | - | Busan
       이동: CAR 5분 2.77km 2214원
       비용: 13000원 / 메모: -
-  #36 14:03-15:03  좌동재래시장 | Retail > Market | 해운대구 | Busan
-      이동: WALK 8분 0.48km 0원
-      비용: 0원 / 메모: -
 -- unresolved (5) --
   day1 거리 초과
   day2 거리 초과
   day4 거리 초과
   day5 거리 초과
-  day6 조기 종료(15:03)
+  day6 조기 종료(13:55)
