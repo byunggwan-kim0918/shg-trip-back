@@ -70,6 +70,24 @@ class AvoidedPlacesTest {
     }
 
     @Test
+    @DisplayName("같은 곳으로 합쳐진 행을 피하면 후보에 나오는 대표 행도 피하고, 딸린 일부를 피한다고 큰 장소까지 피하지는 않는다")
+    void avoidsRepresentativeOfSamePlaceOnly() {
+        String sight = "Landmarks and Outdoors > Scenic Lookout";
+        Place diamond = busan(1734764L, "부산다이아몬드타워", sight, 35.1009, 129.0323)
+                .mergedIntoId(308559L).mergeRelation("SAME").build();
+        Place tower = busan(308559L, "부산타워", sight, 35.1012, 129.0324).build();
+        Place gate = busan(8L, "범어사 조계문", "Landmarks and Outdoors > Historic Site", 35.2840, 129.0680)
+                .mergedIntoId(7L).mergeRelation("PART").build();
+        when(placeRepository.findAllById(List.of(1734764L, 8L))).thenReturn(List.of(diamond, gate));
+        when(placeRepository.findAllById(List.of(308559L))).thenReturn(List.of(tower));
+
+        AvoidedPlaces avoided = AvoidedPlaces.load(placeRepository, List.of(1734764L, 8L));
+
+        assertThat(avoided.places()).extracting(PlaceCandidate::placeId).containsExactly(1734764L, 8L, 308559L);
+        verify(placeRepository, never()).findAllById(List.of(7L));
+    }
+
+    @Test
     @DisplayName("같은 항목 id의 다른 이름 관광지(별칭)도 더한다")
     void addsAliasesOfSameItem() {
         String sight = "Landmarks and Outdoors > Tower";

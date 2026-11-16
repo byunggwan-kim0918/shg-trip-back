@@ -38,7 +38,7 @@ class BatchEnrichSchedulerTest {
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
-        scheduler = new BatchEnrichScheduler(placeRepository, objectMapper, embeddingBatchJob);
+        scheduler = new BatchEnrichScheduler(placeRepository, objectMapper, embeddingBatchJob, mock(AnthropicBatchClient.class));
         ReflectionTestUtils.setField(scheduler, "maxDuration", java.time.Duration.ofHours(10));
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
         ReflectionTestUtils.setField(scheduler, "anthropicApiKey", "test-api-key");
@@ -701,9 +701,9 @@ class BatchEnrichSchedulerTest {
         java.net.http.HttpResponse<String> server = mock(java.net.http.HttpResponse.class);
         when(server.statusCode()).thenReturn(503);
 
-        assertThat(BatchEnrichScheduler.retryAfterMs(limited)).isEqualTo(30_000);
-        assertThat(BatchEnrichScheduler.retryAfterMs(limited)).isEqualTo(120_000);
-        assertThat(BatchEnrichScheduler.retryAfterMs(server)).isZero();
+        assertThat(AnthropicBatchClient.retryAfterMs(limited)).isEqualTo(30_000);
+        assertThat(AnthropicBatchClient.retryAfterMs(limited)).isEqualTo(120_000);
+        assertThat(AnthropicBatchClient.retryAfterMs(server)).isZero();
     }
 
     @Test

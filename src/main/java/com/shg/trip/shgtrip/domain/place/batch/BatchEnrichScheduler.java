@@ -11,11 +11,6 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
@@ -38,20 +33,13 @@ public class BatchEnrichScheduler {
     static final int MAX_CONSECUTIVE_FAILED_CHUNKS = 3;
     private static final double MAX_FAILURE_RATIO = 0.2;
 
-    private static final String BATCH_API_URL = "https://api.anthropic.com/v1/messages/batches";
     private static final String CUSTOM_ID_PREFIX = "place_";
-    private static final int MAX_RETRIES = 3;
     /** 실행에서 제외한 실패 id 상한. 대상 조회의 NOT IN 바인드 파라미터 한도(pgjdbc 32767)보다 작아야 한다. */
     static final int MAX_EXCLUDED_IDS = 20_000;
 
-    /** 결과 JSONL 다운로드 타임아웃(분). 청크 1000건 기준 여유 있게 잡는다. */
-    private static final int RESULTS_DOWNLOAD_TIMEOUT_MINUTES = 10;
-    /** 429의 Retry-After 상한(초). */
-    private static final long MAX_RETRY_AFTER_SEC = 120;
-
     private final PlaceRepository placeRepository;
     private final ObjectMapper objectMapper;
-    private final HttpClient httpClient;
+    private final AnthropicBatchClient batchClient;
     private final EmbeddingBatchJob embeddingBatchJob;
 
     @Value("${anthropic.api-key:${ANTHROPIC_API_KEY:}}")
@@ -90,22 +78,12 @@ public class BatchEnrichScheduler {
     @Value("${batch.enrich.resume-batch-id:}")
     private String resumeBatchId;
 
-    /** 묶음 하나의 결과를 기다리는 상한. Batch API는 최대 24시간 걸린다. 끊긴 묶음은 resume-batch-id로 다시 반영한다. */
-    @Value("${batch.enrich.max-poll-duration:PT24H}")
-    private Duration maxPollDuration = Duration.ofHours(24);
-
     /**
      * 보강 단계 전체(결과 대기 포함)의 상한. 넘기면 배치 작업 제한(Step Functions 36h)에 걸려 뒤의 임베딩 단계가
      * 돌지 않고, 내려 둔 근사 검색 인덱스도 다시 만들어지지 않는다.
      */
     @Value("${batch.enrich.max-duration:PT10H}")
     private Duration maxDuration = Duration.ofHours(10);
-
-    @Value("${anthropic.batch.poll-interval-ms:10000}")
-    private long pollIntervalMs = 10_000;
-
-    /** 재시도 대기의 첫 단위. 시도마다 두 배로 늘린다. */
-    private long retryBaseMs = 1_000;
 
     /** 이번 보강 단계의 끝 시각(epoch ms). 결과 대기도 이 시각에서 끊는다. */
     private volatile long runDeadlineMs = Long.MAX_VALUE;
@@ -135,20 +113,11 @@ public class BatchEnrichScheduler {
 
     @org.springframework.beans.factory.annotation.Autowired
     public BatchEnrichScheduler(PlaceRepository placeRepository, ObjectMapper objectMapper,
-                                EmbeddingBatchJob embeddingBatchJob) {
-        this(placeRepository, objectMapper, embeddingBatchJob, HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(30))
-                // 결과 파일 URL은 서명된 스토리지로 302 리다이렉트되어, 따라가지 않으면 본문이 비어 온다
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .build());
-    }
-
-    BatchEnrichScheduler(PlaceRepository placeRepository, ObjectMapper objectMapper,
-                         EmbeddingBatchJob embeddingBatchJob, HttpClient httpClient) {
+                                EmbeddingBatchJob embeddingBatchJob, AnthropicBatchClient batchClient) {
         this.placeRepository = placeRepository;
         this.objectMapper = objectMapper;
         this.embeddingBatchJob = embeddingBatchJob;
-        this.httpClient = httpClient;
+        this.batchClient = batchClient;
     }
 
     /**
@@ -161,10 +130,6 @@ public class BatchEnrichScheduler {
         ChunkResult(int success, int failed, List<Long> failedIds) {
             this(success, failed, failedIds, true);
         }
-    }
-
-    /** @param resultsUrl 결과 파일 URL, 끝나지 않았거나 실패면 null */
-    record PollResult(String resultsUrl, boolean timedOut) {
     }
 
     /**
@@ -393,7 +358,7 @@ public class BatchEnrichScheduler {
 
     /** 끝난 배치의 결과 JSONL. 끝나지 않았거나 실패면 null. */
     String fetchResults(String batchId) {
-        PollResult poll = pollForCompletion(batchId);
+        AnthropicBatchClient.PollResult poll = pollForCompletion(batchId);
         return poll.resultsUrl() == null ? null : downloadResults(poll.resultsUrl());
     }
 
@@ -471,7 +436,7 @@ public class BatchEnrichScheduler {
                 return new ChunkResult(0, places.size(), allIds(places));
             }
 
-            PollResult poll = pollForCompletion(batchId);
+            AnthropicBatchClient.PollResult poll = pollForCompletion(batchId);
             if (poll.resultsUrl() == null) {
                 // 결과는 나중에 batch.enrich.resume-batch-id로 다시 반영할 수 있다
                 log.error("배치 결과 대기 실패 - batchId={}, 시간 초과={}", batchId, poll.timedOut());
@@ -596,145 +561,12 @@ public class BatchEnrichScheduler {
         return sb.toString();
     }
 
-    /**
-     * 5xx/IOException은 MAX_RETRIES회까지 지수 백오프로 재시도하고, 4xx는 재시도하지 않는다.
-     *
-     * @return 배치 ID (실패 시 null)
-     */
     String submitBatch(List<Map<String, Object>> requests) {
-        String requestBody;
-        try {
-            Map<String, Object> body = Map.of("requests", requests);
-            requestBody = objectMapper.writeValueAsString(body);
-        } catch (Exception e) {
-            log.error("배치 요청 본문 직렬화 실패: {}", e.getMessage(), e);
-            return null;
-        }
-
-        HttpRequest httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create(BATCH_API_URL))
-                .header("Content-Type", "application/json")
-                .header("x-api-key", anthropicApiKey)
-                .header("anthropic-version", "2023-06-01")
-                .timeout(Duration.ofSeconds(60))
-                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                .build();
-
-        for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
-            try {
-                HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString());
-
-                if (response.statusCode() == 200 || response.statusCode() == 201) {
-                    JsonNode root = objectMapper.readTree(response.body());
-                    String batchId = root.get("id").asText();
-                    log.info("배치 제출 성공 - batchId={}, 요청 수={}", batchId, requests.size());
-                    return batchId;
-                }
-
-                if (response.statusCode() >= 500 || response.statusCode() == 429) {
-                    log.warn("배치 제출 일시 오류 (HTTP {}), 재시도 {}/{}",
-                            response.statusCode(), attempt + 1, MAX_RETRIES);
-                    if (attempt < MAX_RETRIES - 1) sleepBeforeRetry(attempt, response);
-                    continue;
-                }
-
-                log.error("배치 제출 실패 - HTTP {}: {}", response.statusCode(), response.body());
-                return null;
-
-            } catch (IOException e) {
-                log.warn("배치 제출 IO 에러, 재시도 {}/{}: {}", attempt + 1, MAX_RETRIES, e.getMessage());
-                sleepWithBackoff(attempt);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.error("배치 제출 중 인터럽트 발생", e);
-                return null;
-            }
-        }
-
-        log.error("배치 제출 실패: {}회 재시도 후에도 실패", MAX_RETRIES);
-        return null;
+        return batchClient.submit(requests);
     }
 
-    private void sleepWithBackoff(int attempt) {
-        sleep(retryBaseMs * (1L << attempt));
-    }
-
-    /** Retry-After보다 일찍 보내면 다시 429다. */
-    private void sleepBeforeRetry(int attempt, HttpResponse<String> response) {
-        sleep(Math.max(retryBaseMs * (1L << attempt), retryAfterMs(response)));
-    }
-
-    static long retryAfterMs(HttpResponse<String> response) {
-        java.net.http.HttpHeaders headers = response.headers();
-        if (response.statusCode() != 429 || headers == null) return 0;
-        return headers.firstValue("retry-after").map(v -> {
-            try {
-                return Math.min(Long.parseLong(v.trim()), MAX_RETRY_AFTER_SEC) * 1000;
-            } catch (NumberFormatException e) {
-                return 0L;
-            }
-        }).orElse(0L);
-    }
-
-    PollResult pollForCompletion(String batchId) {
-        long until = Math.min(System.currentTimeMillis() + maxPollDuration.toMillis(), runDeadlineMs);
-
-        while (System.currentTimeMillis() < until) {
-            try {
-                HttpRequest request = HttpRequest.newBuilder()
-                        .uri(URI.create(BATCH_API_URL + "/" + batchId))
-                        .header("x-api-key", anthropicApiKey)
-                        .header("anthropic-version", "2023-06-01")
-                        .timeout(Duration.ofSeconds(30))
-                        .GET()
-                        .build();
-
-                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-                int code = response.statusCode();
-                if (code >= 400 && code < 500 && code != 429) {
-                    // 없는 batchId(오타·보관 기간 지남)·키 오류는 기다려도 같다
-                    log.error("배치 상태 조회 실패 - batchId={}, HTTP {}: {}", batchId, code, response.body());
-                    return new PollResult(null, false);
-                }
-                if (code != 200) {
-                    log.warn("배치 상태 조회 실패 - HTTP {}", code);
-                    sleep(Math.max(pollIntervalMs, retryAfterMs(response)));
-                    continue;
-                }
-
-                JsonNode root = objectMapper.readTree(response.body());
-                String status = root.get("processing_status").asText();
-
-                switch (status) {
-                    case "ended" -> {
-                        String resultsUrl = root.get("results_url").asText();
-                        log.info("배치 완료 - batchId={}", batchId);
-                        return new PollResult(resultsUrl, false);
-                    }
-                    case "canceling" -> {
-                        log.error("배치 취소 중 - batchId={}", batchId);
-                        return new PollResult(null, false);
-                    }
-                    default -> {
-                        log.debug("배치 진행 중 - batchId={}, status={}", batchId, status);
-                    }
-                }
-
-                sleep(pollIntervalMs);
-
-            } catch (IOException | InterruptedException e) {
-                if (e instanceof InterruptedException) {
-                    Thread.currentThread().interrupt();
-                    return new PollResult(null, false);
-                }
-                log.warn("배치 상태 폴링 중 예외: {}", e.getMessage());
-                sleep(pollIntervalMs);
-            }
-        }
-
-        log.error("배치 폴링 타임아웃 - batchId={}", batchId);
-        return new PollResult(null, true);
+    AnthropicBatchClient.PollResult pollForCompletion(String batchId) {
+        return batchClient.poll(batchId, runDeadlineMs);
     }
 
     ChunkResult processResults(String batchId, String resultsUrl, List<Place> places) {
@@ -748,31 +580,7 @@ public class BatchEnrichScheduler {
 
     /** 결과 JSONL. 실패면 null. 비용은 이미 낸 뒤라 실패해도 resume-batch-id로 다시 받을 수 있다. */
     String downloadResults(String resultsUrl) {
-        try {
-            // 결과는 요청 수만큼의 JSONL이라 청크가 커질수록 길어진다.
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(resultsUrl))
-                    .header("x-api-key", anthropicApiKey)
-                    .header("anthropic-version", "2023-06-01")
-                    .timeout(Duration.ofMinutes(RESULTS_DOWNLOAD_TIMEOUT_MINUTES))
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                log.error("배치 결과 조회 실패 - HTTP {}", response.statusCode());
-                return null;
-            }
-            return response.body();
-
-        } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            log.error("배치 결과 다운로드 중 예외: {}", e.getMessage(), e);
-            return null;
-        }
+        return batchClient.download(resultsUrl);
     }
 
     /**
@@ -1087,13 +895,5 @@ public class BatchEnrichScheduler {
             chunks.add(places.subList(i, Math.min(i + chunkSize, places.size())));
         }
         return chunks;
-    }
-
-    private void sleep(long millis) {
-        try {
-            Thread.sleep(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 }

@@ -1170,6 +1170,104 @@ class OptimizedGenerationExecutorTest {
         assertThat(result).extracting(PlaceCandidate::index).containsExactly(1, 2);
     }
 
+    @Test
+    @DisplayName("고른 행이 다른 행에 합쳐진 행이면 후보에 나온 그 대표 행을 빼고 고른 행을 남긴다")
+    void selectedMergedRowDisplacesItsRepresentative() {
+        com.shg.trip.shgtrip.domain.place.entity.Place diamond = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                .id(2L).name("부산다이아몬드타워").address("부산 중구 용두산길 37-55").region("Busan").country("KR")
+                .category("Landmarks and Outdoors > Scenic Lookout").tags(List.of("전망대"))
+                .latitude(java.math.BigDecimal.valueOf(35.1009)).longitude(java.math.BigDecimal.valueOf(129.0323))
+                .mergedIntoId(1L).mergeRelation("SAME").build();
+        List<PlaceCandidate> pool = List.of(place(1, 1L, "부산타워"), place(2, 3L, "범어사"));
+
+        List<PlaceCandidate> merged = OptimizedGenerationExecutor.mergeSelectedPlaces(pool, List.of(diamond));
+
+        assertThat(merged).extracting(PlaceCandidate::placeId).containsExactly(2L, 3L);
+        assertThat(merged.get(0).userSelected()).isTrue();
+        assertThat(merged).extracting(PlaceCandidate::index).containsExactly(1, 2);
+    }
+
+    @Test
+    @DisplayName("같은 곳의 여러 행을 골랐으면 대표 행을, 대표 행이 없으면 먼저 고른 행을 남기고 딸린 일부는 접지 않는다")
+    void collapsesSelectedRowsOfSamePlace() {
+        var tower = linkedPlace(1L, "부산타워", null, null);
+        var diamond = linkedPlace(2L, "부산다이아몬드타워", 1L, "SAME");
+        var towerEn = linkedPlace(3L, "Busan Tower", 1L, "SAME");
+        var park = linkedPlace(4L, "용두산공원", null, null);
+        var flowerClock = linkedPlace(5L, "꽃시계", 4L, "PART");
+
+        assertThat(OptimizedGenerationExecutor.collapseSamePlaces(List.of(diamond, tower, towerEn)))
+                .extracting(com.shg.trip.shgtrip.domain.place.entity.Place::getId).containsExactly(1L);
+        assertThat(OptimizedGenerationExecutor.collapseSamePlaces(List.of(towerEn, diamond)))
+                .extracting(com.shg.trip.shgtrip.domain.place.entity.Place::getId).containsExactly(3L);
+        assertThat(OptimizedGenerationExecutor.collapseSamePlaces(List.of(flowerClock, park)))
+                .extracting(com.shg.trip.shgtrip.domain.place.entity.Place::getId).containsExactly(5L, 4L);
+    }
+
+    @Test
+    @DisplayName("고른 행이 합쳐진 대상 행은 후보에서 빼되, 대상 행도 함께 골랐으면 빼지 않는다")
+    void displacedTargetsOfSelectedRows() {
+        var diamond = linkedPlace(2L, "부산다이아몬드타워", 1L, "SAME");
+        var flowerClock = linkedPlace(5L, "꽃시계", 4L, "PART");
+        var park = linkedPlace(4L, "용두산공원", null, null);
+
+        assertThat(OptimizedGenerationExecutor.displacedBySelection(List.of(diamond, flowerClock)))
+                .containsExactlyInAnyOrder(1L, 4L);
+        assertThat(OptimizedGenerationExecutor.displacedBySelection(List.of(flowerClock, park))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("고른 행과 같은 곳인 대표 행은 날짜별 예비 검색이 돌려줘도 후보에 들어가지 않는다")
+    @SuppressWarnings("unchecked")
+    void reserveSearchDoesNotReaddDisplacedRepresentative() {
+        ItineraryGenerateRequest manual = new ItineraryGenerateRequest(request.mode(), request.destination(),
+                request.themes(), request.categories(), request.pace(), request.transportPref(), request.budget(),
+                request.startDate(), request.endDate(), request.description(), List.of(500L), null);
+        var deck = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
+                .id(500L).name("도쿄타워 메인 데크").address("미나토구 시바코엔 4-2-8").region("Tokyo").country("JP")
+                .category("Landmarks and Outdoors > Scenic Lookout")
+                .latitude(BigDecimal.valueOf(35.6586)).longitude(BigDecimal.valueOf(139.7454))
+                .mergedIntoId(501L).mergeRelation("SAME").build();
+        PlaceCandidate tower = new PlaceCandidate(1, 501L, "Tokyo Tower", "미나토구 시바코엔 4-2-8",
+                "Landmarks and Outdoors > Monument", List.of("전망대"), "Tokyo", "JP", BigDecimal.valueOf(35.6587),
+                BigDecimal.valueOf(139.7455), null, null, 0.8);
+        PlaceCandidate ramen = new PlaceCandidate(1, 203L, "아후리 라멘", "주소", "Dining and Drinking > Restaurant",
+                List.of("라멘"), "Tokyo", "JP", BigDecimal.valueOf(35.67), BigDecimal.valueOf(139.70), null, null, 0.7);
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(manual)).thenReturn(successResult);
+        when(vectorSearchQueryService.search(any(), any())).thenReturn(candidates);
+        when(vectorSearchQueryService.searchNearEach(any(), any(), anyList(), anyDouble(), anyInt()))
+                .thenReturn(List.of(List.of(tower, ramen)));
+        when(fallbackDecider.assess(anyList(), eq(4L))).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
+        when(placeRepository.findAllById(anyList())).thenAnswer(inv -> {
+            java.util.Collection<Long> ids = inv.getArgument(0);
+            return ids.contains(500L) ? List.of(deck) : List.of();
+        });
+        when(selectionCallGenerator.selectPlaces(any(), anyList(), any())).thenReturn(selectionOutput);
+        when(routeOptimizer.schedule(any(), anyList(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(48L);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
+
+        executor.execute("job-m", manual, 1L, emitter);
+
+        ArgumentCaptor<List<PlaceCandidate>> scheduled = ArgumentCaptor.forClass(List.class);
+        verify(routeOptimizer).schedule(any(), scheduled.capture(), any());
+        assertThat(scheduled.getValue()).extracting(PlaceCandidate::placeId)
+                .contains(500L, 203L).doesNotContain(501L);
+    }
+
+    private static com.shg.trip.shgtrip.domain.place.entity.Place linkedPlace(long id, String name, Long into,
+                                                                           String relation) {
+        return com.shg.trip.shgtrip.domain.place.entity.Place.builder().id(id).name(name)
+                .mergedIntoId(into).mergeRelation(relation).build();
+    }
+
     private static PlaceCandidate place(int index, long placeId, String name) {
         return new PlaceCandidate(index, placeId, name, "경주", "Landmarks and Outdoors > Temple", List.of(),
                 "Gyeongju", "KR", java.math.BigDecimal.valueOf(35.79), java.math.BigDecimal.valueOf(129.33),

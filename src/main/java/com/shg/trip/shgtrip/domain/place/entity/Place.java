@@ -154,6 +154,14 @@ public class Place extends BaseTimeEntity {
     @Column(name = "traveler_fame", insertable = false, updatable = false)
     private Short travelerFame;
 
+    /** 같은 곳의 대표 행이나 이 행이 딸린 큰 장소. 배치(PlaceLinkJob)만 쓰고, 있으면 검색 후보에서 뺀다(사용자가 고른 행은 쓴다). */
+    @Column(name = "merged_into_id", insertable = false, updatable = false)
+    private Long mergedIntoId;
+
+    /** SAME(같은 곳) 또는 PART(딸린 일부). */
+    @Column(name = "merge_relation", insertable = false, updatable = false)
+    private String mergeRelation;
+
     /**
      * 일정 속 역할(배치 보강으로 생성): MEAL, CAFE, BAR, SIGHT, ACTIVITY, SHOPPING, MARKET, LODGING,
      * TRANSIT, NOT_VISITABLE. 없으면 카테고리·이름 추정으로 대신한다(CandidatePolicy.roleOf).
@@ -223,6 +231,11 @@ public class Place extends BaseTimeEntity {
     @PrePersist
     protected void onSave() {
         if (savedAt == null) savedAt = OffsetDateTime.now();
+    }
+
+    /** 같은 곳으로 합쳐진 행이면 대표 행 id, 아니면 null. 딸린 일부(PART)는 큰 장소와 다른 곳이라 null이다. */
+    public Long samePlaceRepresentativeId() {
+        return "SAME".equals(mergeRelation) ? mergedIntoId : null;
     }
 
     /** 벡터 검색 후보로 등장했음을 기록 (배치 사전채움 인기도 기준). */

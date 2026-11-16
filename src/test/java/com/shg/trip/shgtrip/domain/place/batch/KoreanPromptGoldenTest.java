@@ -15,7 +15,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** 한국 장소 보강 프롬프트 고정본. 바꾸면 이미 보강된 한국 장소와 새 장소의 태그·설명 기준이 갈린다. */
 class KoreanPromptGoldenTest {
 
-    private final BatchEnrichScheduler scheduler = new BatchEnrichScheduler(null, new ObjectMapper(), null);
+    private final BatchEnrichScheduler scheduler = new BatchEnrichScheduler(null, new ObjectMapper(), null,
+            org.mockito.Mockito.mock(AnthropicBatchClient.class));
 
     private static String golden(String name) throws Exception {
         try (var in = new ClassPathResource("enrich-prompt/" + name).getInputStream()) {

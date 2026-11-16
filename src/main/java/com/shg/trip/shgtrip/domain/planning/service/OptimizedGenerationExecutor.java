@@ -187,7 +187,7 @@ public class OptimizedGenerationExecutor {
                     enrichedInput.description(), request.customPlaceNames(), candidates);
             final PoolExclusions exclusions = new PoolExclusions(ferryTokens,
                     AvoidedPlaces.load(placeRepository, request.avoidPlaceIds()),
-                    PlaceRestrictions.of(request.restrictions()));
+                    PlaceRestrictions.of(request.restrictions()), displacedBySelection(selectedPlaces));
             // 제외 조건을 거친 뒤에 숙소 보완 여부를 판단하고, 보완 숙소도 같은 조건을 거친다(두 번째 exclude).
             final List<PlaceCandidate> enrichedCandidates = appendGateways(dedupePhysicalCandidates(
                     excludeUnwanted(ensureAccommodationCandidates(
@@ -402,9 +402,15 @@ public class OptimizedGenerationExecutor {
         return kept;
     }
 
-    record PoolExclusions(List<String> ferryTokens, AvoidedPlaces avoided, PlaceRestrictions restrictions) {
+    record PoolExclusions(List<String> ferryTokens, AvoidedPlaces avoided, PlaceRestrictions restrictions,
+                          Set<Long> displacedIds) {
         PoolExclusions withoutRestrictions() {
-            return new PoolExclusions(ferryTokens, avoided, PlaceRestrictions.NONE);
+            return new PoolExclusions(ferryTokens, avoided, PlaceRestrictions.NONE, displacedIds);
+        }
+
+        List<PlaceCandidate> excludeDisplaced(List<PlaceCandidate> candidates) {
+            if (displacedIds.isEmpty()) return candidates;
+            return candidates.stream().filter(c -> c.placeId() == null || !displacedIds.contains(c.placeId())).toList();
         }
     }
 
@@ -423,7 +429,7 @@ public class OptimizedGenerationExecutor {
     private List<PlaceCandidate> excludeUnwanted(List<PlaceCandidate> candidates, PoolExclusions exclusions,
                                                  VectorEnrichedInput input) {
         return excludeDormLodging(exclusions.restrictions().exclude(exclusions.avoided().exclude(
-                FerryAreaFilter.exclude(candidates, exclusions.ferryTokens()))), input);
+                FerryAreaFilter.exclude(exclusions.excludeDisplaced(candidates), exclusions.ferryTokens()))), input);
     }
 
     /** 이동수단별 예비 후보 검색 반경(km). 도보는 걸어서 들를 만한 거리만. */
@@ -1109,12 +1115,14 @@ public class OptimizedGenerationExecutor {
      * 사용자 선택 장소를 userSelected=true(트림·교체 면제)로 후보 목록 앞쪽에 병합한다. 벡터 검색으로
      * 이미 들어온 후보와 겹치면 그 후보를 마킹해야 트림 대상이 되지 않는다.
      */
-    private List<PlaceCandidate> mergeSelectedPlaces(List<PlaceCandidate> candidates, List<Place> selectedPlaces) {
+    static List<PlaceCandidate> mergeSelectedPlaces(List<PlaceCandidate> candidates, List<Place> selectedPlaces) {
         if (selectedPlaces.isEmpty()) return candidates;
 
+        selectedPlaces = collapseSamePlaces(selectedPlaces);
         Set<Long> selectedIds = selectedPlaces.stream()
                 .map(Place::getId)
                 .collect(Collectors.toSet());
+        Set<Long> displaced = displacedBySelection(selectedPlaces);
         Set<Long> existingIds = candidates.stream()
                 .map(PlaceCandidate::placeId)
                 .filter(Objects::nonNull)
@@ -1135,13 +1143,43 @@ public class OptimizedGenerationExecutor {
                     p.getNameKo(), p.getTravelerFame()));
         }
         for (PlaceCandidate c : candidates) {
-            PlaceCandidate reindexed = reindexCandidate(c, index++);
+            if (c.placeId() != null && displaced.contains(c.placeId())) {
+                log.info("고른 장소와 같은 곳이라 후보에서 뺌: {}(id={})", c.name(), c.placeId());
+                continue;
+            }
+            PlaceCandidate reindexed = c.reindexed(index++);
             if (c.placeId() != null && selectedIds.contains(c.placeId())) {
                 reindexed = reindexed.asUserSelected();
             }
             merged.add(reindexed);
         }
         return merged;
+    }
+
+    /** 같은 곳(SAME)의 여러 행을 함께 골랐으면 한 행만 남긴다. 대표 행을 골랐으면 그 행, 아니면 먼저 고른 행이다. */
+    static List<Place> collapseSamePlaces(List<Place> selectedPlaces) {
+        Map<Long, Place> byPlace = new LinkedHashMap<>();
+        for (Place p : selectedPlaces) {
+            Long key = Objects.requireNonNullElse(p.samePlaceRepresentativeId(), p.getId());
+            Place kept = byPlace.get(key);
+            if (kept == null || (key.equals(p.getId()) && !key.equals(kept.getId()))) byPlace.put(key, p);
+        }
+        if (byPlace.size() == selectedPlaces.size()) return selectedPlaces;
+        List<Place> collapsed = selectedPlaces.stream().filter(byPlace::containsValue).toList();
+        log.info("같은 곳을 여러 행으로 골라 하나로 접음: {}개 → {}개", selectedPlaces.size(), collapsed.size());
+        return collapsed;
+    }
+
+    /**
+     * 고른 행이 합쳐져 있는 대상 행(같은 곳의 대표·딸린 일부의 큰 장소). 대상 행은 후보 검색에 나오므로 모든 후보 추가 경로에서
+     * 빼야 고른 행과 함께 일정에 들어가지 않는다. 대상 행도 함께 골랐으면 빼지 않는다.
+     */
+    static Set<Long> displacedBySelection(List<Place> selectedPlaces) {
+        Set<Long> selectedIds = selectedPlaces.stream().map(Place::getId).collect(Collectors.toSet());
+        return selectedPlaces.stream()
+                .map(Place::getMergedIntoId)
+                .filter(id -> id != null && !selectedIds.contains(id))
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     private List<PlaceCandidate> ensureAccommodationCandidates(

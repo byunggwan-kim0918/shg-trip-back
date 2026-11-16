@@ -31,6 +31,7 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     private final PlaceRoleBackfillJob placeRoleBackfillJob;
     private final TourApiDetailJob tourApiDetailJob;
     private final CommonsImageJob commonsImageJob;
+    private final PlaceLinkJob placeLinkJob;
     private final ApplicationContext context;
 
     private final List<String> failedStages = new ArrayList<>();
@@ -76,6 +77,10 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     /** 켜면 Wikidata SPARQL·위키미디어 공용 API 호출이 나간다. */
     @Value("${batch.commons-images.enabled:true}")
     private boolean commonsImagesEnabled;
+
+    /** 켜면 근처 장소 쌍마다 Haiku Batch 호출이 나간다. 판정이 남은 쌍은 다시 묻지 않는다. */
+    @Value("${batch.place-links.enabled:false}")
+    private boolean placeLinksEnabled;
 
     @Override
     public void run(String... args) {
@@ -154,6 +159,12 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
 
         log.info("[4/4] 임베딩 배치 생성 시작");
         stage("[4/4] 임베딩 배치 생성", embeddingBatchJob::execute);
+
+        // 임베딩 뒤에 돌아야 같은 실행에서 다시 임베딩된 행도 검색에 나오는 행으로 보고 대표를 고른다.
+        if (placeLinksEnabled) {
+            log.info("[4/4-같은 장소] 같은 장소·딸린 장소 판정 시작");
+            stage("[4/4-같은 장소] 같은 장소·딸린 장소 판정", placeLinkJob::run);
+        }
 
         if (failedStages.isEmpty()) {
             log.info("=== 배치 파이프라인 완료 ===");

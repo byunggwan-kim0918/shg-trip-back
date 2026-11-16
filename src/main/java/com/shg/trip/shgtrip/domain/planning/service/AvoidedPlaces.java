@@ -52,8 +52,17 @@ final class AvoidedPlaces {
                 siblings++;
             }
         }
-        log.info("피할 장소 id {}개 → 판정 행 {}개(같은 Wikidata 항목 {}개, 교통 거점 {}개 제외)",
-                ids.size(), avoided.size(), siblings, found.size() - places.size());
+        // 같은 곳으로 합쳐진 행은 후보에 나오지 않고 대표 행이 대신 나온다. 딸린 일부를 피한다고 큰 장소까지 피하지는 않는다.
+        List<Long> representatives = places.stream()
+                .map(Place::samePlaceRepresentativeId)
+                .filter(id -> id != null && !ids.contains(id))
+                .distinct()
+                .toList();
+        if (!representatives.isEmpty()) {
+            placeRepository.findAllById(representatives).forEach(p -> avoided.add(PlaceCandidates.of(p, 0)));
+        }
+        log.info("피할 장소 id {}개 → 판정 행 {}개(같은 Wikidata 항목 {}개, 같은 곳 대표 {}개, 교통 거점 {}개 제외)",
+                ids.size(), avoided.size(), siblings, representatives.size(), found.size() - places.size());
         return of(avoided);
     }
 

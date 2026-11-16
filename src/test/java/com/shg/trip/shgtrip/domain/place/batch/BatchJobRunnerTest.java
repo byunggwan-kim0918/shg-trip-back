@@ -31,6 +31,9 @@ class BatchJobRunnerTest {
     @Mock
     private WikidataSitelinksJob wikidataSitelinksJob;
 
+    @Mock
+    private PlaceLinkJob placeLinkJob;
+
     @InjectMocks
     private BatchJobRunner batchJobRunner;
 
@@ -112,6 +115,24 @@ class BatchJobRunnerTest {
 
         verify(embeddingBatchJob).execute();
         assertThat(batchJobRunner.getExitCode()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("같은 장소 판정은 켰을 때만 돌고, 보강·임베딩 뒤에 돈다")
+    void placeLinksRunAfterEnrichAndEmbedding() throws Exception {
+        batchJobRunner.run();
+        verify(placeLinkJob, org.mockito.Mockito.never()).run();
+        org.mockito.Mockito.clearInvocations(embeddingBatchJob);
+
+        ReflectionTestUtils.setField(batchJobRunner, "enrichEnabled", true);
+        ReflectionTestUtils.setField(batchJobRunner, "placeLinksEnabled", true);
+        when(batchEnrichScheduler.mode()).thenReturn(BatchEnrichScheduler.Mode.V1);
+        batchJobRunner.run();
+
+        InOrder inOrder = inOrder(batchEnrichScheduler, embeddingBatchJob, placeLinkJob);
+        inOrder.verify(batchEnrichScheduler).enrich();
+        inOrder.verify(embeddingBatchJob).execute();
+        inOrder.verify(placeLinkJob).run();
     }
 
     @Test

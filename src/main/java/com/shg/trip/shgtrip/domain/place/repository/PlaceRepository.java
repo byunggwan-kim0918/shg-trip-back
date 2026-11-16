@@ -144,7 +144,8 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     boolean existsBySourceAndRegionAndName(String source, String region, String name);
 
     /** 해외 여행지 관문(공항·역). 배치가 destinations.json gateways로 넣는다. */
-    @Query("SELECT p FROM Place p WHERE p.region IN :regions AND p.source = 'gateway' AND p.active = true ORDER BY p.id")
+    @Query("SELECT p FROM Place p WHERE p.region IN :regions AND p.source = 'gateway' AND p.active = true"
+            + " AND p.mergedIntoId IS NULL ORDER BY p.id")
     List<Place> findGatewaysByRegions(@Param("regions") List<String> regions);
 
     /**
@@ -159,6 +160,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND LOWER(p.category) NOT LIKE '%> hotel gym'
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND p.active = true
+              AND p.mergedIntoId IS NULL
             ORDER BY p.rating DESC NULLS LAST
             """)
     List<Place> findTopAccommodationsByRegions(@Param("regions") List<String> regions, Pageable pageable);
@@ -561,7 +563,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     /** 일정 표지 대체 후보: 그 지역에서 사진이 있는 가장 유명한 관광지. */
     @Query("""
             SELECT p FROM Place p
-            WHERE p.active = true AND p.region = :region AND p.imageUrl IS NOT NULL
+            WHERE p.active = true AND p.region = :region AND p.imageUrl IS NOT NULL AND p.mergedIntoId IS NULL
               AND (p.category LIKE 'Landmarks%' OR p.category LIKE 'Arts and Entertainment%')
             ORDER BY p.wikidataSitelinks DESC NULLS LAST, p.id
             """)
