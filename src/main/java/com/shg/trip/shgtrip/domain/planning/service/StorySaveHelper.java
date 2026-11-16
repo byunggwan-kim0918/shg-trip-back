@@ -51,13 +51,21 @@ public class StorySaveHelper {
                 storyByOrder.put(s.stepOrder(), s.story());
             }
         }
+        int days = itinerary.getStartDate() == null || itinerary.getEndDate() == null
+                ? fixedSteps.stream().mapToInt(StepData::dayNumber).max().orElse(0)
+                : (int) ChronoUnit.DAYS.between(itinerary.getStartDate(), itinerary.getEndDate()) + 1;
 
         int expected = 0;
         int updated = 0;
         for (StepData step : fixedSteps) {
-            String story = storyByOrder.get(step.stepOrder());
-            if (story == null || step.place() == null) {
+            String raw = storyByOrder.get(step.stepOrder());
+            if (raw == null || step.place() == null) {
                 continue;
+            }
+            String story = StoryDayWords.fix(raw, step.dayNumber(), days);
+            if (!story.equals(raw)) {
+                log.info("story 일차 표현 교정 (itineraryId={}, day={}, stepOrder={})", itineraryId,
+                        step.dayNumber(), step.stepOrder());
             }
             expected++;
             // story 도착 전에 순서 변경·삭제·대안 선택이 있으면 stepOrder가 다른 장소를 가리킨다.
@@ -74,8 +82,6 @@ public class StorySaveHelper {
             log.warn("story 갱신 불일치 - 기대 {}건, 실제 적용 {}건 (itineraryId={})", expected, updated, itineraryId);
         }
 
-        int days = itinerary.getStartDate() == null || itinerary.getEndDate() == null ? 0
-                : (int) ChronoUnit.DAYS.between(itinerary.getStartDate(), itinerary.getEndDate()) + 1;
         replaceTitleIfUntouched(itineraryId, storyOutput.title(), draftTitle, days);
 
         // story 단계의 tags는 쓰지 않는다. 사용자가 자주 손대는 값이라 제목처럼 임시값 비교로

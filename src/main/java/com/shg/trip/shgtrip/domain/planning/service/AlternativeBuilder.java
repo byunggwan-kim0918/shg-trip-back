@@ -21,8 +21,43 @@ final class AlternativeBuilder {
     private AlternativeBuilder() {
     }
 
+    /** 대안이 이보다 적으면 다른 날에 나온 장소도 다시 쓴다. 선택지가 하나뿐인 스텝보다 반복이 낫다. */
+    static final int MIN_ALTERNATIVES = 2;
+    private static final int MAX_ALTERNATIVES = 3;
+
+    /**
+     * 여행 전체 기준의 대안 조건.
+     *
+     * @param shownElsewhere 다른 날 대안으로 이미 나온 장소 키
+     * @param mealKindCounts 일정에 쓴 끼니의 종류별 수
+     * @param mealKindCap    여행 전체 같은 종류 끼니 상한
+     * @param brands         일정에 쓴 식음료 가게의 브랜드(지점명을 뗀 이름)
+     */
+    record TripView(Set<String> shownElsewhere, Map<String, Integer> mealKindCounts, int mealKindCap,
+                    Set<String> brands) {
+
+        static final TripView NONE = new TripView(Set.of(), Map.of(), Integer.MAX_VALUE, Set.of());
+
+        boolean prefers(PlaceCandidate replaced, PlaceCandidate c) {
+            if (c.mealEligible()) {
+                String kind = CandidatePolicy.cuisineOf(c);
+                if (CandidateLookup.isSpecificKind(kind)) {
+                    int count = mealKindCounts.getOrDefault(kind, 0)
+                            - (replaced.mealEligible() && kind.equals(CandidatePolicy.cuisineOf(replaced)) ? 1 : 0);
+                    if (count >= mealKindCap) return false;
+                }
+            }
+            return !CandidateTraits.repeatsBrand(brands, c)
+                    || CandidateTraits.sameBrand(CandidateTraits.diningBrand(c), CandidateTraits.diningBrand(replaced));
+        }
+    }
+
     private static final java.util.regex.Pattern BRANCH_TOKEN =
             java.util.regex.Pattern.compile(".*(본점|지점|[0-9]+호점|점|店)");
+    private static final java.util.regex.Pattern MIDDLE_DOTS = java.util.regex.Pattern.compile("[・·]");
+    private static final java.util.regex.Pattern BRACKETED_BRANCH =
+            java.util.regex.Pattern.compile("[\\s\u3000]*[(（][^()（）]*[店점][)）]$");
+    private static final java.util.regex.Pattern SPACES = java.util.regex.Pattern.compile("[\\s\u3000]+");
 
     /** 대안은 날짜 순서대로 만들어 뒷날에 본일정으로 들어간 장소가 앞날 대안에 남는다. */
     static List<StepData> pruneUsedAndRenumber(List<StepData> steps) {
@@ -66,7 +101,8 @@ final class AlternativeBuilder {
                                                    Deque<Integer> spareIndices, Set<Integer> usedIndices,
                                                    List<PlaceCandidate> allCandidates, String transportPref,
                                                    Set<String> dayAltKeys,
-                                                   java.util.function.Predicate<PlaceCandidate> variety) {
+                                                   java.util.function.Predicate<PlaceCandidate> variety,
+                                                   TripView trip) {
         double[] anchor = coordsOf(main) != null ? coordsOf(main) : dayCentroid;
         double radiusKm = altRadiusKm(transportPref);
         Set<Integer> spareSet = new HashSet<>(spareIndices);
@@ -84,22 +120,28 @@ final class AlternativeBuilder {
         seen.add(altKey(main));
         List<AlternativeData> result = new ArrayList<>();
 
+        java.util.function.Predicate<PlaceCandidate> preferred = variety.and(c -> trip.prefers(main, c));
+        // 연박하는 숙소는 밤마다 같은 대안이 나와야 해서 다른 날 대안과 겹쳐도 그대로 둔다.
+        boolean lodging = "LODGING".equals(PlaceCategoryConstants.majorCategory(main.category()));
         // 3개 미만이면 반경×2까지만 완화하고, 그래도 못 채우면 대안 1~2개로 둔다. 무제한 폴백은 먼 식당을 대안으로 낸다.
-        addAlternatives(result, seen, base.stream()
-                .filter(c -> withinRadius(anchor, c, radiusKm)).collect(Collectors.toList()),
-                main, anchor, spareSet, variety);
-        if (result.size() < 3) {
-            addAlternatives(result, seen, base.stream()
-                    .filter(c -> withinRadius(anchor, c, radiusKm * 2)).collect(Collectors.toList()),
-                    main, anchor, spareSet, variety);
+        for (boolean repeatAllowed : List.of(false, true)) {
+            int limit = repeatAllowed ? MIN_ALTERNATIVES : MAX_ALTERNATIVES;
+            List<PlaceCandidate> pool = base.stream()
+                    .filter(c -> repeatAllowed || lodging || !trip.shownElsewhere().contains(altKey(c)))
+                    .toList();
+            addAlternatives(result, seen, pool.stream().filter(c -> withinRadius(anchor, c, radiusKm)).toList(),
+                    main, anchor, spareSet, preferred, limit);
+            addAlternatives(result, seen, pool.stream().filter(c -> withinRadius(anchor, c, radiusKm * 2)).toList(),
+                    main, anchor, spareSet, preferred, limit);
         }
         return result;
     }
 
-    /** score 내림차순으로 dedup하며 최대 3개까지 result에 채운다. */
+    /** score 내림차순으로 dedup하며 {@code limit}개까지 result에 채운다. */
     private static void addAlternatives(List<AlternativeData> result, Set<String> seen, List<PlaceCandidate> pool,
                                         PlaceCandidate main, double[] anchor, Set<Integer> spareSet,
-                                        java.util.function.Predicate<PlaceCandidate> variety) {
+                                        java.util.function.Predicate<PlaceCandidate> variety, int limit) {
+        if (result.size() >= limit) return;
         Set<Integer> demoted = pool.stream().filter(variety.negate()).map(PlaceCandidate::index)
                 .collect(Collectors.toSet());
         Map<Integer, Double> scores = pool.stream().collect(Collectors.toMap(PlaceCandidate::index,
@@ -108,7 +150,7 @@ final class AlternativeBuilder {
                 .sorted(Comparator.<PlaceCandidate, Boolean>comparing(c -> demoted.contains(c.index()))
                         .thenComparingDouble(c -> -scores.get(c.index())))
                 .forEach(c -> {
-                    if (result.size() >= 3 || !seen.add(altKey(c))) return;
+                    if (result.size() >= limit || !seen.add(altKey(c))) return;
                     result.add(new AlternativeData(c.name(), c.address(), c.category(), c.region(),
                             c.country(), null, estimateCost(c), c.placeId(), c.nameKo()));
                 });
@@ -159,8 +201,9 @@ final class AlternativeBuilder {
 
     /** 지점 표기를 떼어 체인 몸통만 남긴다("흑본오겹 함덕점", "... 2호점", "星巴克(人民广场店)", "一蘭 渋谷店"). */
     static String stripBranchSuffix(String name) {
-        String n = name.strip().replaceAll("\\s*[(（][^()（）]*[店점][)）]$", "");
-        String[] tokens = n.split("\\s+");
+        // 일본 상호는 지점명 앞에 전각 공백을 쓰고 같은 체인도 가운뎃점을 넣었다 뺐다 한다.
+        String n = BRACKETED_BRANCH.matcher(MIDDLE_DOTS.matcher(name.strip()).replaceAll("")).replaceAll("");
+        String[] tokens = SPACES.split(n);
         if (tokens.length > 1 && BRANCH_TOKEN.matcher(tokens[tokens.length - 1]).matches()) {
             return String.join("", java.util.Arrays.copyOf(tokens, tokens.length - 1));
         }
@@ -182,8 +225,13 @@ final class AlternativeBuilder {
         return s;
     }
 
+    /** 확정된 스텝의 대안 키. 장소 id가 없으면 후보 쪽 키와 맞출 수 없어 null이다. */
+    static String altKey(AlternativeData a) {
+        return a.placeId() == null ? null : "id:" + a.placeId();
+    }
+
     /** 대안 dedup 키: placeId 우선, 없으면 유효좌표(4자리), 없으면 정규화 이름. */
-    private static String altKey(PlaceCandidate c) {
+    static String altKey(PlaceCandidate c) {
         if (c.placeId() != null) return "id:" + c.placeId();
         double[] cc = coordsOf(c);
         if (cc != null) return "geo:" + Math.round(cc[0] * 10000) + "|" + Math.round(cc[1] * 10000);

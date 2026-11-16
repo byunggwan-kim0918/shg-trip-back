@@ -300,11 +300,13 @@ public class VectorSearchQueryService {
         return out;
     }
 
+    // 관광은 카테고리·테마별 문구(시장 등)가 대표 문구보다 앞에 올 수 있어, 근처 보완은 대표 문구로 찾는다.
     private SearchSlot slotFor(VectorEnrichedInput input, SearchRole role) {
-        return SearchQueryBuilder.buildSearchSlots(input).stream()
+        List<SearchSlot> slots = SearchQueryBuilder.buildSearchSlots(input).stream()
                 .filter(sl -> sl.role() == role)
-                .findFirst()
-                .orElse(null);
+                .toList();
+        return slots.stream().filter(sl -> REPRESENTATIVE_SLOT_KEY.equals(sl.key())).findFirst()
+                .orElse(slots.isEmpty() ? null : slots.get(0));
     }
 
     private float[] embedOne(String text) {

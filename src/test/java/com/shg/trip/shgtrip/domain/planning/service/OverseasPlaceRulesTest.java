@@ -92,6 +92,8 @@ class OverseasPlaceRulesTest {
         assertThat(AlternativeBuilder.stripBranchSuffix("星巴克(人民广场店)")).isEqualTo("星巴克");
         assertThat(AlternativeBuilder.stripBranchSuffix("鼎泰豐（信義店）")).isEqualTo("鼎泰豐");
         assertThat(AlternativeBuilder.stripBranchSuffix("一蘭 渋谷店")).isEqualTo("一蘭");
+        assertThat(AlternativeBuilder.stripBranchSuffix("大阪焼肉・ホルモン\u3000ふたご\u3000心斎橋店"))
+                .isEqualTo(AlternativeBuilder.stripBranchSuffix("大阪焼肉ホルモン ふたご"));
         assertThat(AlternativeBuilder.stripBranchSuffix("一蘭渋谷店")).isEqualTo("一蘭渋谷店");
         assertThat(AlternativeBuilder.stripBranchSuffix("흑본오겹 함덕점")).isEqualTo("흑본오겹");
     }

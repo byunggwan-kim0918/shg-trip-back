@@ -37,8 +37,8 @@
   #8  09:05-10:05  숭례문 | Landmarks and Outdoors > Tourist Attraction | - | Seoul
       이동: CAR 5분 3.19km 2548원
       비용: 0원 / 메모: -
-      대안: 남대문시장 | Retail > Market | 0원
-      대안: 만리시장 | Retail > Market | 0원
+      대안: 아현시장 | Retail > Market | 0원
+      대안: 성신여대하나로거리 | Event > Marketplace > Street Food Gathering | 0원
   #9  11:30-12:40  성북동삼거리전통설렁탕 | Dining and Drinking > Restaurant | - | Seoul
       이동: CAR 9분 5.36km 4287원
       비용: 13000원 / 메모: -
@@ -50,9 +50,8 @@
   #11 13:57-14:57  서교재래시장 | Retail > Market | - | Seoul
       이동: WALK 10분 0.62km 0원
       비용: 0원 / 메모: -
-      대안: 아현시장 | Retail > Market | 0원
-      대안: 신흥시장 | Retail > Market | 0원
-      대안: 서울동행상회 | Retail > Food and Beverage Retail > Farmers Market | 0원
+      대안: 남대문시장 | Retail > Market | 0원
+      대안: 만리시장 | Retail > Market | 0원
   #12 17:30-18:40  반포6 | Dining and Drinking > Restaurant | - | Seoul
       이동: CAR 9분 5.91km 4728원
       비용: 13000원 / 메모: -
@@ -66,9 +65,8 @@
   #14 09:16-10:46  종묘 [유네스코 세계유산] | Landmarks and Outdoors > Tourist Attraction | 종로구 | Seoul
       이동: WALK 16분 1.03km 0원
       비용: 0원 / 메모: -
-      대안: 남대문시장 | Retail > Market | 0원
-      대안: Bangsan Market | Retail > Market | 0원
-      대안: 종로신진시장 | Retail > Market | 0원
+      대안: 서울훼미리청년몰 | Retail > Market | 0원
+      대안: 정릉시장 | Retail > Market | 0원
   #15 11:30-12:40  반포대가삼 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Seoul
       이동: CAR 14분 8.87km 7099원
       비용: 13000원 / 메모: -
@@ -80,18 +78,16 @@
   #17 13:54-15:24  국립중앙박물관 | Arts and Entertainment > Museum | 용산구 | Seoul
       이동: CAR 10분 6.13km 4904원
       비용: 0원 / 메모: -
-      대안: 신흥시장 | Retail > Market | 0원
       대안: 국립중앙도서관 | Arts and Entertainment > Cultural Center | 0원
-      대안: 만리시장 | Retail > Market | 0원
+      대안: 신흥시장 | Retail > Market | 0원
   #18 17:30-18:40  족발야시장&무청감자탕 용산본점 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Seoul
       이동: CAR 3분 1.55km 1236원
       비용: 13000원 / 메모: -
   #19 18:52-19:52  광장시장 | Retail > Market | 종로구 | Seoul
       이동: CAR 12분 7.69km 6156원
       비용: 0원 / 메모: -
-      대안: 성신여대하나로거리 | Event > Marketplace > Street Food Gathering | 0원
-      대안: 서울동행상회 | Retail > Food and Beverage Retail > Farmers Market | 0원
-      대안: 서울훼미리청년몰 | Retail > Market | 0원
+      대안: 남대문시장 | Retail > Market | 0원
+      대안: Bangsan Market | Retail > Market | 0원
   #20 20:02-20:32  Travelodge Dongdaemun Seoul | Travel and Transportation > Lodging > Hotel | - | Seoul
       이동: WALK 10분 0.6km 0원
       비용: 120000원 / 메모: -
@@ -134,7 +130,7 @@
       비용: 0원 / 메모: -
       대안: 용호시장 | Retail > Market | 0원
       대안: 망미단길 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 국립해양박물관 | Arts and Entertainment > Cultural Center | 0원
+      대안: 광안시장 | Retail > Food and Beverage Retail > Farmers Market | 0원
   #28 11:30-12:40  밀양순대돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant | - | Busan
       이동: CAR 14분 9.2km 7363원
       비용: 13000원 / 메모: -
@@ -149,7 +145,7 @@
       이동: CAR 3분 1.87km 1494원
       비용: 0원 / 메모: -
       대안: 부전시장 | Retail > Market | 0원
-      대안: 브레드포럼 | Retail > Food and Beverage Retail | 0원
+      대안: 국립해양박물관 | Arts and Entertainment > Cultural Center | 0원
   #31 17:30-18:40  큰집돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Busan
       이동: CAR 13분 8.09km 6468원
       비용: 13000원 / 메모: -
@@ -171,7 +167,6 @@
       이동: CAR 4분 2.09km 1675원
       비용: 0원 / 메모: -
       대안: 좌동재래시장 | Retail > Market | 0원
-      대안: 망미단길 | Landmarks and Outdoors > Tourist Attraction | 0원
       대안: 밀락더마켓 | Landmarks and Outdoors > Tourist Attraction | 0원
   #35 11:30-12:40  합천돼지국밥 | Dining and Drinking > Restaurant | - | Busan
       이동: WALK 6분 0.36km 0원

@@ -39,13 +39,13 @@ public class RouteOptimizer {
         if (args.cities() != null) {
             return CityBlockPlanner.schedule(selection, candidates, args, this::scheduleWithinCity);
         }
-        return scheduleWithinCity(selection, candidates, args);
+        return scheduleWithinCity(selection, candidates, args, PlanState.Earlier.NONE);
     }
 
     private ScheduleResult scheduleWithinCity(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                              ScheduleArgs args) {
+                                              ScheduleArgs args, PlanState.Earlier earlier) {
         List<PlaceCandidate> withIntent = IntentHints.apply(selection, candidates);
-        ScheduleResult result = scheduleCandidates(selection, withIntent, args);
+        ScheduleResult result = scheduleCandidates(selection, withIntent, args, earlier);
         IntentHints.logOutcome(withIntent, result.steps());
         return result;
     }
@@ -61,8 +61,9 @@ public class RouteOptimizer {
     }
 
     private ScheduleResult scheduleCandidates(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                              ScheduleArgs args) {
+                                              ScheduleArgs args, PlanState.Earlier earlier) {
         PlanState s = PlanState.of(selection, candidates, args);
+        s.continueFrom(earlier);
 
         // 날짜 배분을 좌표로 먼저 정한다. 아래 반응적 수리는 모델이 정한 날짜를 사후에 밀고 당길 뿐이라 넓게 걸친 날을 되돌리지 못한다.
         // 1D DP로 지리적으로 끊기는 지점에서 가변 크기로 자르고 하루 상한은 벌점으로만 둔다. 개수는 뒤의 pace quota 수리가 맞춘다.
@@ -110,7 +111,7 @@ public class RouteOptimizer {
         DayRebalancer.repairDayCapacity(s.days, s.candidates, s.cfg, s.maxPerDay);
         // 카페 스톱은 이월 뒤에 정한다. 앞에서 정하면 방금 맨 뒤에 붙인 카페가 이월 1순위가 되어
         // 원래 날은 카페가 0개, 옮겨 간 날은 오후 고정이 풀린 카페가 된다.
-        MealPlanner.ensureCafeStops(s.days, s.candidates, s.spare, s.cfg, s.transportPref);
+        MealPlanner.ensureCafeStops(s.days, s.candidates, s.spare, s.cfg, s.transportPref, s.earlier().brands());
         IntentHints.moveEveningOffDepartureDay(s.days, s.candidates);
     }
 

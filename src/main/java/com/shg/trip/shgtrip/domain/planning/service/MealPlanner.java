@@ -40,11 +40,12 @@ final class MealPlanner {
     private MealPlanner() {
     }
 
+    /** @param earlierBrands 앞 도시 구간에서 간 식음료 브랜드 */
     static boolean ensureMealSlots(DayState day, List<StepData> daySteps, List<PlaceCandidate> candidates,
                                    Deque<Integer> spare, Set<Integer> usedIndices, int maxPerDay,
                                    boolean lastDay, java.time.LocalDate startDate, String transportPref,
                                    InvariantMemo memo, ScheduleConfig cfg,
-                                   java.util.function.Predicate<PlaceCandidate> underTypeCap) {
+                                   java.util.function.Predicate<PlaceCandidate> underTypeCap, Set<String> earlierBrands) {
         boolean changed = false;
         java.util.function.Predicate<StepData> isMeal = InvariantChecker.mealJudge(day, candidates);
 
@@ -52,7 +53,7 @@ final class MealPlanner {
             // centroid는 좌표 불명 day에서 null일 수 있고 List.of는 null을 거부해 singletonList를 쓴다.
             changed |= insertMealWithRelaxation(day, candidates, spare, usedIndices, maxPerDay,
                     Collections.singletonList(centroidOf(day.placeIndices, candidates)),
-                    "점심", startDate, transportPref, memo, cfg, underTypeCap);
+                    "점심", startDate, transportPref, memo, cfg, underTypeCap, earlierBrands);
         }
 
         // 마지막날 저녁은 귀가 시각이 늦을 때만 필요하다(출발 허브 도착이 19:30 전이면 저녁을 먹지 않음)
@@ -66,7 +67,7 @@ final class MealPlanner {
             }
             anchors.add(centroidOf(day.placeIndices, candidates));
             changed |= insertMealWithRelaxation(day, candidates, spare, usedIndices, maxPerDay,
-                    anchors, "저녁", startDate, transportPref, memo, cfg, underTypeCap);
+                    anchors, "저녁", startDate, transportPref, memo, cfg, underTypeCap, earlierBrands);
         }
         return changed;
     }
@@ -79,7 +80,8 @@ final class MealPlanner {
                                                     List<double[]> anchors, String slotName,
                                                     java.time.LocalDate startDate, String transportPref,
                                                     InvariantMemo memo, ScheduleConfig cfg,
-                                                    java.util.function.Predicate<PlaceCandidate> underTypeCap) {
+                                                    java.util.function.Predicate<PlaceCandidate> underTypeCap,
+                                                    Set<String> earlierBrands) {
         // 보충할 자리의 시각을 알려줘야 "그 시각에 여는 식당"만 후보가 된다.
         Integer slotStart = "저녁".equals(slotName) ? DINNER_START : LUNCH_START;
         java.util.function.Predicate<PlaceCandidate> variety = VarietyLedger.admitsOnDay(day, candidates);
@@ -94,7 +96,8 @@ final class MealPlanner {
                     filter.and(variety), filter.and(underTypeCap), filter)) {
                 for (double[] anchor : anchors) {
                     if (anchor == null) continue;
-                    if (insertMeal(day, candidates, spare, usedIndices, maxPerDay, anchor, slotName, attempt, memo)) {
+                    if (insertMeal(day, candidates, spare, usedIndices, maxPerDay, anchor, slotName, attempt, memo,
+                            earlierBrands)) {
                         if (level != RelaxLevel.L1) {
                             log.info("{} 슬롯 보충에 제약 완화 {} 적용: day={}", slotName, level, day.dayNumber);
                         }
@@ -111,10 +114,12 @@ final class MealPlanner {
     private static boolean insertMeal(DayState day, List<PlaceCandidate> candidates,
                                       Deque<Integer> spare, Set<Integer> usedIndices, int maxPerDay,
                                       double[] anchor, String slotName,
-                                      java.util.function.Predicate<PlaceCandidate> openOnDay, InvariantMemo memo) {
+                                      java.util.function.Predicate<PlaceCandidate> openOnDay, InvariantMemo memo,
+                                      Set<String> earlierBrands) {
         Integer pick = pickNearbyCandidate(candidates, spare, usedIndices, anchor,
                 openOnDay.and(PlaceCandidate::mealEligible)
-                        .and(c -> PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country())));
+                        .and(c -> PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country())),
+                earlierBrands);
         // 실패 로그는 완화 단계를 전부 소진한 호출부가 남긴다. 여기서 찍으면 L1 실패마다 보충 실패로 보인다.
         if (pick == null) return false;
 
@@ -447,11 +452,15 @@ final class MealPlanner {
      * 마지막 날을 뺀 매일 오후에 들를 카페·디저트 1곳을 정한다({@link ScheduleConfig#cafeStop}일 때).
      * 그날 카페형 장소가 있으면 표시만 하고, 없으면 spare → 미사용 후보 순으로 중심 근처 인기 장소를 넣는다.
      * 카페는 60분 남짓이라 식사처럼 하루 장소 수 상한을 넘을 수 있다.
+     *
+     * @param earlierBrands 앞 도시 구간에서 간 식음료 브랜드
      */
     static void ensureCafeStops(List<DayState> days, List<PlaceCandidate> candidates, Deque<Integer> spare,
-                                ScheduleConfig cfg, String transportPref) {
+                                ScheduleConfig cfg, String transportPref, Set<String> earlierBrands) {
         if (!cfg.cafeStop) return;
         Set<Integer> used = collectUsedIndices(days);
+        Set<String> brands = CandidateTraits.diningBrands(used, candidates);
+        brands.addAll(earlierBrands);
         double maxFromCenter = cafeStopRadiusKm(transportPref, cfg);
 
         for (int i = 0; i < days.size(); i++) {
@@ -470,12 +479,18 @@ final class MealPlanner {
             java.util.function.Predicate<PlaceCandidate> eligible = c -> isCafeLike(c) && isVisitableFill(c)
                     && !used.contains(c.index()) && coordsOf(c) != null
                     && GeoUtils.haversine(center, coordsOf(c)) <= maxFromCenter;
-            Comparator<PlaceCandidate> score = Comparator.comparingDouble(c ->
-                    PlaceProminence.of(c) - GeoUtils.haversine(center, coordsOf(c)) * GAP_FILL_DETOUR_WEIGHT);
-            Integer pick = spare.stream().map(idx -> byIndex(candidates, idx))
-                    .filter(Objects::nonNull).filter(eligible).max(score)
-                    .or(() -> candidates.stream().filter(eligible).max(score))
-                    .map(PlaceCandidate::index).orElse(null);
+            Comparator<PlaceCandidate> score = Comparator
+                    .comparing((PlaceCandidate c) -> !CandidateTraits.repeatsBrand(brands, c))
+                    .thenComparingDouble(c -> PlaceProminence.of(c)
+                            - GeoUtils.haversine(center, coordsOf(c)) * GAP_FILL_DETOUR_WEIGHT);
+            PlaceCandidate chosen = spare.stream().map(idx -> byIndex(candidates, idx))
+                    .filter(Objects::nonNull).filter(eligible).max(score).orElse(null);
+            // spare에 이미 간 체인만 남았으면 미사용 후보의 다른 카페를 쓴다.
+            if (chosen == null || CandidateTraits.repeatsBrand(brands, chosen)) {
+                PlaceCandidate other = candidates.stream().filter(eligible).max(score).orElse(null);
+                if (chosen == null || (other != null && !CandidateTraits.repeatsBrand(brands, other))) chosen = other;
+            }
+            Integer pick = chosen == null ? null : chosen.index();
             if (pick == null) {
                 log.info("카페 스톱 후보 없음: day={} (중심 {}km 이내 카페·디저트 없음)",
                         day.dayNumber, String.format("%.0f", maxFromCenter));
@@ -484,6 +499,7 @@ final class MealPlanner {
             day.placeIndices.add(pick);
             spare.remove(pick);
             used.add(pick);
+            brands.add(CandidateTraits.diningBrand(byIndex(candidates, pick)));
             day.cafeStopIndex = pick;
             log.info("카페 스톱: day={} {}", day.dayNumber, nameOf(candidates, pick));
         }

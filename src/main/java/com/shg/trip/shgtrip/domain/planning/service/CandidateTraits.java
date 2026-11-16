@@ -10,6 +10,8 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.*;
 /** 일정 보충·교체·대안이 같이 쓰는 후보 판정과 식별 키(세부 유형, 보충 가능 여부, 긴 등산, 이름 키). */
 final class CandidateTraits {
 
+    private static final int MIN_BRAND_BODY_LENGTH = 3;
+
     private CandidateTraits() {
     }
 
@@ -123,6 +125,39 @@ final class CandidateTraits {
     /** 카페·디저트형 장소({@link CandidatePolicy#roleOf}가 CAFE). */
     static boolean isCafeLike(PlaceCandidate c) {
         return c != null && CandidatePolicy.roleOf(c) == CandidatePolicy.Role.CAFE;
+    }
+
+    /** 식음료 가게의 브랜드(지점명을 뗀 이름). 체인의 다른 지점은 사용자에게 같은 가게라 반복을 셀 때 쓴다. 식당·카페가 아니면 null. */
+    static String diningBrand(PlaceCandidate c) {
+        if (c == null || c.name() == null || !(c.mealEligible() || isCafeLike(c))) return null;
+        return AlternativeBuilder.stripBranchSuffix(c.name());
+    }
+
+    /** 브랜드 집합에 같은 브랜드({@link #sameBrand})가 있는지. 식당·카페가 아니면 false. */
+    static boolean repeatsBrand(Set<String> brands, PlaceCandidate c) {
+        String brand = diningBrand(c);
+        return brand != null && brands.stream().anyMatch(b -> sameBrand(b, brand));
+    }
+
+    // 앞부분만 같은 상호는 "칼국수"·"칼국수집 ○○"처럼 다른 가게일 수 있어 뒤에 지점명이 붙은 경우만 같은 브랜드로 본다.
+    static boolean sameBrand(String a, String b) {
+        if (a == null || b == null) return false;
+        String x = a.toLowerCase(java.util.Locale.ROOT);
+        String y = b.toLowerCase(java.util.Locale.ROOT);
+        if (x.equals(y)) return true;
+        String shorter = x.length() <= y.length() ? x : y;
+        String longer = shorter == x ? y : x;
+        return shorter.length() >= MIN_BRAND_BODY_LENGTH && longer.startsWith(shorter)
+                && (longer.endsWith("점") || longer.endsWith("店"));
+    }
+
+    static Set<String> diningBrands(Collection<Integer> indices, List<PlaceCandidate> candidates) {
+        Set<String> brands = new HashSet<>();
+        for (Integer i : indices) {
+            String brand = diningBrand(byIndex(candidates, i));
+            if (brand != null) brands.add(brand);
+        }
+        return brands;
     }
 
     static boolean namesOverlap(String placeName, String hubName) {

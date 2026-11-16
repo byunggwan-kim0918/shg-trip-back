@@ -49,7 +49,6 @@
       비용: 0원 / 메모: -
       대안: 아현시장 | Retail > Market | 0원
       대안: 남대문시장 | Retail > Market | 0원
-      대안: 만리시장 | Retail > Market | 0원
   #11 11:52-13:02  문갓포 | Dining and Drinking > Restaurant > Asian Restaurant > Japanese Restaurant | - | Seoul
       이동: CAR 37분 24.13km 19300원
       비용: 13000원 / 메모: -
@@ -76,7 +75,6 @@
       비용: 0원 / 메모: -
       대안: 남대문시장 | Retail > Market | 0원
       대안: 서울동행상회 | Retail > Food and Beverage Retail > Farmers Market | 0원
-      대안: Bangsan Market | Retail > Market | 0원
   #17 11:30-12:40  큰집 설렁탕 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Seoul
       이동: CAR 7분 4.18km 3343원
       비용: 13000원 / 메모: -
@@ -88,8 +86,7 @@
       이동: WALK 13분 0.82km 0원
       비용: 0원 / 메모: -
       대안: 성신여대하나로거리 | Event > Marketplace > Street Food Gathering | 0원
-      대안: 종로신진시장 | Retail > Market | 0원
-      대안: 서울훼미리청년몰 | Retail > Market | 0원
+      대안: Bangsan Market | Retail > Market | 0원
   #20 17:30-18:40  성북동삼거리전통설렁탕 | Dining and Drinking > Restaurant | - | Seoul
       이동: CAR 4분 2.32km 1857원
       비용: 13000원 / 메모: -
@@ -139,8 +136,8 @@
   #29 11:32-12:42  부산제일합천돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | - | Busan
       이동: CAR 6분 3.97km 3174원
       비용: 13000원 / 메모: -
-      대안: 자상한 브런치 | Dining and Drinking > Breakfast Spot | 13000원
       대안: 부산토박이 돼지국밥 | Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant | 13000원
+      대안: 자상한 브런치 | Dining and Drinking > Breakfast Spot | 13000원
   #30 12:48-13:58  바리호떡 | Dining and Drinking > Dessert Shop | - | Busan
       이동: CAR 6분 3.41km 2729원
       비용: 13000원 / 메모: -
@@ -158,7 +155,6 @@
       비용: 0원 / 메모: -
       대안: 브레드포럼 | Retail > Food and Beverage Retail | 0원
       대안: 초량전통시장 | Retail > Market | 0원
-      대안: 영주시장 | Retail > Market | 0원
   #34 20:36-21:06  한화리조트 해운대 | Travel and Transportation > Lodging > Resort | 해운대구 | Busan
       이동: CAR 16분 10.3km 8237원
       비용: 200000원 / 메모: -

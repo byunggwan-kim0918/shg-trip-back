@@ -24,6 +24,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -401,6 +402,46 @@ class OptimizedGenerationExecutorTest {
         verify(routeOptimizer).schedule(any(), scheduled.capture(), any());
         assertThat(scheduled.getValue()).extracting(PlaceCandidate::name)
                 .contains("시부야 호텔").doesNotContain("시부야 호텔 (Shibuya Hotel)");
+    }
+
+    @Test
+    @DisplayName("날짜별 예비 후보는 근처 검색을 더 받아 이미 있는 곳을 건너뛰고 역할별로 정한 수까지 새 곳을 채운다")
+    @SuppressWarnings("unchecked")
+    void reserveTopsUpWithNewPlaces() {
+        int restaurants = OptimizedGenerationExecutor.RESERVE_PER_DAY.stream()
+                .filter(e -> e.getKey() == PlaceCategoryConstants.SearchRole.RESTAURANT)
+                .findFirst().orElseThrow().getValue();
+        List<PlaceCandidate> found = new ArrayList<>(candidates);
+        for (int i = 0; i < restaurants + 2; i++) {
+            found.add(new PlaceCandidate(1, 600L + i, "새 식당 " + i, "주소 " + i, "식당", List.of("라멘"), "시부야", "일본",
+                    BigDecimal.valueOf(35.659 + i * 0.001), BigDecimal.valueOf(139.702), null, null, 0.7));
+        }
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(optimizedClaudeAIService.enrichInput(request)).thenReturn(successResult);
+        when(vectorSearchQueryService.search(any(), any())).thenReturn(candidates);
+        when(vectorSearchQueryService.searchNearEach(any(), any(), anyList(), anyDouble(), anyInt()))
+                .thenReturn(List.of(List.of()));
+        when(vectorSearchQueryService.searchNearEach(any(), eq(PlaceCategoryConstants.SearchRole.RESTAURANT), anyList(),
+                anyDouble(), anyInt())).thenReturn(List.of(found));
+        when(fallbackDecider.assess(candidates, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
+        when(selectionCallGenerator.selectPlaces(any(), anyList(), any())).thenReturn(selectionOutput);
+        when(routeOptimizer.schedule(any(), anyList(), any()))
+                .thenReturn(new RouteOptimizer.ScheduleResult(fixedSteps, List.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
+                .thenReturn(draftData);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(48L);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
+
+        executor.execute("job-r", request, 1L, emitter);
+
+        verify(vectorSearchQueryService).searchNearEach(any(), eq(PlaceCategoryConstants.SearchRole.RESTAURANT),
+                anyList(), anyDouble(), eq(restaurants * OptimizedGenerationExecutor.RESERVE_OVERFETCH));
+        ArgumentCaptor<List<PlaceCandidate>> scheduled = ArgumentCaptor.forClass(List.class);
+        verify(routeOptimizer).schedule(any(), scheduled.capture(), any());
+        assertThat(scheduled.getValue()).filteredOn(c -> c.name().startsWith("새 식당")).hasSize(restaurants);
     }
 
     @Test

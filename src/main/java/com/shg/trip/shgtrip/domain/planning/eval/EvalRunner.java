@@ -19,6 +19,7 @@ import com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy;
 import com.shg.trip.shgtrip.domain.planning.service.GeoCluster;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
+import com.shg.trip.shgtrip.domain.planning.service.MealKindSwaps;
 import com.shg.trip.shgtrip.domain.planning.service.OverCapLegs;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.domain.planning.service.RequiredExperiences;
@@ -225,7 +226,7 @@ public class EvalRunner implements CommandLineRunner {
             ItineraryRules.Verdict savedRules = rules.evaluate(savedSteps, fromPlaces,
                     new ItineraryRules.Context(null, null, itinerary.getStartDate(), dayCount, null));
             return new Row(itinerary.getId(), itinerary.getDestination(), countryOf(savedSteps), false,
-                    saved, null, null, savedRules, null, Trip.untraced(dayCount), null, null, null);
+                    saved, null, null, savedRules, null, Trip.untraced(dayCount), null, null, null, null, null);
         }
 
         List<PlaceCandidate> traced = objectMapper.readValue(trace.getCandidates(), new TypeReference<>() {});
@@ -258,7 +259,7 @@ public class EvalRunner implements CommandLineRunner {
         ItineraryRules.Verdict savedRules = hasSaved ? rules.evaluate(savedSteps, candidates, ruleContext) : null;
         if (!replay) {
             return new Row(itineraryId, destination, country, true, saved, null, null, savedRules, null, trip, null,
-                    null, null);
+                    null, null, null, null);
         }
 
         SerialPlanner.Result serial = !"v2".equals(pipeline) ? null
@@ -280,7 +281,9 @@ public class EvalRunner implements CommandLineRunner {
                 hasSaved ? sameRoute(savedSteps, replayedSteps) : null, savedRules,
                 rules.evaluate(replayedSteps, candidates, ruleContext), trip, serial == null ? null : serial.days(),
                 OverCapLegs.count(replayedSteps, candidates, args.transportPref(), args.pace(),
-                        requestedIndices(selection)), pickUse(selection, candidates, replayedSteps));
+                        requestedIndices(selection)), pickUse(selection, candidates, replayedSteps),
+                MealKindSwaps.count(replayedSteps, candidates, args.transportPref(), args.pace(), args.startDate()),
+                AlternativeStats.of(replayedSteps));
     }
 
     /** 직접 고른 팔도 기록의 highlight·timing으로 채점해야 의도 점수가 공짜로 오르지 않는다. 날짜별 장소는 재실행이 고른 것이다. */
@@ -427,11 +430,14 @@ public class EvalRunner implements CommandLineRunner {
      * @param serialDays v2로 재실행했을 때의 날짜별 결과. 아니면 null
      * @param overCap    재실행 결과의 구간 상한 초과 분류. 재실행하지 않았으면 null
      * @param pickUse    기록된 선택이 재실행 일정에 반영된 정도. 재실행하지 않았으면 null
+     * @param mealSwaps  재실행 결과의 끼니 종류 반복 분류. 재실행하지 않았으면 null
+     * @param alts       재실행 결과의 대안 상태. 재실행하지 않았으면 null
      */
     record Row(Long itineraryId, String destination, String country, boolean hasTrace, ScoreReport saved,
                ScoreReport replayed, Boolean sameRoute, ItineraryRules.Verdict savedRules,
                ItineraryRules.Verdict replayedRules, Trip trip, List<SerialPlanner.DayReport> serialDays,
-               OverCapLegs.Count overCap, PickUse pickUse) {
+               OverCapLegs.Count overCap, PickUse pickUse, MealKindSwaps.Count mealSwaps,
+               AlternativeStats alts) {
 
         /** 현재 코드의 결과. 재실행하지 않았으면 저장본이다. */
         ScoreReport current() {

@@ -46,7 +46,7 @@ final class GapFiller {
                                      PlaceCandidate prev, int currentMinutes, int mealStart,
                                      PlaceCandidate mealCand, double[] dayCentroid, String transportPref,
                                      int remainingQuota, Set<String> dayAltKeys, ScheduleConfig cfg,
-                                     int[] overQuotaUsed) {
+                                     int[] overQuotaUsed, AlternativeBuilder.TripView tripAlternatives) {
         List<StepData> inserted = new ArrayList<>();
         int guard = 0;
         while (guard++ < 3) {
@@ -62,17 +62,19 @@ final class GapFiller {
             if (overQuota && !(gap >= LARGE_GAP_MINUTES && inserted.isEmpty() && overQuotaUsed[0] == 0)) break;
             boolean cafeFirst = overQuota && "relaxed".equals(cfg != null ? cfg.pace : null);
             java.util.function.Predicate<PlaceCandidate> variety = VarietyLedger.admitsOnDay(day, candidates);
+            Set<String> brands = CandidateTraits.diningBrands(usedIndices, candidates);
+            brands.addAll(tripAlternatives.brands());
             Integer fillIdx = null;
             for (boolean onlyCafe : cafeFirst ? List.of(true, false) : List.of(false)) {
                 fillIdx = pickGapFiller(prev, mealCand, candidates, spareIndices, usedIndices,
-                        transportPref, 1.0, day, cfg, onlyCafe, variety, currentMinutes, mealStart);
+                        transportPref, 1.0, day, cfg, onlyCafe, variety, brands, currentMinutes, mealStart);
                 if (fillIdx == null && gap >= LARGE_GAP_MINUTES) {
                     // 긴 공백은 spare가 말라도 미사용 후보까지 넓히고 반경도 완화한다. 몇 시간 비우느니 조금 더 달리는 게 낫다.
                     // 거리 예산은 지킨다. 반경만 풀면 하루 주행 상한을 깨고 다음 패스에 트림되는 churn이 생긴다.
                     fillIdx = pickGapFiller(prev, mealCand, candidates,
                             new ArrayDeque<>(unusedIndices(candidates, usedIndices)), usedIndices,
-                            transportPref, LARGE_GAP_RADIUS_MULTIPLIER, day, cfg, onlyCafe, variety, currentMinutes,
-                            mealStart);
+                            transportPref, LARGE_GAP_RADIUS_MULTIPLIER, day, cfg, onlyCafe, variety, brands,
+                            currentMinutes, mealStart);
                     if (fillIdx != null) {
                         log.info("긴 공백({}분) — 미사용 후보까지 확장해 보충: day={}", gap, day.dayNumber);
                     }
@@ -99,7 +101,8 @@ final class GapFiller {
             int endMin = startMin + resolveVisitMinutes(fill);
             inserted.add(buildStep(day, fill, startMin, endMin, leg,
                     AlternativeBuilder.buildAlternatives(fill, dayCentroid, spareIndices, usedIndices, candidates,
-                            transportPref, dayAltKeys, VarietyLedger.admitsReplacing(day, fillIdx, candidates))));
+                            transportPref, dayAltKeys, VarietyLedger.admitsReplacing(day, fillIdx, candidates),
+                            tripAlternatives)));
             log.info("빈 시간대 보충: day={} {} 삽입 (식사 슬롯까지 {}분 공백)",
                     day.dayNumber, fill.name(), mealStart - arrivalAtMeal);
             currentMinutes = endMin;
@@ -123,8 +126,8 @@ final class GapFiller {
                                          List<PlaceCandidate> candidates, Deque<Integer> spareIndices,
                                          Set<Integer> usedIndices, String transportPref,
                                          double radiusMultiplier, DayState day, ScheduleConfig cfg, boolean cafeOnly,
-                                         java.util.function.Predicate<PlaceCandidate> variety, int nowMin,
-                                         int mealStart) {
+                                         java.util.function.Predicate<PlaceCandidate> variety, Set<String> brands,
+                                         int nowMin, int mealStart) {
         double[] from = prev != null ? coordsOf(prev) : null;
         double[] to = coordsOf(mealCand);
         double radius = AlternativeBuilder.altRadiusKm(transportPref) * radiusMultiplier;
@@ -149,7 +152,8 @@ final class GapFiller {
                 .filter(c -> detourVia(from, coordsOf(c), to) - directKm <= GAP_FILL_MAX_EXTRA_DETOUR_KM)
                 .filter(c -> fitsOpening(c, prev, mealCand, nowMin, mealStart, transportPref, day))
                 // 우회거리만 보면 가장 가까운 무명 spare가 이긴다. 반경·예산·우회 상한이 이미 지리를 제한해 그 안에서는 인기도가 정한다.
-                .max(Comparator.<PlaceCandidate>comparingDouble(c ->
+                .max(Comparator.<PlaceCandidate, Boolean>comparing(c -> !CandidateTraits.repeatsBrand(brands, c))
+                        .thenComparingDouble(c ->
                                 PlaceProminence.of(c) - detourVia(from, coordsOf(c), to) * GAP_FILL_DETOUR_WEIGHT)
                         .thenComparing(c -> c.rating() != null ? c.rating() : BigDecimal.ZERO))
                 .map(PlaceCandidate::index)

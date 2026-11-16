@@ -33,8 +33,9 @@ public final class CityBlockPlanner {
 
     @FunctionalInterface
     interface BlockScheduler {
+        /** @param earlier 앞 구간들에서 정한 것. 첫 구간이거나 구간이 하나면 {@link PlanState.Earlier#NONE} */
         RouteOptimizer.ScheduleResult schedule(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                               ScheduleArgs args);
+                                               ScheduleArgs args, PlanState.Earlier earlier);
     }
 
     /** 도시 하나에 머무는 연속된 날. */
@@ -63,7 +64,7 @@ public final class CityBlockPlanner {
         List<Block> blocks = blocksOf(cities);
         if (blocks.size() < 2 || selection.days() == null) {
             return scheduler.schedule(selection, candidates, args.forCityBlock(args.hub(), args.arrivalTime(),
-                    args.departureTime(), false, false));
+                    args.departureTime(), false, false), PlanState.Earlier.NONE);
         }
         Map<Integer, String> cityOfIndex = new HashMap<>();
         for (PlaceCandidate c : candidates) {
@@ -78,6 +79,8 @@ public final class CityBlockPlanner {
         List<String> unresolved = new ArrayList<>();
         StringBuilder route = new StringBuilder();
         List<BlockPlan> plans = blockPlans(args);
+        PlanState.Earlier earlier = PlanState.Earlier.NONE;
+        CandidateLookup lookup = new CandidateLookup(candidates);
         for (int b = 0; b < plans.size(); b++) {
             BlockPlan plan = plans.get(b);
             Block block = plan.block();
@@ -86,7 +89,9 @@ public final class CityBlockPlanner {
             boolean last = b == plans.size() - 1;
 
             BlockInput input = blockInput(selection, candidates, block, placesByDay, cityOfIndex, first, last);
-            RouteOptimizer.ScheduleResult result = scheduler.schedule(input.selection(), input.candidates(), plan.args());
+            RouteOptimizer.ScheduleResult result = scheduler.schedule(input.selection(), input.candidates(), plan.args(),
+                    earlier);
+            earlier = earlier.plus(result.steps(), lookup, block.lastDay() - block.firstDay() + 1);
             unresolved.addAll(result.unresolved());
             steps.addAll(leg == null ? result.steps() : withLegOnFirstStep(result.steps(), leg));
             route.append(first ? "" : " → ").append(block.city()).append(' ')

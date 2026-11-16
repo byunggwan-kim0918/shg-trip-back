@@ -3,9 +3,12 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary.QualityStatus;
+import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
+import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules.Verdict;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
+import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -110,6 +113,34 @@ public class QualityGate {
             itinerary.reflectEdit(mergedNotices(verdict, ctx), !verdict.hard() && !verdict.core());
         } catch (RuntimeException e) {
             log.error("편집 뒤 판정 실패 itineraryId={}", itinerary.getId(), e);
+        }
+    }
+
+    /**
+     * 교체했을 때 편집 재판정이 남길 안내와 핵심 기준 충족 여부.
+     *
+     * @param notices          교체 뒤 안내(고정 안내 포함)
+     * @param meetsCoreQuality 교체 뒤 일정이 HARD·CORE 위반 없이 기준을 채우는지
+     */
+    public record SwapPreview(List<String> notices, boolean meetsCoreQuality) {}
+
+    /**
+     * 교체 뒤 편집 재판정이 남길 안내를 미리 만든다. 일정 엔티티는 바꾸지 않는다.
+     *
+     * @return 판정 입력이 없거나 판정이 실패하면 null
+     */
+    public SwapPreview previewSwap(Itinerary itinerary, ItineraryStep target, Place replacement,
+                                   GeoUtils.TransportLeg incoming, ItineraryStep next,
+                                   GeoUtils.TransportLeg outgoing) {
+        PlanContext ctx = read(itinerary);
+        if (ctx == null) return null;
+        try {
+            Verdict verdict = SavedItineraryFacts.evaluateSwap(itinerary, target, replacement, incoming, next,
+                    outgoing, ctx.rules());
+            return new SwapPreview(mergedNotices(verdict, ctx), !verdict.hard() && !verdict.core());
+        } catch (RuntimeException e) {
+            log.error("교체 미리보기 판정 실패 itineraryId={}", itinerary.getId(), e);
+            return null;
         }
     }
 

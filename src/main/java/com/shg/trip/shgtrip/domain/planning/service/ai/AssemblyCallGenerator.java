@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.planning.service.ai;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.models.messages.*;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.shg.trip.shgtrip.domain.planning.dto.AssemblyItineraryOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
@@ -73,7 +74,8 @@ public class AssemblyCallGenerator {
         AssemblyItineraryOutput result = message.content().stream()
                 .filter(ContentBlock::isToolUse)
                 .findFirst()
-                .map(block -> block.asToolUse()._input().convert(AssemblyItineraryOutput.class))
+                .map(block -> AssemblyItineraryOutput.fromToolInput(
+                        block.asToolUse()._input().convert(JsonNode.class)))
                 .orElseThrow(() -> new BusinessException(ErrorCode.AI_SERVICE_ERROR,
                         "생성 응답에서 스토리 데이터를 추출할 수 없습니다."));
 

@@ -323,6 +323,8 @@ public final class ScheduleTuning {
      * prepend한다.
      */
     static final double WALK_CONTINUITY_THRESHOLD_KM = 2.0;
+    /** 가장 가까운 곳이 이미 간 체인일 때 다른 가게를 찾아 더 갈 수 있는 직선거리(km). 도보 한 구간 상한의 4분의 1이다. */
+    static final double REPEAT_BRAND_MAX_EXTRA_KM = 2.0;
     /** 아침 식사를 유지할 숙소 기준 최대 거리(km). 초과하면 아침 슬롯을 생략한다. */
     static final double BREAKFAST_MAX_KM_FROM_ACCOMMODATION = 10.0;
     /** 아침과 점심 사이 최소 간격(분). 이보다 붙으면 연달아 두 끼를 먹는 셈이라 아침을 뺀다. */

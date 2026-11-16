@@ -75,6 +75,16 @@ public class ItineraryController {
         return ApiResponse.success(itineraryService.selectAlternative(id, stepId, request.alternativeId(), principal.id()));
     }
 
+    @GetMapping("/{id}/steps/{stepId}/alternatives/{alternativeId}/preview")
+    public ApiResponse<AlternativePreviewResponse> previewAlternative(
+            @PathVariable Long id,
+            @PathVariable Long stepId,
+            @PathVariable Long alternativeId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        verifyPrincipal(principal);
+        return ApiResponse.success(itineraryService.previewAlternative(id, stepId, alternativeId, principal.id()));
+    }
+
     @PatchMapping("/{id}/steps/reorder")
     public ApiResponse<ItineraryResponse> reorderSteps(
             @PathVariable Long id,
