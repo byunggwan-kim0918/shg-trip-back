@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.itinerary.service;
 
+import com.shg.trip.shgtrip.domain.itinerary.dto.AlternativePreviewResponse;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryResponse;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryStepResponse;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
@@ -34,6 +35,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -465,6 +467,71 @@ class ItineraryServiceTest {
         assertThat(e.getType()).isEqualTo(ItineraryEditEvent.Type.SELECT_ALTERNATIVE);
         assertThat(e.getPayload()).containsEntry("fromPlaceId", 110L).containsEntry("toPlaceId", 999L);
         verify(qualityGate).reflectEdit(itinerary);
+    }
+
+    @Test
+    @DisplayName("교체 미리보기의 이동은 실제로 바꾼 뒤 저장되는 앞뒤 구간과 같고, 판정 안내 변화를 함께 준다")
+    void previewMatchesSelection() {
+        mockFind();
+        Place other = Place.builder().id(999L).name("다른 카페").address("주소")
+                .latitude(BigDecimal.valueOf(33.46)).longitude(BigDecimal.valueOf(126.55))
+                .category("관광").region("제주").country("Korea").build();
+        stepById(11L).addAlternative(com.shg.trip.shgtrip.domain.itinerary.entity.AlternativeOption.builder()
+                .id(5L).place(other).optionOrder(1).estimatedCost(BigDecimal.valueOf(7000)).build());
+        when(qualityGate.previewSwap(eq(itinerary), eq(stepById(11L)), eq(other), any(), eq(stepById(12L)), any()))
+                .thenReturn(new com.shg.trip.shgtrip.domain.planning.service.QualityGate.SwapPreview(
+                        List.of("1일차에 점심 식사가 없어요."), false));
+
+        AlternativePreviewResponse preview = itineraryService.previewAlternative(ITINERARY_ID, 11L, 5L, USER_ID);
+        itineraryService.selectAlternative(ITINERARY_ID, 11L, 5L, USER_ID);
+
+        assertThat(preview.incoming().before().mode()).isEqualTo("WALK");
+        assertThat(preview.incoming().after()).isEqualTo(AlternativePreviewResponse.Leg.of(stepById(11L)));
+        assertThat(preview.outgoing().after()).isEqualTo(AlternativePreviewResponse.Leg.of(stepById(12L)));
+        assertThat(preview.costAfter()).isEqualByComparingTo("7000");
+        assertThat(preview.newNotices()).containsExactly("1일차에 점심 식사가 없어요.");
+        assertThat(preview.resolvedNotices()).isEmpty();
+        assertThat(preview.resolvesAdjustment()).isFalse();
+        assertThat(preview.alreadyOnDay()).isNull();
+    }
+
+    @Test
+    @DisplayName("대안 설명은 지금 스텝 장소를 기준으로 만들고, 대안을 골라도 스텝 이야기 자리에 들어가지 않는다")
+    void alternativeNotesFollowTheCurrentPlace() {
+        mockFind();
+        ItineraryStep cafe = stepById(11L);
+        ReflectionTestUtils.setField(cafe, "notes", "카페 이야기");
+        Place other = Place.builder().id(999L).name("다른 카페").address("주소")
+                .latitude(BigDecimal.valueOf(33.46)).longitude(BigDecimal.valueOf(126.55))
+                .category("관광").region("제주").country("Korea").build();
+        cafe.addAlternative(com.shg.trip.shgtrip.domain.itinerary.entity.AlternativeOption.builder()
+                .id(5L).place(other).optionOrder(1).build());
+
+        ItineraryStepResponse before = byId(itineraryService.getItinerary(ITINERARY_ID, USER_ID)).get(11L);
+        ItineraryStepResponse after = byId(itineraryService.selectAlternative(ITINERARY_ID, 11L, 5L, USER_ID)).get(11L);
+
+        assertThat(before.alternatives().get(0).notes()).contains("지금 장소에서");
+        assertThat(after.notes()).isNull();
+        assertThat(after.placeNote()).isNotBlank();
+        assertThat(after.alternatives()).filteredOn(a -> a.place().name().equals("카페"))
+                .singleElement().satisfies(a -> assertThat(a.notes()).contains("지금 장소에서"));
+        // 원래 장소를 다시 고르면 이야기가 돌아온다.
+        assertThat(cafe.getAlternatives()).filteredOn(a -> a.getPlace().getName().equals("카페"))
+                .singleElement().satisfies(a -> assertThat(a.getNotes()).isEqualTo("카페 이야기"));
+    }
+
+    @Test
+    @DisplayName("다른 날 일정에 이미 있는 장소로 바꾸려 하면 그날을 알려 주고, 확정한 일정은 미리보기를 막는다")
+    void previewWarnsDuplicateAndRespectsFinalize() {
+        mockFind();
+        stepById(11L).addAlternative(com.shg.trip.shgtrip.domain.itinerary.entity.AlternativeOption.builder()
+                .id(6L).place(stepById(30L).getPlace()).optionOrder(1).build());
+
+        assertThat(itineraryService.previewAlternative(ITINERARY_ID, 11L, 6L, USER_ID).alreadyOnDay()).isEqualTo(3);
+
+        itineraryService.finalizeItinerary(ITINERARY_ID, USER_ID);
+        assertThatThrownBy(() -> itineraryService.previewAlternative(ITINERARY_ID, 11L, 6L, USER_ID))
+                .isInstanceOf(BusinessException.class);
     }
 
     @Test

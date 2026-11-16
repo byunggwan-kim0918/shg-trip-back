@@ -32,7 +32,7 @@ public class AlternativeOption extends BaseTimeEntity {
     @Column(nullable = false)
     private Integer optionOrder;
 
-    /** 이 대안 장소에서의 추천 활동/팁 */
+    /** 이 대안을 고르면 스텝 이야기가 되는 글. 교체로 빠진 장소의 이야기나 레거시 경로에서 모델이 쓴 팁이다. */
     @Column(columnDefinition = "TEXT")
     private String notes;
 

@@ -487,10 +487,16 @@ public class OptimizedGenerationExecutor {
         return 10.0;
     }
 
-    private static final List<Map.Entry<PlaceCategoryConstants.SearchRole, Integer>> RESERVE_PER_DAY = List.of(
-            Map.entry(PlaceCategoryConstants.SearchRole.ATTRACTION, 4),
-            Map.entry(PlaceCategoryConstants.SearchRole.CAFE, 2),
-            Map.entry(PlaceCategoryConstants.SearchRole.RESTAURANT, 3));
+    /**
+     * 날마다 새로 덧붙일 예비 후보 수. 대안은 같은 역할끼리만 내서, 끼니·관광 스텝마다 다른 날과 겹치지 않는 대안 3개를 주려면
+     * 역할마다 하루 스텝 수의 몇 배가 남아야 한다.
+     */
+    static final List<Map.Entry<PlaceCategoryConstants.SearchRole, Integer>> RESERVE_PER_DAY = List.of(
+            Map.entry(PlaceCategoryConstants.SearchRole.ATTRACTION, 8),
+            Map.entry(PlaceCategoryConstants.SearchRole.CAFE, 3),
+            Map.entry(PlaceCategoryConstants.SearchRole.RESTAURANT, 8));
+    /** 근처 검색 상위는 대부분 이미 후보에 있는 곳이라 이만큼 더 받아 새 곳만 쓴다. */
+    static final int RESERVE_OVERFETCH = 3;
 
     /**
      * 날짜별 방문지 중심 근처의 예비 후보를 덧붙인다. SelectionOutput에는 넣지 않아 RouteOptimizer의 미사용 후보
@@ -510,10 +516,13 @@ public class OptimizedGenerationExecutor {
         Set<String> known = knownKeys(candidates);
         for (Map.Entry<PlaceCategoryConstants.SearchRole, Integer> role : RESERVE_PER_DAY) {
             for (List<PlaceCandidate> found : vectorSearchQueryService.searchNearEach(
-                    input, role.getKey(), centers, radius, role.getValue())) {
+                    input, role.getKey(), centers, radius, role.getValue() * RESERVE_OVERFETCH)) {
+                int added = 0;
                 for (PlaceCandidate c : excludeUnwanted(found, exclusions, input)) {
+                    if (added == role.getValue()) break;
                     if (!addIfNew(known, result, c)) continue;
                     result.add(reindexCandidate(c, result.size() + 1));
+                    added++;
                 }
             }
         }

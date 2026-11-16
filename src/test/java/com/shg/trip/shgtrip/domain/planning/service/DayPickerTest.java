@@ -13,6 +13,8 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.coordsOf;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -423,6 +425,119 @@ class DayPickerTest {
         assertThat(asPlaced.anchors()).isEmpty();
     }
 
+    @Test
+    @DisplayName("전날 저녁과 같은 종류 식당은 같은 고리에 다른 종류가 있으면 고르지 않는다")
+    void avoidsThePreviousDinnerKind() {
+        List<PlaceCandidate> pool = walkablePool();
+        // 기준 장소(궁 0)에서 가장 가까운 식당이다.
+        pool.set(7, place(8, "바다 횟집", MEAL, "MEAL", 37.5710, 126.9790));
+
+        assertThat(fillOneDay(pool, null)).contains(8);
+        assertThat(fillOneDay(pool, "raw_fish")).doesNotContain(8);
+    }
+
+    @Test
+    @DisplayName("전날 저녁이 종류를 모르는 식당이면 종류를 모르는 가까운 식당도 그대로 고른다")
+    void genericPreviousDinnerKindIsNotAvoided() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.set(7, place(8, "동네 밥집", "Dining and Drinking > Restaurant", "MEAL", 37.5710, 126.9790));
+
+        assertThat(fillOneDay(pool, "restaurant")).contains(8);
+    }
+
+    @Test
+    @DisplayName("저녁에 여는 식당이 점심과 같은 종류뿐이면 저녁을 두고 점심을 다른 종류로 바꾼다")
+    void swapsLunchWhenDinnerCanOnlyRepeatItsKind() {
+        List<PlaceCandidate> pool = lunchOnlyPool();
+
+        List<Integer> picked = fillOneDay(pool, null);
+
+        assertThat(picked).contains(14).doesNotContain(8);
+        assertThat(picked.stream().filter(idx -> pool.get(idx - 1).mealEligible())).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("점심을 바꾸지 않는 경우: 요청 의도로 고른 점심, 바꿀 점심이 여행 전체 상한에 걸릴 때")
+    void keepsLunchWhenSwapWouldBreakIntentOrTripCap() {
+        List<PlaceCandidate> pool = lunchOnlyPool();
+        pool.set(7, place(8, "바다 횟집", MEAL, "MEAL", 37.5710, 126.9790).withIntent(true, null));
+        assertThat(fillOneDay(pool, null)).contains(8, 14);
+
+        List<PlaceCandidate> gukbap = lunchOnlyPool();
+        for (int i = 8; i <= 13; i++) {
+            if (i == 8) continue;
+            PlaceCandidate c = gukbap.get(i - 1);
+            gukbap.set(i - 1, withHours(place(i, "국밥집 " + i, MEAL, "MEAL", c.latitude().doubleValue(),
+                    c.longitude().doubleValue()), LUNCH_ONLY));
+        }
+        PlanState.Earlier capped = new PlanState.Earlier(Set.of(), Set.of(), Map.of("gukbap", 2), 1);
+        assertThat(fillOneDay(gukbap, null, capped)).contains(8, 14);
+    }
+
+    @Test
+    @DisplayName("점심을 바꾸면 빠진 점심은 예비 목록에 있었다면 다시 예비 목록으로 돌아간다")
+    void swappedLunchReturnsToSpare() {
+        List<PlaceCandidate> pool = lunchOnlyPool();
+        PlanState s = PlanState.of(new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null, List.of(2),
+                1, null)), List.of(), List.of(8)), pool, walkArgs());
+        s.beginScheduling();
+
+        DayPicker.fill(s, s.days.get(0), null, false, Set.of(), null);
+
+        assertThat(s.days.get(0).placeIndices).doesNotContain(8).contains(14);
+        assertThat(s.spare).contains(8);
+    }
+
+    /** 식당은 모두 점심에만 열고, 가장 가까운 바다 횟집과 저녁에 여는 항구 횟집만 같은 종류(회)다. */
+    private static List<PlaceCandidate> lunchOnlyPool() {
+        List<PlaceCandidate> pool = new ArrayList<>(walkablePool().stream()
+                .map(c -> c.mealEligible() ? withHours(c, LUNCH_ONLY) : c).toList());
+        pool.set(7, place(8, "바다 횟집", MEAL, "MEAL", 37.5710, 126.9790));
+        pool.add(place(14, "항구 횟집", MEAL, "MEAL", 37.5745, 126.9805));
+        return pool;
+    }
+
+    @Test
+    @DisplayName("이미 간 체인의 다른 지점은 같은 고리에 다른 식당이 있으면 고르지 않는다")
+    void avoidsVisitedBrand() {
+        List<PlaceCandidate> pool = walkablePool();
+        // 기준 장소(궁 0)에서 가장 가까운 식당이다.
+        pool.set(7, place(8, "본가국밥 종로점", MEAL, "MEAL", 37.5710, 126.9790));
+        pool.add(place(14, "본가국밥 서면점", MEAL, "MEAL", 37.5900, 126.9900));
+
+        assertThat(fillOneDay(pool, null)).contains(8);
+        assertThat(fillOneDay(pool, null, 14)).doesNotContain(8);
+    }
+
+    @Test
+    @DisplayName("앞 도시 구간에서 여행 전체 상한까지 먹은 종류는 같은 고리에 다른 식당이 있으면 고르지 않는다")
+    void countsMealKindsFromEarlierCities() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.set(7, place(8, "바다 횟집", MEAL, "MEAL", 37.5710, 126.9790));
+        PlanState.Earlier earlier = new PlanState.Earlier(Set.of(), Set.of(), Map.of("raw_fish", 2), 1);
+
+        assertThat(fillOneDay(pool, null, PlanState.Earlier.NONE)).contains(8);
+        assertThat(fillOneDay(pool, null, earlier)).doesNotContain(8);
+    }
+
+    private static List<Integer> fillOneDay(List<PlaceCandidate> pool, String previousDinnerKind,
+                                            Integer... visited) {
+        return fillOneDay(pool, previousDinnerKind, PlanState.Earlier.NONE, visited);
+    }
+
+    /** @param visited 다른 날 구성에 이미 들어 있는 장소 */
+    private static List<Integer> fillOneDay(List<PlaceCandidate> pool, String previousDinnerKind,
+                                            PlanState.Earlier earlier, Integer... visited) {
+        List<SelectionOutput.DayPlan> days = new ArrayList<>(List.of(new SelectionOutput.DayPlan(1, null, List.of(2),
+                1, null)));
+        if (visited.length > 0) days.add(new SelectionOutput.DayPlan(2, null, List.of(visited), null, null));
+        PlanState s = PlanState.of(new SelectionOutput("", days, List.of(), List.of()), pool, walkArgs());
+        s.continueFrom(earlier);
+        s.beginScheduling();
+        DayPicker.fill(s, s.days.get(0), null, false, Set.of(), previousDinnerKind);
+        return s.days.get(0).placeIndices;
+    }
+
     /** 1일차에 주어진 장소를, 2일차에는 아무것도 고르지 않은 선택. */
     private static SelectionOutput selectionPicking(Integer... dayOnePicks) {
         return new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null, List.of(dayOnePicks), null, null),
@@ -443,6 +558,15 @@ class DayPickerTest {
 
     private static ScheduleArgs walkArgs() {
         return ScheduleTestArgs.of("normal", "walk", LocalDate.of(2026, 12, 1), List.of(), null, false, List.of());
+    }
+
+    private static final String LUNCH_ONLY = "월요일: 11:00 ~ 15:00, 화요일: 11:00 ~ 15:00, 수요일: 11:00 ~ 15:00, "
+            + "목요일: 11:00 ~ 15:00, 금요일: 11:00 ~ 15:00, 토요일: 11:00 ~ 15:00, 일요일: 11:00 ~ 15:00";
+
+    private static PlaceCandidate withHours(PlaceCandidate c, String hours) {
+        return new PlaceCandidate(c.index(), c.placeId(), c.name(), c.address(), c.category(), c.tags(), c.region(),
+                c.country(), c.latitude(), c.longitude(), null, null, c.similarityScore(), null, hours, null, 60, false,
+                null, null, null, null, CandidatePolicy.roleOf(c).name(), null, false, null);
     }
 
     private static PlaceCandidate place(int index, String name, String category, String role, double lat,

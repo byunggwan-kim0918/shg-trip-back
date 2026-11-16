@@ -47,7 +47,6 @@
       비용: 0원 / 메모: -
       대안: 서프라이즈 테마파크 | Landmarks and Outdoors > Tourist Attraction | 0원
       대안: 세기알해변 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 제주 성산항 | Landmarks and Outdoors > Tourist Attraction | 0원
   #12 12:21-13:31  어멍 | Dining and Drinking > Restaurant > BBQ Joint | 제주시 | Jeju
       이동: CAR 32분 20.93km 6279원
       비용: 13000원 / 메모: -
@@ -55,6 +54,7 @@
   #13 13:51-16:51  제주도 국가지질공원 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
       이동: CAR 20분 13.21km 3962원
       비용: 0원 / 메모: -
+      대안: 제주 성산항 | Landmarks and Outdoors > Tourist Attraction | 0원
   #14 17:11-19:41  손지오름 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
       이동: CAR 20분 12.68km 3804원
       비용: 0원 / 메모: -

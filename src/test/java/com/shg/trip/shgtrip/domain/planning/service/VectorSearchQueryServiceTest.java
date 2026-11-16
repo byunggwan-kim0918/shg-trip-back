@@ -167,6 +167,24 @@ class VectorSearchQueryServiceTest {
         }
 
         @Test
+        @DisplayName("근처 보완 검색의 관광 질의는 카테고리·테마별 문구가 아니라 대표 관광 문구를 쓴다")
+        @SuppressWarnings("unchecked")
+        void searchNear_usesRepresentativeAttractionQuery() {
+            VectorEnrichedInput input = inputWith(List.of("food", "ocean"), List.of("market", "attraction"));
+            String representative = SearchQueryBuilder.buildSearchSlots(input).stream()
+                    .filter(sl -> "attraction".equals(sl.key())).findFirst().orElseThrow().queryText();
+            given(embeddingService.embedBatch(anyList())).willReturn(List.of(MOCK_VECTOR));
+            given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willReturn(List.of());
+
+            service.searchNearEach(input, PlaceCategoryConstants.SearchRole.ATTRACTION,
+                    List.<double[]>of(new double[]{35.66, 139.70}), 10.0, 5);
+
+            ArgumentCaptor<List<String>> queries = ArgumentCaptor.forClass(List.class);
+            verify(embeddingService).embedBatch(queries.capture());
+            assertThat(queries.getValue()).containsExactly(representative);
+        }
+
+        @Test
         @DisplayName("인기도 시딩 갈래는 관광 슬롯에만 켜진다 (숙소·식당·카페 슬롯에 공항·역이 섞이지 않게)")
         void search_popularitySeedOnlyForAttractionSlots() {
             VectorEnrichedInput input = createBasicInput(3);

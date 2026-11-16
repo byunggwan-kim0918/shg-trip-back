@@ -85,6 +85,7 @@ public class ItineraryDataMapper {
                 .build();
 
         if (optimizedSteps != null) {
+            int totalDays = totalDays(input, optimizedSteps);
             int dropped = 0;
             boolean precededByDrop = false;
             StepData pendingTransfer = null;
@@ -103,7 +104,7 @@ public class ItineraryDataMapper {
                 pendingTransfer = null;
                 // 도시 간 이동은 앞 도시에서 온 구간이라 앞 장소(전날 숙소 등)가 빠져도 그대로다.
                 if (InvariantChecker.isIntercityLeg(stepData)) precededByDrop = false;
-                itinerary.addStep(toStepEntity(stepData, placeCache, precededByDrop));
+                itinerary.addStep(toStepEntity(stepData, placeCache, precededByDrop, totalDays));
                 precededByDrop = false;
             }
             if (dropped > 0) {
@@ -247,12 +248,20 @@ public class ItineraryDataMapper {
                 GeoUtils.haversine(c[0], c[1], lat.doubleValue(), lng.doubleValue()) > DESTINATION_DISTANCE_THRESHOLD_KM);
     }
 
+    private static int totalDays(EnrichedInput input, List<StepData> steps) {
+        if (input.startDate() == null || input.endDate() == null) {
+            return steps.stream().mapToInt(StepData::dayNumber).max().orElse(0);
+        }
+        return (int) java.time.temporal.ChronoUnit.DAYS.between(input.startDate(), input.endDate()) + 1;
+    }
+
     /**
      * @param precededByDrop 바로 앞 스텝이 버려졌으면 true. 교통 정보가 사라진 출발지에서 온
      *                       구간이라 비워서 UI가 구간을 그리지 않게 한다.
+     * @param totalDays      여행 전체 일수. 모르면 0
      */
     private ItineraryStep toStepEntity(StepData stepData, Map<String, Place> placeCache,
-                                       boolean precededByDrop) {
+                                       boolean precededByDrop, int totalDays) {
         Place place = lookupPlace(stepData.place(), placeCache);
 
         ItineraryStep step = ItineraryStep.builder()
@@ -265,7 +274,8 @@ public class ItineraryDataMapper {
                 .transportationDuration(precededByDrop ? null : stepData.transportationDuration())
                 .transportationDistance(precededByDrop ? null : stepData.transportationDistance())
                 .transportationCost(precededByDrop ? null : stepData.transportationCost())
-                .notes(stepData.notes())
+                // 대체 경로는 모델이 스텝 설명을 바로 써서 이야기 저장과 같은 일차 표현 교정을 여기서 한다.
+                .notes(StoryDayWords.fix(stepData.notes(), stepData.dayNumber(), totalDays))
                 .estimatedCost(stepData.estimatedCost())
                 .build();
 

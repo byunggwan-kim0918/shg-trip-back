@@ -50,7 +50,8 @@ enum FinalRepair {
                 if (daySteps.isEmpty()) continue;
                 boolean lastDay = DayState.endsTrip(s.days, i);
                 changed |= MealPlanner.ensureMealSlots(day, daySteps, s.candidates, s.spare, s.usedIndices,
-                        s.maxPerDay, lastDay, s.startDate, s.transportPref, pass.memo(), s.cfg, pass.underTypeCap());
+                        s.maxPerDay, lastDay, s.startDate, s.transportPref, pass.memo(), s.cfg, pass.underTypeCap(),
+                        s.earlier().brands());
                 changed |= LodgingPlanner.ensureAccommodation(day, s.candidates, lastDay);
             }
             return changed ? RepairOutcome.highPriority(pass.memo().pendingIndices()) : RepairOutcome.none();
@@ -69,7 +70,8 @@ enum FinalRepair {
                 changed |= ensureAttraction(day, daySteps, s.candidates, s.spare, s.usedIndices, s.maxPerDay,
                         s.pace, fillable, pass.memo(), pass.lookup());
                 changed |= ensureNotFinishingEarly(day, daySteps, s.candidates, s.spare, s.usedIndices,
-                        s.maxPerDay, fillable.and(VarietyLedger.admitsOnDay(day, s.candidates)), pass.memo());
+                        s.maxPerDay, fillable.and(VarietyLedger.admitsOnDay(day, s.candidates)), pass.memo(),
+                        s.earlier().brands());
             }
             return changed ? RepairOutcome.highPriority(pass.memo().pendingIndices()) : RepairOutcome.none();
         }
@@ -135,10 +137,10 @@ enum FinalRepair {
         static Pass of(PlanState s, List<StepData> steps, InvariantMemo memo) {
             Map<Integer, List<StepData>> byDay = steps.stream()
                     .collect(Collectors.groupingBy(StepData::dayNumber, LinkedHashMap::new, Collectors.toList()));
-            Map<String, Integer> globalTypeCount = DiversityRepair.countSubTypes(s.days, s.candidates);
+            Map<String, Integer> globalTypeCount = s.typeCounts();
             Predicate<PlaceCandidate> underTypeCap =
                     c -> !DiversityRepair.isSpecificType(subTypeOf(c))
-                            || globalTypeCount.getOrDefault(subTypeOf(c), 0) < DiversityRepair.typeCapFor(c, s.days.size());
+                            || globalTypeCount.getOrDefault(subTypeOf(c), 0) < s.typeCap(c);
             return new Pass(steps, byDay, underTypeCap, memo, new CandidateLookup(s.candidates));
         }
 
@@ -200,7 +202,7 @@ enum FinalRepair {
                                                    List<PlaceCandidate> candidates, Deque<Integer> spare,
                                                    Set<Integer> usedIndices, int maxPerDay,
                                                    Predicate<PlaceCandidate> openOnDay,
-                                                   InvariantMemo memo) {
+                                                   InvariantMemo memo, Set<String> earlierBrands) {
         int end = daySteps.stream()
                 .filter(FinalRepair::isActivityStep)
                 .mapToInt(s -> toMinutesOrZero(s.endTime()))
@@ -210,7 +212,7 @@ enum FinalRepair {
 
         Integer pick = pickNearbyCandidate(candidates, spare, usedIndices,
                 centroidOf(day.placeIndices, candidates),
-                openOnDay.and(c -> isVisitableFill(c) && timePreference(c) != TimePreference.EVENING));
+                openOnDay.and(c -> isVisitableFill(c) && timePreference(c) != TimePreference.EVENING), earlierBrands);
         if (pick == null) {
             log.info("조기 종료({}) 보충 실패(후보 없음): day={}", formatMinutes(end), day.dayNumber);
             return false;

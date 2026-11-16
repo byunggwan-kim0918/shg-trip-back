@@ -44,24 +44,22 @@
   #9  12:08-13:18  반양 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
       이동: CAR 25분 16.43km 4928원
       비용: 13000원 / 메모: -
-      대안: 영육일삼 | Dining and Drinking > Restaurant | 13000원
-      대안: 중문색달통갈치 본점 | Dining and Drinking > Restaurant | 13000원
       대안: 바다속고등어쌈밥 | Dining and Drinking > Restaurant | 13000원
+      대안: 도두해녀의집 | Dining and Drinking > Restaurant | 13000원
+      대안: 흑본오겹 함덕점 | Dining and Drinking > Restaurant | 13000원
   #10 13:27-14:37  미쁜제과 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
       이동: CAR 9분 5.85km 1754원
       비용: 13000원 / 메모: -
       대안: 쉼표 | Dining and Drinking > Cafe, Coffee, and Tea House > Coffee Shop | 6000원
       대안: 카페콜라 | Dining and Drinking > Cafe, Coffee, and Tea House > Café | 6000원
-      대안: 카페 귤꽃다락 | Dining and Drinking > Restaurant | 13000원
   #11 15:14-16:14  한림민속오일시장 | Retail > Market | 제주시 | Jeju
       이동: CAR 37분 24.62km 7387원
       비용: 0원 / 메모: -
   #12 17:30-18:40  크라운돼지 | Dining and Drinking > Restaurant | 제주시 | Jeju
       이동: CAR 21분 13.74km 4123원
       비용: 13000원 / 메모: -
-      대안: 흑돈가 제주 | Dining and Drinking > Restaurant | 13000원
-      대안: 감따남 | Dining and Drinking > Restaurant | 13000원
-      대안: 삼보식당 | Dining and Drinking > Restaurant | 13000원
+      대안: 가시아방국수 | Dining and Drinking > Restaurant | 13000원
+      대안: 소섬전복 | Dining and Drinking > Restaurant | 13000원
   #13 18:48-19:18  프레리아 커플 독채펜션 | Travel and Transportation > Lodging | 제주시 | Jeju
       이동: CAR 8분 5.27km 1580원
       비용: 120000원 / 메모: -
@@ -75,9 +73,8 @@
   #15 11:40-12:50  은희네해장국 | Dining and Drinking > Restaurant | 제주시 | Jeju
       이동: CAR 19분 12.09km 3627원
       비용: 13000원 / 메모: -
-      대안: 흑본오겹 함덕점 | Dining and Drinking > Restaurant | 13000원
       대안: 올래국수 | Dining and Drinking > Restaurant | 13000원
-      대안: 흑돈가 제주 | Dining and Drinking > Restaurant | 13000원
+      대안: 삼보식당 | Dining and Drinking > Restaurant | 13000원
   #16 12:53-14:23  제주 삼성혈 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
       이동: CAR 3분 1.56km 467원
       비용: 0원 / 메모: -
@@ -87,9 +84,8 @@
   #18 17:30-18:40  형돈 | Dining and Drinking > Restaurant | 제주시 | Jeju
       이동: CAR 7분 4.53km 1359원
       비용: 13000원 / 메모: -
-      대안: 삼보식당 | Dining and Drinking > Restaurant | 13000원
       대안: 영육일삼 | Dining and Drinking > Restaurant | 13000원
-      대안: 감따남 | Dining and Drinking > Restaurant | 13000원
+      대안: 도두해녀의집 | Dining and Drinking > Restaurant | 13000원
   #19 18:44-19:14  제주R호텔 | Travel and Transportation > Lodging > Hotel | 제주시 | Jeju
       이동: CAR 4분 2.32km 697원
       비용: 120000원 / 메모: -
@@ -105,16 +101,14 @@
       비용: 13000원 / 메모: -
       대안: 가시아방국수 | Dining and Drinking > Restaurant | 13000원
       대안: 흑본오겹 함덕점 | Dining and Drinking > Restaurant | 13000원
-      대안: 소섬전복 | Dining and Drinking > Restaurant | 13000원
   #22 13:54-15:24  별방진 | Landmarks and Outdoors > Tourist Attraction | 제주시 | Jeju
       이동: CAR 14분 8.99km 2696원
       비용: 0원 / 메모: -
   #23 17:30-18:40  해녀의 부엌 | Dining and Drinking > Restaurant | 제주시 | Jeju
       이동: CAR 8분 5.31km 1594원
       비용: 13000원 / 메모: -
+      대안: 소섬전복 | Dining and Drinking > Restaurant | 13000원
       대안: 영육일삼 | Dining and Drinking > Restaurant | 13000원
-      대안: 도두해녀의집 | Dining and Drinking > Restaurant | 13000원
-      대안: 바다속고등어쌈밥 | Dining and Drinking > Restaurant | 13000원
   #24 19:56-21:26  제주국제공항 | Travel and Transportation > Transport Hub > Airport > Airport Terminal | 제주시 | Jeju
       이동: CAR 76분 50.58km 15175원
       비용: 0원 / 메모: -

@@ -62,7 +62,8 @@ class GapFillerTest {
 
         GapFill result = GapFiller.fillGapBeforeMeal(day, pool, new ArrayDeque<>(List.of(3, 4)),
                 new HashSet<>(day.placeIndices), pool.get(0), 13 * 60, 17 * 60 + 30, pool.get(1), null, "car", 2,
-                new HashSet<>(), new ScheduleConfig(9 * 60, 22 * 60, 0, false, "normal"), new int[]{0});
+                new HashSet<>(), new ScheduleConfig(9 * 60, 22 * 60, 0, false, "normal"), new int[]{0},
+                AlternativeBuilder.TripView.NONE);
 
         assertThat(result.steps()).extracting(step -> step.place().name()).containsExactly("곧 여는 공원");
         assertThat(result.steps().get(0).startTime()).isEqualTo("13:30");
@@ -72,7 +73,8 @@ class GapFillerTest {
         Set<Integer> used = new HashSet<>(day.placeIndices);
         GapFill result = GapFiller.fillGapBeforeMeal(day, candidates, new ArrayDeque<>(spare), used,
                 candidates.get(0), 13 * 60, 17 * 60 + 30, candidates.get(1), null, "car", remainingQuota,
-                new HashSet<>(), new ScheduleConfig(9 * 60, 22 * 60, 0, false, pace), new int[]{0});
+                new HashSet<>(), new ScheduleConfig(9 * 60, 22 * 60, 0, false, pace), new int[]{0},
+                AlternativeBuilder.TripView.NONE);
         return result.steps().stream().map(StepData::place).map(p -> p.name()).toList();
     }
 

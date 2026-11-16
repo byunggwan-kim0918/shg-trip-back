@@ -160,6 +160,39 @@ class ItineraryDataMapperTest {
     }
 
     @Test
+    @DisplayName("대체 경로에서 모델이 쓴 스텝 설명도 틀린 일차 표현을 실제 일차로 고친다")
+    void fixesDayWordsInModelNotes() {
+        when(placeRepository.findByNameAndAddress("캐시장소", "addr-3"))
+                .thenReturn(Optional.of(placeAt("캐시장소", "addr-3", JEJU_LAT + 0.01, JEJU_LNG + 0.01)));
+        StepData dayTwo = new StepData(1, 2, "09:00", "10:00", new PlaceData("캐시장소", "addr-3", "관광", "제주", "Korea"),
+                List.of(), null, null, null, null, "마지막 날 아침, 바다를 보며 걸어요.", BigDecimal.ZERO);
+
+        Itinerary itinerary = mapper.toEntity(new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(),
+                List.of(dayTwo)), jejuInput(), 1L, true, List.of(JEJU_CENTER));
+
+        assertThat(itinerary.getSteps().get(0).getNotes()).isEqualTo("둘째 날 아침, 바다를 보며 걸어요.");
+    }
+
+    @Test
+    @DisplayName("여행 날짜를 모르면 스텝의 마지막 일차를 여행 일수로 보고 \"마지막 날\"을 고친다")
+    void usesLastStepDayWhenDatesAreMissing() {
+        when(placeRepository.findByNameAndAddress("캐시장소", "addr-3"))
+                .thenReturn(Optional.of(placeAt("캐시장소", "addr-3", JEJU_LAT + 0.01, JEJU_LNG + 0.01)));
+        PlaceData place = new PlaceData("캐시장소", "addr-3", "관광", "제주", "Korea");
+        StepData first = new StepData(1, 1, "09:00", "10:00", place, List.of(), null, null, null, null,
+                "마지막 날 아침, 바다를 보며 걸어요.", BigDecimal.ZERO);
+        StepData last = new StepData(2, 2, "09:00", "10:00", place, List.of(), null, null, null, null, null,
+                BigDecimal.ZERO);
+        EnrichedInput noDates = new EnrichedInput("제주", List.of(), List.of(), "normal", "any",
+                BigDecimal.valueOf(1000000), null, null, null, null, null);
+
+        Itinerary itinerary = mapper.toEntity(new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(),
+                List.of(first, last)), noDates, 1L, true, List.of(JEJU_CENTER));
+
+        assertThat(itinerary.getSteps().get(0).getNotes()).isEqualTo("첫째 날 아침, 바다를 보며 걸어요.");
+    }
+
+    @Test
     @DisplayName("DB 장소가 여행지 근처면 그대로 채택한다")
     void acceptsNearbyDbPlace() {
         when(placeRepository.findByNameAndAddress("캐시장소", "addr-3"))

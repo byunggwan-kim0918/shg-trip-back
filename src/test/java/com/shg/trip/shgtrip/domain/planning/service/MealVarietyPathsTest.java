@@ -13,6 +13,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -60,7 +61,7 @@ class MealVarietyPathsTest {
 
         List<String> names = AlternativeBuilder.buildAlternatives(candidates.get(5), null,
                         new ArrayDeque<>(List.of(8)), new HashSet<>(List.of(1, 2, 6)), candidates, "car", new HashSet<>(),
-                        VarietyLedger.admitsReplacing(day, 6, candidates)).stream()
+                        VarietyLedger.admitsReplacing(day, 6, candidates), AlternativeBuilder.TripView.NONE).stream()
                 .map(AlternativeData::name).toList();
 
         assertThat(names).containsExactlyInAnyOrder("황금조개구이", "합천돼지국밥", "그옛날 초당순두부");
@@ -73,7 +74,7 @@ class MealVarietyPathsTest {
         used.removeAll(spare);
         MealPlanner.ensureMealSlots(day, steps, candidates, new ArrayDeque<>(spare), used, 6,
                 false, null, "car", new InvariantMemo(), new ScheduleConfig(9 * 60, 22 * 60, 0, false, "normal"),
-                c -> true);
+                c -> true, Set.of());
         List<Integer> added = new ArrayList<>(day.placeIndices);
         added.removeAll(List.of(1, 2));
         return added.isEmpty() ? null : added.get(0);

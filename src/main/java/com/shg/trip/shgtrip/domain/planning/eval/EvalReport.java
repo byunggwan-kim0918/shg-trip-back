@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.planning.eval;
 import com.shg.trip.shgtrip.domain.planning.service.DropReason;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
+import com.shg.trip.shgtrip.domain.planning.service.MealKindSwaps;
 import com.shg.trip.shgtrip.domain.planning.service.OverCapLegs;
 import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
 import com.shg.trip.shgtrip.domain.planning.service.ScoreReport;
@@ -351,6 +352,8 @@ final class EvalReport {
         sb.append(",days,pace,transport,multi_city,joined,pool,search_pool,zones,day_scores,day_visits,day_prominence,day_end");
         sb.append(",picked,dropped,filled,drop_reasons,legs_avoidable,legs_pool_limited,legs_requested,short_days");
         sb.append(",sel_placed,sel_kept");
+        sb.append(",kind_day_avoidable,kind_day_pool_limited,kind_repeat_avoidable,kind_repeat_pool_limited");
+        sb.append(",kind_consec_avoidable,kind_consec_pool_limited,alt_steps,alt_total,alt_empty,alt_cross_day");
         sb.append('\n');
         for (EvalRunner.Row r : rows) {
             if (r.saved() != null) line(sb, r, "saved", r.saved(), r.savedRules());
@@ -412,6 +415,18 @@ final class EvalReport {
         EvalRunner.PickUse pickUse = "replayed".equals(source) ? r.pickUse() : null;
         sb.append(',').append(pickUse == null ? "" : pickUse.placed())
                 .append(',').append(pickUse == null ? "" : pickUse.kept());
+        MealKindSwaps.Count k = "replayed".equals(source) ? r.mealSwaps() : null;
+        sb.append(',').append(k == null ? "" : k.sameDayAvoidable())
+                .append(',').append(k == null ? "" : k.sameDayPoolLimited())
+                .append(',').append(k == null ? "" : k.repeatedAvoidable())
+                .append(',').append(k == null ? "" : k.repeatedPoolLimited())
+                .append(',').append(k == null ? "" : k.consecutiveAvoidable())
+                .append(',').append(k == null ? "" : k.consecutivePoolLimited());
+        AlternativeStats a = "replayed".equals(source) ? r.alts() : null;
+        sb.append(',').append(a == null ? "" : a.steps())
+                .append(',').append(a == null ? "" : a.total())
+                .append(',').append(a == null ? "" : a.empty())
+                .append(',').append(a == null ? "" : a.crossDay());
         sb.append('\n');
     }
 

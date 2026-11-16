@@ -38,6 +38,7 @@ final class DayScheduler {
      * 바꾸므로 다시 부르기 전 상태는 {@link PlanState#checkpoint()}로 잡아 둔다.
      */
     static List<StepData> scheduleAll(PlanState s) {
+        s.resetAlternativeKeys();
         List<StepData> steps = new ArrayList<>();
         for (int i = 0; i < s.days.size(); i++) {
             Integer previousLodging = i > 0 ? s.days.get(i - 1).accommodationIndex : null;
@@ -80,8 +81,10 @@ final class DayScheduler {
         ordered = DistanceBudget.enforceDistanceBudget(day, ordered, s.candidates, s.spare, s.usedIndices,
                 s.transportPref, s.cfg);
         double[] dayCentroid = centroidOf(day.placeIndices, s.candidates);
+        Set<String> dayAltKeys = new HashSet<>();
+        AlternativeBuilder.TripView tripAlternatives = s.alternativesFor(day, dayAltKeys);
         List<StepData> steps = scheduleDay(day, ordered, s.candidates, s.spare, s.cfg,
-                dayCentroid, s.usedIndices, s.transportPref, startFrom, s.maxPerDay);
+                dayCentroid, s.usedIndices, s.transportPref, startFrom, s.maxPerDay, dayAltKeys, tripAlternatives);
         return new DayResult(steps, day.dropped());
     }
 
@@ -199,7 +202,8 @@ final class DayScheduler {
                                               List<PlaceCandidate> candidates, Deque<Integer> spareIndices,
                                               ScheduleConfig cfg, double[] dayCentroid,
                                               Set<Integer> usedIndices, String transportPref,
-                                              PlaceCandidate startFrom, int maxPerDay) {
+                                              PlaceCandidate startFrom, int maxPerDay, Set<String> dayAltKeys,
+                                              AlternativeBuilder.TripView tripAlternatives) {
         cfg = withDepartureLegLead(day, cfg.forDay(day), candidates, startFrom, transportPref);
         List<Integer> diningAll = orderedMain.stream()
                 .filter(idx -> {
@@ -375,8 +379,6 @@ final class DayScheduler {
                 transportPref, protectedIdx, breakfastIdx, lunchIdx, dinnerIdx);
 
         List<StepData> steps = new ArrayList<>();
-        // 같은 날 안에서 대안이 겹치지 않도록 스텝 간에 공유하는 집합.
-        Set<String> dayAltKeys = new HashSet<>();
         int currentMinutes = cfg.morningStart;
         // 전날 숙소를 출발지로 둬야 첫 스텝에도 이동 정보가 붙고 첫 도착이 출발 + 이동시간이 된다.
         // walk 보정으로 숙소가 이미 첫 스텝이면 중복 적용하지 않는다.
@@ -394,7 +396,8 @@ final class DayScheduler {
                 GapFill fill = GapFiller.fillGapBeforeMeal(day, candidates, spareIndices, usedIndices,
                         prev, currentMinutes, mealStart, cand, dayCentroid, transportPref,
                         // 채운 장소는 day.placeIndices에 들어가므로 이미 센 것으로 친다(0을 넘긴다).
-                        GapFiller.gapFillQuota(day, maxPerDay, 0), dayAltKeys, cfg, overQuotaUsed);
+                        GapFiller.gapFillQuota(day, maxPerDay, 0), dayAltKeys, cfg, overQuotaUsed,
+                        tripAlternatives);
                 steps.addAll(fill.steps());
                 prev = fill.prev();
                 currentMinutes = fill.minutes();
@@ -483,7 +486,8 @@ final class DayScheduler {
             trimPreviousEnd(steps, startMin);
             steps.add(buildStep(day, cand, startMin, endMin, leg,
                     AlternativeBuilder.buildAlternatives(cand, dayCentroid, spareIndices, usedIndices, candidates,
-                            transportPref, dayAltKeys, VarietyLedger.admitsReplacing(day, cand.index(), candidates))));
+                            transportPref, dayAltKeys, VarietyLedger.admitsReplacing(day, cand.index(), candidates),
+                            tripAlternatives)));
 
             currentMinutes = Math.max(currentMinutes, endMin);
             prev = cand;

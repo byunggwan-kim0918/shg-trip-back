@@ -35,13 +35,13 @@
       비용: 0원 / 메모: -
       대안: 논짓물 | Landmarks and Outdoors > Tourist Attraction | 0원
       대안: 중문색달해수욕장 | Landmarks and Outdoors > Tourist Attraction | 0원
-      대안: 한림민속오일시장 | Retail > Market | 0원
   #9  11:30-12:40  양가형제 | Dining and Drinking > Restaurant | 제주시 | Jeju
       이동: CAR 9분 5.53km 4422원
       비용: 13000원 / 메모: -
   #10 12:58-14:28  제주 서귀포 산방산 | Landmarks and Outdoors > Tourist Attraction | 서귀포시 | Jeju
       이동: CAR 18분 11.86km 9485원
       비용: 0원 / 메모: -
+      대안: 한림민속오일시장 | Retail > Market | 0원
       대안: 곽지해수욕장 | Landmarks and Outdoors > Tourist Attraction | 0원
   #11 17:30-18:40  연돈 | Dining and Drinking > Restaurant | 서귀포시 | Jeju
       이동: CAR 18분 11.4km 9116원

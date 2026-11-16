@@ -10,6 +10,7 @@ import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventReposi
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
+import com.shg.trip.shgtrip.domain.planning.service.OpeningCheck;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.domain.planning.service.QualityGate;
 import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
@@ -27,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -188,6 +190,61 @@ public class ItineraryService {
     }
 
     /**
+     * 대안으로 바꿨을 때의 변화. 일정은 바꾸지 않는다. 이동은 {@link #recalculateTransportation}처럼 같은 날 앞뒤 구간만
+     * 다시 재고, 잴 수 없으면 저장된 값을 둔다. 안내는 편집 재판정과 같은 판정으로 만든다.
+     */
+    @Transactional(readOnly = true)
+    public AlternativePreviewResponse previewAlternative(Long itineraryId, Long stepId, Long alternativeId,
+                                                         Long userId) {
+        Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+        verifyEditable(itinerary);
+        ItineraryStep step = itinerary.getSteps().stream()
+                .filter(s -> s.getId().equals(stepId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "일정 단계를 찾을 수 없습니다."));
+        AlternativeOption selected = step.getAlternatives().stream()
+                .filter(a -> a.getId().equals(alternativeId))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "대안 장소를 찾을 수 없습니다."));
+        Place to = selected.getPlace();
+
+        List<ItineraryStep> sorted = byStepOrder(itinerary.getSteps());
+        ItineraryStep prev = sameDayNeighbor(sorted, step, -1);
+        ItineraryStep next = sameDayNeighbor(sorted, step, 1);
+        GeoUtils.TransportLeg incoming = prev == null ? null : computeLeg(prev.getPlace(), to);
+        GeoUtils.TransportLeg outgoing = next == null ? null : computeLeg(to, next.getPlace());
+
+        QualityGate.SwapPreview quality = qualityGate.previewSwap(itinerary, step, to, incoming, next, outgoing);
+        List<String> now = itinerary.getQualityNotices() == null ? List.of() : itinerary.getQualityNotices();
+        List<String> after = quality == null ? now : quality.notices();
+        LocalDate date = itinerary.getStartDate() == null ? null
+                : itinerary.getStartDate().plusDays(step.getDayNumber() - 1L);
+        Integer alreadyOnDay = sorted.stream()
+                .filter(s -> s != step && s.getPlace() != null && s.getPlace().getId().equals(to.getId()))
+                .map(ItineraryStep::getDayNumber)
+                .findFirst().orElse(null);
+
+        return new AlternativePreviewResponse(
+                prev == null ? null : legChange(step, incoming),
+                next == null ? null : legChange(next, outgoing),
+                step.getEstimatedCost(), selected.getEstimatedCost(),
+                OpeningCheck.openDuring(to, date, step.getStartTime(), step.getEndTime()),
+                OpeningCheck.closedOn(to, date),
+                alreadyOnDay,
+                now.stream().filter(n -> !after.contains(n)).toList(),
+                after.stream().filter(n -> !now.contains(n)).toList(),
+                itinerary.getQualityStatus() == Itinerary.QualityStatus.NEEDS_ADJUSTMENT
+                        && quality != null && quality.meetsCoreQuality());
+    }
+
+    private static AlternativePreviewResponse.LegChange legChange(ItineraryStep arriving,
+                                                                  GeoUtils.TransportLeg recalculated) {
+        AlternativePreviewResponse.Leg before = AlternativePreviewResponse.Leg.of(arriving);
+        return new AlternativePreviewResponse.LegChange(before,
+                recalculated == null ? before : AlternativePreviewResponse.Leg.of(recalculated));
+    }
+
+    /**
      * 시간(startTime/endTime)은 슬롯에 고정되고 장소만 재배치되며, 교통 정보는 새 순서로 재계산한다.
      * orderedStepIds가 해당 day의 전체 스텝 집합과 정확히 일치하지 않으면 거부한다.
      */
@@ -335,32 +392,30 @@ public class ItineraryService {
      * 일차 경계를 넘는 구간은 재계산하지 않는다.
      */
     private void recalculateTransportation(List<ItineraryStep> allSteps, ItineraryStep changedStep) {
-        List<ItineraryStep> sorted = allSteps.stream()
-                .sorted(Comparator.comparingInt(ItineraryStep::getStepOrder))
-                .toList();
+        List<ItineraryStep> sorted = byStepOrder(allSteps);
+        ItineraryStep prev = sameDayNeighbor(sorted, changedStep, -1);
+        ItineraryStep next = sameDayNeighbor(sorted, changedStep, 1);
+        if (prev != null) updateDistance(prev, changedStep);
+        if (next != null) updateDistance(changedStep, next);
+    }
 
+    private static List<ItineraryStep> byStepOrder(List<ItineraryStep> steps) {
+        return steps.stream().sorted(Comparator.comparingInt(ItineraryStep::getStepOrder)).toList();
+    }
+
+    /** 같은 날 바로 앞({@code offset} -1)·뒤(+1) 스텝. 날이 바뀌거나 없으면 null. */
+    private static ItineraryStep sameDayNeighbor(List<ItineraryStep> sorted, ItineraryStep step, int offset) {
         int idx = -1;
         for (int i = 0; i < sorted.size(); i++) {
-            if (sorted.get(i).getId().equals(changedStep.getId())) {
+            if (sorted.get(i).getId().equals(step.getId())) {
                 idx = i;
                 break;
             }
         }
-        if (idx < 0) return;
-
-        if (idx > 0) {
-            ItineraryStep prev = sorted.get(idx - 1);
-            if (prev.getDayNumber().equals(changedStep.getDayNumber())) {
-                updateDistance(prev, changedStep);
-            }
-        }
-
-        if (idx < sorted.size() - 1) {
-            ItineraryStep next = sorted.get(idx + 1);
-            if (changedStep.getDayNumber().equals(next.getDayNumber())) {
-                updateDistance(changedStep, next);
-            }
-        }
+        int at = idx + offset;
+        if (idx < 0 || at < 0 || at >= sorted.size()) return null;
+        ItineraryStep neighbor = sorted.get(at);
+        return neighbor.getDayNumber().equals(step.getDayNumber()) ? neighbor : null;
     }
 
     /**
@@ -379,8 +434,10 @@ public class ItineraryService {
      * 좌표가 없거나(0,0 포함) 비현실 구간이면 null.
      */
     private GeoUtils.TransportLeg computeLeg(ItineraryStep from, ItineraryStep to) {
-        Place fromPlace = from.getPlace();
-        Place toPlace = to.getPlace();
+        return computeLeg(from.getPlace(), to.getPlace());
+    }
+
+    private static GeoUtils.TransportLeg computeLeg(Place fromPlace, Place toPlace) {
         if (fromPlace == null || toPlace == null) return null;
         if (fromPlace.getLatitude() == null || toPlace.getLatitude() == null) return null;
         if (GeoUtils.isZeroCoord(fromPlace.getLatitude(), fromPlace.getLongitude())

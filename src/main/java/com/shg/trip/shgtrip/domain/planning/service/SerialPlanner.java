@@ -71,6 +71,8 @@ public class SerialPlanner {
         final Map<Integer, List<String>> picks = new TreeMap<>();
         final Map<Integer, Integer> shortfall = new HashMap<>();
         final Map<Integer, double[]> anchors = new TreeMap<>();
+        // 도시 구간이 바뀌어도 전날 저녁과 다음 날 점심은 이어서 판정된다.
+        String lastDinnerKind;
     }
 
     /** 선택 단계가 날짜별로 놓은 장소를 어떻게 쓸지. */
@@ -124,24 +126,25 @@ public class SerialPlanner {
                        Set<String> promised) {
         TripNotes notes = new TripNotes();
         CityBlockPlanner.BlockScheduler withinCity =
-                (blockSelection, blockCandidates, blockArgs) -> scheduleWithinCity(blockSelection, blockCandidates,
-                        blockArgs, notes, picks, promised);
+                (blockSelection, blockCandidates, blockArgs, earlier) -> scheduleWithinCity(blockSelection,
+                        blockCandidates, blockArgs, earlier, notes, picks, promised);
         RouteOptimizer.ScheduleResult result = args.cities() != null
                 ? CityBlockPlanner.schedule(selection, candidates, args, withinCity)
-                : withinCity.schedule(selection, candidates, args);
+                : withinCity.schedule(selection, candidates, args, PlanState.Earlier.NONE);
         SelectionOutput chosen = picks == Picks.AS_PLACED ? selection : chosen(notes, candidates);
         return new Result(result.steps(), result.unresolved(), reports(chosen, candidates, result.steps(), notes),
                 chosen, notes.anchors);
     }
 
     private RouteOptimizer.ScheduleResult scheduleWithinCity(SelectionOutput selection, List<PlaceCandidate> candidates,
-                                                             ScheduleArgs args, TripNotes notes, Picks picks,
-                                                             Set<String> promised) {
+                                                             ScheduleArgs args, PlanState.Earlier earlier,
+                                                             TripNotes notes, Picks picks, Set<String> promised) {
         boolean choosesDays = picks != Picks.AS_PLACED;
         Set<Integer> promisedHere = candidates.stream().filter(c -> promised.contains(keyOf(c)))
                 .map(PlaceCandidate::index).collect(Collectors.toCollection(TreeSet::new));
         List<PlaceCandidate> withIntent = IntentHints.apply(selection, candidates);
         PlanState s = PlanState.of(selection, withIntent, args);
+        s.continueFrom(earlier);
         Set<Integer> placed = s.days.stream().flatMap(d -> d.placeIndices.stream()).filter(Objects::nonNull)
                 .collect(Collectors.toCollection(TreeSet::new));
         Set<Integer> preferred = picks == Picks.PREFER ? placed : Set.of();
@@ -164,22 +167,26 @@ public class SerialPlanner {
             SubstitutionRepair.dedupeMainStepsAcrossItinerary(s.days, s.candidates, s.spare);
             LodgingPlanner.assignHubsAndLodging(s.days, s.candidates, args.hub());
         }
-        MealPlanner.ensureCafeStops(s.days, s.candidates, s.spare, s.cfg, s.transportPref);
+        MealPlanner.ensureCafeStops(s.days, s.candidates, s.spare, s.cfg, s.transportPref, s.earlier().brands());
         s.beginScheduling();
 
         List<StepData> steps = new ArrayList<>();
+        CandidateLookup lookup = new CandidateLookup(s.candidates);
         for (int i = 0; i < s.days.size(); i++) {
             DayState day = s.days.get(i);
             Integer previousLodging = i > 0 ? s.days.get(i - 1).accommodationIndex : null;
             if (choosesDays) {
                 notes.shortfall.put(day.dayNumber,
-                        DayPicker.fill(s, day, previousLodging, DayState.endsTrip(s.days, i), preferred));
+                        DayPicker.fill(s, day, previousLodging, DayState.endsTrip(s.days, i), preferred,
+                                notes.lastDinnerKind));
                 reserved.addAll(day.placeIndices);
                 notes.picks.put(day.dayNumber, day.placeIndices.stream()
                         .map(idx -> byIndex(s.candidates, idx)).filter(Objects::nonNull)
                         .map(SerialPlanner::keyOf).toList());
             }
-            steps.addAll(completeDay(s, day, previousLodging, notes.reasons, choosesDays));
+            List<StepData> daySteps = completeDay(s, day, previousLodging, notes.reasons, choosesDays);
+            steps.addAll(daySteps);
+            notes.lastDinnerKind = dinnerKind(daySteps, lookup);
             // 거리 트림과 끼니 교체로 뺀 장소는 사용 표시가 풀린다. 그날에는 다시 쓸 수 있지만 다른 날의 빈자리로 들어가면 안 된다.
             s.usedIndices.addAll(reserved);
         }
@@ -192,6 +199,14 @@ public class SerialPlanner {
                 s.cfg);
         IntentHints.logOutcome(withIntent, steps);
         return new RouteOptimizer.ScheduleResult(AlternativeBuilder.pruneUsedAndRenumber(steps), unresolved);
+    }
+
+    private static String dinnerKind(List<StepData> daySteps, CandidateLookup lookup) {
+        return daySteps.stream()
+                .filter(st -> st.place() != null && lookup.isMeal(st) && InvariantChecker.inMealWindow(
+                        ScheduleTimes.toMinutesOrZero(st.startTime()), ScheduleTuning.DINNER_START,
+                        ScheduleTuning.DINNER_END))
+                .reduce((first, second) -> second).map(lookup::mealKind).orElse(null);
     }
 
     /** @param nearbySpareOnly 그날 기준 장소에서 먼 예비 장소를 그날 보충에서 뺀다 */

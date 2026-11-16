@@ -129,24 +129,53 @@ final class PlanEdits {
     static Integer pickNearbyCandidate(List<PlaceCandidate> candidates, Deque<Integer> spare,
                                        Set<Integer> usedIndices, double[] anchor,
                                        java.util.function.Predicate<PlaceCandidate> predicate) {
-        Integer fromSpare = nearestMatching(spare.stream().map(i -> byIndex(candidates, i)).toList(),
-                usedIndices, anchor, predicate);
-        if (fromSpare != null) return fromSpare;
-        // spare에 없으면 아직 어디에도 쓰이지 않은 후보까지 넓힌다(검색 결과를 끝까지 활용)
-        return nearestMatching(candidates, usedIndices, anchor, predicate);
+        return pickNearbyCandidate(candidates, spare, usedIndices, anchor, predicate, Set.of());
     }
 
+    /** @param earlierBrands 앞 도시 구간에서 간 식음료 브랜드 */
+    static Integer pickNearbyCandidate(List<PlaceCandidate> candidates, Deque<Integer> spare,
+                                       Set<Integer> usedIndices, double[] anchor,
+                                       java.util.function.Predicate<PlaceCandidate> predicate,
+                                       Set<String> earlierBrands) {
+        Set<String> brands = CandidateTraits.diningBrands(usedIndices, candidates);
+        brands.addAll(earlierBrands);
+        Integer fromSpare = nearestMatching(spare.stream().map(i -> byIndex(candidates, i)).toList(),
+                usedIndices, anchor, predicate, brands);
+        if (fromSpare != null && !CandidateTraits.repeatsBrand(brands, byIndex(candidates, fromSpare))) {
+            return fromSpare;
+        }
+        // spare에 없으면 아직 어디에도 쓰이지 않은 후보까지 넓힌다(검색 결과를 끝까지 활용)
+        Integer fromAll = nearestMatching(candidates, usedIndices, anchor, predicate, brands);
+        if (fromSpare == null || fromAll == null) return fromSpare != null ? fromSpare : fromAll;
+        // spare에 이미 간 체인만 남았으면 전체 후보의 다른 가게를 같은 거리 안에서 먼저 쓴다.
+        PlaceCandidate other = byIndex(candidates, fromAll);
+        boolean nearEnough = anchor == null || kmFrom(anchor, other)
+                <= kmFrom(anchor, byIndex(candidates, fromSpare)) + REPEAT_BRAND_MAX_EXTRA_KM;
+        return !CandidateTraits.repeatsBrand(brands, other) && nearEnough ? fromAll : fromSpare;
+    }
+
+    private static double kmFrom(double[] anchor, PlaceCandidate c) {
+        return coordsOf(c) == null ? Double.MAX_VALUE : GeoUtils.haversine(anchor, coordsOf(c));
+    }
+
+    // 완화 단계는 반경을 풀어 두어, 거리 상한 없이 새 브랜드를 앞세우면 먼 가게가 가까운 곳을 이긴다.
     private static Integer nearestMatching(List<PlaceCandidate> pool, Set<Integer> usedIndices, double[] anchor,
-                                           java.util.function.Predicate<PlaceCandidate> predicate) {
-        return pool.stream()
+                                           java.util.function.Predicate<PlaceCandidate> predicate,
+                                           Set<String> brands) {
+        java.util.function.ToDoubleFunction<PlaceCandidate> km = c -> anchor == null || coordsOf(c) == null
+                ? Double.MAX_VALUE : GeoUtils.haversine(anchor, coordsOf(c));
+        List<PlaceCandidate> ranked = pool.stream()
                 .filter(Objects::nonNull)
                 .filter(c -> !usedIndices.contains(c.index()))
                 .filter(predicate)
                 .filter(c -> anchor == null || coordsOf(c) != null)
-                .min(Comparator.comparingDouble(c -> anchor == null || coordsOf(c) == null
-                        ? Double.MAX_VALUE : GeoUtils.haversine(anchor, coordsOf(c))))
-                .map(PlaceCandidate::index)
-                .orElse(null);
+                .sorted(Comparator.comparingDouble(km))
+                .toList();
+        if (ranked.isEmpty()) return null;
+        double reach = km.applyAsDouble(ranked.get(0)) + REPEAT_BRAND_MAX_EXTRA_KM;
+        return ranked.stream()
+                .filter(c -> km.applyAsDouble(c) <= reach && !CandidateTraits.repeatsBrand(brands, c))
+                .findFirst().orElse(ranked.get(0)).index();
     }
 
     /** 그날 영업하는 장소만 통과시키는 필터. startDate가 없으면 판단 보류(전부 통과). */

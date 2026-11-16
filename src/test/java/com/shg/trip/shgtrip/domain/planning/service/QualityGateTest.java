@@ -2,11 +2,13 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.shg.trip.shgtrip.domain.itinerary.entity.AlternativeOption;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary.QualityStatus;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
+import com.shg.trip.shgtrip.global.util.GeoUtils;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
@@ -174,6 +176,60 @@ class QualityGateTest {
 
         gate.reflectEdit(itinerary);
         assertThat(itinerary.getQualityNotices()).containsExactly(expected);
+    }
+
+    @Test
+    @DisplayName("교체 미리보기의 안내와 기준 충족은 실제로 바꾼 뒤 편집 재판정과 같다")
+    void swapPreviewMatchesEdit() throws Exception {
+        String ctx = objectMapper.writeValueAsString(context(1));
+        List<ItineraryStep> steps = fullDay();
+        steps.set(3, step(4, "18:00", "19:00", place(4, "초당순두부", KOREAN, "MEAL")));
+        Itinerary itinerary = itinerary(steps, QualityStatus.NEEDS_ADJUSTMENT, ctx);
+        ItineraryStep dinner = steps.get(3);
+        Place noodle = place(9, "짬뽕지존", CHINESE, "MEAL");
+
+        QualityGate.SwapPreview sameKind = gate.previewSwap(itinerary, dinner, place(8, "할매순두부", KOREAN, "MEAL"),
+                null, null, null);
+        QualityGate.SwapPreview preview = gate.previewSwap(itinerary, dinner, noodle, null, null, null);
+        dinner.addAlternative(AlternativeOption.builder().id(5L).place(noodle).optionOrder(1).build());
+        dinner.selectAlternative(dinner.getAlternatives().get(0));
+        gate.reflectEdit(itinerary);
+
+        assertThat(sameKind.meetsCoreQuality()).isFalse();
+        assertThat(preview.notices()).isEqualTo(itinerary.getQualityNotices());
+        assertThat(preview.meetsCoreQuality()).isTrue();
+        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.OK);
+    }
+
+    @Test
+    @DisplayName("교체 판정은 바뀐 스텝으로 오는 구간과 다음 스텝으로 가는 구간을 넘긴 값으로 본다")
+    void swapVerdictUsesGivenLegs() {
+        List<ItineraryStep> steps = fullDay();
+        Itinerary itinerary = itinerary(steps, QualityStatus.OK, null);
+        ItineraryRules.Context ctx = context(1).rules();
+        Place other = place(9, "범어사", TEMPLE, "SIGHT");
+        GeoUtils.TransportLeg near = new GeoUtils.TransportLeg("CAR", 10, BigDecimal.valueOf(5), BigDecimal.valueOf(1500));
+        GeoUtils.TransportLeg far = new GeoUtils.TransportLeg("CAR", 90, BigDecimal.valueOf(80), BigDecimal.valueOf(24000));
+
+        assertThat(legOverCap(SavedItineraryFacts.evaluateSwap(itinerary, steps.get(2), other, far, steps.get(3), near,
+                ctx))).isTrue();
+        assertThat(legOverCap(SavedItineraryFacts.evaluateSwap(itinerary, steps.get(2), other, near, steps.get(3), far,
+                ctx))).isTrue();
+        assertThat(legOverCap(SavedItineraryFacts.evaluateSwap(itinerary, steps.get(2), other, near, steps.get(3), near,
+                ctx))).isFalse();
+    }
+
+    private static boolean legOverCap(ItineraryRules.Verdict verdict) {
+        return verdict.violations().stream().anyMatch(v -> v.rule() == ItineraryRules.Rule.LEG_OVER_CAP);
+    }
+
+    @Test
+    @DisplayName("판정 입력이 없는 일정은 교체 미리보기 판정을 하지 않는다")
+    void swapPreviewNeedsPlanContext() {
+        Itinerary itinerary = itinerary(fullDay(), QualityStatus.OK, null);
+
+        assertThat(gate.previewSwap(itinerary, itinerary.getSteps().get(0), place(9, "다른 해변", BEACH, "SIGHT"),
+                null, null, null)).isNull();
     }
 
     private static QualityGate.PlanContext context(int days) {

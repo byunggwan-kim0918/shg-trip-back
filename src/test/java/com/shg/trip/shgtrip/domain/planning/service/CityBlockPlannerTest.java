@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
+import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
 import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
@@ -90,6 +91,30 @@ class CityBlockPlannerTest {
 
     private static List<StepData> day(List<StepData> steps, int dayNumber) {
         return steps.stream().filter(s -> s.dayNumber() == dayNumber).toList();
+    }
+
+    @Test
+    @DisplayName("다음 도시 구간은 앞 구간에서 간 식당의 브랜드·종류와 앞 구간 일수를 받는다")
+    void laterBlocksSeeEarlierBlocks() {
+        List<PlaceCandidate> candidates = candidates();
+        PlaceCandidate tokyoMeal = candidates.get(7);
+        List<PlanState.Earlier> received = new ArrayList<>();
+
+        CityBlockPlanner.schedule(selection(), candidates, args(CITIES), (sel, cands, blockArgs, earlier) -> {
+            received.add(earlier);
+            PlaceData place = new PlaceData(tokyoMeal.name(), tokyoMeal.address(), tokyoMeal.category(), null, "JP",
+                    null, null, tokyoMeal.placeId(), null);
+            List<StepData> steps = received.size() == 1
+                    ? List.of(new StepData(1, 1, "12:00", "13:00", place, List.of(), null, null, null, null, null, null))
+                    : List.of();
+            return new RouteOptimizer.ScheduleResult(steps, List.of());
+        });
+
+        assertThat(received).hasSize(2);
+        assertThat(received.get(0)).isEqualTo(PlanState.Earlier.NONE);
+        assertThat(received.get(1).daysBefore()).isEqualTo(2);
+        assertThat(received.get(1).brands()).contains(CandidateTraits.diningBrand(tokyoMeal));
+        assertThat(received.get(1).mealKinds()).containsKey(CandidatePolicy.cuisineOf(tokyoMeal));
     }
 
     @Test
