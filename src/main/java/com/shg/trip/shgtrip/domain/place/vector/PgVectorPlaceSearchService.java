@@ -74,6 +74,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         String sql = SELECT_COLUMNS + """
                 WHERE p.embedding IS NOT NULL
                   AND p.active = true
+                  AND p.merged_into_id IS NULL
                   AND p.country = ?
                   AND p.region = ?
                   AND p.wikidata_sitelinks > 0
@@ -212,6 +213,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         StringBuilder where = new StringBuilder("""
                 WHERE p.embedding IS NOT NULL
                   AND p.active = true
+                  AND p.merged_into_id IS NULL
                   AND p.country = ?
                   AND NOT (p.latitude = 0 AND p.longitude = 0)
                   AND (p.place_role IS NULL OR p.place_role <> 'NOT_VISITABLE')
@@ -288,6 +290,7 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         StringBuilder where = new StringBuilder("""
                 WHERE p.embedding IS NOT NULL
                   AND p.active = true
+                  AND p.merged_into_id IS NULL
                   AND p.country = ?
                   AND p.region = ?
                   AND NOT (p.latitude = 0 AND p.longitude = 0)

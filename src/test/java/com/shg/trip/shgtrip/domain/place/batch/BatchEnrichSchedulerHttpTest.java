@@ -46,13 +46,19 @@ class BatchEnrichSchedulerHttpTest {
 
     @BeforeEach
     void setUp() {
-        scheduler = new BatchEnrichScheduler(repository, new ObjectMapper(), mock(EmbeddingBatchJob.class), http);
+        scheduler = new BatchEnrichScheduler(repository, new ObjectMapper(), mock(EmbeddingBatchJob.class), client(http));
         ReflectionTestUtils.setField(scheduler, "anthropicApiKey", "test-key");
         ReflectionTestUtils.setField(scheduler, "enrichModel", "test-model");
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
-        ReflectionTestUtils.setField(scheduler, "pollIntervalMs", 1L);
-        ReflectionTestUtils.setField(scheduler, "retryBaseMs", 1L);
-        ReflectionTestUtils.setField(scheduler, "maxPollDuration", Duration.ofSeconds(5));
+    }
+
+    private static AnthropicBatchClient client(HttpClient http) {
+        AnthropicBatchClient client = new AnthropicBatchClient(new ObjectMapper(), http);
+        ReflectionTestUtils.setField(client, "apiKey", "test-key");
+        ReflectionTestUtils.setField(client, "pollIntervalMs", 1L);
+        ReflectionTestUtils.setField(client, "retryBaseMs", 1L);
+        ReflectionTestUtils.setField(client, "maxPollDuration", Duration.ofSeconds(5));
+        return client;
     }
 
     private static HttpResponse<String> response(int status, String body, Map<String, List<String>> headers) {
@@ -72,7 +78,7 @@ class BatchEnrichSchedulerHttpTest {
     void poll_clientErrorFailsImmediately() throws Exception {
         respond(response(404, "{\"error\":\"not_found\"}", Map.of()));
 
-        BatchEnrichScheduler.PollResult result = scheduler.pollForCompletion("msgbatch_typo");
+        AnthropicBatchClient.PollResult result = scheduler.pollForCompletion("msgbatch_typo");
 
         assertThat(result.resultsUrl()).isNull();
         assertThat(result.timedOut()).isFalse();
@@ -94,7 +100,7 @@ class BatchEnrichSchedulerHttpTest {
     void poll_canceling() throws Exception {
         respond(response(200, "{\"processing_status\":\"canceling\"}", Map.of()));
 
-        BatchEnrichScheduler.PollResult result = scheduler.pollForCompletion("b1");
+        AnthropicBatchClient.PollResult result = scheduler.pollForCompletion("b1");
 
         assertThat(result.resultsUrl()).isNull();
         assertThat(result.timedOut()).isFalse();
@@ -105,7 +111,7 @@ class BatchEnrichSchedulerHttpTest {
     void poll_stopsAtRunDeadline() throws Exception {
         ReflectionTestUtils.setField(scheduler, "runDeadlineMs", System.currentTimeMillis() - 1);
 
-        BatchEnrichScheduler.PollResult result = scheduler.pollForCompletion("b1");
+        AnthropicBatchClient.PollResult result = scheduler.pollForCompletion("b1");
 
         assertThat(result.timedOut()).isTrue();
         verify(http, never()).send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
@@ -121,9 +127,8 @@ class BatchEnrichSchedulerHttpTest {
         HttpClient always429 = mock(HttpClient.class);
         HttpResponse<String> limited = response(429, "", Map.of("retry-after", List.of("0")));
         when(always429.send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class))).thenReturn(limited);
-        BatchEnrichScheduler other = new BatchEnrichScheduler(repository, new ObjectMapper(), mock(EmbeddingBatchJob.class), always429);
-        ReflectionTestUtils.setField(other, "anthropicApiKey", "test-key");
-        ReflectionTestUtils.setField(other, "retryBaseMs", 1L);
+        BatchEnrichScheduler other = new BatchEnrichScheduler(repository, new ObjectMapper(), mock(EmbeddingBatchJob.class),
+                client(always429));
 
         assertThat(other.submitBatch(List.of(Map.of("custom_id", "place_1")))).isNull();
         verify(always429, times(3)).send(any(HttpRequest.class), any(HttpResponse.BodyHandler.class));
@@ -140,10 +145,10 @@ class BatchEnrichSchedulerHttpTest {
     void processChunk_mapsWaitAndDownloadFailures() {
         BatchEnrichScheduler spied = spy(scheduler);
         doReturn("b1").when(spied).submitBatch(anyList());
-        doReturn(new BatchEnrichScheduler.PollResult(null, true)).when(spied).pollForCompletion("b1");
+        doReturn(new AnthropicBatchClient.PollResult(null, true)).when(spied).pollForCompletion("b1");
         assertThat(spied.processChunk(List.of(place(1))).countsTowardAbort()).isFalse();
 
-        doReturn(new BatchEnrichScheduler.PollResult("https://r", false)).when(spied).pollForCompletion("b1");
+        doReturn(new AnthropicBatchClient.PollResult("https://r", false)).when(spied).pollForCompletion("b1");
         doReturn(null).when(spied).downloadResults("https://r");
         assertThat(spied.processChunk(List.of(place(1))).countsTowardAbort()).isTrue();
     }

@@ -228,6 +228,43 @@ Step Functions (월 1회)
         ※ name_ko가 원문 이름과 같으면 임베딩 텍스트에 넣지 않는다. Wikidata가 name_ko를 채우면 보강이 끝난 행만
           임베딩을 다시 만든다(보강 전인 행은 보강 결과 반영 때 다시 만들어진다)
           OpenAI 429는 retry-after(-ms)만큼 기다려 재시도
+  [4/4-같은 장소] PlaceLinkJob.run()  (batch.place-links.enabled, 기본 false, 임베딩 뒤)
+        가까운 장소 행 쌍을 같은 곳(SAME)·한쪽이 다른 쪽에 딸린 일부·다른 곳으로 판정해 place_pair_verdicts에 남기고,
+        행마다 합쳐지는 대표 행을 places.merged_into_id(merge_relation SAME·PART)에 기록한다.
+        출처마다 같은 곳이 다른 언어·옛 이름(부산타워·부산다이아몬드타워)으로 따로 있어 이름 규칙으로는 못 잡는다.
+        읽는 쪽 계약: merged_into_id가 있는 행은 후보에서 뺀다(관계와 무관). 가리키는 행은 합쳐지지 않았고 검색에 나오며
+        구역 이름·음식 거리가 아닌 행이다(대표가 그런 행이 못 되는 묶음은 합치지 않는다)
+        사용자가 고른 행은 합쳐졌어도 그대로 쓰고, 가리키는 행을 모든 후보 추가 경로에서 뺀다(딸린 일부를 고르면 큰 장소도
+        빠진다). 같은 곳의 여러 행을 함께 고르면 대표 행(없으면 먼저 고른 행) 하나만 남긴다
+        대표 행이 적재에서 비활성이 되면 다음 실행까지 합쳐진 행도 숨어 그곳이 검색에서 빠진다. 운영에서 켜려면 월간 실행에
+        이 단계를 함께 붙인다
+        → 대상(같은 지역·같은 종류, PlaceLinkRepository.findNearPairs)
+          · 관광(SIGHT·ACTIVITY·MARKET·SHOPPING): 150m 안, 후보로 나왔거나 언어판·관광공사 행이 낀 쌍.
+            이름 근거(같은 Wikidata 항목·괄호 설명/영문 꼬리를 뗀 같은 이름·한쪽 이름이 다른 쪽으로 시작)가 없으면 40m 안만
+          · 숙소: 150m 안, 후보로 나왔거나 한쪽 이름이 다른 쪽으로 시작하는 쌍 / 식당: 60m 안, 이름 앞부분이 겹치는 쌍
+          · 역할(place_role)이 없는 미보강 행은 대상이 아니다. 보강으로 역할이 생기면 다음 실행에서 잡힌다
+        → 대소문자·띄어쓰기·문장부호만 다른 이름은 묻지 않고 같은 곳으로 남긴다. 나머지는 Haiku Batch 도구 강제 호출
+          (PlacePairJudge, 보강 설명은 넣지 않음). 판정은 입력 지문(판정 버전·이름·카테고리·출처·주소·Wikidata·거리)이
+          바뀐 쌍만 다시 묻는다. 모든 지역의 묻을 쌍을 모아 묶음으로 낸 뒤 함께 기다린다. 새로 물을 쌍은 실행당
+          BATCH_PLACE_LINKS_MAX_PAIRS(기본 10만, 1 이상)까지다. 판정 모델은 보강과 같은 anthropic.batch.model이다
+        → 프롬프트·도구·모델을 바꾸면 PlacePairJudge.VERSION을 올린다. 올린 실행은 모든 쌍을 다시 물어 키·상한·시간이
+          모자라면 그 실행 동안 LLM 판정 합침이 풀린다. 키와 상한(대상 쌍 수 이상)을 확인하고 돌린다
+        → 대표 행(PlaceLinkResolver): 같은 곳 묶음에서 검색에 나오는 행 → 언어판 → 관광공사 → 사진 → 보강 순.
+          대표와 큰 장소는 검색에 나오고 구역 이름(관광특구)·음식 거리가 아닌 행만 된다(생성이 본 칸에 넣지 않는 행에
+          합치면 묶인 곳이 사라진다). 딸린 일부는 큰 장소 묶음의 대표를 가리키되 딸린 쪽이 더 알려졌으면(공원 안의 타워) 둘 다 둔다.
+          8행 넘는 같은 곳 묶음, 묶음 안 두 행을 다른 곳으로 판정한 묶음(본점과 다른 지점), 한 곳이 두 장소의 일부라는
+          판정, 고리는 따르지 않는다
+        → 대표 행 기록은 매번 지금 대상인 쌍 중 입력 지문이 맞는 판정으로 다시 계산하고 바뀐 행만 쓴다. 비활성이 됐거나
+          역할·좌표·이름이 바뀐 행의 옛 판정은 쓰지 않는다(판정 행은 남아 다시 대상이 되면 그대로 쓴다).
+          키가 없으면 묻지 않고 이것만 한다. 한 지역이 실패해도 다른 지역은 끝까지 처리하고 단계를 실패로 남긴다
+        → 이 단계만: BATCH_PLACE_LINKS_ENABLED=true (BATCH_PLACE_LINKS_REGIONS=<지역들>, 비우면 전 지역)
+            BATCH_ENRICH_ENABLED=false BATCH_FOURSQUARE_ENABLED=false BATCH_GATEWAYS_ENABLED=false
+            BATCH_ROLE_BACKFILL_ENABLED=false BATCH_COMMONS_IMAGES_ENABLED=false BATCH_NAME_KO_OVERRIDES_ENABLED=false
+            BATCH_TOURAPI_ENABLED=false BATCH_TOURAPI_IMAGE_BACKFILL=false BATCH_WIKIDATA_ENABLED=false
+            BATCH_WIKIDATA_LANDMARKS_ENABLED=false. 앞의 임베딩 단계는 늘 돌아 미임베딩 행을 채운다
+        → 첫 실행은 BATCH_PLACE_LINKS_MAX_PAIRS로 견본만 돌리고 "같은 장소 판정 분포"와 대표 행 기록 로그를 본다.
+          요청당 입력 약 390토큰 + 시스템 프롬프트 캐시 읽기 약 1,400토큰, 출력 약 40토큰
+        ※ 프롬프트는 라벨 표본 304쌍으로 골랐다(docs/eval-baseline.md "같은 장소 판정")
 ```
 
 ### 규모와 비용 (2026-10 실측, 한국 12개 도시)

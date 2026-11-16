@@ -44,7 +44,7 @@ class IngredientEnrichmentTest {
 
     @BeforeEach
     void setUp() {
-        scheduler = new BatchEnrichScheduler(placeRepository, objectMapper, embeddingBatchJob);
+        scheduler = new BatchEnrichScheduler(placeRepository, objectMapper, embeddingBatchJob, mock(AnthropicBatchClient.class));
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
         ReflectionTestUtils.setField(scheduler, "anthropicApiKey", "test-api-key");
         ReflectionTestUtils.setField(scheduler, "enrichModel", "claude-haiku-5-5");

@@ -133,6 +133,12 @@ batch:
   commons-images:
     # 사진 없는 장소에 Wikidata 대표 사진(P18)을 위키미디어 공용 썸네일 주소·저작자·라이선스와 함께 연결
     enabled: ${BATCH_COMMONS_IMAGES_ENABLED:true}
+  place-links:
+    # 가까운 장소 행 쌍을 같은 곳·딸린 일부·다른 곳으로 판정(Haiku Batch)하고 행마다 합쳐지는 대표 행 기록
+    enabled: ${BATCH_PLACE_LINKS_ENABLED:false}
+    regions: ${BATCH_PLACE_LINKS_REGIONS:}          # 비우면 전 지역
+    max-pairs: ${BATCH_PLACE_LINKS_MAX_PAIRS:100000} # 이번 실행에서 새로 물을 쌍 상한(1 이상). 견본은 작게 준다
+    max-duration: ${BATCH_PLACE_LINKS_MAX_DURATION:PT6H}
   tourapi:
     # 한국관광공사 TourAPI 관광지 시딩 (Foursquare의 빈약한 관광지 커버리지 보완)
     enabled: ${BATCH_TOURAPI_ENABLED:false}
