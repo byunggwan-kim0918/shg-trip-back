@@ -211,6 +211,26 @@ class PgVectorPlaceSearchServiceTest {
         }
 
         @Test
+        @DisplayName("다중 지역이라도 반경 검색은 지역 목록과 반경을 건 한 번의 조회로 한다")
+        void search_multipleRegionsWithCenter_queriesOnceWithRadius() {
+            float[] vector = {0.1f, 0.2f};
+            VectorSearchRequest request = new VectorSearchRequest(
+                    vector, "KR", List.of("Seoul", "Busan"), List.of(), List.of(), null, 10, List.of(),
+                    new double[]{35.1, 129.03}, 5, false);
+
+            given(jdbcTemplate.query(anyString(), any(Object[].class), any(RowMapper.class)))
+                    .willReturn(List.of());
+
+            service.search(request);
+
+            ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<Object[]> paramsCaptor = ArgumentCaptor.forClass(Object[].class);
+            verify(jdbcTemplate).query(sqlCaptor.capture(), paramsCaptor.capture(), any(RowMapper.class));
+            assertThat(sqlCaptor.getValue()).contains("p.region IN (?, ?)").contains("p.latitude BETWEEN");
+            assertThat(paramsCaptor.getValue()).contains("Seoul", "Busan");
+        }
+
+        @Test
         @DisplayName("지역별 분리 조회 시 전체 limit을 초과하지 않는다")
         void search_multipleRegions_respectsTotalLimit() {
             float[] vector = {0.1f, 0.2f};

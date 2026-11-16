@@ -51,6 +51,23 @@ class GapFillerTest {
         assertThat(fill(day(1, 5, 6, 2), List.of(7, 4), "relaxed", 0)).containsExactly("골목 공원");
     }
 
+    @Test
+    @DisplayName("도착 시각에 열지 않는 곳은 넣지 않고, 개장까지 한 시간 안이면 열 때 시작한다")
+    void respectsOpeningHoursAtArrival() {
+        List<PlaceCandidate> pool = new ArrayList<>(candidates.subList(0, 2));
+        pool.add(place(3, "늦게 여는 공원", PARK, "SIGHT", 37.5030, 127.0050, 40, "목요일: 16:00 ~ 20:00"));
+        pool.add(place(4, "곧 여는 공원", PARK, "SIGHT", 37.5040, 127.0060, null, "목요일: 13:30 ~ 18:00"));
+        DayState day = day(1, 2);
+        day.dayOfWeek = java.time.DayOfWeek.THURSDAY;
+
+        GapFill result = GapFiller.fillGapBeforeMeal(day, pool, new ArrayDeque<>(List.of(3, 4)),
+                new HashSet<>(day.placeIndices), pool.get(0), 13 * 60, 17 * 60 + 30, pool.get(1), null, "car", 2,
+                new HashSet<>(), new ScheduleConfig(9 * 60, 22 * 60, 0, false, "normal"), new int[]{0});
+
+        assertThat(result.steps()).extracting(step -> step.place().name()).containsExactly("곧 여는 공원");
+        assertThat(result.steps().get(0).startTime()).isEqualTo("13:30");
+    }
+
     private List<String> fill(DayState day, List<Integer> spare, String pace, int remainingQuota) {
         Set<Integer> used = new HashSet<>(day.placeIndices);
         GapFill result = GapFiller.fillGapBeforeMeal(day, candidates, new ArrayDeque<>(spare), used,
@@ -65,8 +82,13 @@ class GapFillerTest {
 
     private static PlaceCandidate place(int index, String name, String category, String role,
                                         double lat, double lng, Integer sitelinks) {
+        return place(index, name, category, role, lat, lng, sitelinks, null);
+    }
+
+    private static PlaceCandidate place(int index, String name, String category, String role,
+                                        double lat, double lng, Integer sitelinks, String openingHours) {
         return new PlaceCandidate(index, (long) index, name, "서울 성동구 테스트로 " + index, category, List.of(), "Seoul",
-                "KR", BigDecimal.valueOf(lat), BigDecimal.valueOf(lng), null, null, 0.9, null, null,
+                "KR", BigDecimal.valueOf(lat), BigDecimal.valueOf(lng), null, null, 0.9, null, openingHours,
                 null, 60, false, null, null, null, sitelinks, role, null, false, null);
     }
 }

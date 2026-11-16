@@ -4,6 +4,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.TransportationHub;
+import com.shg.trip.shgtrip.domain.planning.eval.TraceFile;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -159,5 +160,75 @@ class IntentHintTest {
         assertThat(protectedPerDay.values()).allSatisfy(n ->
                 assertThat(n).isLessThanOrEqualTo((long) ScheduleTuning.INTENT_PROTECT_PER_DAY));
         assertThat(out.get(14 - 1).intentProtected()).isTrue();
+    }
+
+    @Test
+    @DisplayName("사용자가 고른 먼 장소 때문에 출발 시각을 놓치던 기록은 그 장소를 전날로 옮겨 출발 시각을 지킨다")
+    void userPicksMoveWhenDepartureIsMissed() {
+        TraceFile trace = TraceFixtures.load("/fixtures/promised-109-kyoto.json");
+
+        List<StepData> steps = routeOptimizer.schedule(trace.selection(), trace.candidates(), trace.args()).steps();
+
+        int lastDay = steps.stream().mapToInt(StepData::dayNumber).max().orElseThrow();
+        StepData hub = steps.stream()
+                .filter(st -> st.dayNumber() == lastDay && st.place().name().startsWith("Kansai International"))
+                .findFirst().orElseThrow();
+        assertThat(ScheduleTimes.toMinutesOrZero(hub.startTime()))
+                .isLessThanOrEqualTo(ScheduleTimes.departureHubDeadline("19:00", "JP"));
+        assertThat(steps).filteredOn(st -> List.of("比叡山", "嵐山").contains(st.place().name()))
+                .hasSize(2).allSatisfy(st -> assertThat(st.dayNumber()).isLessThan(lastDay));
+    }
+
+    @Test
+    @DisplayName("출발 시각을 준 마지막 날에서 출발 거점에서 가장 먼 사용자 선택 관광지 하나를 전날로 옮기고, 전날 활동 중 출발 거점에 가까운 것과 맞바꾼다")
+    void userPickLeavesDeadlineDayBySwap() {
+        List<PlaceCandidate> pool = List.of(
+                pick(1, "공항", "Travel and Transportation > Transport Hub > Airport", 37.46, 126.44, false, null),
+                pick(2, "먼 산", "Landmarks and Outdoors > Mountain", 37.70, 127.20, true, null),
+                pick(3, "공항 쪽 공원", "Landmarks and Outdoors > Park", 37.48, 126.60, false, null),
+                pick(4, "시내 궁", "Landmarks and Outdoors > Historic and Protected Site", 37.58, 126.98, false, null),
+                pick(5, "전날 고른 궁", "Landmarks and Outdoors > Historic and Protected Site", 37.47, 126.50, true, null),
+                pick(6, "점심 식당", "Dining and Drinking > Restaurant", 37.57, 126.98, true, null),
+                pick(7, "공항 옆 전망대", "Landmarks and Outdoors > Scenic Lookout", 37.47, 126.45, true, null));
+        DayState before = new DayState(new SelectionOutput.DayPlan(1, null, new ArrayList<>(List.of(3, 4, 5)),
+                null, null));
+        DayState last = new DayState(new SelectionOutput.DayPlan(2, null, new ArrayList<>(List.of(7, 2, 6)), null,
+                null));
+        last.departureHubIndex = 1;
+        last.departureDeadline = 17 * 60;
+
+        boolean moved = IntentHints.moveUserPickOffDeadlineDay(List.of(before, last), pool, null);
+
+        assertThat(moved).isTrue();
+        assertThat(before.placeIndices).containsExactlyInAnyOrder(4, 5, 2);
+        assertThat(last.placeIndices).containsExactlyInAnyOrder(7, 6, 3);
+    }
+
+    @Test
+    @DisplayName("사용자가 고른 장소는 출발 시각이 없거나 전날이 그곳 휴무일이면 옮기지 않는다")
+    void userPickStaysWithoutDeadlineOrOnClosedDay() {
+        List<PlaceCandidate> pool = List.of(
+                pick(1, "공항", "Travel and Transportation > Transport Hub > Airport", 37.46, 126.44, false, null),
+                pick(2, "월요일 휴관 박물관", "Arts and Entertainment > Museum", 37.70, 127.20, true,
+                        "월요일: 휴무, 화요일: 09:00 ~ 18:00, 수요일: 09:00 ~ 18:00, 목요일: 09:00 ~ 18:00, "
+                                + "금요일: 09:00 ~ 18:00, 토요일: 09:00 ~ 18:00, 일요일: 09:00 ~ 18:00"));
+        DayState before = new DayState(new SelectionOutput.DayPlan(1, null, new ArrayList<>(), null, null));
+        DayState last = new DayState(new SelectionOutput.DayPlan(2, null, new ArrayList<>(List.of(2)), null, null));
+        last.departureHubIndex = 1;
+
+        assertThat(IntentHints.moveUserPickOffDeadlineDay(List.of(before, last), pool, null)).isFalse();
+
+        last.departureDeadline = 17 * 60;
+        // 2026-11-16은 월요일이라 1일차가 휴관일이다.
+        assertThat(IntentHints.moveUserPickOffDeadlineDay(List.of(before, last), pool, LocalDate.of(2026, 11, 16)))
+                .isFalse();
+        assertThat(last.placeIndices).containsExactly(2);
+    }
+
+    private static PlaceCandidate pick(int index, String name, String category, double lat, double lng,
+                                       boolean userSelected, String openingHours) {
+        return new PlaceCandidate(index, (long) index, name, "서울", category, List.of(), "Seoul", "KR",
+                java.math.BigDecimal.valueOf(lat), java.math.BigDecimal.valueOf(lng), null, null, 0.8, null,
+                openingHours, null, 60, userSelected, null, null, null, null, null, null, false, null);
     }
 }

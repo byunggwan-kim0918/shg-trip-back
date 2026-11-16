@@ -2,7 +2,7 @@
   스텝 33 / 숙소 1곳 / 총이동 303km
   연속중복 0 / 최대공백 193분 / 늦은시작 2일 / 미해소 2건
 == day 1 ==
-  #1  08:30-10:00  유엔기념공원 | Landmarks and Outdoors > Tourist Attraction | - | Busan
+  #1  09:00-10:30  유엔기념공원 | Landmarks and Outdoors > Tourist Attraction | - | Busan
       이동: - -분 -km -원
       비용: 0원 / 메모: -
       대안: 부산다이아몬드타워 | Landmarks and Outdoors > Scenic Lookout | 0원

@@ -14,7 +14,6 @@ import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.isCaf
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.isVisitableFill;
 import static com.shg.trip.shgtrip.domain.planning.service.DayTiming.buildStep;
 import static com.shg.trip.shgtrip.domain.planning.service.DayTiming.computeLeg;
-import static com.shg.trip.shgtrip.domain.planning.service.DayTiming.isClosedOnDay;
 import static com.shg.trip.shgtrip.domain.planning.service.DayTiming.resolveVisitMinutes;
 import static com.shg.trip.shgtrip.domain.planning.service.DayTiming.timePreference;
 import static com.shg.trip.shgtrip.domain.planning.service.PlanEdits.unusedIndices;
@@ -66,13 +65,14 @@ final class GapFiller {
             Integer fillIdx = null;
             for (boolean onlyCafe : cafeFirst ? List.of(true, false) : List.of(false)) {
                 fillIdx = pickGapFiller(prev, mealCand, candidates, spareIndices, usedIndices,
-                        transportPref, 1.0, day, cfg, onlyCafe, variety);
+                        transportPref, 1.0, day, cfg, onlyCafe, variety, currentMinutes, mealStart);
                 if (fillIdx == null && gap >= LARGE_GAP_MINUTES) {
                     // 긴 공백은 spare가 말라도 미사용 후보까지 넓히고 반경도 완화한다. 몇 시간 비우느니 조금 더 달리는 게 낫다.
                     // 거리 예산은 지킨다. 반경만 풀면 하루 주행 상한을 깨고 다음 패스에 트림되는 churn이 생긴다.
                     fillIdx = pickGapFiller(prev, mealCand, candidates,
                             new ArrayDeque<>(unusedIndices(candidates, usedIndices)), usedIndices,
-                            transportPref, LARGE_GAP_RADIUS_MULTIPLIER, day, cfg, onlyCafe, variety);
+                            transportPref, LARGE_GAP_RADIUS_MULTIPLIER, day, cfg, onlyCafe, variety, currentMinutes,
+                            mealStart);
                     if (fillIdx != null) {
                         log.info("긴 공백({}분) — 미사용 후보까지 확장해 보충: day={}", gap, day.dayNumber);
                     }
@@ -95,7 +95,7 @@ final class GapFiller {
             PlaceCandidate fill = byIndex(candidates, fillIdx);
             TransportLeg leg = computeLeg(prev, fill, transportPref, day.dayNumber);
             if (leg != null) currentMinutes += leg.durationMin();
-            int startMin = currentMinutes;
+            int startMin = startWithinOpening(fill, day, currentMinutes);
             int endMin = startMin + resolveVisitMinutes(fill);
             inserted.add(buildStep(day, fill, startMin, endMin, leg,
                     AlternativeBuilder.buildAlternatives(fill, dayCentroid, spareIndices, usedIndices, candidates,
@@ -116,12 +116,15 @@ final class GapFiller {
      *
      * @param radiusMultiplier 반경 완화 배수. 공백이 길 때만 1보다 큰 값을 준다.
      * @param cafeOnly         카페만 허용(relaxed 초과 채움의 첫 시도).
+     * @param nowMin           현위치를 떠나는 시각(자정부터 분). 도착 시각의 영업 여부를 본다.
+     * @param mealStart        다음 끼니 시작(자정부터 분)
      */
     private static Integer pickGapFiller(PlaceCandidate prev, PlaceCandidate mealCand,
                                          List<PlaceCandidate> candidates, Deque<Integer> spareIndices,
                                          Set<Integer> usedIndices, String transportPref,
                                          double radiusMultiplier, DayState day, ScheduleConfig cfg, boolean cafeOnly,
-                                         java.util.function.Predicate<PlaceCandidate> variety) {
+                                         java.util.function.Predicate<PlaceCandidate> variety, int nowMin,
+                                         int mealStart) {
         double[] from = prev != null ? coordsOf(prev) : null;
         double[] to = coordsOf(mealCand);
         double radius = AlternativeBuilder.altRadiusKm(transportPref) * radiusMultiplier;
@@ -139,17 +142,49 @@ final class GapFiller {
                 // 역할·구역·경유·집합POI·여객시설·긴 등산을 다른 보충 경로와 같은 공용 게이트로 본다.
                 .filter(CandidateTraits::isVisitableFill)
                 .filter(variety)
-                .filter(c -> day.dayOfWeek == null || !isClosedOnDay(c.openingHours(), day.dayOfWeek))
                 .filter(c -> timePreference(c) != TimePreference.EVENING)
                 .filter(c -> coordsOf(c) != null)
                 .filter(c -> from == null || GeoUtils.haversine(from, coordsOf(c)) <= radius)
                 .filter(c -> !wouldExceedDayBudget(day, c, candidates, transportPref, cfg))
                 .filter(c -> detourVia(from, coordsOf(c), to) - directKm <= GAP_FILL_MAX_EXTRA_DETOUR_KM)
+                .filter(c -> fitsOpening(c, prev, mealCand, nowMin, mealStart, transportPref, day))
                 // 우회거리만 보면 가장 가까운 무명 spare가 이긴다. 반경·예산·우회 상한이 이미 지리를 제한해 그 안에서는 인기도가 정한다.
                 .max(Comparator.<PlaceCandidate>comparingDouble(c ->
                                 PlaceProminence.of(c) - detourVia(from, coordsOf(c), to) * GAP_FILL_DETOUR_WEIGHT)
                         .thenComparing(c -> c.rating() != null ? c.rating() : BigDecimal.ZERO))
                 .map(PlaceCandidate::index)
                 .orElse(null);
+    }
+
+    /** 개장을 기다리는 곳은 체류를 마치고 끼니 시작 전에 식당에 닿아야 한다. 대기가 끼니를 밀지 않게 한다. */
+    private static boolean fitsOpening(PlaceCandidate c, PlaceCandidate prev, PlaceCandidate meal, int nowMin,
+                                       int mealStart, String transportPref, DayState day) {
+        int arrival = arrivalAt(prev, c, nowMin, transportPref, day);
+        Integer start = startWithinOpening(c, day, arrival);
+        if (start == null) return false;
+        if (start == arrival) return true;
+        TransportLeg toMeal = computeLeg(c, meal, transportPref, day.dayNumber);
+        return start + resolveVisitMinutes(c) + (toMeal != null ? toMeal.durationMin() : 0) <= mealStart;
+    }
+
+    private static int arrivalAt(PlaceCandidate prev, PlaceCandidate c, int nowMin, String transportPref,
+                                 DayState day) {
+        TransportLeg leg = computeLeg(prev, c, transportPref, day.dayNumber);
+        return nowMin + (leg != null ? leg.durationMin() : 0);
+    }
+
+    /**
+     * 확정 루프의 영업시간 가드와 같은 기준(개장 대기 {@value ScheduleTuning#OPENING_WAIT_LIMIT_MINUTES}분까지)으로 정한 시작 시각.
+     * 보충 스텝은 그 가드를 거치지 않고 바로 시각이 붙는다.
+     *
+     * @return 그 시각에 열 수 없으면 null, 영업시간을 모르면 {@code arrival}
+     */
+    private static Integer startWithinOpening(PlaceCandidate c, DayState day, int arrival) {
+        if (day.dayOfWeek == null) return arrival;
+        Integer openFrom = OpeningHoursText.earliestStart(c.openingHours(), day.dayOfWeek, arrival,
+                resolveVisitMinutes(c));
+        if (openFrom == null) return arrival;
+        if (openFrom < 0 || openFrom - arrival > OPENING_WAIT_LIMIT_MINUTES) return null;
+        return openFrom;
     }
 }
