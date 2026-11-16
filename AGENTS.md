@@ -18,7 +18,7 @@ docker compose up -d                 # PostgreSQL(pgvector) · Valkey · LocalSt
 
 ## 구조
 
-- `domain/planning`: 생성 파이프라인. 조건 판정은 `InvariantChecker`(고치지 않음), 수리는 `RouteOptimizer`가 단계 순서를 정하고 단계 클래스(`DayRebalancer`·`LodgingPlanner`·`MealPlanner`·`DistanceBudget`·`FinalRepair` 등)가 맡는다. 튜닝 상수는 `ScheduleTuning` 한 곳에 둔다. 저장할 일정은 `QualityGate`가 `ItineraryRules`로 판정해 HARD면 막고 CORE면 '조정 필요'로 저장한다. `SerialPlanner`는 고른 장소를 다른 날로 옮기지 않는 날짜별 확정이고 아직 평가에서만 쓴다. `DayPicker`는 날마다 기준 장소를 두고 거기서 닿는 범위 안에서 끼니와 관광지를 고른다. 끼니와 관광지는 선택 단계가 고른 장소를 같은 거리 안에서만 먼저 쓰고, 기준 장소는 요청 의도·선택 장소·유명도 순으로 정한다.
+- `domain/planning`: 생성 파이프라인. 조건 판정은 `InvariantChecker`(고치지 않음), 수리는 `RouteOptimizer`가 단계 순서를 정하고 단계 클래스(`DayRebalancer`·`LodgingPlanner`·`MealPlanner`·`DistanceBudget`·`FinalRepair` 등)가 맡는다. 튜닝 상수는 `ScheduleTuning` 한 곳에 둔다. 저장할 일정은 `QualityGate`가 `ItineraryRules`로 판정해 HARD면 막고 CORE면 '조정 필요'로 저장한다. `SerialPlanner`는 고른 장소를 다른 날로 옮기지 않는 날짜별 확정이다. 운영은 `planning.pipeline=v2`(기본 v1)일 때 국내 여행만 이것으로 확정하고(`PlanningPipeline`), 날짜를 한 번 정해 날마다의 기준 좌표 둘레에서 후보를 보완한 뒤 다시 정한다. 예외가 나면 그 생성만 v1으로 확정하고 생성 기록 `pipeline`에 남긴다. `DayPicker`는 날마다 기준 장소를 두고 거기서 닿는 범위 안에서 끼니와 관광지를 고른다. 끼니와 관광지는 선택 단계가 고른 장소를 같은 거리 안에서만 먼저 쓰고, 기준 장소는 요청 의도·선택 장소·유명도 순으로 정한다.
 - `domain/tripchat`: 대화형 입력. 생성 요청은 `TripRequestMapper` 한 곳에서만 만든다.
 - `domain/place/batch`: `batch` 프로필 전용 적재·보강·임베딩 작업.
 - `src/main/resources/prompts/`: LLM 프롬프트, `db/migration/`: Flyway.

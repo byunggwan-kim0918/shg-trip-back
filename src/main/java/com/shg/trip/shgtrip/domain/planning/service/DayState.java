@@ -37,6 +37,8 @@ class DayState {
     boolean resumesAfterTransfer;
     /** 다음 도시로 넘어가기 전날. 구간의 마지막 날이어도 숙소·저녁이 필요하고 출발 허브가 없다. */
     boolean continuesAfter;
+    /** 오전 방문지 중 아침에만 성립하는 곳(아침 의도, 긴 등산)을 먼저 둔다. 날짜를 직접 고르는 확정만 켠다. */
+    boolean morningOnlyFirst;
     private final List<Drop> drops = new ArrayList<>();
     private final java.util.Set<Integer> dropBaseline = new java.util.HashSet<>();
 

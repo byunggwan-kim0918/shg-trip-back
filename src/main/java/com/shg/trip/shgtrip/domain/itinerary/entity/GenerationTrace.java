@@ -73,6 +73,15 @@ public class GenerationTrace {
     @Column(columnDefinition = "JSONB")
     private String generatedSteps;
 
+    /** v1, v2, v2-fallback. null은 이 열 이전 기록이고 v1이다. */
+    @Column(length = 16)
+    private String pipeline;
+
+    /** v2가 날짜별로 고른 장소. v1이면 null이다. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "JSONB")
+    private String dayPicks;
+
     @Column(nullable = false, insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -80,7 +89,7 @@ public class GenerationTrace {
     private GenerationTrace(Long itineraryId, Long userId, String jobId, int traceVersion, String request,
                             String enrichedInput, String selectionRaw, String selectionFinal,
                             String candidates, Integer searchPoolSize, String scheduleArgs, String models,
-                            Long totalMs, String score, String generatedSteps) {
+                            Long totalMs, String score, String generatedSteps, String pipeline, String dayPicks) {
         this.itineraryId = itineraryId;
         this.userId = userId;
         this.jobId = jobId;
@@ -96,6 +105,8 @@ public class GenerationTrace {
         this.totalMs = totalMs;
         this.score = score;
         this.generatedSteps = generatedSteps;
+        this.pipeline = pipeline;
+        this.dayPicks = dayPicks;
     }
 
     public void updateScore(String scoreJson) {

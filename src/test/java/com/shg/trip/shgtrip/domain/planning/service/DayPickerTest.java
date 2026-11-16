@@ -292,6 +292,137 @@ class DayPickerTest {
                 .filter(c -> !c.mealEligible())).hasSizeLessThanOrEqualTo(most + 1);
     }
 
+    @Test
+    @DisplayName("사용자가 고른 관광지가 날 수보다 많으면 기준 장소에서 한 구간 밖인 곳도 가장 가까운 날에 들어간다")
+    void promisedSightBeyondReachIsPlaced() {
+        List<PlaceCandidate> pool = new ArrayList<>(walkablePool().stream()
+                .map(c -> c.index() == 2 || c.index() == 4 ? c.asUserSelected() : c).toList());
+        // 기준 장소들에서 10km 넘게 떨어져 도보 한 구간(8km) 밖이다.
+        pool.add(place(14, "먼 고른 궁", SIGHT, "SIGHT", 37.5120, 127.1020).asUserSelected());
+
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.PREFER);
+
+        assertThat(result.selection().days()).flatExtracting(SelectionOutput.DayPlan::placeIndices)
+                .contains(2, 4, 14);
+        assertThat(result.steps()).extracting(s -> s.place().name()).contains("궁 0", "궁 2", "먼 고른 궁");
+    }
+
+    @Test
+    @DisplayName("사용자가 출발 시각을 준 여행에서 고른 먼 관광지는 끝나는 날의 기준 장소가 더 가까워도 다른 날에 둔다")
+    void promisedSightAvoidsTheEndingDayWithDeparture() {
+        List<PlaceCandidate> pool = new ArrayList<>(walkablePool().stream()
+                .map(c -> c.index() == 2 || c.index() == 4 ? c.asUserSelected() : c).toList());
+        // 둘째 날 기준 장소(궁 2) 쪽으로 10km쯤 떨어져 있다. 출발 시각 가드는 고른 장소를 자르지 않는다.
+        pool.add(place(14, "먼 고른 궁", SIGHT, "SIGHT", 37.6500, 127.0500).asUserSelected());
+        ScheduleArgs departing = new ScheduleArgs("normal", "walk", LocalDate.of(2026, 12, 1), List.of(), null, false,
+                List.of(), false, null, "18:00", "KR", null, false, false);
+
+        SerialPlanner.Result withDeparture = planner.plan(NO_HINTS, pool, departing, 2, SerialPlanner.Picks.PREFER);
+        SerialPlanner.Result noDeparture = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.PREFER);
+
+        assertThat(withDeparture.selection().days().get(0).placeIndices()).contains(14);
+        assertThat(withDeparture.selection().days().get(1).placeIndices()).doesNotContain(14);
+        // 출발 시각이 없으면 지킬 마감이 없어 가까운 끝나는 날에 둔다. 앞날에 몰면 그날이 자정 가까이 끝난다.
+        assertThat(noDeparture.selection().days().get(1).placeIndices()).contains(14);
+    }
+
+    @Test
+    @DisplayName("사용자가 고른 먼 식당은 끼니 하나를 맡아 그날 세 끼가 되지 않는다")
+    void promisedMealTakesOneMealSlot() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.add(place(14, "먼 고른 식당", MEAL, "MEAL", 37.5120, 127.1020).asUserSelected());
+
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.PREFER);
+
+        CandidateLookup lookup = new CandidateLookup(pool);
+        assertThat(result.steps()).extracting(s -> s.place().name()).contains("먼 고른 식당");
+        for (int day = 1; day <= 2; day++) {
+            int dayNumber = day;
+            assertThat(result.steps().stream().filter(s -> s.dayNumber() == dayNumber && lookup.isMeal(s)))
+                    .as("day %d", day).hasSizeLessThanOrEqualTo(2);
+        }
+    }
+
+    @Test
+    @DisplayName("사용자가 고른 식당이 끼니 자리보다 많으면 끼니가 찬 날에 더 얹지 않는다")
+    void promisedMealsDoNotOverfillMealSlots() {
+        // 두 날의 점심·저녁 네 자리보다 하나 많다.
+        List<PlaceCandidate> pool = new ArrayList<>(walkablePool().stream()
+                .map(c -> c.mealEligible() && c.index() <= 12 ? c.asUserSelected() : c).toList());
+
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.PREFER);
+
+        // 출발 시각이 없어 두 날 모두 점심·저녁 자리가 있다.
+        assertThat(result.selection().days()).allSatisfy(d -> assertThat(d.placeIndices().stream()
+                .filter(idx -> pool.get(idx - 1).mealEligible())).hasSizeLessThanOrEqualTo(2));
+    }
+
+    @Test
+    @DisplayName("당일치기에 꼭 하고 싶은 저녁 경험은 끝나는 날이어도 일정에 들어간다")
+    void dayTripKeepsPromisedEveningPlace() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.add(place(14, "야경 명소", SIGHT, "SIGHT", 37.5790, 126.9840).withIntent(true, "evening"));
+
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 1, SerialPlanner.Picks.PREFER);
+
+        assertThat(result.selection().days().get(0).placeIndices()).contains(14);
+        assertThat(result.steps()).extracting(s -> s.place().name()).contains("야경 명소");
+    }
+
+    @Test
+    @DisplayName("당일치기에 고른 식당 두 곳은 하나가 기준 장소에서 멀어도 점심과 저녁을 맡는다")
+    void dayTripKeepsBothPromisedMeals() {
+        List<PlaceCandidate> pool = new ArrayList<>(walkablePool().stream()
+                .map(c -> c.index() == 8 ? c.asUserSelected() : c).toList());
+        pool.add(place(14, "먼 고른 식당", MEAL, "MEAL", 37.5120, 127.1020).asUserSelected());
+
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 1, SerialPlanner.Picks.PREFER);
+
+        CandidateLookup lookup = new CandidateLookup(pool);
+        assertThat(result.steps()).extracting(s -> s.place().name()).contains("식당 0", "먼 고른 식당");
+        assertThat(result.steps().stream().filter(lookup::isMeal)).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("점심 뒤에 도착하는 날의 고른 식당은 저녁을 맡아 저녁 식당을 하나 더 고르지 않는다")
+    void lateArrivalPromisedMealTakesDinner() {
+        List<PlaceCandidate> pool = new ArrayList<>(walkablePool().stream()
+                .map(c -> c.index() == 8 ? c.asUserSelected() : c).toList());
+        ScheduleArgs afternoon = new ScheduleArgs("normal", "walk", LocalDate.of(2026, 12, 1), List.of(), null, false,
+                List.of(), false, "15:00", null, "KR", null, false, false);
+
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, afternoon, 2, SerialPlanner.Picks.PREFER);
+
+        CandidateLookup lookup = new CandidateLookup(pool);
+        assertThat(result.steps().stream().filter(s -> s.dayNumber() == 1 && lookup.isMeal(s)))
+                .extracting(s -> s.place().name()).containsExactly("식당 0");
+    }
+
+    @Test
+    @DisplayName("선택 결과의 날짜 수가 어긋나 다시 고를 때도 예약한 숙소로 밤을 보낸다")
+    void bookedLodgingSurvivesDayCountMismatch() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.add(place(14, "예약한 호텔", HOTEL, "LODGING", 37.5900, 126.9950).asUserSelected());
+
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 3, SerialPlanner.Picks.PREFER);
+
+        CandidateLookup lookup = new CandidateLookup(pool);
+        assertThat(result.steps()).filteredOn(s -> lookup.role(s) == CandidatePolicy.Role.LODGING)
+                .isNotEmpty().allSatisfy(s -> assertThat(s.place().name()).isEqualTo("예약한 호텔"));
+    }
+
+    @Test
+    @DisplayName("날짜를 직접 고르면 날마다 기준 좌표를 남기고, 받은 날짜대로 확정하면 남기지 않는다")
+    void anchorsAreRecordedOnlyWhenChoosingDays() {
+        List<PlaceCandidate> pool = walkablePool();
+
+        SerialPlanner.Result picked = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.PREFER);
+        SerialPlanner.Result asPlaced = planner.schedule(selectionPicking(2, 8), pool, walkArgs());
+
+        assertThat(picked.anchors()).containsOnlyKeys(1, 2);
+        assertThat(asPlaced.anchors()).isEmpty();
+    }
+
     /** 1일차에 주어진 장소를, 2일차에는 아무것도 고르지 않은 선택. */
     private static SelectionOutput selectionPicking(Integer... dayOnePicks) {
         return new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null, List.of(dayOnePicks), null, null),

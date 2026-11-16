@@ -60,6 +60,8 @@ class OptimizedGenerationExecutorTest {
     @Mock private com.shg.trip.shgtrip.domain.place.repository.PlaceRepository placeRepository;
     @Mock private com.shg.trip.shgtrip.domain.planning.service.validation.PlaceRegionValidator placeRegionValidator;
     @Mock private ScheduledExecutorService sseHeartbeatScheduler;
+    @Mock private PlanningPipeline planningPipeline;
+    @Mock private SerialPlanner serialPlanner;
 
     @InjectMocks
     private OptimizedGenerationExecutor executor;
@@ -241,7 +243,7 @@ class OptimizedGenerationExecutorTest {
         assertThat(scheduled.getValue()).hasSize(seen.getValue().size() + 1)
                 .extracting(PlaceCandidate::name).contains("시부야 호텔");
         verify(traceRecorder).record(any(), eq("job-p"), eq(request), any(), any(), any(),
-                eq(scheduled.getValue()), eq(seen.getValue().size()), any(), anyLong(), any());
+                eq(scheduled.getValue()), eq(seen.getValue().size()), any(), eq(ScheduledBy.V1), anyLong(), any());
     }
 
     @Test
@@ -523,7 +525,7 @@ class OptimizedGenerationExecutorTest {
         assertThat(attached.intentTime()).isEqualTo("morning");
         assertThat(attached.userSelected()).isFalse();
         verify(traceRecorder).record(any(), eq("job-r"), eq(withRequired), any(), any(), any(),
-                eq(scheduled.getValue()), eq(pool.size()), any(), anyLong(), any());
+                eq(scheduled.getValue()), eq(pool.size()), any(), eq(ScheduledBy.V1), anyLong(), any());
 
         ArgumentCaptor<List<String>> notices = ArgumentCaptor.forClass(List.class);
         verify(indexResultMapper).toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(),
@@ -946,7 +948,7 @@ class OptimizedGenerationExecutorTest {
 
         verify(saveHelper, never()).save(any(), any(), anyLong(), anyBoolean(), any(), any());
         verify(traceRecorder).recordRejected(eq(1L), eq("job-4"), eq(request), any(), any(), any(), anyList(),
-                anyInt(), any(), anyLong(), any(), eq("구조 검증: 시각 겹침"));
+                anyInt(), any(), eq(ScheduledBy.V1), anyLong(), any(), eq("구조 검증: 시각 겹침"));
         verify(generationPolicyService, never()).recordSuccess(anyLong());
         verify(generationPolicyService, never()).recordUnbilled(anyLong());
         assertThat(sentError()).containsEntry("errorCode", "PLANNING_011")
@@ -967,9 +969,9 @@ class OptimizedGenerationExecutorTest {
         executor.execute("job-5", request, 1L, emitter);
 
         verify(traceRecorder).recordRejected(eq(1L), eq("job-5"), eq(request), any(), any(), any(), anyList(),
-                anyInt(), any(), anyLong(), eq(hard), isNull());
+                anyInt(), any(), eq(ScheduledBy.V1), anyLong(), eq(hard), isNull());
         verify(traceRecorder, never()).record(any(), anyString(), any(), any(), any(), any(), anyList(), anyInt(),
-                any(), anyLong(), any());
+                any(), any(), anyLong(), any());
         verify(resultStore, never()).save(anyString(), anyLong(), anyLong());
         verify(generationPolicyService, never()).recordSuccess(anyLong());
         verify(generationPolicyService).recordUnbilled(1L);
@@ -1012,6 +1014,143 @@ class OptimizedGenerationExecutorTest {
         verify(resultStore).save("job-6", 77L, 1L);
         verify(generationPolicyService).recordUnbilled(1L);
         verify(generationPolicyService, never()).recordSuccess(anyLong());
+    }
+
+    private void stubSave(long itineraryId) {
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(itineraryId);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, null));
+    }
+
+    private static SelectionOutput dayOnePicks(Integer... picks) {
+        return new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null, List.of(picks), null, null)),
+                List.of(), List.of());
+    }
+
+    @Test
+    @DisplayName("v2 설정이면 날짜를 정해 기준 좌표 둘레에서 후보를 보완하고 다시 정하며, 필수 경험 표시는 그대로 두고 기록에 v2를 남긴다")
+    @SuppressWarnings("unchecked")
+    void serialPipelineSearchesAroundAnchorsAndPlansAgain() {
+        ItineraryGenerateRequest withRequired = new ItineraryGenerateRequest(request.mode(), request.destination(),
+                request.themes(), request.categories(), request.pace(), request.transportPref(), request.budget(),
+                request.startDate(), request.endDate(), request.description(), null, null, null, null, null, null,
+                List.of(new ItineraryGenerateRequest.RequiredExperience("메이지신궁 아침", "메이지신궁", "morning")),
+                null, null);
+        PlaceCandidate shrine = new PlaceCandidate(2, 101L, "메이지신궁", "시부야구 요요기카미조노초 1-1",
+                "Landmarks and Outdoors > Shrine", List.of(), "Tokyo", "JP", BigDecimal.valueOf(35.6764),
+                BigDecimal.valueOf(139.6993), null, null, 0.93, null, null, null, 60, false, null, null, null, 40,
+                "SIGHT", null, false, null);
+        List<PlaceCandidate> pool = List.of(candidates.get(0), shrine, candidates.get(2));
+        PlaceCandidate udon = new PlaceCandidate(1, 301L, "요요기 우동", "시부야구 요요기 2-1",
+                "Dining and Drinking > Restaurant", List.of("우동"), "Tokyo", "JP", BigDecimal.valueOf(35.6770),
+                BigDecimal.valueOf(139.7000), null, null, 0.7);
+        double nearRing = DayPicker.nearRingKm(vectorEnrichedInput.transportPref(), vectorEnrichedInput.pace());
+        SelectionOutput firstPicks = dayOnePicks(2);
+        SelectionOutput finalPicks = dayOnePicks(2, 4);
+        when(cancellationRegistry.isCancelled(anyString())).thenReturn(false);
+        when(planningPipeline.serialFor(any())).thenReturn(true);
+        when(optimizedClaudeAIService.enrichInput(withRequired)).thenReturn(successResult);
+        when(vectorSearchQueryService.search(eq(vectorEnrichedInput), any())).thenReturn(pool);
+        when(fallbackDecider.assess(pool, 4L)).thenReturn(FallbackDecider.PoolQuality.SUFFICIENT);
+        // DB 값으로 다시 채우면 필수 경험 표시가 지워지는 행이다.
+        var shrineRow = com.shg.trip.shgtrip.domain.place.entity.Place.builder().id(101L).name("메이지신궁")
+                .category("Landmarks and Outdoors > Shrine").region("Tokyo").country("JP")
+                .latitude(BigDecimal.valueOf(35.6764)).longitude(BigDecimal.valueOf(139.6993)).build();
+        when(placeRepository.findAllById(anyList())).thenAnswer(inv -> {
+            java.util.Collection<Long> ids = inv.getArgument(0);
+            return ids.contains(101L) ? List.of(shrineRow) : List.of();
+        });
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList(), any())).thenReturn(selectionOutput);
+        when(vectorSearchQueryService.searchNearEach(any(), any(), anyList(), eq(nearRing), anyInt()))
+                .thenReturn(List.of(List.of(udon)));
+        when(serialPlanner.plan(any(), anyList(), any(), eq(4), eq(SerialPlanner.Picks.PREFER))).thenReturn(
+                new SerialPlanner.Result(fixedSteps, List.of(), List.of(), firstPicks,
+                        Map.of(1, new double[]{35.6764, 139.6993})),
+                new SerialPlanner.Result(fixedSteps, List.of(), List.of(), finalPicks, Map.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
+                .thenReturn(draftData);
+        stubSave(44L);
+
+        executor.execute("job-v2", withRequired, 1L, emitter);
+
+        ArgumentCaptor<List<PlaceCandidate>> planned = ArgumentCaptor.forClass(List.class);
+        verify(serialPlanner, times(2)).plan(any(), planned.capture(), any(), eq(4), eq(SerialPlanner.Picks.PREFER));
+        List<PlaceCandidate> first = planned.getAllValues().get(0);
+        List<PlaceCandidate> second = planned.getAllValues().get(1);
+        assertThat(second).hasSize(first.size() + 1);
+        assertThat(second.get(second.size() - 1)).extracting(PlaceCandidate::name, PlaceCandidate::index)
+                .containsExactly("요요기 우동", second.size());
+        assertThat(second.stream().filter(c -> "메이지신궁".equals(c.name())).findFirst().orElseThrow()
+                .intentProtected()).isTrue();
+        verify(routeOptimizer, never()).schedule(any(), anyList(), any());
+        verify(traceRecorder).record(any(), eq("job-v2"), eq(withRequired), any(), any(), any(), eq(second),
+                eq(pool.size()), any(), eq(new ScheduledBy(ScheduledBy.Pipeline.V2, finalPicks)), anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("v2에서 기준 좌표가 없으면 보완 검색 없이 한 번만 정한다")
+    void serialPipelineWithoutAnchorsPlansOnce() {
+        stubPipelineUntilSave();
+        when(planningPipeline.serialFor(any())).thenReturn(true);
+        double nearRing = DayPicker.nearRingKm(vectorEnrichedInput.transportPref(), vectorEnrichedInput.pace());
+        when(serialPlanner.plan(any(), anyList(), any(), anyInt(), any())).thenReturn(
+                new SerialPlanner.Result(fixedSteps, List.of(), List.of(), dayOnePicks(1), Map.of()));
+        stubSave(45L);
+
+        executor.execute("job-v2a", request, 1L, emitter);
+
+        verify(serialPlanner, times(1)).plan(any(), anyList(), any(), anyInt(), any());
+        verify(vectorSearchQueryService, never()).searchNearEach(any(), any(), anyList(), eq(nearRing), anyInt());
+        // 숙소가 없는 풀이라 선택 결과의 하루 기준 보완만 한 번 돈다.
+        verify(vectorSearchQueryService, times(1)).searchAccommodationsNear(any(), any(), anyDouble(), anyInt(),
+                anyInt());
+    }
+
+    @Test
+    @DisplayName("v2 확정이 예외로 끝나면 그 생성만 v1으로 확정하고 기록에 v2-fallback을 남긴다")
+    void serialFailureFallsBackToRouteOptimizer() {
+        stubPipelineUntilSave();
+        when(planningPipeline.serialFor(any())).thenReturn(true);
+        when(serialPlanner.plan(any(), anyList(), any(), anyInt(), any()))
+                .thenThrow(new IllegalStateException("하루 확정 실패"));
+        stubSave(46L);
+
+        executor.execute("job-v2f", request, 1L, emitter);
+
+        verify(routeOptimizer).schedule(any(), anyList(), any());
+        verify(traceRecorder).record(any(), eq("job-v2f"), eq(request), any(), any(), any(), anyList(), anyInt(),
+                any(), eq(new ScheduledBy(ScheduledBy.Pipeline.V2_FALLBACK, null)), anyLong(), any());
+        verify(resultStore).save("job-v2f", 46L, 1L);
+    }
+
+    @Test
+    @DisplayName("선택 결과의 일차 번호가 겹쳐도 숙소 보완 검색은 날마다 한다")
+    void accommodationSearchRunsPerSelectionDay() {
+        stubPipelineUntilSave();
+        SelectionOutput unnumbered = new SelectionOutput("일차 번호 없음", List.of(
+                new SelectionOutput.DayPlan(0, null, List.of(1), null, null),
+                new SelectionOutput.DayPlan(0, null, List.of(2), null, null)), List.of(), List.of());
+        when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList(), any())).thenReturn(unnumbered);
+        stubSave(48L);
+
+        executor.execute("job-days", request, 1L, emitter);
+
+        verify(vectorSearchQueryService, times(2)).searchAccommodationsNear(any(), any(), anyDouble(), anyInt(),
+                anyInt());
+    }
+
+    @Test
+    @DisplayName("v2 설정이 꺼져 있으면 날짜별 확정을 부르지 않는다")
+    void v1PipelineNeverCallsSerialPlanner() {
+        stubPipelineUntilSave();
+        stubSave(47L);
+
+        executor.execute("job-v1", request, 1L, emitter);
+
+        verify(serialPlanner, never()).plan(any(), anyList(), any(), anyInt(), any());
+        verify(routeOptimizer).schedule(any(), anyList(), any());
     }
 
     private void stubPipelineUntilSave() {

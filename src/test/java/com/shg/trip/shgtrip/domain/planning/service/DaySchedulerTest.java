@@ -82,6 +82,49 @@ class DaySchedulerTest {
     }
 
     @Test
+    @DisplayName("날짜를 직접 고른 날은 아침 의도 장소를 오전 첫 방문으로 둬, 숙소에서 가까운 곳 뒤로 밀려 잘리지 않는다")
+    void morningIntentLeadsTheMorningWhenFlagged() {
+        List<PlaceCandidate> pool = oneDayPool();
+        // 그날 숙소가 일출 명소 쪽이라 경로상 궁을 먼저 지난다. 둘 다 오전 예산에 들어가고, 궁 뒤에 두면 11시를 넘겨 시작한다.
+        pool.set(1, place(2, "궁", SIGHT, "SIGHT", 37.6000, 126.9800, 80, null));
+        pool.set(5, place(6, "그날 호텔", HOTEL, "LODGING", 37.7850, 126.9850));
+        pool.add(place(7, "일출 명소", SIGHT, "SIGHT", 37.7800, 126.9800, 30, null).withIntent(true, "morning"));
+
+        PlanState nearestFirst = midTripDay(pool, List.of(2, 7, 4, 5));
+        DayScheduler.DayResult kept = DayScheduler.scheduleOne(nearestFirst, nearestFirst.days.get(0), PREVIOUS_HOTEL);
+        PlanState morningFirst = midTripDay(pool, List.of(2, 7, 4, 5));
+        morningFirst.days.get(0).morningOnlyFirst = true;
+        DayScheduler.DayResult led = DayScheduler.scheduleOne(morningFirst, morningFirst.days.get(0), PREVIOUS_HOTEL);
+
+        assertThat(reasons(kept)).contains(DropReason.LATE_START);
+        assertThat(led.steps().get(0).place().name()).isEqualTo("일출 명소");
+        assertThat(led.dropped()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("도보 여행에서 전날 숙소에서 출발하는 날은 아침 의도 장소를 앞당겨도 숙소가 첫 스텝으로 남는다")
+    void walkDayKeepsLodgingFirstWhenMorningLeads() {
+        List<PlaceCandidate> pool = oneDayPool();
+        // 그날 장소가 모두 전날 호텔에서 3km 넘게 떨어져 도보 연속성 보정이 전날 호텔을 첫 스텝으로 붙인다.
+        pool.set(1, place(2, "궁", SIGHT, "SIGHT", 37.5980, 126.9800));
+        pool.set(2, place(3, "한옥마을", SIGHT, "SIGHT", 37.6020, 126.9790));
+        pool.set(3, place(4, "점심 식당", MEAL, "MEAL", 37.5990, 126.9810));
+        pool.set(4, place(5, "저녁 식당", MEAL, "MEAL", 37.6005, 126.9830));
+        pool.set(5, place(6, "그날 호텔", HOTEL, "LODGING", 37.6010, 126.9840));
+        pool.add(place(7, "일출 명소", SIGHT, "SIGHT", 37.6000, 126.9820, 30, null).withIntent(true, "morning"));
+        PlanState s = oneDay(pool, new SelectionOutput.DayPlan(3, null, List.of(2, 7, 4, 5), HOTEL_TODAY, null),
+                List.of(), "walk", null);
+        s.days.get(0).morningOnlyFirst = true;
+
+        List<String> names = DayScheduler.scheduleOne(s, s.days.get(0), PREVIOUS_HOTEL).steps().stream()
+                .map(step -> step.place().name()).toList();
+
+        assertThat(names.get(0)).isEqualTo("전날 호텔");
+        assertThat(names.get(1)).isEqualTo("일출 명소");
+        assertThat(names).containsOnlyOnce("전날 호텔");
+    }
+
+    @Test
     @DisplayName("전날 숙소가 없으면 첫 스텝에 이동 정보를 붙이지 않는다")
     void firstStepHasNoLegWithoutPreviousLodging() {
         PlanState s = midTripDay(oneDayPool(), List.of(2, 4, 3, 5));
