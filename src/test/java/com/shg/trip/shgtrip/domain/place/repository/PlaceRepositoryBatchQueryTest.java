@@ -73,6 +73,80 @@ class PlaceRepositoryBatchQueryTest {
         return p;
     }
 
+    private Place saveDescribed(String name, String country, String description) {
+        Place p = save(name, "Landmarks and Outdoors > Beach", null, true);
+        em.createNativeQuery("UPDATE places SET country = ?, description = ? WHERE id = ?")
+                .setParameter(1, country).setParameter(2, description).setParameter(3, p.getId()).executeUpdate();
+        return p;
+    }
+
+    @Test
+    @DisplayName("평판 문구 정규식은 Java와 PostgreSQL에서 같은 문장을 잡는다")
+    void reputationRegexMatchesSameInJavaAndPostgres() {
+        String regex = com.shg.trip.shgtrip.domain.place.batch.DescriptionRewrite.REPUTATION_REGEX;
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(regex);
+        List<String> samples = List.of(
+                "현지인들이 즐겨 찾는 맛집입니다.", "야경 명소로 인기입니다.", "벚꽃이 아름다운 곳으로 알려져 있습니다.",
+                "부산 여행의 필수코스입니다.", "꼭 가봐야 할 해변입니다.", "널리 알려진 사찰입니다.",
+                "많은 현지인과 여행자가 찾는 명소입니다.", "많은 사람들이 모여드는 광장입니다.",
+                "임진왜란 때 쌓은 성으로 알려져 있습니다.", "예약이 필수입니다.", "노을과 함께 찾으면 좋습니다.",
+                "현지인의 장보기를 볼 수 있는 시장입니다.", "앞에 바다가 보이는 언덕입니다.");
+
+        for (String sample : samples) {
+            Object matched = em.createNativeQuery("SELECT CAST(? AS text) ~ CAST(? AS text)")
+                    .setParameter(1, sample).setParameter(2, regex).getSingleResult();
+            assertThat(matched).as(sample).isEqualTo(pattern.matcher(sample).find());
+        }
+    }
+
+    @Test
+    @DisplayName("소개 다시 쓰기 후보는 평판 문구와 국내 섞인 글자 행이고, 쓰기는 보낼 때의 소개가 그대로일 때만 바꾼다")
+    void descriptionRewriteTargetsAndWrites() {
+        String reputation = com.shg.trip.shgtrip.domain.place.batch.DescriptionRewrite.REPUTATION_REGEX;
+        List<String> overseas = List.of("JP", "CN", "TW", "VN");
+        Place popular = saveDescribed("광안리", "KR", "야경 명소로 인기입니다.");
+        Place mixed = saveDescribed("경주레져", "KR", "가족과 즐기기에 适합니다.");
+        Place compatHan = saveDescribed("어느 절", null, "산책하기 좋은 \uF900곳입니다.");
+        saveDescribed("해운대", "KR", "모래사장이 넓은 해변입니다.");
+        saveDescribed("金閣寺", "JP", "鹿苑寺라고도 부르는 절입니다.");
+        saveDescribed("빈 곳", "KR", "  ");
+        em.clear();
+
+        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation,
+                List.of(-1L), PageRequest.of(0, 10))).extracting(Place::getId)
+                .containsExactlyInAnyOrder(popular.getId(), mixed.getId(), compatHan.getId());
+        assertThat(placeRepository.countDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation))
+                .isEqualTo(3);
+        assertThat(placeRepository.countDescriptionRewriteTargets(true, List.of(""), overseas, reputation))
+                .isGreaterThanOrEqualTo(3);
+        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation,
+                List.of(popular.getId()), PageRequest.of(0, 10))).extracting(Place::getId)
+                .doesNotContain(popular.getId());
+
+        assertThat(placeRepository.writeDescription(popular.getId(), "광안대교가 보이는 해변입니다.", "다른 소개")).isZero();
+        assertThat(placeRepository.writeDescription(popular.getId(), "광안대교가 보이는 해변입니다.", "야경 명소로 인기입니다."))
+                .isEqualTo(1);
+        em.clear();
+
+        assertThat(placeRepository.findById(popular.getId()).orElseThrow().getDescription())
+                .isEqualTo("광안대교가 보이는 해변입니다.");
+        assertThat(placeRepository.countDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation))
+                .isEqualTo(2);
+
+        for (int i = 0; i < 3; i++) placeRepository.incrementDescriptionRewriteAttempts(List.of(mixed.getId()));
+        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation,
+                List.of(-1L), PageRequest.of(0, 10))).extracting(Place::getId).containsExactly(compatHan.getId());
+        assertThat(placeRepository.countDescriptionRewriteExhausted()).isGreaterThanOrEqualTo(1);
+
+        // v1 보강이 소개를 새로 쓰면 횟수가 0으로 돌아가 다시 대상이 된다.
+        Place reloaded = placeRepository.findById(mixed.getId()).orElseThrow();
+        placeRepository.writeEnrichment(reloaded);
+        em.clear();
+        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation,
+                List.of(-1L), PageRequest.of(0, 10))).extracting(Place::getId)
+                .containsExactlyInAnyOrder(mixed.getId(), compatHan.getId());
+    }
+
     @Test
     @DisplayName("주재료 대상은 끼니·술집 중 아직 묻지 않은 행이고, 쓰기는 원문·분류 키를 지키며 속성 보강도 주재료를 남긴다")
     void ingredientTargetsAndWrites() {

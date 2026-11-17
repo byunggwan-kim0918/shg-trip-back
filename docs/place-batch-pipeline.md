@@ -208,6 +208,28 @@ Step Functions (월 1회)
             ORDER BY last_candidate_at DESC NULLS LAST LIMIT 100
           · 프롬프트를 고쳐 다시 물을 때: UPDATE places SET attributes = attributes - 'ingredients'
             WHERE region IN (...) AND attributes ? 'ingredients'
+        → descriptions 모드: 장소 소개에 평판·권유 문구(인기·유명·맛집·추천·대표적인·명소로·현지인이 즐겨 찾는 등,
+          DescriptionRewrite.REPUTATION_REGEX)가 있거나 해외가 아닌 장소 소개의 한글에 한자·가나가 붙은 행("适합니다")만
+          rewrite_description 도구로 고쳐 쓴다. 보강을 마친 방문 장소(NOT_VISITABLE 제외)만 고른다. 기존 소개에 있는 정보
+          (어떤 곳인지, 보고 먹고 할 수 있는 것, 풍경·위치 특징)만 남기고 새 내용은 지어내지 않는다. 장소 이름에 든 낱말
+          ("소문난 국밥", "명성교회")과 이름을 따라 쓴 한자("石佛寺는")는 SQL 후보에 걸려도 요청하지 않는다.
+          보낼 때의 소개가 그대로인 행만 바꾸고 바뀐 행은 바로 다시 임베딩한다. 그사이 소개가 바뀐 행은 실패로 세지 않는다.
+          고친 소개에도 평판 문구·섞인 글자가 남거나 기존 소개보다 눈에 띄게 길면 반영하지 않고 다음 실행에서 다시 묻는다.
+          이렇게 3번 실패한 행은 description_rewrite_attempts로 빠진다("소개 고쳐 쓰기에 3번 실패해 제외된 장소 N건" 로그).
+          v1 보강이 소개를 새로 쓰면 횟수는 0으로 돌아간다
+          · 월간 실행: v1 보강이 끝나면 같은 단계에서 이 모드를 이어서 돈다(batch.enrich.rewrite-descriptions, 기본 true,
+            BATCH_ENRICH_REWRITE_DESCRIPTIONS=false로 끔, BATCH_ENRICH_CATEGORY_PREFIX 견본 실행에서는 건너뜀). v1 프롬프트의 설명 가이드(DescriptionRewrite.ENRICH_RULE)를 어기고
+            남은 평판 문구를 여기서 고친다. v1 결과에서 문장을 빼지 않는다(사실과 평판이 한 문장에 붙는 일이 많다)
+          · 이 단계만: BATCH_ENRICH_ENABLED=true BATCH_ENRICH_MODE=descriptions + ingredients 절차의 다른 단계 끄기 설정.
+            지역 목록 없이 전체를 돌 수 있다(BATCH_ENRICH_REGIONS로 좁힐 수 있다). 결과 재반영(BATCH_ENRICH_RESUME_BATCH_ID)은
+            월간 실행이 낸 묶음도 BATCH_ENRICH_MODE=descriptions로 한다
+          · 첫 실행은 BATCH_ENRICH_MAX_PER_REGION(지역 목록 없으면 전체 합계 상한)으로 견본을 돌리고 바뀐 소개를 훑어본다
+          · 남은 후보 확인(로그 "소개 다시 쓰기 후보 N건"과 같은 조건이라 이름 속 낱말·한자만 걸린 행도 센다.
+            :reputation은 DescriptionRewrite.REPUTATION_REGEX, :overseas는 OverseasEnrichment.COUNTRIES):
+            SELECT count(*) FROM places WHERE active AND enriched_at IS NOT NULL AND btrim(COALESCE(description, '')) <> ''
+              AND description_rewrite_attempts < 3 AND (place_role IS NULL OR place_role <> 'NOT_VISITABLE')
+              AND (description ~ :reputation OR ((country IS NULL OR country NOT IN (:overseas))
+                   AND description ~ '[\uAC00-\uD7A3][\u3005-\u3007\u3021-\u3029\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\U00020000-\U0003134F\u3040-\u30FF]|[\u3005-\u3007\u3021-\u3029\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\U00020000-\U0003134F\u3040-\u30FF][\uAC00-\uD7A3]'))
         ※ recommended_time_slots는 DayTiming.timePreference()가 소비 —
           야간 골프장 같은 시간대 부적합 배치 방지
   [3/4-이름] NameKoOverrideJob.run()  (batch.name-ko-overrides.enabled, 기본 true)

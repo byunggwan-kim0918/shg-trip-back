@@ -145,6 +145,7 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
             log.info("[3/4] {} 배치 보강 시작", mode == null ? "알 수 없는 모드의" : switch (mode) {
                 case ATTRIBUTES -> "속성(v2)";
                 case INGREDIENTS -> "식당 주재료";
+                case DESCRIPTIONS -> "장소 소개 고쳐 쓰기";
                 case V1 -> "태그/설명";
             });
             stage("[3/4] 배치 보강", batchEnrichScheduler::enrich);
