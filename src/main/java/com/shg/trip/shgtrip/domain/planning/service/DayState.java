@@ -39,6 +39,10 @@ class DayState {
     boolean continuesAfter;
     /** 오전 방문지 중 아침에만 성립하는 곳(아침 의도, 긴 등산)을 먼저 둔다. 날짜를 직접 고르는 확정만 켠다. */
     boolean morningOnlyFirst;
+    /** 영업시간에 맞춰 시간대 맨 앞에 둘 장소. 날짜를 직접 고르는 확정만 붙인다. */
+    final java.util.Map<Integer, Slot> openingSlots = new java.util.HashMap<>();
+
+    enum Slot { MORNING_FIRST, AFTERNOON_FIRST, EVENING_FIRST }
     private final List<Drop> drops = new ArrayList<>();
     private final java.util.Set<Integer> dropBaseline = new java.util.HashSet<>();
 

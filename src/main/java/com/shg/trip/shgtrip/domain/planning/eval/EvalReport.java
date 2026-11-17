@@ -2,6 +2,8 @@ package com.shg.trip.shgtrip.domain.planning.eval;
 
 import com.shg.trip.shgtrip.domain.planning.service.DropReason;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
+import com.shg.trip.shgtrip.domain.planning.service.PoolLimits;
+import com.shg.trip.shgtrip.domain.planning.service.QualityGate;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
 import com.shg.trip.shgtrip.domain.planning.service.MealKindSwaps;
 import com.shg.trip.shgtrip.domain.planning.service.OverCapLegs;
@@ -354,6 +356,7 @@ final class EvalReport {
         sb.append(",sel_placed,sel_kept");
         sb.append(",kind_day_avoidable,kind_day_pool_limited,kind_repeat_avoidable,kind_repeat_pool_limited");
         sb.append(",kind_consec_avoidable,kind_consec_pool_limited,alt_steps,alt_total,alt_empty,alt_cross_day");
+        sb.append(",intent_missed,pool_limited,needs_adjust");
         sb.append('\n');
         for (EvalRunner.Row r : rows) {
             if (r.saved() != null) line(sb, r, "saved", r.saved(), r.savedRules());
@@ -427,6 +430,15 @@ final class EvalReport {
                 .append(',').append(a == null ? "" : a.total())
                 .append(',').append(a == null ? "" : a.empty())
                 .append(',').append(a == null ? "" : a.crossDay());
+        List<String> missed = "replayed".equals(source) ? r.missedIntents() : null;
+        // 비교 스크립트가 쉼표로만 나눠 읽어 이름의 쉼표는 공백으로 바꾼다.
+        sb.append(',').append(missed == null ? "" : String.join(";", missed).replace(',', ' '));
+        // 생성은 v2 결과만 풀 탓 위반을 '조정 필요'에서 뺀다.
+        List<QualityGate.PoolLimit> limits = "replayed".equals(source) ? r.poolLimits() : null;
+        sb.append(',').append(limits == null ? "" : limits.stream()
+                        .map(l -> l.rule() + "@" + l.day()).collect(Collectors.joining(";")))
+                .append(',').append(verdict == null ? "" : String.valueOf(limits == null ? verdict.core()
+                        : PoolLimits.needsAdjustment(verdict, limits)));
         sb.append('\n');
     }
 

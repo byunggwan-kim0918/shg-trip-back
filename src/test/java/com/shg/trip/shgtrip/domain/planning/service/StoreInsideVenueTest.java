@@ -24,7 +24,7 @@ class StoreInsideVenueTest {
     @Test
     @DisplayName("백화점 이름으로 시작하는 근처 매장은 빼고 백화점은 남긴다")
     void dropsStoreInsideDepartmentStore() {
-        List<PlaceCandidate> result = OptimizedGenerationExecutor.dropStoresInsideVenue(List.of(
+        List<PlaceCandidate> result = CandidateKeys.dropStoresInsideVenue(List.of(
                 cand(1, "롯데백화점 본점", "Retail > Department Store", 37.56468, 126.98170),
                 cand(2, "롯데백화점 본점 시스템옴므", "Retail > Department Store", 37.56561, 126.98206)));
         assertThat(names(result)).containsExactly("롯데백화점 본점");
@@ -33,7 +33,7 @@ class StoreInsideVenueTest {
     @Test
     @DisplayName("백화점 식당가·멀리 떨어진 같은 이름 지점·관광지는 건드리지 않는다")
     void keepsDiningFarAndNonRetail() {
-        List<PlaceCandidate> result = OptimizedGenerationExecutor.dropStoresInsideVenue(List.of(
+        List<PlaceCandidate> result = CandidateKeys.dropStoresInsideVenue(List.of(
                 cand(1, "롯데백화점 본점", "Retail > Department Store", 37.56468, 126.98170),
                 cand(2, "롯데백화점 본점 푸드코트", "Dining and Drinking > Food Court", 37.56470, 126.98172),
                 cand(3, "롯데백화점 본점 잠실", "Retail > Department Store", 37.51100, 127.09800),

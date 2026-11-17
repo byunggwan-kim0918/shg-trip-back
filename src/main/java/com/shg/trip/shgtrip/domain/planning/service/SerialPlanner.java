@@ -86,28 +86,38 @@ public class SerialPlanner {
     }
 
     public Result schedule(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args) {
-        return run(selection, candidates, args, Picks.AS_PLACED, Set.of());
+        return run(selection, candidates, args, Picks.AS_PLACED, Set.of(), true);
     }
 
     /**
      * 날짜는 직접 정한다. 날마다 기준 장소에서 닿는 범위 안에서 고르고, 요청 의도(highlight·timing)·거점·숙소·예비 장소는
      * 선택 결과의 것을 쓴다.
      *
-     * 사용자가 고른 장소와 꼭 하고 싶은 경험으로 맞춘 장소({@link PlaceCandidate#userSelected()},
-     * 후보에 이미 붙은 {@link PlaceCandidate#intentProtected()})는 닿는 범위 밖이어도 날짜를 고를 때 먼저 둔다.
-     * 휴무일과 끼니 자리가 찬 날에는 두지 않는다.
+     * 사용자가 고른 장소, 꼭 하고 싶은 경험으로 맞춘 장소, 선택 단계의 요청 의도 장소({@link PlaceCandidate#keepsPlace()})는
+     * 닿는 범위 밖이어도 날짜를 고를 때 먼저 둔다. 휴무일에는 두지 않고, 점심·저녁 자리가 찬 날의 고른 식당은 아침 자리를 맡는다.
      *
      * @param selection 날짜 수가 {@code dayCount}와 다르면 요청 의도와 예약 숙소만 읽고 {@link Picks#IGNORE}로 고른다
      */
     public Result plan(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args, int dayCount,
                        Picks picks) {
+        return plan(selection, candidates, args, dayCount, picks, true);
+    }
+
+    /** 결과를 버리고 기준 좌표만 쓸 확정. 의도 반영률을 세는 요약 로그(불변식 요약·의도 시간대·날짜 직접 선택)를 남기지 않는다. */
+    public Result planWithoutSummary(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args,
+                                     int dayCount, Picks picks) {
+        return plan(selection, candidates, args, dayCount, picks, false);
+    }
+
+    private Result plan(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args, int dayCount,
+                        Picks picks, boolean summary) {
         // 선택 단계의 의도도 intentProtected로 붙으므로 그 전에 약속 장소를 정한다.
         Set<String> promised = candidates.stream()
                 .filter(c -> c.userSelected() || c.intentProtected())
                 .map(SerialPlanner::keyOf)
                 .collect(Collectors.toSet());
         if (selection.days() != null && selection.days().size() == dayCount) {
-            return run(selection, candidates, args, picks, promised);
+            return run(selection, candidates, args, picks, promised, summary);
         }
         log.warn("선택 결과의 날짜 수가 여행 일수와 달라 요청 의도와 예약 숙소만 쓴다: 선택 {}일, 여행 {}일",
                 selection.days() == null ? 0 : selection.days().size(), dayCount);
@@ -119,15 +129,15 @@ public class SerialPlanner {
                         null))
                 .toList();
         return run(new SelectionOutput("", days, List.of(), List.of()), IntentHints.apply(selection, candidates), args,
-                Picks.IGNORE, promised);
+                Picks.IGNORE, promised, summary);
     }
 
     private Result run(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args, Picks picks,
-                       Set<String> promised) {
+                       Set<String> promised, boolean summary) {
         TripNotes notes = new TripNotes();
         CityBlockPlanner.BlockScheduler withinCity =
                 (blockSelection, blockCandidates, blockArgs, earlier) -> scheduleWithinCity(blockSelection,
-                        blockCandidates, blockArgs, earlier, notes, picks, promised);
+                        blockCandidates, blockArgs, earlier, notes, picks, promised, summary);
         RouteOptimizer.ScheduleResult result = args.cities() != null
                 ? CityBlockPlanner.schedule(selection, candidates, args, withinCity)
                 : withinCity.schedule(selection, candidates, args, PlanState.Earlier.NONE);
@@ -138,7 +148,8 @@ public class SerialPlanner {
 
     private RouteOptimizer.ScheduleResult scheduleWithinCity(SelectionOutput selection, List<PlaceCandidate> candidates,
                                                              ScheduleArgs args, PlanState.Earlier earlier,
-                                                             TripNotes notes, Picks picks, Set<String> promised) {
+                                                             TripNotes notes, Picks picks, Set<String> promised,
+                                                             boolean summary) {
         boolean choosesDays = picks != Picks.AS_PLACED;
         Set<Integer> promisedHere = candidates.stream().filter(c -> promised.contains(keyOf(c)))
                 .map(PlaceCandidate::index).collect(Collectors.toCollection(TreeSet::new));
@@ -190,6 +201,9 @@ public class SerialPlanner {
             // 거리 트림과 끼니 교체로 뺀 장소는 사용 표시가 풀린다. 그날에는 다시 쓸 수 있지만 다른 날의 빈자리로 들어가면 안 된다.
             s.usedIndices.addAll(reserved);
         }
+        if (!summary) {
+            return new RouteOptimizer.ScheduleResult(AlternativeBuilder.pruneUsedAndRenumber(steps), List.of());
+        }
         if (choosesDays) {
             Set<Integer> finalPlaces = s.days.stream().flatMap(d -> d.placeIndices.stream()).collect(Collectors.toSet());
             log.info("날짜 직접 선택: {} / 선택 단계가 놓은 장소 {}곳 중 {}곳 반영", picks, placed.size(),
@@ -214,6 +228,9 @@ public class SerialPlanner {
                                               Map<DroppedOn, DropReason> reasons, boolean nearbySpareOnly) {
         Set<Integer> droppedToday = new HashSet<>();
         List<StepData> steps = scheduleDay(s, day, previousLodging, reasons, droppedToday, nearbySpareOnly);
+        if (nearbySpareOnly && placeByOpeningHours(s, day)) {
+            steps = scheduleDay(s, day, previousLodging, reasons, droppedToday, nearbySpareOnly);
+        }
         for (int attempt = 0; attempt < SEED_ATTEMPTS && seedEmptyDay(s, day, previousLodging, droppedToday);
              attempt++) {
             steps = scheduleDay(s, day, previousLodging, reasons, droppedToday, nearbySpareOnly);
@@ -224,6 +241,63 @@ public class SerialPlanner {
             memo.settle(s.days);
         }
         return steps;
+    }
+
+    /**
+     * 영업시간·시작 상한에 걸려 빠진 장소를 그날 다시 넣고 영업시간에 맞는 시간대 맨 앞에 둔다. 경로 순서는 영업시간을 보지
+     * 않아 늦게 여는 곳이 아침 첫 자리에, 일찍 닫는 곳이 오후 끝에 놓인다. 사용자가 고른 장소는 빠지지 않아 늦게 여는 곳이면
+     * 처음부터 그 시간대로 보낸다.
+     *
+     * @return 다시 넣거나 시간대를 정한 장소가 있으면 true
+     */
+    static boolean placeByOpeningHours(PlanState s, DayState day) {
+        int morningStart = s.cfg.forDay(day).morningStart;
+        boolean placed = false;
+        for (Integer idx : day.placeIndices) {
+            PlaceCandidate c = byIndex(s.candidates, idx);
+            if (c == null || !c.userSelected() || day.openingSlots.containsKey(idx)
+                    || !CandidatePolicy.roleOf(c).isVisit()) continue;
+            DayState.Slot slot = slotFor(c, day, morningStart);
+            if (slot == DayState.Slot.AFTERNOON_FIRST && opensWithin(c, day, slot, morningStart)) {
+                day.openingSlots.put(idx, slot);
+                placed = true;
+            }
+        }
+        for (DayState.Drop drop : day.dropped()) {
+            if (drop.reason() != DropReason.CLOSED_AT_TIME && drop.reason() != DropReason.LATE_START) continue;
+            if (day.openingSlots.containsKey(drop.index())) continue;
+            PlaceCandidate c = byIndex(s.candidates, drop.index());
+            if (c == null) continue;
+            DayState.Slot slot = slotFor(c, day, morningStart);
+            if (!opensWithin(c, day, slot, morningStart)) continue;
+            day.openingSlots.put(drop.index(), slot);
+            addToDay(day, drop.index(), s.spare, s.usedIndices);
+            placed = true;
+        }
+        return placed;
+    }
+
+    private static DayState.Slot slotFor(PlaceCandidate c, DayState day, int morningStart) {
+        if (DayTiming.timePreference(c) == TimePreference.EVENING) return DayState.Slot.EVENING_FIRST;
+        List<int[]> ranges = day.dayOfWeek == null ? null : OpeningHoursText.rangesFor(c.openingHours(), day.dayOfWeek);
+        if (ranges == null || ranges.isEmpty()) return DayState.Slot.MORNING_FIRST;
+        int opens = ranges.get(0)[0];
+        if (opens >= ScheduleTuning.DINNER_START) return DayState.Slot.EVENING_FIRST;
+        return opens > morningStart + ScheduleTuning.OPENING_WAIT_LIMIT_MINUTES
+                ? DayState.Slot.AFTERNOON_FIRST : DayState.Slot.MORNING_FIRST;
+    }
+
+    /** 그 시간대가 시작할 때 열지 않는 곳을 다시 넣으면 다른 장소의 예산만 차지하고 다시 빠진다. */
+    private static boolean opensWithin(PlaceCandidate c, DayState day, DayState.Slot slot, int morningStart) {
+        if (day.dayOfWeek == null) return true;
+        int slotStart = switch (slot) {
+            case MORNING_FIRST -> morningStart;
+            case AFTERNOON_FIRST -> ScheduleTuning.LUNCH_START + ScheduleTuning.DINING_VISIT_MINUTES;
+            case EVENING_FIRST -> ScheduleTuning.DINNER_START + ScheduleTuning.DINING_VISIT_MINUTES;
+        };
+        Integer openFrom = OpeningHoursText.earliestStart(c.openingHours(), day.dayOfWeek, slotStart,
+                DayTiming.resolveVisitMinutes(c));
+        return openFrom == null || (openFrom >= 0 && openFrom - slotStart <= ScheduleTuning.OPENING_WAIT_LIMIT_MINUTES);
     }
 
     private static List<StepData> scheduleDay(PlanState s, DayState day, Integer previousLodging,

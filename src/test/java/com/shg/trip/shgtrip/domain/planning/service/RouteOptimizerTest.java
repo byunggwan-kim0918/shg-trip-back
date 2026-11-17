@@ -72,6 +72,35 @@ class RouteOptimizerTest {
     }
 
     @Test
+    @DisplayName("사용자가 고른 장소는 개장이 한 시간 안이면 기다리고, 더 늦게 열어도 빼지 않는다")
+    void schedule_userSelectedWaitsForOpeningWithinLimit() {
+        java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);
+        List<PlaceCandidate> soon = List.of(
+                placeWithHours(1, "열시개장관", "Arts and Entertainment > Museum",
+                        37.500, 127.000, "강남", "월요일: 오전 10:00 ~ 오후 6:00").asUserSelected(),
+                placeWithHours(2, "점심집", "Dining and Drinking > Restaurant > Korean",
+                        37.501, 127.001, "강남", "월요일: 오전 11:00 ~ 오후 9:00"),
+                placeWithHours(3, "호텔", "Travel and Transportation > Lodging > Hotel",
+                        37.502, 127.002, "강남", null));
+        List<PlaceCandidate> late = List.of(
+                placeWithHours(1, "한시개장관", "Arts and Entertainment > Museum",
+                        37.500, 127.000, "강남", "월요일: 오후 1:00 ~ 오후 6:00").asUserSelected(),
+                soon.get(1), soon.get(2));
+        SelectionOutput selection = new SelectionOutput("concept",
+                List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2), 3, null)), List.of(), List.of());
+
+        StepData waited = schedule(selection, soon, "normal", "any", monday, List.of()).stream()
+                .filter(s -> "열시개장관".equals(s.place().name())).findFirst().orElseThrow();
+        List<StepData> lateSteps = schedule(selection, late, "normal", "any", monday, List.of());
+
+        assertThat(waited.startTime()).isEqualTo("10:00");
+        // 오래 기다리면 점심과 뒤 일정이 통째로 밀려 그 자리에 둔다.
+        assertThat(lateSteps).anySatisfy(s -> assertThat(s.place().name()).isEqualTo("한시개장관"));
+        assertThat(lateSteps).filteredOn(s -> "점심집".equals(s.place().name()))
+                .allSatisfy(s -> assertThat(ScheduleTimes.toMinutesOrZero(s.startTime())).isLessThan(14 * 60));
+    }
+
+    @Test
     @DisplayName("개장까지 1시간을 넘게 기다려야 하는 장소는 그 자리에 두지 않는다")
     void schedule_trimsPlaceOpeningMuchLater() {
         java.time.LocalDate monday = java.time.LocalDate.of(2024, 1, 1);

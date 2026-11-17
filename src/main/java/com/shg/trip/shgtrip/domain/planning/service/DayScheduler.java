@@ -249,8 +249,28 @@ final class DayScheduler {
         // 버킷은 실제 체류시간으로 채워야 시계와 용량이 어긋나지 않는다.
         int[] usedM = {0}, usedA = {0}, usedE = {0};
         List<Integer> morning = new ArrayList<>(), afternoon = new ArrayList<>(), evening = new ArrayList<>();
+        List<Integer> morningFirst = new ArrayList<>(), afternoonFirst = new ArrayList<>(), eveningFirst = new ArrayList<>();
         for (Integer idx : activities) {
             PlaceCandidate actCand = byIndex(candidates, idx);
+            DayState.Slot opening = day.openingSlots.get(idx);
+            if (opening != null && actCand != null) {
+                int minutes = resolveVisitMinutes(actCand) + INTRA_BUCKET_TRAVEL_MINUTES;
+                int bucket = switch (opening) {
+                    case MORNING_FIRST -> 0;
+                    case AFTERNOON_FIRST -> 1;
+                    case EVENING_FIRST -> 2;
+                };
+                int[] used = List.of(usedM, usedA, usedE).get(bucket);
+                // 다시 넣은 장소도 시간대 예산을 넘기면 점심·저녁과 뒤 장소를 밀어낸다.
+                if (!actCand.keepsPlace() && used[0] + minutes > budgets[bucket]) {
+                    day.drop(idx, DropReason.TIME_BUDGET);
+                    spareIndices.addLast(idx);
+                    continue;
+                }
+                used[0] += minutes;
+                List.of(morningFirst, afternoonFirst, eveningFirst).get(bucket).add(idx);
+                continue;
+            }
             // 카페 스톱은 점심과 저녁 사이(오후)에 둔다. 오전 버킷부터 채우면 아침 9시 카페가 된다.
             if (cfg.cafeStop && isSameIndex(day.cafeStopIndex, idx)) {
                 // 늦게 도착한 날은 오후가 짧아 카페까지 넣으면 저녁이 시간대 밖으로 밀린다
@@ -299,6 +319,9 @@ final class DayScheduler {
             morning.sort(Comparator.comparing(
                     idx -> timePreference(byIndex(candidates, idx)) != TimePreference.MORNING_ONLY));
         }
+        morning.addAll(0, morningFirst);
+        afternoon.addAll(0, afternoonFirst);
+        evening.addAll(0, eveningFirst);
 
         // 버킷 경계를 알아야 점심이 오전·오후 활동 사이 우회를 최소화하는지 판정할 수 있어 버킷 확정 뒤에 식사 슬롯을 정한다.
         // 그날 중심 최근접으로 고르면 오전 → 점심 → 오후가 동서로 왕복한다.
@@ -444,11 +467,12 @@ final class DayScheduler {
                     || isSameIndex(breakfastIdx, idx)
                     || isSameIndex(lunchIdx, idx)
                     || isSameIndex(dinnerIdx, idx);
-            if (!fixedSlot && !cand.userSelected()) {
+            if (!fixedSlot) {
                 // 확정 시각에 영업 중인지 본다. 숙소 영업시간은 프런트 운영 시간이라 걸면 저녁 체크인이 막혀 fixedSlot은 제외한다.
                 Integer openFrom = OpeningHoursText.earliestStart(
                         cand.openingHours(), day.dayOfWeek, startMin, visitMinutes);
-                if (openFrom != null && (openFrom < 0 || openFrom - startMin > OPENING_WAIT_LIMIT_MINUTES)) {
+                if (!cand.userSelected() && openFrom != null
+                        && (openFrom < 0 || openFrom - startMin > OPENING_WAIT_LIMIT_MINUTES)) {
                     day.drop(idx, DropReason.CLOSED_AT_TIME);
                     spareIndices.addLast(idx);
                     log.info("영업시간 가드 트림: day={}({}) {} ({} 시작 예정, 영업 [{}])",
@@ -456,8 +480,8 @@ final class DayScheduler {
                             cand.openingHours() == null ? "?" : cand.openingHours());
                     continue;
                 }
-                if (openFrom != null && openFrom > startMin) {
-                    // 개장까지 대기가 한도 안이면 버리지 않고 시작을 늦춘다.
+                // 한도를 넘는 대기는 하루를 통째로 밀어, 그때도 빼지 않는 사용자가 고른 장소는 그 자리에 둔다.
+                if (openFrom != null && openFrom > startMin && openFrom - startMin <= OPENING_WAIT_LIMIT_MINUTES) {
                     log.info("개장 대기로 시작 시각 조정: day={}({}) {} {} → {}",
                             day.dayNumber, day.dayOfWeek, cand.name(),
                             formatMinutes(startMin), formatMinutes(openFrom));
@@ -471,7 +495,7 @@ final class DayScheduler {
                 } else if (pref == TimePreference.MORNING_ONLY) {
                     latestStart = Math.min(latestStart, LONG_HIKE_LATEST_START_MINUTES);
                 }
-                if (startMin > latestStart) {
+                if (!cand.userSelected() && startMin > latestStart) {
                     day.drop(idx, DropReason.LATE_START);
                     spareIndices.addLast(idx);
                     log.info("시각 가드 트림: day={} {} ({} 시작, 상한 {})", day.dayNumber, cand.name(),

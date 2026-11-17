@@ -230,32 +230,47 @@ public final class ItineraryScorer {
             estimated.add("intent");
             return 0.5;
         }
-        Map<String, StepData> placed = new HashMap<>();
-        byDay.values().forEach(list -> list.forEach(s -> placed.putIfAbsent(CandidateLookup.name(s), s)));
+        List<IntentCheck> checks = intentChecks(selection, candidates,
+                byDay.values().stream().flatMap(List::stream).toList());
+        return checks.isEmpty() ? 1 : (double) checks.stream().filter(IntentCheck::kept).count() / checks.size();
+    }
 
-        int asked = 0, kept = 0;
+    /** 지키지 못한 요청 의도. "이름 evening@14:00"(시간대가 어긋남), "이름 highlight@없음"(일정에 없음) 꼴이다. */
+    public static List<String> missedIntents(SelectionOutput selection, List<PlaceCandidate> candidates,
+                                             List<StepData> steps) {
+        if (selection == null || candidates == null) return List.of();
+        return intentChecks(selection, candidates, steps).stream().filter(c -> !c.kept())
+                .map(c -> c.name() + " " + c.kind() + "@" + (c.placed() == null ? "없음" : c.placed().startTime()))
+                .toList();
+    }
+
+    private record IntentCheck(String name, String kind, StepData placed, boolean kept) {}
+
+    private static List<IntentCheck> intentChecks(SelectionOutput selection, List<PlaceCandidate> candidates,
+                                                  List<StepData> steps) {
+        Map<String, StepData> placed = new HashMap<>();
+        steps.forEach(s -> placed.putIfAbsent(CandidateLookup.name(s), s));
+        List<IntentCheck> checks = new ArrayList<>();
         if (selection.timing() != null) {
             for (SelectionOutput.TimingHint t : selection.timing()) {
                 PlaceCandidate c = ScheduleTimes.byIndex(candidates, t.index());
                 if (c == null) continue;
-                asked++;
                 StepData s = placed.get(c.name());
-                if (s == null) continue;
-                int start = toMinutesOrZero(s.startTime());
-                boolean ok = "evening".equals(t.when()) ? start >= EVENING_ACTIVITY_EARLIEST_START
-                        : start < LUNCH_START;
-                if (ok) kept++;
+                boolean ok = s != null && ("evening".equals(t.when())
+                        ? toMinutesOrZero(s.startTime()) >= EVENING_ACTIVITY_EARLIEST_START
+                        : toMinutesOrZero(s.startTime()) < LUNCH_START);
+                checks.add(new IntentCheck(c.name(), t.when(), s, ok));
             }
         }
         if (selection.highlightIndices() != null) {
             for (Integer idx : selection.highlightIndices()) {
                 PlaceCandidate c = idx == null ? null : ScheduleTimes.byIndex(candidates, idx);
                 if (c == null) continue;
-                asked++;
-                if (placed.containsKey(c.name())) kept++;
+                StepData s = placed.get(c.name());
+                checks.add(new IntentCheck(c.name(), "highlight", s, s != null));
             }
         }
-        return asked == 0 ? 1 : (double) kept / asked;
+        return checks;
     }
 
     /** Sonnet이 고른 방문지 중 같은 날에 남은 비율. */

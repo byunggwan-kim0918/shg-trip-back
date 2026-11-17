@@ -9,6 +9,7 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -39,8 +40,19 @@ public final class MealKindSwaps {
     private record Meal(StepData step, PlaceCandidate place, String kind, StepData before, StepData after,
                         int dayNumber) {}
 
+    /**
+     * @param sameDayLimitedDays 점심·저녁이 같은 종류인데 어느 쪽도 바꿔 넣을 식당이 없던 날
+     * @param repeatsLimited     상한을 넘긴 종류가 있고, 그 종류의 어느 끼니도 바꿔 넣을 식당이 없었는지
+     */
+    record Classified(Count count, Set<Integer> sameDayLimitedDays, boolean repeatsLimited) {}
+
     public static Count count(List<StepData> steps, List<PlaceCandidate> candidates, String transportPref,
                               String pace, LocalDate startDate) {
+        return classify(steps, candidates, transportPref, pace, startDate).count();
+    }
+
+    static Classified classify(List<StepData> steps, List<PlaceCandidate> candidates, String transportPref,
+                               String pace, LocalDate startDate) {
         double cap = ScheduleTuning.distanceLimits(transportPref, pace)[0];
         CandidateLookup lookup = new CandidateLookup(candidates);
         Set<Integer> used = steps.stream().map(lookup::of).filter(Objects::nonNull).map(PlaceCandidate::index)
@@ -79,13 +91,18 @@ public final class MealKindSwaps {
         byKind.forEach((k, meals) -> kindCount.put(k, meals.size()));
 
         int sameDayAvoidable = 0, sameDayLimited = 0, consecutiveAvoidable = 0, consecutiveLimited = 0;
+        Set<Integer> sameDayLimitedDays = new HashSet<>();
         for (Meal lunch : lunches) {
             Meal dinner = dinners.stream().filter(m -> m.dayNumber() == lunch.dayNumber()).findFirst().orElse(null);
             if (dinner != null && PlaceCategoryConstants.sameMealKind(lunch.kind(), dinner.kind())) {
                 if (swappable(lunch, Set.of(dinner.kind()), unusedMeals, kindCount, tripCap, cap, lookup, startDate)
                         || swappable(dinner, Set.of(lunch.kind()), unusedMeals, kindCount, tripCap, cap, lookup,
-                        startDate)) sameDayAvoidable++;
-                else sameDayLimited++;
+                        startDate)) {
+                    sameDayAvoidable++;
+                } else {
+                    sameDayLimited++;
+                    sameDayLimitedDays.add(lunch.dayNumber());
+                }
                 continue;
             }
             Meal previousDinner = dinners.stream().filter(m -> m.dayNumber() == lunch.dayNumber() - 1).findFirst()
@@ -102,6 +119,7 @@ public final class MealKindSwaps {
         }
 
         int repeatedAvoidable = 0, repeatedLimited = 0;
+        boolean anyRepeatMovable = false;
         for (Map.Entry<String, List<Meal>> entry : byKind.entrySet()) {
             int over = entry.getValue().size() - tripCap;
             if (over <= 0) continue;
@@ -109,12 +127,14 @@ public final class MealKindSwaps {
                     .filter(m -> swappable(m, Set.of(entry.getKey()), unusedMeals, kindCount, tripCap, cap, lookup,
                             startDate))
                     .count();
+            anyRepeatMovable |= movable > 0;
             int avoidable = (int) Math.min(over, movable);
             repeatedAvoidable += avoidable;
             repeatedLimited += over - avoidable;
         }
-        return new Count(sameDayAvoidable, sameDayLimited, repeatedAvoidable, repeatedLimited,
+        Count count = new Count(sameDayAvoidable, sameDayLimited, repeatedAvoidable, repeatedLimited,
                 consecutiveAvoidable, consecutiveLimited);
+        return new Classified(count, Set.copyOf(sameDayLimitedDays), repeatedLimited > 0 && !anyRepeatMovable);
     }
 
     // 앞뒤 이웃 한쪽만 보면 바꾼 뒤 반대쪽 구간이 상한을 넘는다.

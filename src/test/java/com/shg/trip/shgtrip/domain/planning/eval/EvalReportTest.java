@@ -1,8 +1,10 @@
 package com.shg.trip.shgtrip.domain.planning.eval;
 
 import com.shg.trip.shgtrip.domain.planning.service.DropReason;
+import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
 import com.shg.trip.shgtrip.domain.planning.service.MealKindSwaps;
+import com.shg.trip.shgtrip.domain.planning.service.QualityGate;
 import com.shg.trip.shgtrip.domain.planning.service.OverCapLegs;
 import com.shg.trip.shgtrip.domain.planning.service.ScoreReport;
 import com.shg.trip.shgtrip.domain.planning.service.SerialPlanner;
@@ -21,7 +23,7 @@ class EvalReportTest {
     void csvColumnsAlignWithoutVerdict() {
         ScoreReport score = new ScoreReport(0, 80, Map.of(), List.of(), List.of(), Map.of());
         EvalRunner.Row row = new EvalRunner.Row(1L, "부산", "KR", false, score, null, null, null, null,
-                EvalRunner.Trip.untraced(2), null, null, null, null, null);
+                EvalRunner.Trip.untraced(2), null, null, null, null, null, null, null);
 
         List<String> lines = EvalReport.csv(List.of(row)).lines().toList();
 
@@ -33,7 +35,7 @@ class EvalReportTest {
     @DisplayName("저장본이 없는 행은 재실행 줄만 내고 머리글과 열 개수가 같다")
     void csvSkipsMissingSaved() {
         EvalRunner.Row row = new EvalRunner.Row(1900023L, "서울 부산", "KR", true, null, fourDays(), null, null, null,
-                new EvalRunner.Trip(4, "normal", "walk", true, true, 80, null, 0), null, null, null, null, null);
+                new EvalRunner.Trip(4, "normal", "walk", true, true, 80, null, 0), null, null, null, null, null, null, null);
 
         List<String> lines = EvalReport.csv(List.of(row)).lines().toList();
 
@@ -52,13 +54,13 @@ class EvalReportTest {
                 new ScoreReport.DayScore(4, 0.4, 1, null, 900)));
         List<EvalRunner.Row> rows = List.of(
                 new EvalRunner.Row(1L, "부산", "KR", true, twoDays, null, true, null, null,
-                        new EvalRunner.Trip(2, "normal", "car", false, false, 40, null, 3), null, null, null, null, null),
+                        new EvalRunner.Trip(2, "normal", "car", false, false, 40, null, 3), null, null, null, null, null, null, null),
                 new EvalRunner.Row(2L, "부산", "KR", true, null, fourDays(), null, null, null,
-                        new EvalRunner.Trip(4, "normal", "car", false, false, 60, 48, 0), null, null, null, null, null),
+                        new EvalRunner.Trip(4, "normal", "car", false, false, 60, 48, 0), null, null, null, null, null, null, null),
                 new EvalRunner.Row(3L, "도쿄 오사카", "JP", true, null, fourDays(), null, null, null,
-                        new EvalRunner.Trip(4, "normal", "any", true, false, 90, null, 4), null, null, null, null, null),
+                        new EvalRunner.Trip(4, "normal", "any", true, false, 90, null, 4), null, null, null, null, null, null, null),
                 new EvalRunner.Row(1900023L, "서울 부산", "KR", true, null, firstDayEmpty, null, null, null,
-                        new EvalRunner.Trip(4, "normal", "walk", true, true, 100, null, 0), null, null, null, null, null));
+                        new EvalRunner.Trip(4, "normal", "walk", true, true, 100, null, 0), null, null, null, null, null, null, null));
 
         String report = EvalReport.markdown("files", rows);
 
@@ -90,7 +92,9 @@ class EvalReportTest {
         EvalRunner.Row row = new EvalRunner.Row(1L, "부산", "KR", true, score, score, true, null, null,
                 new EvalRunner.Trip(2, "normal", "car", false, false, 40, null, 0), days,
                 new OverCapLegs.Count(2, 1, 1), new EvalRunner.PickUse(8, 6),
-                new MealKindSwaps.Count(1, 0, 2, 1, 0, 3), new AlternativeStats(10, 25, 1, 2));
+                new MealKindSwaps.Count(1, 0, 2, 1, 0, 3), new AlternativeStats(10, 25, 1, 2),
+                List.of("광안리, 해변 evening@없음", "해동용궁사 highlight@없음"),
+                List.of(new QualityGate.PoolLimit(ItineraryRules.Rule.LUNCH_MISSING, 2, List.of())));
 
         String report = EvalReport.markdown("files, pipeline=v2", List.of(row));
         List<String> lines = EvalReport.csv(List.of(row)).lines().toList();
@@ -98,8 +102,8 @@ class EvalReportTest {
         assertThat(report).contains("- 고른 장소 8, 빠진 장소 2(25.0%), 코드가 채운 장소 1")
                 .contains("하루 관광 하한을 못 채운 날 1일(전체 2일)")
                 .contains("| DISTANCE | 1 |").contains("| TIME_BUDGET | 1 |");
-        assertThat(lines.get(1)).startsWith("1,KR,saved,").endsWith("car,false,false,40,,0,,,,,,,,,,,,,," + ",".repeat(10));
-        assertThat(lines.get(2)).startsWith("1,KR,replayed,").endsWith(",8,2,1,DISTANCE:1;TIME_BUDGET:1,2,1,1,1,8,6,1,0,2,1,0,3,10,25,1,2");
+        assertThat(lines.get(1)).startsWith("1,KR,saved,").endsWith("car,false,false,40,,0,,,,,,,,,,,,,," + ",".repeat(13));
+        assertThat(lines.get(2)).startsWith("1,KR,replayed,").endsWith(",8,2,1,DISTANCE:1;TIME_BUDGET:1,2,1,1,1,8,6,1,0,2,1,0,3,10,25,1,2,광안리  해변 evening@없음;해동용궁사 highlight@없음,LUNCH_MISSING@2,");
         assertThat(lines).allSatisfy(l -> assertThat(l.split(",", -1)).hasSize(lines.get(0).split(",", -1).length));
     }
 
