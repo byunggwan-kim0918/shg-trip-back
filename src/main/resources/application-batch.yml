@@ -104,7 +104,10 @@ batch:
     enabled: ${BATCH_ENRICH_ENABLED:false}
     # v1: 미보강 장소 태그·설명·역할 보강 / v2: 후보 등장·인기 장소 속성 분류만(임베딩 유지, regions 필수)
     # ingredients: 끼니·술집 식당 주재료만(못 먹는 음식 조건용, 임베딩 유지, regions 필수)
+    # descriptions: 소개의 평판 문구·섞인 글자만 고쳐 쓰기(바뀐 행 재임베딩, regions 없으면 전체)
     mode: ${BATCH_ENRICH_MODE:v1}
+    # v1 보강 뒤 같은 단계에서 descriptions를 이어서 돈다(category-prefix 견본 실행에서는 건너뜀)
+    rewrite-descriptions: ${BATCH_ENRICH_REWRITE_DESCRIPTIONS:true}
     # 지역 스코프 (쉼표 구분, 예: "Jeju,Gangneung"). 비우면 전체 —
     # 전량 보강은 LLM 비용이 크므로 관광지 데이터가 빈약한 지역부터 점진 실행 권장.
     regions: ${BATCH_ENRICH_REGIONS:}

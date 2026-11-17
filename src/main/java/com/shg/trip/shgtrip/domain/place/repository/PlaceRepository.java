@@ -372,6 +372,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 traveler_fame = COALESCE(CAST(:fame AS smallint), traveler_fame),
                 enriched_at = CAST(:enrichedAt AS timestamptz),
                 attributes = attributes - 'ingredients',
+                description_rewrite_attempts = 0,
                 updated_at = now()
              WHERE id = :id
             """, nativeQuery = true)
@@ -400,6 +401,15 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     @Query(value = "SELECT count(*) FROM places WHERE active = true AND enriched_at IS NULL AND enrich_attempts >= 3",
             nativeQuery = true)
     long countEnrichExhausted();
+
+    @Query(value = "SELECT count(*) FROM places WHERE active AND description_rewrite_attempts >= 3", nativeQuery = true)
+    long countDescriptionRewriteExhausted();
+
+    @Modifying
+    @Transactional
+    @Query(value = "UPDATE places SET description_rewrite_attempts = description_rewrite_attempts + 1 WHERE id IN (:ids)",
+            nativeQuery = true)
+    int incrementDescriptionRewriteAttempts(@Param("ids") Collection<Long> ids);
 
     /** 장소 탓인 보강 실패만 센다(BatchEnrichScheduler.applyResults). */
     @Modifying
@@ -699,6 +709,52 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             WHERE id = :id
             """, nativeQuery = true)
     int writeIngredients(@Param("id") Long id, @Param("ingredientsJson") String ingredientsJson);
+
+    /**
+     * 소개 다시 쓰기 후보: 보강을 마친 방문 장소 중 평판·권유 문구가 있거나, 해외가 아닌 장소 소개의 한글에 한자·가나가
+     * 붙은 행. 이름 속 낱말·한자까지 걸리는 거친 조건이라 {@code DescriptionRewrite.needsRewrite}로 한 번 더 거른다.
+     * 고쳐 쓰기에 3번 실패한 행은 뺀다.
+     * allRegions가 true면 지역 조건을 끈다(regions에는 자리값을 넘긴다).
+     * 글자 범위를 이스케이프로 쓰는 것은 호환 한자(U+F900)가 정규화되면 범위가 한글까지 넓어지기 때문이다.
+     */
+    String DESCRIPTION_REWRITE_TARGETS = """
+            active AND enriched_at IS NOT NULL AND btrim(COALESCE(description, '')) <> ''
+              AND description_rewrite_attempts < 3
+              AND (place_role IS NULL OR place_role <> 'NOT_VISITABLE')
+              AND (:allRegions OR region IN (:regions))
+              AND (description ~ :reputation
+                   OR ((country IS NULL OR country NOT IN (:overseas))
+                       AND description ~ '[\\uAC00-\\uD7A3][\\u3005-\\u3007\\u3021-\\u3029\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\U00020000-\\U0003134F\\u3040-\\u30FF]|[\\u3005-\\u3007\\u3021-\\u3029\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\U00020000-\\U0003134F\\u3040-\\u30FF][\\uAC00-\\uD7A3]'))
+            """;
+
+    @Query(value = "SELECT * FROM places WHERE " + DESCRIPTION_REWRITE_TARGETS + """
+              AND id NOT IN (:excludedIds)
+            ORDER BY last_candidate_at DESC NULLS LAST, COALESCE(wikidata_sitelinks, 0) DESC, id
+            """, nativeQuery = true)
+    List<Place> findDescriptionRewriteTargets(@Param("allRegions") boolean allRegions,
+                                              @Param("regions") List<String> regions,
+                                              @Param("overseas") List<String> overseasCountries,
+                                              @Param("reputation") String reputationRegex,
+                                              @Param("excludedIds") Collection<Long> excludedIds,
+                                              Pageable pageable);
+
+    @Query(value = "SELECT COUNT(*) FROM places WHERE " + DESCRIPTION_REWRITE_TARGETS, nativeQuery = true)
+    long countDescriptionRewriteTargets(@Param("allRegions") boolean allRegions,
+                                        @Param("regions") List<String> regions,
+                                        @Param("overseas") List<String> overseasCountries,
+                                        @Param("reputation") String reputationRegex);
+
+    /**
+     * 요청을 보낼 때의 소개가 그대로일 때만 바꾼다. 결과를 기다리는 사이 v1 보강이 새로 쓴 소개를 덮지 않는다.
+     *
+     * @return 바뀐 행 수(그사이 소개가 바뀌었으면 0)
+     */
+    @Modifying
+    @Transactional
+    @Query(value = "UPDATE places SET description = :description WHERE id = :id AND description = :expected",
+            nativeQuery = true)
+    int writeDescription(@Param("id") Long id, @Param("description") String description,
+                         @Param("expected") String expected);
 
     /**
      * TourAPI 매칭 대상 (id, name, category, latitude, longitude). 후보 등장·인기 장소 중 아직 시도하지 않은 것.

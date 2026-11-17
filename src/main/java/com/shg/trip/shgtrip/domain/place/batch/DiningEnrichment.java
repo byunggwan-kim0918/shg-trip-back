@@ -203,11 +203,13 @@ final class DiningEnrichment {
                 .append("이다. 아침 식사가 분명한 곳(해장국·국밥·죽·브런치·조식)은 morning을, ")
                 .append("심야 영업이 분명한 곳은 night를 더한다.\n");
         if (famous) {
-            sb.append(n++).append(". description에는 이 업장에 대해 널리 알려진 사실(역사·대표 메뉴)만 ")
-                    .append("한국어 2문장 이내로 쓴다. 확실하지 않으면 null.\n");
+            sb.append(n++).append(". description에는 이 업장에 대해 확인되는 사실(역사·대표 메뉴)만 ")
+                    .append("한국어 2문장 이내로 쓴다. ").append(DescriptionRewrite.NO_REPUTATION)
+                    .append(" 확실하지 않으면 null.\n");
         } else if (overseas) {
-            sb.append(n++).append(". description은 traveler_fame이 1 이상일 때만 이 업장에 대해 널리 알려진 사실")
-                    .append("(역사·대표 메뉴)을 한국어 2문장 이내로 쓴다. 0이거나 확실하지 않으면 null.\n");
+            sb.append(n++).append(". description은 traveler_fame이 1 이상일 때만 이 업장에 대해 확인되는 사실")
+                    .append("(역사·대표 메뉴)을 한국어 2문장 이내로 쓴다. ").append(DescriptionRewrite.NO_REPUTATION)
+                    .append(" 0이거나 확실하지 않으면 null.\n");
         }
         if (overseas) {
             sb.append(n++).append(". ").append(OverseasEnrichment.fameRule().replace("\n", "\n   ")).append("\n");

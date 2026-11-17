@@ -291,6 +291,10 @@ public class Place extends BaseTimeEntity {
         enrichWith(newTags, newDescription, newTimeSlots, durationMinutes, null);
     }
 
+    public void rewriteDescription(String newDescription) {
+        this.description = newDescription;
+    }
+
     /** 비어 있을 때만 채운다. Wikidata 한국어 라벨이나 보정표가 이미 정한 이름이 우선이다. */
     public void fillNameKo(String newNameKo) {
         if (this.nameKo == null && newNameKo != null && !newNameKo.isBlank()) this.nameKo = newNameKo;
