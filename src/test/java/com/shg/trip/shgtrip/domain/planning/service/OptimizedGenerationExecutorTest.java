@@ -78,6 +78,9 @@ class OptimizedGenerationExecutorTest {
 
     @BeforeEach
     void setUp() {
+        // 후보 보완은 실제 검색·저장소 목으로 동작을 본다.
+        ReflectionTestUtils.setField(executor, "candidateSupplement",
+                new CandidateSupplement(vectorSearchQueryService, placeRepository));
         ReflectionTestUtils.setField(executor, "destinations",
                 com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath());
         enableCountries("KR", "JP");
@@ -361,12 +364,12 @@ class OptimizedGenerationExecutorTest {
                 List.of("우동"), "Tokyo", "JP", BigDecimal.valueOf(35.71), BigDecimal.valueOf(139.79), null, null, 0.7);
         List<PlaceCandidate> all = List.of(base, crab, udon);
 
-        List<PlaceCandidate> kept = OptimizedGenerationExecutor.excludeRestrictedAppended(all, 1,
+        List<PlaceCandidate> kept = CandidateSupplement.excludeRestrictedAppended(all, 1,
                 PlaceRestrictions.of(List.of(PlaceRestriction.SEAFOOD)));
 
         assertThat(kept).extracting(PlaceCandidate::name).containsExactly("센소지", "우동집");
         assertThat(kept).extracting(PlaceCandidate::index).containsExactly(1, 2);
-        assertThat(OptimizedGenerationExecutor.excludeRestrictedAppended(all, 1, PlaceRestrictions.NONE)).isSameAs(all);
+        assertThat(CandidateSupplement.excludeRestrictedAppended(all, 1, PlaceRestrictions.NONE)).isSameAs(all);
     }
 
     @Test
@@ -408,7 +411,7 @@ class OptimizedGenerationExecutorTest {
     @DisplayName("날짜별 예비 후보는 근처 검색을 더 받아 이미 있는 곳을 건너뛰고 역할별로 정한 수까지 새 곳을 채운다")
     @SuppressWarnings("unchecked")
     void reserveTopsUpWithNewPlaces() {
-        int restaurants = OptimizedGenerationExecutor.RESERVE_PER_DAY.stream()
+        int restaurants = CandidateSupplement.RESERVE_PER_DAY.stream()
                 .filter(e -> e.getKey() == PlaceCategoryConstants.SearchRole.RESTAURANT)
                 .findFirst().orElseThrow().getValue();
         List<PlaceCandidate> found = new ArrayList<>(candidates);
@@ -438,7 +441,7 @@ class OptimizedGenerationExecutorTest {
         executor.execute("job-r", request, 1L, emitter);
 
         verify(vectorSearchQueryService).searchNearEach(any(), eq(PlaceCategoryConstants.SearchRole.RESTAURANT),
-                anyList(), anyDouble(), eq(restaurants * OptimizedGenerationExecutor.RESERVE_OVERFETCH));
+                anyList(), anyDouble(), eq(restaurants * CandidateSupplement.RESERVE_OVERFETCH));
         ArgumentCaptor<List<PlaceCandidate>> scheduled = ArgumentCaptor.forClass(List.class);
         verify(routeOptimizer).schedule(any(), scheduled.capture(), any());
         assertThat(scheduled.getValue()).filteredOn(c -> c.name().startsWith("새 식당")).hasSize(restaurants);
@@ -896,7 +899,7 @@ class OptimizedGenerationExecutorTest {
                 twinCandidate(4, 54L, "Mỳ Quảng Faifo", "Dining and Drinking > Restaurant", 15.8800, 108.3300, 0));
         SelectionOutput.DayPlan day = new SelectionOutput.DayPlan(2, null, List.of(1, 2, 3, 4), null, null);
 
-        double[] center = OptimizedGenerationExecutor.activityCentroid(day, pool);
+        double[] center = CandidateSupplement.activityCentroid(day, pool);
 
         assertThat(center[0]).isCloseTo(15.996, org.assertj.core.data.Offset.offset(0.01));
         assertThat(center[1]).isCloseTo(107.992, org.assertj.core.data.Offset.offset(0.01));
@@ -1040,6 +1043,25 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
+    @DisplayName("데이터 한계 알림만 남아 OK로 저장된 일정도 핵심 위반이 있으면 30일 쿼터를 쓰지 않는다")
+    void execute_poolLimitedOk_countsUnbilled() {
+        stubPipelineUntilSave();
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.pass());
+        Itinerary mockItinerary = mock(Itinerary.class);
+        when(mockItinerary.getId()).thenReturn(78L);
+        when(mockItinerary.getQualityStatus()).thenReturn(Itinerary.QualityStatus.OK);
+        ItineraryRules.Verdict limited = new ItineraryRules.Verdict(ItineraryRules.VERSION, List.of(
+                new ItineraryRules.Violation(ItineraryRules.Rule.LUNCH_MISSING, 1, "day1 점심 없음")), 1, 0);
+        when(saveHelper.save(eq(draftData), any(EnrichedInput.class), eq(1L), eq(true), any(), any()))
+                .thenReturn(new ItinerarySaveHelper.Saved(mockItinerary, limited));
+
+        executor.execute("job-8", request, 1L, emitter);
+
+        verify(generationPolicyService).recordUnbilled(1L);
+        verify(generationPolicyService, never()).recordSuccess(anyLong());
+    }
+
+    @Test
     @DisplayName("조정 필요로 저장된 일정은 30일 쿼터 대신 미차감 한도를 센다")
     void execute_needsAdjustment_countsUnbilled() {
         stubPipelineUntilSave();
@@ -1084,6 +1106,15 @@ class OptimizedGenerationExecutorTest {
                 BigDecimal.valueOf(139.6993), null, null, 0.93, null, null, null, 60, false, null, null, null, 40,
                 "SIGHT", null, false, null);
         List<PlaceCandidate> pool = List.of(candidates.get(0), shrine, candidates.get(2));
+        // 날짜가 빠진 일정은 필수 위반이라 v1으로 다시 확정된다. 네 날을 다 채운 v2 결과로 본다.
+        List<StepData> fourDays = new ArrayList<>();
+        for (int day = 1; day <= 4; day++) {
+            for (StepData st : fixedSteps) {
+                fourDays.add(new StepData(fourDays.size() + 1, day, st.startTime(), st.endTime(), st.place(),
+                        st.alternatives(), st.transportationMode(), st.transportationDuration(),
+                        st.transportationDistance(), st.transportationCost(), st.notes(), st.estimatedCost()));
+            }
+        }
         PlaceCandidate udon = new PlaceCandidate(1, 301L, "요요기 우동", "시부야구 요요기 2-1",
                 "Dining and Drinking > Restaurant", List.of("우동"), "Tokyo", "JP", BigDecimal.valueOf(35.6770),
                 BigDecimal.valueOf(139.7000), null, null, 0.7);
@@ -1106,20 +1137,24 @@ class OptimizedGenerationExecutorTest {
         when(selectionCallGenerator.selectPlaces(eq(vectorEnrichedInput), anyList(), any())).thenReturn(selectionOutput);
         when(vectorSearchQueryService.searchNearEach(any(), any(), anyList(), eq(nearRing), anyInt()))
                 .thenReturn(List.of(List.of(udon)));
+        when(serialPlanner.planWithoutSummary(any(), anyList(), any(), eq(4), eq(SerialPlanner.Picks.PREFER)))
+                .thenReturn(new SerialPlanner.Result(fourDays, List.of(), List.of(), firstPicks,
+                        Map.of(1, new double[]{35.6764, 139.6993})));
         when(serialPlanner.plan(any(), anyList(), any(), eq(4), eq(SerialPlanner.Picks.PREFER))).thenReturn(
-                new SerialPlanner.Result(fixedSteps, List.of(), List.of(), firstPicks,
-                        Map.of(1, new double[]{35.6764, 139.6993})),
-                new SerialPlanner.Result(fixedSteps, List.of(), List.of(), finalPicks, Map.of()));
-        when(indexResultMapper.toDraftItineraryData(eq(fixedSteps), eq("도쿄"), anyString(), anyList(), anyList()))
+                new SerialPlanner.Result(fourDays, List.of(), List.of(), finalPicks, Map.of()));
+        when(indexResultMapper.toDraftItineraryData(eq(fourDays), eq("도쿄"), anyString(), anyList(), anyList()))
                 .thenReturn(draftData);
         stubSave(44L);
 
         executor.execute("job-v2", withRequired, 1L, emitter);
 
-        ArgumentCaptor<List<PlaceCandidate>> planned = ArgumentCaptor.forClass(List.class);
-        verify(serialPlanner, times(2)).plan(any(), planned.capture(), any(), eq(4), eq(SerialPlanner.Picks.PREFER));
-        List<PlaceCandidate> first = planned.getAllValues().get(0);
-        List<PlaceCandidate> second = planned.getAllValues().get(1);
+        ArgumentCaptor<List<PlaceCandidate>> firstPass = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<List<PlaceCandidate>> finalPass = ArgumentCaptor.forClass(List.class);
+        verify(serialPlanner).planWithoutSummary(any(), firstPass.capture(), any(), eq(4),
+                eq(SerialPlanner.Picks.PREFER));
+        verify(serialPlanner).plan(any(), finalPass.capture(), any(), eq(4), eq(SerialPlanner.Picks.PREFER));
+        List<PlaceCandidate> first = firstPass.getValue();
+        List<PlaceCandidate> second = finalPass.getValue();
         assertThat(second).hasSize(first.size() + 1);
         assertThat(second.get(second.size() - 1)).extracting(PlaceCandidate::name, PlaceCandidate::index)
                 .containsExactly("요요기 우동", second.size());
@@ -1131,18 +1166,24 @@ class OptimizedGenerationExecutorTest {
     }
 
     @Test
-    @DisplayName("v2에서 기준 좌표가 없으면 보완 검색 없이 한 번만 정한다")
-    void serialPipelineWithoutAnchorsPlansOnce() {
+    @DisplayName("v2에서 기준 좌표가 없으면 보완 검색 없이 같은 후보로 다시 정하고 요약 로그는 마지막 확정에만 남긴다")
+    void serialPipelineWithoutAnchorsSkipsSupplement() {
         stubPipelineUntilSave();
         when(planningPipeline.serialFor(any())).thenReturn(true);
         double nearRing = DayPicker.nearRingKm(vectorEnrichedInput.transportPref(), vectorEnrichedInput.pace());
-        when(serialPlanner.plan(any(), anyList(), any(), anyInt(), any())).thenReturn(
-                new SerialPlanner.Result(fixedSteps, List.of(), List.of(), dayOnePicks(1), Map.of()));
+        SerialPlanner.Result noAnchors = new SerialPlanner.Result(fixedSteps, List.of(), List.of(), dayOnePicks(1),
+                Map.of());
+        when(serialPlanner.planWithoutSummary(any(), anyList(), any(), anyInt(), any())).thenReturn(noAnchors);
+        when(serialPlanner.plan(any(), anyList(), any(), anyInt(), any())).thenReturn(noAnchors);
         stubSave(45L);
 
         executor.execute("job-v2a", request, 1L, emitter);
 
-        verify(serialPlanner, times(1)).plan(any(), anyList(), any(), anyInt(), any());
+        ArgumentCaptor<List<PlaceCandidate>> firstPass = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<List<PlaceCandidate>> finalPass = ArgumentCaptor.forClass(List.class);
+        verify(serialPlanner).planWithoutSummary(any(), firstPass.capture(), any(), anyInt(), any());
+        verify(serialPlanner).plan(any(), finalPass.capture(), any(), anyInt(), any());
+        assertThat(finalPass.getValue()).isEqualTo(firstPass.getValue());
         verify(vectorSearchQueryService, never()).searchNearEach(any(), any(), anyList(), eq(nearRing), anyInt());
         // 숙소가 없는 풀이라 선택 결과의 하루 기준 보완만 한 번 돈다.
         verify(vectorSearchQueryService, times(1)).searchAccommodationsNear(any(), any(), anyDouble(), anyInt(),
@@ -1154,7 +1195,7 @@ class OptimizedGenerationExecutorTest {
     void serialFailureFallsBackToRouteOptimizer() {
         stubPipelineUntilSave();
         when(planningPipeline.serialFor(any())).thenReturn(true);
-        when(serialPlanner.plan(any(), anyList(), any(), anyInt(), any()))
+        when(serialPlanner.planWithoutSummary(any(), anyList(), any(), anyInt(), any()))
                 .thenThrow(new IllegalStateException("하루 확정 실패"));
         stubSave(46L);
 
@@ -1164,6 +1205,28 @@ class OptimizedGenerationExecutorTest {
         verify(traceRecorder).record(any(), eq("job-v2f"), eq(request), any(), any(), any(), anyList(), anyInt(),
                 any(), eq(new ScheduledBy(ScheduledBy.Pipeline.V2_FALLBACK, null)), anyLong(), any());
         verify(resultStore).save("job-v2f", 46L, 1L);
+    }
+
+    @Test
+    @DisplayName("v2 결과가 구조 검증에 걸리면 생성을 실패시키지 않고 v1으로 다시 확정해 저장하고 기록에 v2-fallback을 남긴다")
+    void unsavableSerialResultFallsBackToRouteOptimizer() {
+        stubPipelineUntilSave();
+        when(planningPipeline.serialFor(any())).thenReturn(true);
+        SerialPlanner.Result v2 = new SerialPlanner.Result(fixedSteps, List.of(), List.of(), dayOnePicks(1), Map.of());
+        when(serialPlanner.planWithoutSummary(any(), anyList(), any(), anyInt(), any())).thenReturn(v2);
+        when(serialPlanner.plan(any(), anyList(), any(), anyInt(), any())).thenReturn(v2);
+        stubSave(49L);
+        when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.fail("스텝 시각 역전"),
+                HardValidationResult.pass());
+
+        executor.execute("job-v2s", request, 1L, emitter);
+
+        verify(routeOptimizer).schedule(any(), anyList(), any());
+        verify(traceRecorder).record(any(), eq("job-v2s"), eq(request), any(), any(), any(), anyList(), anyInt(),
+                any(), eq(new ScheduledBy(ScheduledBy.Pipeline.V2_FALLBACK, null)), anyLong(), any());
+        verify(traceRecorder, never()).recordRejected(any(), any(), any(), any(), any(), any(), anyList(), anyInt(),
+                any(), any(), anyLong(), any(), any());
+        verify(resultStore).save("job-v2s", 49L, 1L);
     }
 
     @Test
@@ -1190,6 +1253,7 @@ class OptimizedGenerationExecutorTest {
 
         executor.execute("job-v1", request, 1L, emitter);
 
+        verify(serialPlanner, never()).planWithoutSummary(any(), anyList(), any(), anyInt(), any());
         verify(serialPlanner, never()).plan(any(), anyList(), any(), anyInt(), any());
         verify(routeOptimizer).schedule(any(), anyList(), any());
     }
@@ -1344,7 +1408,7 @@ class OptimizedGenerationExecutorTest {
         when(placeRepository.findAllById(anyList())).thenReturn(List.of(
                 placeWithQid(10L, "Q408318"), placeWithQid(11L, "Q408318"), placeWithQid(12L, "Q483813")));
 
-        List<PlaceCandidate> result = executor.dropAppendedSameWikidataItem(List.of(base, dup, fresh), 1);
+        List<PlaceCandidate> result = new CandidateSupplement(vectorSearchQueryService, placeRepository).dropAppendedSameWikidataItem(List.of(base, dup, fresh), 1);
 
         assertThat(result).extracting(PlaceCandidate::name).containsExactly("경주 불국사 [유네스코 세계유산]", "석굴암");
         assertThat(result).extracting(PlaceCandidate::index).containsExactly(1, 2);

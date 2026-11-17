@@ -44,6 +44,21 @@ class DaySchedulerTest {
         return out;
     }
 
+    @Test
+    @DisplayName("영업시간 때문에 시간대에 다시 넣은 장소도 그 시간대 예산을 넘으면 넣지 않는다")
+    void openingSlotPlaceOverBudgetIsDropped() {
+        List<PlaceCandidate> pool = oneDayPool();
+        pool.set(1, place(2, "궁", SIGHT, "SIGHT", 37.5796, 126.9770, 200, null));
+        pool.set(2, place(3, "한옥마을", SIGHT, "SIGHT", 37.5826, 126.9836, 200, null));
+        PlanState s = midTripDay(pool, new ArrayList<>(List.of(2, 3, 4, 5)));
+        s.days.get(0).openingSlots.put(2, DayState.Slot.AFTERNOON_FIRST);
+        s.days.get(0).openingSlots.put(3, DayState.Slot.AFTERNOON_FIRST);
+
+        DayScheduler.DayResult result = DayScheduler.scheduleOne(s, s.days.get(0), null);
+
+        assertThat(reasons(result)).containsExactly(DropReason.TIME_BUDGET);
+    }
+
     /** 여행 중간 날 하나만 담은 상태. 도착·출발 거점이 없고 그날도 숙소에서 끝난다. */
     private static PlanState midTripDay(List<PlaceCandidate> candidates, List<Integer> picks) {
         return oneDay(candidates, new SelectionOutput.DayPlan(3, null, picks, HOTEL_TODAY, null), List.of(), "car",

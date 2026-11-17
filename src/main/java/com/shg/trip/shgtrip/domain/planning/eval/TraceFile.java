@@ -22,10 +22,11 @@ import java.util.List;
  *
  * @param searchPoolSize 선택 모델이 본 후보 수. 기록에 없으면 null
  * @param joined         기록 두 건을 이어 붙여 만든 입력({@code scripts/eval/join-traces.py}). 저장본이 없다
+ * @param pipeline       생성이 일정을 확정한 단계(v1·v2·v2-fallback). 기록에 없으면 null
  */
 public record TraceFile(Long itineraryId, String destination, LocalDate startDate, LocalDate endDate,
                         List<StepData> savedSteps, List<PlaceCandidate> candidates, Integer searchPoolSize,
-                        SelectionOutput selection, ScheduleArgs args, boolean joined) {
+                        SelectionOutput selection, ScheduleArgs args, boolean joined, String pipeline) {
 
     public int dayCount() {
         return (int) ChronoUnit.DAYS.between(startDate, endDate) + 1;
@@ -43,7 +44,8 @@ public record TraceFile(Long itineraryId, String destination, LocalDate startDat
                 n.hasNonNull("searchPoolSize") ? n.get("searchPoolSize").asInt() : null,
                 mapper.convertValue(n.path("selection"), SelectionOutput.class),
                 mapper.convertValue(n.path("scheduleArgs"), ScheduleArgs.class),
-                n.path("joined").asBoolean(false));
+                n.path("joined").asBoolean(false),
+                n.hasNonNull("pipeline") ? n.get("pipeline").asText() : null);
     }
 
     /** {@link PlaceData#placeId()}는 LLM 응답에서 읽지 않도록 역직렬화가 막혀 있어 직접 만든다. */

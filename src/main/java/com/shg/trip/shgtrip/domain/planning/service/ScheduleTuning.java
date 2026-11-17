@@ -38,7 +38,7 @@ public final class ScheduleTuning {
     static final int ABSOLUTE_LATEST_START_MINUTES = 22 * 60;
     /** 하루가 이 시각 이전에 끝나면 오후 활동을 보충한다. */
     static final int EARLY_FINISH_MINUTES = 17 * 60;
-    /** 개장 전에 도착하는 스텝을 개장 시각까지 늦춰줄 수 있는 한도(분). 넘으면 그 자리에 두지 않는다. */
+    /** 개장 전에 도착하는 스텝을 개장 시각까지 늦춰줄 수 있는 한도(분). 넘으면 사용자가 고른 장소가 아닌 곳은 그 자리에서 뺀다. */
     static final int OPENING_WAIT_LIMIT_MINUTES = 60;
 
     // ── 체류 시간 ───────────────────────────────────────────────────────────
@@ -325,6 +325,8 @@ public final class ScheduleTuning {
     static final double WALK_CONTINUITY_THRESHOLD_KM = 2.0;
     /** 가장 가까운 곳이 이미 간 체인일 때 다른 가게를 찾아 더 갈 수 있는 직선거리(km). 도보 한 구간 상한의 4분의 1이다. */
     static final double REPEAT_BRAND_MAX_EXTRA_KM = 2.0;
+    /** 같은 자리로 보는 두 볼거리 사이 거리(km). 걸어서 5~10분이라 다른 날로 나누면 같은 동네를 두 번 간다. */
+    static final double SAME_SPOT_KM = 0.5;
     /** 아침 식사를 유지할 숙소 기준 최대 거리(km). 초과하면 아침 슬롯을 생략한다. */
     static final double BREAKFAST_MAX_KM_FROM_ACCOMMODATION = 10.0;
     /** 아침과 점심 사이 최소 간격(분). 이보다 붙으면 연달아 두 끼를 먹는 셈이라 아침을 뺀다. */

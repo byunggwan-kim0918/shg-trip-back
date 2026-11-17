@@ -51,16 +51,44 @@ final class RouteOrdering {
             nodeIntensity.add(groupIntensity(g, highlights, rests));
         }
 
-        int seedIndex = nearestNodeTo(nodeCoords, startAnchor);
-        List<Integer> nodeOrder = nearestNeighborOrder(nodeCoords, seedIndex);
-        nodeOrder = twoOpt(nodeOrder, nodeCoords, nodeIntensity);
-        nodeOrder = orientToAnchors(nodeOrder, nodeCoords, startAnchor, endAnchor);
+        // 아침에 가야 하는 곳을 순서를 정한 뒤 앞으로 옮기면 거리 예산과 짝 인접이 그 순서를 모르고 계산된다.
+        List<Integer> lead = new ArrayList<>();
+        List<Integer> rest = new ArrayList<>();
+        for (int n = 0; n < nodeGroups.size(); n++) {
+            boolean first = nodeGroups.get(n).stream().anyMatch(idx -> goesFirst(day, idx, candidates));
+            (first ? lead : rest).add(n);
+        }
+        List<Integer> nodeOrder;
+        if (lead.isEmpty() || rest.isEmpty()) {
+            nodeOrder = orderNodes(lead.isEmpty() ? rest : lead, nodeCoords, nodeIntensity, startAnchor, endAnchor);
+        } else {
+            nodeOrder = new ArrayList<>(orderNodes(lead, nodeCoords, nodeIntensity, startAnchor, null));
+            double[] leadEnd = nodeCoords.get(nodeOrder.get(nodeOrder.size() - 1));
+            nodeOrder.addAll(orderNodes(rest, nodeCoords, nodeIntensity, leadEnd, endAnchor));
+        }
 
         List<Integer> result = new ArrayList<>();
         for (Integer nodeIdx : nodeOrder) {
             result.addAll(nodeGroups.get(nodeIdx));
         }
         return result;
+    }
+
+    private static boolean goesFirst(DayState day, Integer idx, List<PlaceCandidate> candidates) {
+        if (day.openingSlots.get(idx) == DayState.Slot.MORNING_FIRST) return true;
+        return day.morningOnlyFirst
+                && DayTiming.timePreference(ScheduleTimes.byIndex(candidates, idx)) == TimePreference.MORNING_ONLY;
+    }
+
+    /** @param nodes 순서를 정할 노드 번호. 결과도 노드 번호다 */
+    private static List<Integer> orderNodes(List<Integer> nodes, List<double[]> nodeCoords,
+                                            List<Intensity> nodeIntensity, double[] startAnchor, double[] endAnchor) {
+        List<double[]> coords = nodes.stream().map(nodeCoords::get).toList();
+        List<Intensity> intensity = nodes.stream().map(nodeIntensity::get).toList();
+        List<Integer> order = nearestNeighborOrder(coords, nearestNodeTo(coords, startAnchor));
+        order = twoOpt(order, coords, intensity);
+        order = orientToAnchors(order, coords, startAnchor, endAnchor);
+        return order.stream().map(nodes::get).toList();
     }
 
     /** anchor와 가장 가까운 노드의 인덱스. anchor가 null이면 0. */

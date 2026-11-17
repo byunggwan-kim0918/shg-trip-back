@@ -16,13 +16,22 @@ public final class QualityNotices {
     private QualityNotices() {}
 
     public static List<String> of(ItineraryRules.Verdict verdict, ItineraryRules.Context ctx) {
+        return of(verdict, ctx, List.of());
+    }
+
+    /** @param poolLimits 후보 풀에 바꿔 넣을 곳이 없던 위반. 고쳐 달라는 말 대신 이유를 알린다 */
+    public static List<String> of(ItineraryRules.Verdict verdict, ItineraryRules.Context ctx,
+                                  List<QualityGate.PoolLimit> poolLimits) {
         if (verdict == null) return List.of();
         Set<String> out = new LinkedHashSet<>();
         verdict.violations().stream()
                 // 여행 전체 위반(day 0)은 날짜별 안내 뒤에 둔다
                 .sorted(Comparator.comparingInt((Violation v) -> v.day() == 0 ? Integer.MAX_VALUE : v.day())
                         .thenComparing(Violation::rule))
-                .map(v -> text(v, ctx))
+                .map(v -> {
+                    String limit = PoolLimits.isLimited(v, poolLimits) ? limitText(v) : null;
+                    return limit != null ? limit : text(v, ctx);
+                })
                 .filter(java.util.Objects::nonNull)
                 .forEach(out::add);
         return List.copyOf(out);
@@ -57,6 +66,20 @@ public final class QualityNotices {
                     : null;
             case LEG_OVER_CAP, DAY_DISTANCE_OVER_CAP, CONSECUTIVE_MEAL_KIND, SAME_DAY_MEAL_GROUP,
                  MEAL_GROUP_REPEATED -> null;
+        };
+    }
+
+    private static String limitText(Violation v) {
+        int d = v.day();
+        return switch (v.rule()) {
+            case LUNCH_MISSING -> d + "일차 동선 근처에 점심때 여는 식당이 없어 점심을 넣지 못했어요.";
+            case DINNER_MISSING -> d + "일차 동선 근처에 저녁때 여는 식당이 없어 저녁을 넣지 못했어요.";
+            case SAME_DAY_MEAL_KIND -> d + "일차 동선 근처에 다른 종류 식당이 없어 점심과 저녁이 같은 종류예요("
+                    + String.join("·", v.evidence()) + ").";
+            case MEAL_KIND_REPEATED -> "이 지역은 등록된 식당 종류가 적어 같은 종류 식당이 " + v.evidence().size()
+                    + "번 나와요(" + quoted(v, 0) + " 등).";
+            case NO_NON_FOOD_ACTIVITY -> d + "일차 동선 근처에 둘러볼 곳이 없어 식사·카페 위주예요.";
+            default -> null;
         };
     }
 

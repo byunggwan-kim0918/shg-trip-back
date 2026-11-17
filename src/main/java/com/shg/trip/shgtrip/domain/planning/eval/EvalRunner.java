@@ -16,15 +16,19 @@ import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy;
+import com.shg.trip.shgtrip.domain.planning.service.CandidateSupplement;
 import com.shg.trip.shgtrip.domain.planning.service.GeoCluster;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
 import com.shg.trip.shgtrip.domain.planning.service.MealKindSwaps;
 import com.shg.trip.shgtrip.domain.planning.service.OverCapLegs;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
+import com.shg.trip.shgtrip.domain.planning.service.PoolLimits;
+import com.shg.trip.shgtrip.domain.planning.service.QualityGate;
 import com.shg.trip.shgtrip.domain.planning.service.RequiredExperiences;
 import com.shg.trip.shgtrip.domain.planning.service.RouteOptimizer;
 import com.shg.trip.shgtrip.domain.planning.service.SavedItineraryFacts;
+import com.shg.trip.shgtrip.domain.planning.service.ScheduledBy;
 import com.shg.trip.shgtrip.domain.planning.service.ScoreReport;
 import com.shg.trip.shgtrip.domain.planning.service.SerialPlanner;
 import com.shg.trip.shgtrip.domain.planning.service.VectorSearchQueryService;
@@ -53,7 +57,9 @@ import java.util.*;
  * / files: {@code --eval.files}(쉼표로 여러 개)의 {@link TraceFile} JSON 줄을 DB 없이 replay한다
  * / rejected: 관문에서 막혀 일정 없이 남은 기록을 다시 돌려 rejected-{기록 id}.txt로 남긴다(eval.ids는 기록 id).
  *
- * <p>{@code --eval.pipeline}: 재실행에 쓸 확정 단계. v1(기본)은 {@link RouteOptimizer}, v2는 {@link SerialPlanner}다.
+ * <p>{@code --eval.pipeline}: 재실행에 쓸 확정 단계. recorded(기본)는 생성 기록이 확정한 단계를 따르고(기록이 없으면 v1),
+ * v1은 {@link RouteOptimizer}, v2는 {@link SerialPlanner}다. v2로 확정한 기록은 날짜를 직접 정한 결과라
+ * {@code --eval.selection}이 recorded여도 guided로 다시 정한다.
  * {@code --eval.selection}: recorded(기본)는 기록된 선택의 날짜를 그대로 쓴다. guided와 picker는 코드가 날짜를 정하고(v2만),
  * 둘 다 기록된 선택의 요청 의도·거점·숙소·예비 장소를 쓴다. guided는 기록된 선택이 날짜에 놓은 장소를 같은 거리 안에서 먼저 쓴다.
  *
@@ -74,6 +80,7 @@ public class EvalRunner implements CommandLineRunner {
     private final ObjectMapper objectMapper;
     private final ApplicationContext context;
     private final VectorSearchQueryService vectorSearchQueryService;
+    private final CandidateSupplement candidateSupplement;
 
     private static final Map<String, SerialPlanner.Picks> PICKS_BY_SELECTION = Map.of(
             "guided", SerialPlanner.Picks.PREFER, "picker", SerialPlanner.Picks.IGNORE);
@@ -101,11 +108,19 @@ public class EvalRunner implements CommandLineRunner {
     @Value("${eval.files:}")
     private String files;
 
-    @Value("${eval.pipeline:v1}")
+    @Value("${eval.pipeline:recorded}")
     private String pipeline;
 
     @Value("${eval.selection:recorded}")
     private String selectionSource;
+
+    /**
+     * near면 v2 재실행이 생성처럼 날짜를 한 번 정한 뒤 기준 좌표 둘레에서 후보를 보완하고 다시 정한다. 기록된 풀만으로는
+     * 보완 검색이 채웠을 날이 비어 보인다. 기록에 요청 문장이 없어 검색 입력은 여행지·나라·지역·이동수단으로 근사한다.
+     * 장소 DB와 질의 임베딩이 필요하다.
+     */
+    @Value("${eval.supplement:off}")
+    private String supplement;
 
     @Override
     @Transactional(readOnly = true)
@@ -113,8 +128,8 @@ public class EvalRunner implements CommandLineRunner {
         if (!Set.of("off", "score", "all").contains(refreshAttributes)) {
             throw new IllegalArgumentException("eval.refresh-attributes는 off|score|all: " + refreshAttributes);
         }
-        if (!Set.of("v1", "v2").contains(pipeline)) {
-            throw new IllegalArgumentException("eval.pipeline은 v1|v2: " + pipeline);
+        if (!Set.of("recorded", "v1", "v2").contains(pipeline)) {
+            throw new IllegalArgumentException("eval.pipeline은 recorded|v1|v2: " + pipeline);
         }
         if ("v2".equals(pipeline) && !Set.of("files", "corpus", "replay").contains(mode)) {
             throw new IllegalArgumentException("eval.pipeline=v2는 재실행하는 모드(files|corpus|replay)에서만 쓴다: " + mode);
@@ -124,6 +139,12 @@ public class EvalRunner implements CommandLineRunner {
         }
         if (!"recorded".equals(selectionSource) && !"v2".equals(pipeline)) {
             throw new IllegalArgumentException("eval.selection=" + selectionSource + "는 eval.pipeline=v2에서만 쓴다");
+        }
+        if (!Set.of("off", "near").contains(supplement)) {
+            throw new IllegalArgumentException("eval.supplement는 off|near: " + supplement);
+        }
+        if ("near".equals(supplement) && !PICKS_BY_SELECTION.containsKey(selectionSource)) {
+            throw new IllegalArgumentException("eval.supplement=near는 날짜를 직접 정하는 eval.selection=guided|picker에서만 쓴다");
         }
         if ("pool".equals(mode)) {
             dumpPools();
@@ -206,8 +227,9 @@ public class EvalRunner implements CommandLineRunner {
         Path dir = Path.of(outDir);
         Files.createDirectories(dir);
         String label = mode + ("off".equals(refreshAttributes) ? "" : ", refresh=" + refreshAttributes)
-                + ("v1".equals(pipeline) ? "" : ", pipeline=" + pipeline)
-                + ("recorded".equals(selectionSource) ? "" : ", selection=" + selectionSource);
+                + ("recorded".equals(pipeline) ? "" : ", pipeline=" + pipeline)
+                + ("recorded".equals(selectionSource) ? "" : ", selection=" + selectionSource)
+                + ("off".equals(supplement) ? "" : ", supplement=" + supplement + "(근사 입력)");
         Files.writeString(dir.resolve("report.md"), EvalReport.markdown(label, rows));
         Files.writeString(dir.resolve("report.csv"), EvalReport.csv(rows));
         log.info("평가 완료: mode={}, refresh={}, pipeline={}, selection={}, 일정 {}건 → {}", mode,
@@ -226,14 +248,15 @@ public class EvalRunner implements CommandLineRunner {
             ItineraryRules.Verdict savedRules = rules.evaluate(savedSteps, fromPlaces,
                     new ItineraryRules.Context(null, null, itinerary.getStartDate(), dayCount, null));
             return new Row(itinerary.getId(), itinerary.getDestination(), countryOf(savedSteps), false,
-                    saved, null, null, savedRules, null, Trip.untraced(dayCount), null, null, null, null, null);
+                    saved, null, null, savedRules, null, Trip.untraced(dayCount), null, null, null, null, null, null, null);
         }
 
         List<PlaceCandidate> traced = objectMapper.readValue(trace.getCandidates(), new TypeReference<>() {});
         SelectionOutput selection = objectMapper.readValue(trace.getSelectionFinal(), SelectionOutput.class);
         ScheduleArgs args = objectMapper.readValue(trace.getScheduleArgs(), ScheduleArgs.class);
         return evaluateTraced(new TraceFile(itinerary.getId(), itinerary.getDestination(), itinerary.getStartDate(),
-                itinerary.getEndDate(), savedSteps, traced, trace.getSearchPoolSize(), selection, args, false), replay);
+                itinerary.getEndDate(), savedSteps, traced, trace.getSearchPoolSize(), selection, args, false,
+                trace.getPipeline()), replay);
     }
 
     private Row evaluateTraced(TraceFile f, boolean replay) throws Exception {
@@ -259,13 +282,24 @@ public class EvalRunner implements CommandLineRunner {
         ItineraryRules.Verdict savedRules = hasSaved ? rules.evaluate(savedSteps, candidates, ruleContext) : null;
         if (!replay) {
             return new Row(itineraryId, destination, country, true, saved, null, null, savedRules, null, trip, null,
-                    null, null, null, null);
+                    null, null, null, null, null, null);
         }
 
-        SerialPlanner.Result serial = !"v2".equals(pipeline) ? null
-                : PICKS_BY_SELECTION.containsKey(selectionSource) ? serialPlanner.plan(selection, scheduleInput, args,
-                        dayCount, PICKS_BY_SELECTION.get(selectionSource))
-                : serialPlanner.schedule(selection, scheduleInput, args);
+        SerialPlanner.Result serial;
+        SerialPlanner.Picks picks = picksFor(pipeline, selectionSource, f);
+        if (!"v2".equals(pipelineFor(pipeline, f))) {
+            serial = null;
+        } else if ("near".equals(supplement)) {
+            CandidateSupplement.Planned planned = candidateSupplement.planWithReserve(serialPlanner, selection,
+                    scheduleInput, args, approximateInput(f, traced), CandidateSupplement.PoolExclusions.none(),
+                    dayCount, picks);
+            serial = planned.result();
+            // 덧붙인 후보도 채점·판정이 이름과 좌표로 찾는다.
+            candidates = planned.candidates();
+        } else {
+            serial = picks == SerialPlanner.Picks.AS_PLACED ? serialPlanner.schedule(selection, scheduleInput, args)
+                    : serialPlanner.plan(selection, scheduleInput, args, dayCount, picks);
+        }
         SelectionOutput replayedSelection = scoringSelection(selection, serial);
         List<StepData> replayedSteps = serial != null ? serial.steps()
                 : routeOptimizer.schedule(selection, scheduleInput, args).steps();
@@ -277,13 +311,53 @@ public class EvalRunner implements CommandLineRunner {
         }
         ScoreReport replayed = scorer.score(new ItineraryScorer.Input(replayedSteps, args.pace(),
                 args.transportPref(), args.startDate(), candidates, replayedSelection, hubDeadline));
+        ItineraryRules.Verdict replayedRules = rules.evaluate(replayedSteps, candidates, ruleContext);
         return new Row(itineraryId, destination, country, true, saved, replayed,
                 hasSaved ? sameRoute(savedSteps, replayedSteps) : null, savedRules,
-                rules.evaluate(replayedSteps, candidates, ruleContext), trip, serial == null ? null : serial.days(),
+                replayedRules, trip, serial == null ? null : serial.days(),
                 OverCapLegs.count(replayedSteps, candidates, args.transportPref(), args.pace(),
                         requestedIndices(selection)), pickUse(selection, candidates, replayedSteps),
                 MealKindSwaps.count(replayedSteps, candidates, args.transportPref(), args.pace(), args.startDate()),
-                AlternativeStats.of(replayedSteps));
+                AlternativeStats.of(replayedSteps),
+                withDropReasons(ItineraryScorer.missedIntents(replayedSelection, candidates, replayedSteps), serial),
+                serial == null ? null : PoolLimits.of(replayedRules, replayedSteps, candidates, ruleContext));
+    }
+
+    /** 기록을 따르면 v2로 확정한 기록만 v2로 다시 돌린다. v2가 예외로 끝나거나 저장할 수 없어 v1이 확정한 기록은 v1이다. */
+    static String pipelineFor(String pipeline, TraceFile f) {
+        if (!"recorded".equals(pipeline)) return pipeline;
+        return ScheduledBy.Pipeline.V2.label().equals(f.pipeline()) ? "v2" : "v1";
+    }
+
+    // 생성의 v2는 기록된 후보(보완 후보 포함)로 날짜를 직접 정한 결과라 같은 방식으로 다시 정해야 재현된다.
+    static SerialPlanner.Picks picksFor(String pipeline, String selectionSource, TraceFile f) {
+        if (PICKS_BY_SELECTION.containsKey(selectionSource)) return PICKS_BY_SELECTION.get(selectionSource);
+        return "recorded".equals(pipeline) && "v2".equals(pipelineFor(pipeline, f)) ? SerialPlanner.Picks.PREFER
+                : SerialPlanner.Picks.AS_PLACED;
+    }
+
+    /** 보완 검색 입력. 질의 문구는 기본 문구를 쓰고 지역은 기록된 후보의 지역이다. */
+    static VectorEnrichedInput approximateInput(TraceFile f, List<PlaceCandidate> traced) {
+        ScheduleArgs args = f.args();
+        List<String> regions = traced.stream().map(PlaceCandidate::region).filter(Objects::nonNull).distinct().toList();
+        return new VectorEnrichedInput(f.destination(), List.of(), List.of(), args.pace(), args.transportPref(), null,
+                f.startDate(), f.endDate(), "", List.of(), f.destination(), args.country(), regions, List.of(), null,
+                null, null, null, args.hub(), null, VectorEnrichedInput.CompanionType.UNKNOWN, null, List.of(), null);
+    }
+
+    /** 놓친 의도 뒤에 날짜별 확정에서 빠진 날과 이유를 붙인다. 어느 날에도 고르지 않았으면 "안 고름"이다. */
+    static List<String> withDropReasons(List<String> missed, SerialPlanner.Result serial) {
+        if (serial == null) return missed;
+        return missed.stream().map(m -> {
+            String name = m.substring(0, m.lastIndexOf(' '));
+            String where = serial.days().stream()
+                    .flatMap(d -> d.dropped().stream().filter(x -> x.name().equals(name))
+                            .map(x -> "d" + d.dayNumber() + " " + x.reason()))
+                    .findFirst()
+                    .orElseGet(() -> serial.selection().days().stream()
+                            .anyMatch(d -> d.placeIndices() != null && !d.placeIndices().isEmpty()) ? "안 고름" : "");
+            return where.isEmpty() ? m : m + "(" + where + ")";
+        }).toList();
     }
 
     /** 직접 고른 팔도 기록의 highlight·timing으로 채점해야 의도 점수가 공짜로 오르지 않는다. 날짜별 장소는 재실행이 고른 것이다. */
@@ -432,12 +506,14 @@ public class EvalRunner implements CommandLineRunner {
      * @param pickUse    기록된 선택이 재실행 일정에 반영된 정도. 재실행하지 않았으면 null
      * @param mealSwaps  재실행 결과의 끼니 종류 반복 분류. 재실행하지 않았으면 null
      * @param alts       재실행 결과의 대안 상태. 재실행하지 않았으면 null
+     * @param missedIntents 재실행 결과가 지키지 못한 요청 의도. 재실행하지 않았으면 null
+     * @param poolLimits 재실행 결과의 풀 탓 핵심 위반. 생성과 같이 v2로 재실행했을 때만 있고 아니면 null
      */
     record Row(Long itineraryId, String destination, String country, boolean hasTrace, ScoreReport saved,
                ScoreReport replayed, Boolean sameRoute, ItineraryRules.Verdict savedRules,
                ItineraryRules.Verdict replayedRules, Trip trip, List<SerialPlanner.DayReport> serialDays,
                OverCapLegs.Count overCap, PickUse pickUse, MealKindSwaps.Count mealSwaps,
-               AlternativeStats alts) {
+               AlternativeStats alts, List<String> missedIntents, List<QualityGate.PoolLimit> poolLimits) {
 
         /** 현재 코드의 결과. 재실행하지 않았으면 저장본이다. */
         ScoreReport current() {

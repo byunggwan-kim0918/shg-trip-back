@@ -15,7 +15,7 @@ public record ScheduledBy(Pipeline pipeline, SelectionOutput dayPicks) {
     public enum Pipeline {
         V1("v1"),
         V2("v2"),
-        /** v2가 예외로 끝나 그 생성만 v1이 확정했다. */
+        /** v2가 예외로 끝나거나 저장할 수 없는 일정(구조 검증 실패·필수 위반)을 내 그 생성만 v1이 확정한 기록. */
         V2_FALLBACK("v2-fallback");
 
         private final String label;

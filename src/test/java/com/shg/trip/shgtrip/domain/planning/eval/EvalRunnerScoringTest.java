@@ -20,6 +20,33 @@ class EvalRunnerScoringTest {
             List.of(2), List.of(), List.of(new SelectionOutput.TimingHint(3, "evening")));
 
     @Test
+    @DisplayName("기록을 따르면 v2로 확정한 기록만 v2로, 날짜를 직접 정하는 방식으로 다시 돌린다")
+    void recordedPipelineReplaysAsGenerated() throws Exception {
+        TraceFile v2 = trace("v2");
+        TraceFile fallback = trace("v2-fallback");
+        TraceFile old = trace(null);
+
+        assertThat(EvalRunner.pipelineFor("recorded", v2)).isEqualTo("v2");
+        assertThat(EvalRunner.picksFor("recorded", "recorded", v2)).isEqualTo(SerialPlanner.Picks.PREFER);
+        assertThat(EvalRunner.pipelineFor("recorded", fallback)).isEqualTo("v1");
+        assertThat(EvalRunner.pipelineFor("recorded", old)).isEqualTo("v1");
+        assertThat(EvalRunner.picksFor("recorded", "recorded", old)).isEqualTo(SerialPlanner.Picks.AS_PLACED);
+        assertThat(EvalRunner.pipelineFor("v2", old)).isEqualTo("v2");
+        assertThat(EvalRunner.picksFor("v2", "recorded", v2)).isEqualTo(SerialPlanner.Picks.AS_PLACED);
+        assertThat(EvalRunner.picksFor("recorded", "picker", v2)).isEqualTo(SerialPlanner.Picks.IGNORE);
+    }
+
+    private static TraceFile trace(String pipeline) throws Exception {
+        String json = """
+                {"itineraryId":1,"destination":"부산","startDate":"2026-12-01","endDate":"2026-12-02",
+                "savedSteps":[],"candidates":[],"selection":{"concept":"","days":[]},"scheduleArgs":{}%s}"""
+                .formatted(pipeline == null ? "" : ",\"pipeline\":\"" + pipeline + "\"");
+        TraceFile f = TraceFile.parse(new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules(), json);
+        assertThat(f.pipeline()).isEqualTo(pipeline);
+        return f;
+    }
+
+    @Test
     @DisplayName("직접 고른 팔은 고른 날짜별 장소와 기록의 요청 의도로 채점한다")
     void pickedArmKeepsTheRecordedIntent() {
         SelectionOutput picked = new SelectionOutput("", List.of(

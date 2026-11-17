@@ -28,10 +28,32 @@ public class QualityGate {
     /**
      * @param rules        판정 입력
      * @param fixedNotices 판정으로 다시 만들 수 없는 안내(운전면허·못 찾은 장소). 편집 뒤에도 그대로 둔다
+     * @param poolLimits   후보 풀에 바꿔 넣을 곳이 없던 핵심 위반. '조정 필요'로 세지 않고 알림으로 보인다.
+     *                     편집으로 풀이 늘지 않아 편집 뒤에도 그대로 둔다
      */
-    public record PlanContext(ItineraryRules.Context rules, List<String> fixedNotices) {
+    public record PlanContext(ItineraryRules.Context rules, List<String> fixedNotices, List<PoolLimit> poolLimits) {
         public PlanContext {
             fixedNotices = fixedNotices == null ? List.of() : List.copyOf(fixedNotices);
+            poolLimits = poolLimits == null ? List.of() : List.copyOf(poolLimits);
+        }
+
+        public PlanContext(ItineraryRules.Context rules, List<String> fixedNotices) {
+            this(rules, fixedNotices, List.of());
+        }
+    }
+
+    /**
+     * plan_context에 저장된다. 필드 이름을 바꾸면 저장된 일정에서 비어 읽혀 알림이던 위반이 '조정 필요'로 돌아간다.
+     *
+     * @param evidence 위반 근거(장소 이름). 편집으로 다른 장소가 같은 규칙을 어기면 사용자가 고칠 수 있는 위반이라 따로 본다
+     */
+    public record PoolLimit(ItineraryRules.Rule rule, int day, List<String> evidence) {
+        public PoolLimit {
+            evidence = evidence == null ? List.of() : List.copyOf(evidence);
+        }
+
+        static PoolLimit of(ItineraryRules.Violation v) {
+            return new PoolLimit(v.rule(), v.day(), v.evidence());
         }
     }
 
@@ -95,7 +117,8 @@ public class QualityGate {
             log.warn("저장 관문 v{} 거부: {}", verdict.version(), messages);
             throw new Rejected(verdict, ctx.rules());
         }
-        QualityStatus status = verdict.core() ? QualityStatus.NEEDS_ADJUSTMENT : QualityStatus.OK;
+        QualityStatus status = PoolLimits.needsAdjustment(verdict, ctx.poolLimits())
+                ? QualityStatus.NEEDS_ADJUSTMENT : QualityStatus.OK;
         itinerary.applyQuality(status, notices, write(ctx));
         log.info("저장 관문 v{}: {} {}", verdict.version(), status, messages);
         return verdict;
@@ -110,7 +133,7 @@ public class QualityGate {
         if (ctx == null) return;
         try {
             Verdict verdict = SavedItineraryFacts.evaluate(itinerary, ctx.rules());
-            itinerary.reflectEdit(mergedNotices(verdict, ctx), !verdict.hard() && !verdict.core());
+            itinerary.reflectEdit(mergedNotices(verdict, ctx), meetsCoreQuality(verdict, ctx));
         } catch (RuntimeException e) {
             log.error("편집 뒤 판정 실패 itineraryId={}", itinerary.getId(), e);
         }
@@ -137,7 +160,7 @@ public class QualityGate {
         try {
             Verdict verdict = SavedItineraryFacts.evaluateSwap(itinerary, target, replacement, incoming, next,
                     outgoing, ctx.rules());
-            return new SwapPreview(mergedNotices(verdict, ctx), !verdict.hard() && !verdict.core());
+            return new SwapPreview(mergedNotices(verdict, ctx), meetsCoreQuality(verdict, ctx));
         } catch (RuntimeException e) {
             log.error("교체 미리보기 판정 실패 itineraryId={}", itinerary.getId(), e);
             return null;
@@ -146,11 +169,15 @@ public class QualityGate {
 
     /** 판정 안내 뒤에 고정 안내를 붙인다. 생성 중 미리보기도 같은 순서를 써야 화면 안내가 저장 뒤와 같다. */
     static List<String> mergedNotices(Verdict verdict, PlanContext ctx) {
-        List<String> out = new ArrayList<>(QualityNotices.of(verdict, ctx.rules()));
+        List<String> out = new ArrayList<>(QualityNotices.of(verdict, ctx.rules(), ctx.poolLimits()));
         for (String n : ctx.fixedNotices()) {
             if (!out.contains(n)) out.add(n);
         }
         return out;
+    }
+
+    private static boolean meetsCoreQuality(Verdict verdict, PlanContext ctx) {
+        return !verdict.hard() && !PoolLimits.needsAdjustment(verdict, ctx.poolLimits());
     }
 
     private String write(PlanContext ctx) {

@@ -36,19 +36,33 @@ class DayPickerTest {
     }
 
     @Test
-    @DisplayName("날마다 고른 장소는 그날 첫 관광지에서 한 구간 안에 있다")
+    @DisplayName("날마다 고른 장소는 그날 첫 관광지나 그날 요청 의도 장소에서 한 구간 안에 있고, 요청 의도 장소는 어느 날에든 놓인다")
     void picksStayWithinOneLegOfTheDayBase() {
         for (TraceFile trace : List.of(Itinerary91Fixture.load(), JoinedSeoulBusanFixture.load())) {
             double cap = ScheduleTuning.distanceLimits(trace.args().transportPref(), trace.args().pace())[0];
+            // 맞바꿀 날이 없는 먼 요청 의도 장소는 거리를 감수하고 가장 가까운 날에 둔다.
+            Set<Integer> requested = new java.util.HashSet<>(trace.selection().highlightIndices() == null ? List.of()
+                    : trace.selection().highlightIndices());
+            if (trace.selection().timing() != null) {
+                trace.selection().timing().forEach(t -> requested.add(t.index()));
+            }
+            List<SelectionOutput.DayPlan> days = plan(trace).selection().days();
+            assertThat(days).flatExtracting(SelectionOutput.DayPlan::placeIndices).containsAll(requested);
 
-            for (SelectionOutput.DayPlan day : plan(trace).selection().days()) {
-                List<PlaceCandidate> picks = day.placeIndices().stream()
-                        .map(idx -> trace.candidates().get(idx - 1)).toList();
-                PlaceCandidate base = picks.stream().filter(c -> CandidatePolicy.roleOf(c).isVisit())
-                        .findFirst().orElse(null);
+            for (SelectionOutput.DayPlan day : days) {
+                // 요청 의도 장소도 그날 기준 장소가 될 수 있다.
+                PlaceCandidate base = day.placeIndices().stream().map(idx -> trace.candidates().get(idx - 1))
+                        .filter(c -> CandidatePolicy.roleOf(c).isVisit()).findFirst().orElse(null);
                 if (base == null) continue;
-                assertThat(picks).as("day %d", day.dayNumber()).allSatisfy(c ->
-                        assertThat(GeoUtils.haversine(coordsOf(base), coordsOf(c))).isLessThanOrEqualTo(cap));
+                // 카페 스톱은 그날 장소들의 중심에서 고르므로 먼 요청 의도 장소 쪽에 놓일 수 있다.
+                List<PlaceCandidate> anchors = new ArrayList<>(List.of(base));
+                day.placeIndices().stream().filter(requested::contains).map(idx -> trace.candidates().get(idx - 1))
+                        .forEach(anchors::add);
+                List<PlaceCandidate> picks = day.placeIndices().stream().filter(idx -> !requested.contains(idx))
+                        .map(idx -> trace.candidates().get(idx - 1)).toList();
+                assertThat(picks).as("day %d", day.dayNumber()).allSatisfy(c -> assertThat(anchors.stream()
+                        .mapToDouble(a -> GeoUtils.haversine(coordsOf(a), coordsOf(c))).min().orElseThrow())
+                        .isLessThanOrEqualTo(cap));
             }
         }
     }
@@ -256,6 +270,111 @@ class DayPickerTest {
     }
 
     @Test
+    @DisplayName("숙소를 옮기는 날에는 전날 숙소에서 한 구간 밖인 요청 장소를 맞바꿔 오지 않는다")
+    void lodgingChangeDayDoesNotTakeABaseFarFromLastNight() {
+        List<PlaceCandidate> pool = new ArrayList<>();
+        pool.add(place(1, "서쪽 호텔", HOTEL, "LODGING", 37.5700, 126.9000));
+        pool.add(place(2, "동쪽 호텔", HOTEL, "LODGING", 37.5700, 127.0000));
+        pool.add(new PlaceCandidate(3, 3L, "동쪽 명소", "서울특별시 광진구 3", SIGHT, List.of(), "Seoul", "KR",
+                BigDecimal.valueOf(37.5700), BigDecimal.valueOf(127.0300), null, null, 0.9, null, null, null, 60,
+                false, null, null, null, 40, "SIGHT", null, false, null).withIntent(true, null));
+        pool.add(place(4, "가운데 궁", SIGHT, "SIGHT", 37.5700, 126.9500));
+        pool.add(place(5, "가운데 정원", SIGHT, "SIGHT", 37.5710, 126.9550));
+        PlanState s = PlanState.of(new SelectionOutput("", List.of(
+                new SelectionOutput.DayPlan(1, null, new ArrayList<>(List.of(3)), 1, null),
+                new SelectionOutput.DayPlan(2, null, new ArrayList<>(List.of(5)), 2, null),
+                new SelectionOutput.DayPlan(3, null, new ArrayList<>(List.of(4)), 2, null)), List.of(), List.of()),
+                pool, walkArgs());
+
+        DayPicker.keepBasesInReach(s, Set.of());
+
+        assertThat(s.days.get(1).placeIndices).containsExactly(5);
+        assertThat(s.days.get(2).placeIndices).containsExactly(3);
+    }
+
+    @Test
+    @DisplayName("다른 날 볼거리와 같은 자리(0.5km 안)의 관광지는 고르지 않는다")
+    void skipsSightsAtAnotherDaysSpot() {
+        List<PlaceCandidate> pool = new ArrayList<>();
+        pool.add(place(1, "호텔", HOTEL, "LODGING", 37.5760, 126.9800));
+        pool.add(place(2, "궁", SIGHT, "SIGHT", 37.5700, 126.9770));
+        pool.add(place(3, "미술관", "Arts and Entertainment > Museum > Art Museum", "SIGHT", 37.5700, 126.9870));
+        pool.add(place(4, "공원", "Landmarks and Outdoors > Park", "SIGHT", 37.5840, 126.9770));
+        pool.add(place(5, "사찰", "Landmarks and Outdoors > Temple", "SIGHT", 37.5715, 126.9885));
+        for (int i = 0; i < 3; i++) pool.add(place(6 + i, "식당 " + i, MEAL, "MEAL", 37.5710 + i * 0.002, 126.9790));
+
+        // 2일차의 사찰 둘레 0.5km 안에 미술관이 있다.
+        assertThat(fillOneDay(pool, null, 5)).doesNotContain(3);
+        assertThat(fillOneDay(pool, null)).contains(3);
+    }
+
+    @Test
+    @DisplayName("영업시간에 걸려 빠진 장소는 그날 다시 넣고 여는 시간대 맨 앞 자리를 준다")
+    void placesOpeningHoursDropsBackIntoTheirSlot() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.set(3, withHours(pool.get(3), AFTERNOON_ONLY));
+        PlanState s = PlanState.of(new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null,
+                new ArrayList<>(List.of(2, 4)), 1, null)), List.of(), List.of()), pool, walkArgs());
+        s.beginScheduling();
+        DayState day = s.days.get(0);
+        day.resetDrops();
+        day.drop(4, DropReason.CLOSED_AT_TIME);
+
+        assertThat(SerialPlanner.placeByOpeningHours(s, day)).isTrue();
+        assertThat(day.placeIndices).contains(4);
+        assertThat(day.openingSlots).containsEntry(4, DayState.Slot.AFTERNOON_FIRST);
+        assertThat(SerialPlanner.placeByOpeningHours(s, day)).isFalse();
+    }
+
+    @Test
+    @DisplayName("사용자가 고른 늦게 여는 장소는 빠지지 않으므로 처음부터 여는 시간대 맨 앞 자리를 준다")
+    void userSelectedLateOpenerGetsItsSlot() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.set(3, withHours(pool.get(3), AFTERNOON_ONLY).asUserSelected());
+        PlanState s = PlanState.of(new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null,
+                new ArrayList<>(List.of(2, 4)), 1, null)), List.of(), List.of()), pool, walkArgs());
+        s.beginScheduling();
+        DayState day = s.days.get(0);
+
+        assertThat(SerialPlanner.placeByOpeningHours(s, day)).isTrue();
+        assertThat(day.openingSlots).containsExactly(Map.entry(4, DayState.Slot.AFTERNOON_FIRST));
+    }
+
+    @Test
+    @DisplayName("그 시간대가 시작할 때도 열지 않는 장소는 다시 넣지 않는다")
+    void doesNotReAddPlacesClosedAtTheirSlot() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.set(3, withHours(pool.get(3), SHORT_AFTERNOON));
+        PlanState s = PlanState.of(new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null,
+                new ArrayList<>(List.of(2, 4)), 1, null)), List.of(), List.of()), pool, walkArgs());
+        s.beginScheduling();
+        DayState day = s.days.get(0);
+        day.resetDrops();
+        day.drop(4, DropReason.CLOSED_AT_TIME);
+
+        assertThat(SerialPlanner.placeByOpeningHours(s, day)).isFalse();
+        assertThat(day.placeIndices).doesNotContain(4);
+    }
+
+    @Test
+    @DisplayName("출발 시각을 아는 마지막 날은 저녁 시각까지 더 고르지 않는다")
+    void lastDayWithDepartureDoesNotFillTheAfternoon() {
+        TraceFile trace = Itinerary91Fixture.load();
+        int most = ScheduleTuning.sightsPerDay(trace.args().pace())[1];
+        ScheduleArgs withDeparture = trace.args().forCityBlock(trace.args().hub(), trace.args().arrivalTime(),
+                "18:00", false, false);
+        TraceFile departing = new TraceFile(trace.itineraryId(), trace.destination(), trace.startDate(),
+                trace.endDate(), trace.savedSteps(), trace.candidates(), trace.searchPoolSize(), trace.selection(),
+                withDeparture, trace.joined(), trace.pipeline());
+
+        SelectionOutput.DayPlan last = plan(departing).selection().days().get(trace.dayCount() - 1);
+        long sights = last.placeIndices().stream().map(idx -> trace.candidates().get(idx - 1))
+                .filter(c -> !c.mealEligible()).count();
+
+        assertThat(sights).isLessThanOrEqualTo(most);
+    }
+
+    @Test
     @DisplayName("숙소에서 자는 날은 점심과 저녁을 직접 고른다")
     void picksLunchAndDinner() {
         List<PlaceCandidate> pool = walkablePool();
@@ -283,15 +402,20 @@ class DayPickerTest {
     }
 
     @Test
-    @DisplayName("저녁이 없는 마지막 날도 하루 관광 수보다 한 곳까지만 더 고른다")
-    void lastDayTakesAtMostOneExtraStop() {
+    @DisplayName("저녁이 없는 마지막 날은 예상 종료가 저녁 시각에 닿을 때까지만 관광지를 더 고른다")
+    void lastDayFillsTheAfternoonOnly() {
         TraceFile trace = Itinerary91Fixture.load();
         int most = ScheduleTuning.sightsPerDay(trace.args().pace())[1];
 
-        SelectionOutput.DayPlan last = plan(trace).selection().days().get(trace.dayCount() - 1);
+        SerialPlanner.Result result = plan(trace);
+        SelectionOutput.DayPlan last = result.selection().days().get(trace.dayCount() - 1);
+        long sights = last.placeIndices().stream().map(idx -> trace.candidates().get(idx - 1))
+                .filter(c -> !c.mealEligible()).count();
 
-        assertThat(last.placeIndices().stream().map(idx -> trace.candidates().get(idx - 1))
-                .filter(c -> !c.mealEligible())).hasSizeLessThanOrEqualTo(most + 1);
+        assertThat(sights).isGreaterThan(most);
+        assertThat(result.steps().stream().filter(s -> s.dayNumber() == trace.dayCount()))
+                .allSatisfy(s -> assertThat(ScheduleTimes.toMinutesOrZero(s.startTime()))
+                        .isLessThan(ScheduleTuning.DINNER_START));
     }
 
     @Test
@@ -307,6 +431,20 @@ class DayPickerTest {
         assertThat(result.selection().days()).flatExtracting(SelectionOutput.DayPlan::placeIndices)
                 .contains(2, 4, 14);
         assertThat(result.steps()).extracting(s -> s.place().name()).contains("궁 0", "궁 2", "먼 고른 궁");
+    }
+
+    @Test
+    @DisplayName("좌표가 없는 사용자가 고른 관광지도 가장 덜 찬 날에 놓여 일정에 들어간다")
+    void promisedSightWithoutCoordsIsPlaced() {
+        List<PlaceCandidate> pool = new ArrayList<>(walkablePool());
+        pool.add(new PlaceCandidate(14, null, "직접 입력한 공방", "서울 어딘가", SIGHT, List.of(), "Seoul", "KR",
+                null, null, null, null, 0.5, null, null, null, 60, true, null, null, null, null, "SIGHT", null,
+                false, null));
+
+        SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.PREFER);
+
+        assertThat(result.selection().days()).flatExtracting(SelectionOutput.DayPlan::placeIndices).contains(14);
+        assertThat(result.steps()).extracting(s -> s.place().name()).contains("직접 입력한 공방");
     }
 
     @Test
@@ -346,17 +484,21 @@ class DayPickerTest {
     }
 
     @Test
-    @DisplayName("사용자가 고른 식당이 끼니 자리보다 많으면 끼니가 찬 날에 더 얹지 않는다")
-    void promisedMealsDoNotOverfillMealSlots() {
+    @DisplayName("사용자가 고른 식당이 점심·저녁 자리보다 많으면 남는 식당은 아침 자리를 맡고 하루 세 끼를 넘지 않는다")
+    void extraPromisedMealTakesBreakfast() {
         // 두 날의 점심·저녁 네 자리보다 하나 많다.
         List<PlaceCandidate> pool = new ArrayList<>(walkablePool().stream()
                 .map(c -> c.mealEligible() && c.index() <= 12 ? c.asUserSelected() : c).toList());
 
         SerialPlanner.Result result = planner.plan(NO_HINTS, pool, walkArgs(), 2, SerialPlanner.Picks.PREFER);
 
-        // 출발 시각이 없어 두 날 모두 점심·저녁 자리가 있다.
+        List<Integer> promisedMeals = pool.stream().filter(c -> c.userSelected() && c.mealEligible())
+                .map(PlaceCandidate::index).toList();
+        assertThat(promisedMeals).hasSize(5);
+        assertThat(result.selection().days()).flatExtracting(SelectionOutput.DayPlan::placeIndices)
+                .containsAll(promisedMeals);
         assertThat(result.selection().days()).allSatisfy(d -> assertThat(d.placeIndices().stream()
-                .filter(idx -> pool.get(idx - 1).mealEligible())).hasSizeLessThanOrEqualTo(2));
+                .filter(idx -> pool.get(idx - 1).mealEligible())).hasSizeLessThanOrEqualTo(3));
     }
 
     @Test
@@ -562,6 +704,12 @@ class DayPickerTest {
 
     private static final String LUNCH_ONLY = "월요일: 11:00 ~ 15:00, 화요일: 11:00 ~ 15:00, 수요일: 11:00 ~ 15:00, "
             + "목요일: 11:00 ~ 15:00, 금요일: 11:00 ~ 15:00, 토요일: 11:00 ~ 15:00, 일요일: 11:00 ~ 15:00";
+
+    private static final String SHORT_AFTERNOON = "월요일: 14:30 ~ 15:30, 화요일: 14:30 ~ 15:30, 수요일: 14:30 ~ 15:30, "
+            + "목요일: 14:30 ~ 15:30, 금요일: 14:30 ~ 15:30, 토요일: 14:30 ~ 15:30, 일요일: 14:30 ~ 15:30";
+
+    private static final String AFTERNOON_ONLY = "월요일: 13:00 ~ 18:00, 화요일: 13:00 ~ 18:00, 수요일: 13:00 ~ 18:00, "
+            + "목요일: 13:00 ~ 18:00, 금요일: 13:00 ~ 18:00, 토요일: 13:00 ~ 18:00, 일요일: 13:00 ~ 18:00";
 
     private static PlaceCandidate withHours(PlaceCandidate c, String hours) {
         return new PlaceCandidate(c.index(), c.placeId(), c.name(), c.address(), c.category(), c.tags(), c.region(),

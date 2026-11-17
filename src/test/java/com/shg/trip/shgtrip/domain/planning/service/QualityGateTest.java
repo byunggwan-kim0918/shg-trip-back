@@ -158,8 +158,38 @@ class QualityGateTest {
                 "lastDayHubDeadline":null,"requiredExperiences":{"1":"해운대해수욕장"}},"fixedNotices":["운전면허 안내"]}""";
 
         assertThat(objectMapper.readValue(stored, QualityGate.PlanContext.class)).isEqualTo(context(1));
-        assertThat(objectMapper.readTree(objectMapper.writeValueAsString(context(1))))
-                .isEqualTo(objectMapper.readTree(stored));
+    }
+
+    @Test
+    @DisplayName("풀 한계 위반을 담은 판정 입력은 저장 뒤에도 같은 값으로 읽힌다")
+    void poolLimitsRoundTrip() throws Exception {
+        QualityGate.PlanContext ctx = withPoolLimit(context(1), ItineraryRules.Rule.LUNCH_MISSING, 1);
+
+        assertThat(objectMapper.readValue(objectMapper.writeValueAsString(ctx), QualityGate.PlanContext.class))
+                .isEqualTo(ctx);
+    }
+
+    @Test
+    @DisplayName("풀에 바꿔 넣을 곳이 없던 핵심 위반은 조정 필요로 두지 않고 이유를 알린다")
+    void poolLimitedViolationIsNoticeOnly() {
+        Itinerary itinerary = itinerary(withoutLunch(), QualityStatus.OK, null);
+
+        gate.admit(itinerary, withPoolLimit(context(1), ItineraryRules.Rule.LUNCH_MISSING, 1));
+
+        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.OK);
+        assertThat(itinerary.getQualityNotices()).containsExactly(
+                "1일차 동선 근처에 점심때 여는 식당이 없어 점심을 넣지 못했어요.", LICENSE_NOTICE);
+    }
+
+    @Test
+    @DisplayName("다른 날의 같은 위반은 풀 한계로 보지 않는다")
+    void poolLimitIsPerDay() {
+        Itinerary itinerary = itinerary(withoutLunch(), QualityStatus.OK, null);
+
+        gate.admit(itinerary, withPoolLimit(context(1), ItineraryRules.Rule.LUNCH_MISSING, 2));
+
+        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.NEEDS_ADJUSTMENT);
+        assertThat(itinerary.getQualityNotices()).startsWith("1일차에 점심 식사가 없어요.");
     }
 
     @Test
@@ -235,6 +265,12 @@ class QualityGateTest {
     private static QualityGate.PlanContext context(int days) {
         return new QualityGate.PlanContext(new ItineraryRules.Context("normal", "car", LocalDate.of(2026, 11, 20),
                 days, null, Map.of(1L, "해운대해수욕장")), List.of(LICENSE_NOTICE));
+    }
+
+    private static QualityGate.PlanContext withPoolLimit(QualityGate.PlanContext ctx, ItineraryRules.Rule rule,
+                                                         int day) {
+        return new QualityGate.PlanContext(ctx.rules(), ctx.fixedNotices(),
+                List.of(new QualityGate.PoolLimit(rule, day, List.of())));
     }
 
     private static List<ItineraryStep> fullDay() {
