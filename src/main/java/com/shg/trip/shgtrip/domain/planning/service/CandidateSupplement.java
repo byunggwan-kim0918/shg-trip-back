@@ -41,13 +41,15 @@ public class CandidateSupplement {
      * 날짜를 한 번 정하고, 날마다의 기준 좌표 둘레에서 후보를 보완한 뒤 다시 정한다. 선택 단계의 보완 후보는 선택한 날짜
      * 둘레에서만 찾아, v2가 다시 짠 날의 기준 장소 근처에는 식당이 모자란다.
      * 보완할 후보가 없어도 다시 확정해 요약 로그를 마지막 확정에서 한 번만 남긴다.
+     *
+     * @param selector 마지막 확정에서만 쓴다. 1차 확정은 기준 좌표만 쓰여 날마다 고르는 호출을 하지 않는다
      */
     public Planned planWithReserve(SerialPlanner planner, SelectionOutput selection, List<PlaceCandidate> candidates,
                                    ScheduleArgs args, VectorEnrichedInput input, PoolExclusions exclusions,
-                                   int dayCount, SerialPlanner.Picks picks) {
+                                   int dayCount, SerialPlanner.Picks picks, DaySelector selector) {
         SerialPlanner.Result first = planner.planWithoutSummary(selection, candidates, args, dayCount, picks);
         List<PlaceCandidate> withReserve = appendReserveAroundAnchors(candidates, first.anchors(), input, exclusions);
-        return new Planned(planner.plan(selection, withReserve, args, dayCount, picks), withReserve);
+        return new Planned(planner.plan(selection, withReserve, args, dayCount, picks, selector), withReserve);
     }
 
     /** 커플·가족 여행이면 다인실 숙소(게스트하우스·호스텔)를 후보에서 뺀다. 사용자가 직접 고른 숙소는 남긴다. */

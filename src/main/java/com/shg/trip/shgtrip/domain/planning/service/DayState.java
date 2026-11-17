@@ -39,6 +39,8 @@ class DayState {
     boolean continuesAfter;
     /** 오전 방문지 중 아침에만 성립하는 곳(아침 의도, 긴 등산)을 먼저 둔다. 날짜를 직접 고르는 확정만 켠다. */
     boolean morningOnlyFirst;
+    /** 하루에 둘 카페·디저트 수. 날짜를 직접 고르는 확정은 카페를 관광 대신 쓰지 않게 하나로 줄인다. */
+    int cafeCap = ScheduleTuning.CAFE_PER_DAY_CAP;
     /** 영업시간에 맞춰 시간대 맨 앞에 둘 장소. 날짜를 직접 고르는 확정만 붙인다. */
     final java.util.Map<Integer, Slot> openingSlots = new java.util.HashMap<>();
 

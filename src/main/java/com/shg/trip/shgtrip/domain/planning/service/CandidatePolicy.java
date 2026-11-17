@@ -6,6 +6,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * 후보 장소의 일정 속 역할을 정하는 단일 소스.
@@ -136,6 +137,25 @@ public final class CandidatePolicy {
         if (name != null && !lower.contains("lodging") && STATION_EXIT_NAME.matcher(name.strip()).matches()) return true;
         return "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(category)) && isLowValue(name, lower);
     }
+
+    /**
+     * 경기·행사가 있을 때만 갈 만한 경기장·전시장. 일정은 경기·행사 일정을 모르니 날짜별 선택이 관광으로 고르지 않는다.
+     * 유명도용 {@link PlaceCategoryConstants#isEventVenue}와 달리 대학 캠퍼스는 관광지로 남기고 전시장을 더 본다.
+     * 경기를 보러 가는 요청도 있어 방문지 판정({@link #roleOf})과 DB 기록에는 넣지 않는다.
+     */
+    static boolean isEventOnlySight(String name, String category) {
+        String lower = category == null ? "" : category.toLowerCase(Locale.ROOT);
+        if (lower.contains("> stadium") || lower.contains("convention center") || lower.startsWith("event > convention")) {
+            return true;
+        }
+        // 이름만 보면 요트경기장(항구)·운동장 유구(사적지)·식당까지 걸려 운동·문화시설 분류일 때만 본다.
+        boolean venueCategory = lower.isEmpty() || lower.startsWith("sports and recreation")
+                || lower.endsWith("> cultural center");
+        return venueCategory && name != null && EVENT_VENUE_NAME.matcher(name).find();
+    }
+
+    private static final Pattern EVENT_VENUE_NAME = Pattern.compile(
+            "경기장|운동장|체육관|야구장|스타디움|벡스코|bexco|킨텍스|kintex|엑스코|exco", Pattern.CASE_INSENSITIVE);
 
     private static final List<String> HOTEL_FACILITY_CATEGORIES = List.of("> hotel pool", "> hotel gym");
 

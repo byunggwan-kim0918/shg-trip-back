@@ -155,7 +155,7 @@ public final class ScheduleTuning {
     // ── 밀도 · 반복 상한 ────────────────────────────────────────────────────
 
     /**
-     * pace별 하루 관광·체험 개수 [최소, 최대]. 끼니는 따로 세고, 카페·간식은 관광 자리 하나를 쓴다.
+     * pace별 하루 관광·체험 개수 [최소, 최대]. 끼니는 따로 세고, 카페·간식은 받은 날짜대로 확정할 때만 관광 자리 하나를 쓴다.
      * 선택·fallback 프롬프트와 채점기가 이 값을 읽는다.
      */
     static final Map<String, int[]> SIGHTS_PER_DAY = Map.of(
@@ -216,6 +216,12 @@ public final class ScheduleTuning {
 
     /** 하루 카페·디저트·베이커리 방문 수 상한. 넘으면 쉬는 날이 아니라 카페를 옮겨 다니는 날이 된다. */
     static final int CAFE_PER_DAY_CAP = 2;
+    /** 영업시간이 빈 백화점·쇼핑몰·아울렛으로 보는 영업시간. 국내 백화점의 흔한 개점·폐점 시각이다. */
+    static final String RETAIL_COMPLEX_HOURS = java.util.stream.Stream.of(
+                    "월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일")
+            .map(d -> d + ": 10:30 ~ 20:00").collect(java.util.stream.Collectors.joining(", "));
+    /** 날짜를 직접 고르는 확정의 하루 카페·디저트 수. 쉬어 가는 한 곳이면 충분하고, 둘째부터는 볼거리 자리를 차지한다. */
+    static final int CAFES_PER_DAY_PICKED = 1;
     /** 경유형(해안도로·드라이브코스 등) 전체 일정 허용 개수. 방문지가 아니라 지나가는 구간이다. */
     static final int VIA_ROUTE_CAP = 1;
     /** 같은 대분류가 이 개수 이상 연속되면 중간을 다른 대분류로 교체한다. */
@@ -327,6 +333,8 @@ public final class ScheduleTuning {
     static final double REPEAT_BRAND_MAX_EXTRA_KM = 2.0;
     /** 같은 자리로 보는 두 볼거리 사이 거리(km). 걸어서 5~10분이라 다른 날로 나누면 같은 동네를 두 번 간다. */
     static final double SAME_SPOT_KM = 0.5;
+    /** 같은 장소로 보는 두 볼거리 사이 거리(km). 이름이 바뀐 건물·한 시설의 부분이 따로 적재돼 있다. */
+    static final double SAME_PLACE_KM = 0.1;
     /** 아침 식사를 유지할 숙소 기준 최대 거리(km). 초과하면 아침 슬롯을 생략한다. */
     static final double BREAKFAST_MAX_KM_FROM_ACCOMMODATION = 10.0;
     /** 아침과 점심 사이 최소 간격(분). 이보다 붙으면 연달아 두 끼를 먹는 셈이라 아침을 뺀다. */

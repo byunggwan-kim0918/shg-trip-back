@@ -13,10 +13,12 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.accommodationCoords;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.coordsOf;
+import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.isCafeLike;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.isSelectable;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.subTypeOf;
 import static com.shg.trip.shgtrip.domain.planning.service.DayTiming.dayBudgets;
@@ -189,13 +191,8 @@ final class DayPicker {
         ScheduleConfig cfg = s.cfg.forDay(day);
         double cap = legCapKm(s);
         Map<String, Integer> typeCount = s.typeCounts();
-        // 요청 의도 장소는 유형 트림에서 빠지는 것과 같은 이유로 유형 반복을 따지지 않는다.
-        Predicate<PlaceCandidate> underTypeCap = c -> c.keepsPlace() || !DiversityRepair.isSpecificType(subTypeOf(c))
-                || typeCount.getOrDefault(subTypeOf(c), 0) < s.typeCap(c);
-        Predicate<PlaceCandidate> addable = openOnDayFilter(s.startDate, day.dayNumber)
-                .and(c -> !s.usedIndices.contains(c.index()) && coordsOf(c) != null && selectable(c, preferred))
-                .and(c -> km(base, c) <= cap)
-                .and(c -> !wouldExceedDayBudget(day, c, s.candidates, s.transportPref, cfg));
+        Predicate<PlaceCandidate> underTypeCap = underTypeCap(s, typeCount);
+        Predicate<PlaceCandidate> addable = addable(s, day, base, preferred);
 
         // 끼니를 고르기 전에 놓인 식당은 약속한 식당뿐이다.
         List<PlaceCandidate> placedMeals = mealsOn(s, day);
@@ -236,23 +233,18 @@ final class DayPicker {
         // 하루 확정은 숙소를 나서는 스텝을 오전에 두어, 종료 추정에 넣지 않으면 마지막 날을 덜 채운다.
         int departure = day.startLodgingIndex != null && !day.startLodgingIndex.equals(day.accommodationIndex)
                 ? MORNING_DEPARTURE_MINUTES : 0;
-        // 카페·간식은 하루 관광 자리 하나를 쓴다(ScheduleTuning.SIGHTS_PER_DAY).
+        // 카페는 쉬어 가는 곳이라 하루 관광 수에 세지 않는다.
         int stops = 0;
         EndEstimate end = new EndEstimate(cfg.morningStart + departure, day.lunchInWindow());
         for (Integer idx : day.placeIndices) {
             PlaceCandidate c = byIndex(s.candidates, idx);
             if (c == null || c.mealEligible()) continue;
-            stops++;
+            if (!isCafeLike(c)) stops++;
             spend(left, c);
             end.add(minutesFor(c));
         }
 
-        // 사용자가 고른 식당은 끼니로만 고른다. 관광 자리로 들이면 세 끼째가 되어 확정에서 빠진다.
-        // 다른 날 볼거리와 같은 자리면 같은 동네를 두 번 가게 되어 고르지 않는다.
-        List<double[]> otherDays = visitCoordsOnOtherDays(s, day);
-        Predicate<PlaceCandidate> sight = addable.and(underTypeCap).and(c -> !c.mealEligible())
-                .and(c -> c.keepsPlace() || (CandidatePolicy.roleOf(c).isVisit() && !repeatsToday(s, day, c)
-                        && !nearAny(c, otherDays)));
+        Predicate<PlaceCandidate> sight = sight(s, day, addable.and(underTypeCap));
         // 저녁이 없는 마지막 날은 하루 관광 수를 채워도 일찍 끝나, 저녁 시각까지 더 고른다.
         // 출발 시각을 알면 귀가 시각이 끝을 정하고, 허브 이동을 모르는 이 추정으로 채우면 귀가 트림이 다시 자른다.
         boolean fillAfternoon = lastDay && day.departureDeadline == null;
@@ -260,8 +252,11 @@ final class DayPicker {
         for (Tier tier : tiers(cap, preferred)) {
             while (stops < range[1] || (fillAfternoon && end.minutes() < DINNER_START)) {
                 List<double[]> today = visitCoordsOn(s, day);
+                boolean eveningTaken = eveningVisitOn(s, day);
                 PlaceCandidate next = s.candidates.stream()
                         .filter(sight).filter(tier.pool())
+                        .filter(c -> c.keepsPlace() || (!sameSpot(c, today, ScheduleTuning.SAME_PLACE_KM)
+                                && !(eveningTaken && timePreference(c) == TimePreference.EVENING)))
                         .filter(c -> km(base, c) <= tier.radiusKm()
                                 && (fits(left, c) || startsBeforeDinnerTime(fillAfternoon, end, c)))
                         .min(REQUESTED_FIRST.thenComparing(c -> !nearAny(c, today))
@@ -275,6 +270,81 @@ final class DayPicker {
             }
         }
         return Math.max(0, floor - stops);
+    }
+
+    // 요청 의도 장소는 유형 트림에서 빠지는 것과 같은 이유로 유형 반복을 따지지 않는다.
+    private static Predicate<PlaceCandidate> underTypeCap(PlanState s, Map<String, Integer> typeCount) {
+        return c -> c.keepsPlace() || !DiversityRepair.isSpecificType(subTypeOf(c))
+                || typeCount.getOrDefault(subTypeOf(c), 0) < s.typeCap(c);
+    }
+
+    private static Predicate<PlaceCandidate> addable(PlanState s, DayState day, PlaceCandidate base,
+                                                     Set<Integer> preferred) {
+        ScheduleConfig cfg = s.cfg.forDay(day);
+        double cap = legCapKm(s);
+        return openOnDayFilter(s.startDate, day.dayNumber)
+                .and(c -> !s.usedIndices.contains(c.index()) && coordsOf(c) != null && selectable(c, preferred))
+                .and(c -> km(base, c) <= cap)
+                .and(c -> !wouldExceedDayBudget(day, c, s.candidates, s.transportPref, cfg));
+    }
+
+    // 사용자가 고른 식당은 끼니로만 고른다. 관광 자리로 들이면 세 끼째가 되어 확정에서 빠진다.
+    // 다른 날 볼거리와 같은 자리면 같은 동네를 두 번 가게 되어 고르지 않는다.
+    private static Predicate<PlaceCandidate> sight(PlanState s, DayState day, Predicate<PlaceCandidate> addable) {
+        List<double[]> otherDays = visitCoordsOnOtherDays(s, day);
+        return addable.and(c -> !c.mealEligible())
+                .and(c -> c.keepsPlace() || (CandidatePolicy.roleOf(c).isVisit() && !repeatsToday(s, day, c)
+                        && !nearAny(c, otherDays) && !CandidatePolicy.isEventOnlySight(c.name(), c.category())));
+    }
+
+    /**
+     * 그날 고를 수 있는 끼니·관광 후보. {@link #fill}의 후보 조건(기준 장소에서 한 구간, 영업일, 하루 거리 예산, 유형 상한,
+     * 다른 날과 같은 자리)으로 거르고 {@link #fill}과 같은 순위로 자른다. 시간 예산과 거리 고리는 {@link #fill}이 고를 때 본다.
+     * 기준 장소가 없는 날은 null이다.
+     */
+    static DaySelector.DayOptions options(PlanState s, DayState day, Integer previousLodging, boolean lastDay,
+                                          Set<Integer> preferred, int dayCount) {
+        PlaceCandidate base = baseOf(s, day);
+        if (base == null) return null;
+        day.startLodgingIndex = day.arrivalHubIndex == null ? previousLodging : null;
+        Predicate<PlaceCandidate> addable = addable(s, day, base, preferred).and(underTypeCap(s, s.typeCounts()));
+        List<PlaceCandidate> placedMeals = mealsOn(s, day);
+        boolean lunchTaken = day.lunchInWindow() && placedMeals.stream().anyMatch(c -> isOpenDuring(c,
+                day.dayOfWeek, LUNCH_START, LUNCH_START + DINING_VISIT_MINUTES));
+        boolean dinnerTaken = placedMeals.size() > (lunchTaken ? 1 : 0);
+        Comparator<PlaceCandidate> near = REQUESTED_FIRST.thenComparing(meritNear(coordsOf(base)));
+        List<DaySelector.Option> lunch = day.lunchInWindow() && !lunchTaken
+                ? optionList(s.candidates.stream().filter(addable).filter(PlaceCandidate::mealEligible)
+                .filter(c -> isOpenDuring(c, day.dayOfWeek, LUNCH_START, LUNCH_START + DINING_VISIT_MINUTES)),
+                near, DaySelector.MEAL_OPTIONS, base, preferred) : List.of();
+        List<DaySelector.Option> dinner = day.dinnerInWindow() && !lastDay && !dinnerTaken
+                ? optionList(s.candidates.stream().filter(addable).filter(PlaceCandidate::mealEligible)
+                .filter(c -> isOpenDuring(c, day.dayOfWeek, DINNER_START, DINNER_START + DINING_VISIT_MINUTES)),
+                near, DaySelector.MEAL_OPTIONS, base, preferred) : List.of();
+        List<DaySelector.Option> sights = optionList(s.candidates.stream().filter(sight(s, day, addable)), near,
+                DaySelector.SIGHT_OPTIONS, base, preferred);
+        List<DaySelector.Option> fixed = day.placeIndices.stream().map(idx -> byIndex(s.candidates, idx))
+                .filter(Objects::nonNull).map(c -> option(c, base, preferred)).toList();
+        int[] range = ScheduleTuning.sightsPerDay(s.pace);
+        List<String> earlier = s.days.stream().filter(d -> d.dayNumber < day.dayNumber)
+                .map(d -> d.dayNumber + "일차: " + d.placeIndices.stream().map(idx -> byIndex(s.candidates, idx))
+                        .filter(Objects::nonNull).map(c -> option(c, base, preferred).name())
+                        .collect(Collectors.joining(", ")))
+                .toList();
+        return new DaySelector.DayOptions(day.dayNumber, dayCount, lastDay, option(base, base, preferred), fixed,
+                lunch, dinner, sights, range[0], range[1], earlier);
+    }
+
+    private static List<DaySelector.Option> optionList(Stream<PlaceCandidate> pool, Comparator<PlaceCandidate> order,
+                                                       int limit, PlaceCandidate base, Set<Integer> preferred) {
+        return pool.sorted(order).limit(limit).map(c -> option(c, base, preferred)).toList();
+    }
+
+    private static DaySelector.Option option(PlaceCandidate c, PlaceCandidate base, Set<Integer> preferred) {
+        return new DaySelector.Option(c.index(), c.nameKo() != null && !c.nameKo().isBlank() ? c.nameKo() : c.name(),
+                c.category(), c.mealEligible() ? CandidatePolicy.cuisineOf(c) : null,
+                coordsOf(c) == null ? null : km(base, c), resolveVisitMinutes(c), timePreference(c).name(),
+                c.wikidataSitelinks(), preferred.contains(c.index()), c.keepsPlace());
     }
 
     // 첫날은 도착 거점, 마지막 날은 출발 거점에서 가까운 곳을 주고 사이 날은 앞날 기준 장소에서 가까운 순으로 잇는다.
@@ -460,7 +530,17 @@ final class DayPicker {
     }
 
     private static boolean nearAny(PlaceCandidate c, List<double[]> spots) {
-        return spots.stream().anyMatch(p -> GeoUtils.haversine(p, coordsOf(c)) <= ScheduleTuning.SAME_SPOT_KM);
+        return sameSpot(c, spots, ScheduleTuning.SAME_SPOT_KM);
+    }
+
+    private static boolean sameSpot(PlaceCandidate c, List<double[]> spots, double km) {
+        return spots.stream().anyMatch(p -> GeoUtils.haversine(p, coordsOf(c)) <= km);
+    }
+
+    // 저녁 뒤 밤 명소를 두 곳 넣으면 먼 숙소까지 가는 길이 자정 가까이 밀린다.
+    private static boolean eveningVisitOn(PlanState s, DayState day) {
+        return day.placeIndices.stream().map(i -> byIndex(s.candidates, i))
+                .anyMatch(c -> c != null && !c.mealEligible() && timePreference(c) == TimePreference.EVENING);
     }
 
     // 세부 유형이 달라도 백화점과 쇼핑몰은 같은 일정이라 쇼핑·시장은 역할로 하루 한 곳만 둔다.

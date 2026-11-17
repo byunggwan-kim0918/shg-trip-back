@@ -17,6 +17,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.service.CandidatePolicy;
 import com.shg.trip.shgtrip.domain.planning.service.CandidateSupplement;
+import com.shg.trip.shgtrip.domain.planning.service.DaySelector;
 import com.shg.trip.shgtrip.domain.planning.service.GeoCluster;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryScorer;
@@ -32,6 +33,7 @@ import com.shg.trip.shgtrip.domain.planning.service.ScheduledBy;
 import com.shg.trip.shgtrip.domain.planning.service.ScoreReport;
 import com.shg.trip.shgtrip.domain.planning.service.SerialPlanner;
 import com.shg.trip.shgtrip.domain.planning.service.VectorSearchQueryService;
+import com.shg.trip.shgtrip.domain.planning.service.ai.DaySelectionCallGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -81,6 +83,7 @@ public class EvalRunner implements CommandLineRunner {
     private final ApplicationContext context;
     private final VectorSearchQueryService vectorSearchQueryService;
     private final CandidateSupplement candidateSupplement;
+    private final DaySelectionCallGenerator daySelectionCallGenerator;
 
     private static final Map<String, SerialPlanner.Picks> PICKS_BY_SELECTION = Map.of(
             "guided", SerialPlanner.Picks.PREFER, "picker", SerialPlanner.Picks.IGNORE);
@@ -122,6 +125,13 @@ public class EvalRunner implements CommandLineRunner {
     @Value("${eval.supplement:off}")
     private String supplement;
 
+    /**
+     * haiku·sonnet이면 v2가 날마다 고를 때 모델이 그날 허용 후보에서 먼저 고른다(off는 모델을 부르지 않음).
+     * 날마다 모델을 불러 비용이 든다. 기록에 요청 문장이 없어 여행 맥락은 여행지·테마·동행·페이스·이동수단만 준다.
+     */
+    @Value("${eval.day-selector:off}")
+    private String daySelector;
+
     @Override
     @Transactional(readOnly = true)
     public void run(String... args) throws Exception {
@@ -145,6 +155,12 @@ public class EvalRunner implements CommandLineRunner {
         }
         if ("near".equals(supplement) && !PICKS_BY_SELECTION.containsKey(selectionSource)) {
             throw new IllegalArgumentException("eval.supplement=near는 날짜를 직접 정하는 eval.selection=guided|picker에서만 쓴다");
+        }
+        if (!Set.of("off", "haiku", "sonnet").contains(daySelector)) {
+            throw new IllegalArgumentException("eval.day-selector는 off|haiku|sonnet: " + daySelector);
+        }
+        if (!"off".equals(daySelector) && !PICKS_BY_SELECTION.containsKey(selectionSource)) {
+            throw new IllegalArgumentException("eval.day-selector는 날짜를 직접 정하는 eval.selection=guided|picker에서만 쓴다");
         }
         if ("pool".equals(mode)) {
             dumpPools();
@@ -229,7 +245,8 @@ public class EvalRunner implements CommandLineRunner {
         String label = mode + ("off".equals(refreshAttributes) ? "" : ", refresh=" + refreshAttributes)
                 + ("recorded".equals(pipeline) ? "" : ", pipeline=" + pipeline)
                 + ("recorded".equals(selectionSource) ? "" : ", selection=" + selectionSource)
-                + ("off".equals(supplement) ? "" : ", supplement=" + supplement + "(근사 입력)");
+                + ("off".equals(supplement) ? "" : ", supplement=" + supplement + "(근사 입력)")
+                + ("off".equals(daySelector) ? "" : ", day-selector=" + daySelector);
         Files.writeString(dir.resolve("report.md"), EvalReport.markdown(label, rows));
         Files.writeString(dir.resolve("report.csv"), EvalReport.csv(rows));
         log.info("평가 완료: mode={}, refresh={}, pipeline={}, selection={}, 일정 {}건 → {}", mode,
@@ -292,13 +309,13 @@ public class EvalRunner implements CommandLineRunner {
         } else if ("near".equals(supplement)) {
             CandidateSupplement.Planned planned = candidateSupplement.planWithReserve(serialPlanner, selection,
                     scheduleInput, args, approximateInput(f, traced), CandidateSupplement.PoolExclusions.none(),
-                    dayCount, picks);
+                    dayCount, picks, daySelectorFor(f));
             serial = planned.result();
             // 덧붙인 후보도 채점·판정이 이름과 좌표로 찾는다.
             candidates = planned.candidates();
         } else {
             serial = picks == SerialPlanner.Picks.AS_PLACED ? serialPlanner.schedule(selection, scheduleInput, args)
-                    : serialPlanner.plan(selection, scheduleInput, args, dayCount, picks);
+                    : serialPlanner.plan(selection, scheduleInput, args, dayCount, picks, daySelectorFor(f));
         }
         SelectionOutput replayedSelection = scoringSelection(selection, serial);
         List<StepData> replayedSteps = serial != null ? serial.steps()
@@ -334,6 +351,14 @@ public class EvalRunner implements CommandLineRunner {
         if (PICKS_BY_SELECTION.containsKey(selectionSource)) return PICKS_BY_SELECTION.get(selectionSource);
         return "recorded".equals(pipeline) && "v2".equals(pipelineFor(pipeline, f)) ? SerialPlanner.Picks.PREFER
                 : SerialPlanner.Picks.AS_PLACED;
+    }
+
+    private DaySelector daySelectorFor(TraceFile f) {
+        if ("off".equals(daySelector)) return DaySelector.NONE;
+        ScheduleArgs args = f.args();
+        return daySelectionCallGenerator.selectorFor(new DaySelectionCallGenerator.TripContext(f.destination(),
+                args.themes(), args.couple() ? "커플" : null, null, args.pace(), args.transportPref()),
+                "sonnet".equals(daySelector));
     }
 
     /** 보완 검색 입력. 질의 문구는 기본 문구를 쓰고 지역은 기록된 후보의 지역이다. */

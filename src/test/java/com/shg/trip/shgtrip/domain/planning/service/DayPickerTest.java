@@ -375,6 +375,165 @@ class DayPickerTest {
     }
 
     @Test
+    @DisplayName("날짜별 선택기가 고른 관광지를 같은 거리 고리 안에서 먼저 쓴다")
+    void daySelectorPicksComeFirst() {
+        List<Integer> withoutSelector = planner.plan(NO_HINTS, variedPool(), walkArgs(), 1,
+                SerialPlanner.Picks.IGNORE).selection().days().get(0).placeIndices();
+        int skipped = variedPool().stream().filter(c -> !c.mealEligible() && c.index() > 1
+                && !withoutSelector.contains(c.index())).mapToInt(PlaceCandidate::index).findFirst().orElseThrow();
+
+        List<Integer> withSelector = planner.plan(NO_HINTS, variedPool(), walkArgs(), 1,
+                SerialPlanner.Picks.IGNORE, options -> Set.of(skipped)).selection().days().get(0).placeIndices();
+
+        assertThat(withSelector).contains(skipped);
+    }
+
+    /** 숙소 둘레 2km 안에 세부 유형이 다른 관광지 여섯과 식당 넷. 하루에 다 넣을 수 없다. */
+    private static List<PlaceCandidate> variedPool() {
+        List<PlaceCandidate> pool = new ArrayList<>();
+        pool.add(place(1, "호텔", HOTEL, "LODGING", 37.5760, 126.9800));
+        String[] kinds = {"Historic and Protected Site", "Museum", "Park", "Temple", "Garden", "Monument"};
+        for (int i = 0; i < kinds.length; i++) {
+            pool.add(place(2 + i, kinds[i] + " " + i, "Landmarks and Outdoors > " + kinds[i], "SIGHT",
+                    37.5700 + i * 0.004, 126.9770 + i * 0.003));
+        }
+        for (int i = 0; i < 4; i++) pool.add(place(8 + i, "식당 " + i, MEAL, "MEAL", 37.5710 + i * 0.003, 126.9790));
+        return pool;
+    }
+
+    @Test
+    @DisplayName("날짜별 선택기가 허용 후보 밖의 번호를 내거나 실패하면 그날은 선택기 없이 고른다")
+    void daySelectorFailureFallsBackToPicker() {
+        List<Integer> plain = planner.plan(NO_HINTS, walkablePool(), walkArgs(), 2, SerialPlanner.Picks.IGNORE)
+                .selection().days().stream().flatMap(d -> d.placeIndices().stream()).toList();
+
+        List<Integer> outside = planner.plan(NO_HINTS, walkablePool(), walkArgs(), 2, SerialPlanner.Picks.IGNORE,
+                options -> Set.of(999, 1)).selection().days().stream().flatMap(d -> d.placeIndices().stream()).toList();
+        List<Integer> failing = planner.plan(NO_HINTS, walkablePool(), walkArgs(), 2, SerialPlanner.Picks.IGNORE,
+                options -> { throw new IllegalStateException("모델 오류"); })
+                .selection().days().stream().flatMap(d -> d.placeIndices().stream()).toList();
+
+        assertThat(outside).isEqualTo(plain);
+        assertThat(failing).isEqualTo(plain);
+    }
+
+    @Test
+    @DisplayName("날짜별 선택지는 그날 휴무인 곳과 다른 날 볼거리와 같은 자리의 관광지를 빼고, 끝나는 날에는 저녁 후보를 주지 않는다")
+    void dayOptionsFollowTheSameFilters() {
+        List<PlaceCandidate> pool = new ArrayList<>();
+        pool.add(place(1, "호텔", HOTEL, "LODGING", 37.5760, 126.9800));
+        pool.add(place(2, "궁", SIGHT, "SIGHT", 37.5700, 126.9770));
+        pool.add(place(3, "미술관", "Arts and Entertainment > Museum > Art Museum", "SIGHT", 37.5700, 126.9870));
+        pool.add(withHours(place(4, "공원", "Landmarks and Outdoors > Park", "SIGHT", 37.5840, 126.9770), CLOSED_TUESDAY));
+        pool.add(place(5, "사찰", "Landmarks and Outdoors > Temple", "SIGHT", 37.5715, 126.9885));
+        for (int i = 0; i < 3; i++) pool.add(place(6 + i, "식당 " + i, MEAL, "MEAL", 37.5710 + i * 0.002, 126.9790));
+        PlanState s = PlanState.of(new SelectionOutput("", List.of(
+                new SelectionOutput.DayPlan(1, null, new ArrayList<>(List.of(2)), 1, null),
+                new SelectionOutput.DayPlan(2, null, new ArrayList<>(List.of(5)), null, null)), List.of(), List.of()),
+                pool, walkArgs());
+        s.beginScheduling();
+
+        DaySelector.DayOptions options = DayPicker.options(s, s.days.get(0), null, true, Set.of(), 2);
+
+        assertThat(options.sights()).extracting(DaySelector.Option::index).doesNotContain(3, 4);
+        assertThat(options.lunch()).isNotEmpty();
+        assertThat(options.dinner()).isEmpty();
+        assertThat(options.base().index()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("저녁 뒤 밤 명소는 하루 한 곳만 고르고, 이미 넣은 곳에서 0.1km 안의 관광지는 같은 장소로 보고 고르지 않는다")
+    void oneEveningSpotAndNoSamePlace() {
+        List<PlaceCandidate> pool = variedPool();
+        pool.add(nightSpot(12, "전망대", 37.5702, 126.9772));
+        pool.add(nightSpot(13, "야경 다리", 37.5730, 126.9800));
+        pool.add(place(14, "궁 별관", "Landmarks and Outdoors > Castle", "SIGHT", 37.5703, 126.9773));
+        PlanState s = dayOf(pool, 2);
+
+        DayPicker.fill(s, s.days.get(0), null, false, Set.of(), null);
+
+        assertThat(sightsOf(s)).filteredOn(c -> DayTiming.timePreference(c) == TimePreference.EVENING).hasSize(1);
+        assertThat(s.days.get(0).placeIndices).doesNotContain(14);
+    }
+
+    @Test
+    @DisplayName("날짜를 직접 고르는 날은 카페를 관광 수에 세지 않고, 빈 시간 채우기도 카페를 하루 한 곳까지만 넣는다")
+    void cafeDoesNotTakeASightSlot() {
+        List<PlaceCandidate> pool = variedPool();
+        pool.add(place(12, "카페", "Dining and Drinking > Cafe, Coffee, and Tea House", "CAFE", 37.5712, 126.9776));
+        pool.add(place(13, "베이커리", "Dining and Drinking > Bakery", "CAFE", 37.5714, 126.9778));
+        PlanState s = dayOf(pool, 2);
+        s.days.forEach(d -> d.cafeCap = ScheduleTuning.CAFES_PER_DAY_PICKED);
+        s.days.get(0).placeIndices.add(12);
+
+        DayPicker.fill(s, s.days.get(0), null, false, Set.of(), null);
+
+        assertThat(sightsOf(s)).filteredOn(c -> !CandidateTraits.isCafeLike(c))
+                .hasSize(ScheduleTuning.sightsPerDay("normal")[1]);
+        assertThat(VarietyLedger.admitsOnDay(s.days.get(0), s.candidates).test(s.candidates.get(12))).isFalse();
+    }
+
+    @Test
+    @DisplayName("경기장·전시장은 방문지 판정에는 남지만 날짜를 직접 고를 때 관광으로 고르지 않는다")
+    void eventVenuesAreNotPickedAsSights() {
+        List<PlaceCandidate> pool = variedPool();
+        pool.add(place(12, "옆 월드컵경기장", "Sports and Recreation > Outdoor Activity", "SIGHT", 37.5712, 126.9776));
+        PlanState s = dayOf(pool, 2);
+
+        DayPicker.fill(s, s.days.get(0), null, false, Set.of(), null);
+
+        assertThat(CandidatePolicy.roleOf(s.candidates.get(11))).isEqualTo(CandidatePolicy.Role.SIGHT);
+        assertThat(s.days.get(0).placeIndices).doesNotContain(12);
+    }
+
+    @Test
+    @DisplayName("늦게 여는 낮 볼거리는 빠지기 전에 처음부터 오후 시간대 맨 앞에 둔다")
+    void lateOpeningSightGoesToTheAfternoonUpFront() {
+        List<PlaceCandidate> pool = walkablePool();
+        pool.set(3, withHours(pool.get(3), AFTERNOON_ONLY));
+        PlanState s = PlanState.of(new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null,
+                new ArrayList<>(List.of(2, 4)), 1, null)), List.of(), List.of()), pool, walkArgs());
+        s.beginScheduling();
+
+        assertThat(SerialPlanner.placeByOpeningHours(s, s.days.get(0))).isTrue();
+        assertThat(s.days.get(0).openingSlots).containsExactly(Map.entry(4, DayState.Slot.AFTERNOON_FIRST));
+    }
+
+    @Test
+    @DisplayName("영업시간이 비어 있는 백화점·쇼핑몰은 10:30~20:00으로 보고, 다른 곳은 비어 있는 그대로 둔다")
+    void retailComplexDefaultsToMallHours() {
+        PlaceCandidate mall = place(1, "더현대 서울", "Retail > Department Store", "SHOPPING", 37.52, 126.93);
+        PlaceCandidate diner = place(2, "식당", MEAL, "MEAL", 37.52, 126.93);
+
+        assertThat(OpeningHoursText.isOpenDuring(DayTiming.openingHoursOf(mall), java.time.DayOfWeek.TUESDAY,
+                9 * 60, 10 * 60)).isFalse();
+        assertThat(OpeningHoursText.isOpenDuring(DayTiming.openingHoursOf(mall), java.time.DayOfWeek.TUESDAY,
+                11 * 60, 12 * 60)).isTrue();
+        assertThat(DayTiming.openingHoursOf(diner)).isNull();
+        assertThat(DayTiming.openingHoursOf(withHours(mall, CLOSED_TUESDAY))).isEqualTo(CLOSED_TUESDAY);
+    }
+
+    private static PlanState dayOf(List<PlaceCandidate> pool, int base) {
+        PlanState s = PlanState.of(new SelectionOutput("", List.of(new SelectionOutput.DayPlan(1, null,
+                new ArrayList<>(List.of(base)), 1, null), new SelectionOutput.DayPlan(2, null, new ArrayList<>(),
+                null, null)), List.of(), List.of()), pool, walkArgs());
+        s.beginScheduling();
+        return s;
+    }
+
+    private static List<PlaceCandidate> sightsOf(PlanState s) {
+        return s.days.get(0).placeIndices.stream().map(i -> s.candidates.get(i - 1))
+                .filter(c -> !c.mealEligible()).toList();
+    }
+
+    private static PlaceCandidate nightSpot(int index, String name, double lat, double lng) {
+        return new PlaceCandidate(index, (long) index, name, "서울특별시 종로구 율곡로 " + index,
+                "Landmarks and Outdoors > Scenic Lookout", List.of(), "Seoul", "KR", BigDecimal.valueOf(lat),
+                BigDecimal.valueOf(lng), null, null, 0.8, null, null, List.of("night"), 60, false, null, null, null,
+                null, "SIGHT", null, false, null);
+    }
+
+    @Test
     @DisplayName("숙소에서 자는 날은 점심과 저녁을 직접 고른다")
     void picksLunchAndDinner() {
         List<PlaceCandidate> pool = walkablePool();
@@ -704,6 +863,10 @@ class DayPickerTest {
 
     private static final String LUNCH_ONLY = "월요일: 11:00 ~ 15:00, 화요일: 11:00 ~ 15:00, 수요일: 11:00 ~ 15:00, "
             + "목요일: 11:00 ~ 15:00, 금요일: 11:00 ~ 15:00, 토요일: 11:00 ~ 15:00, 일요일: 11:00 ~ 15:00";
+
+    // walkArgs는 2026-12-01(화) 시작이다.
+    private static final String CLOSED_TUESDAY = "월요일: 09:00 ~ 18:00, 화요일: 휴무, 수요일: 09:00 ~ 18:00, "
+            + "목요일: 09:00 ~ 18:00, 금요일: 09:00 ~ 18:00, 토요일: 09:00 ~ 18:00, 일요일: 09:00 ~ 18:00";
 
     private static final String SHORT_AFTERNOON = "월요일: 14:30 ~ 15:30, 화요일: 14:30 ~ 15:30, 수요일: 14:30 ~ 15:30, "
             + "목요일: 14:30 ~ 15:30, 금요일: 14:30 ~ 15:30, 토요일: 14:30 ~ 15:30, 일요일: 14:30 ~ 15:30";
