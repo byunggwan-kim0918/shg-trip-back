@@ -31,6 +31,30 @@ class SightNoiseTest {
     }
 
     @Test
+    @DisplayName("경기장·전시장은 운동·문화시설 분류이거나 경기장 분류일 때 경기·행사 장소로 본다")
+    void eventVenues() {
+        assertThat(CandidatePolicy.isEventOnlySight("제주월드컵경기장", "Sports and Recreation > Outdoor Activity")).isTrue();
+        assertThat(CandidatePolicy.isEventOnlySight("고척스카이돔", "Arts and Entertainment > Stadium > Baseball Stadium")).isTrue();
+        assertThat(CandidatePolicy.isEventOnlySight("Bexco", "Arts and Entertainment > Cultural Center")).isTrue();
+        assertThat(CandidatePolicy.roleOf(cand("제주월드컵경기장", "Sports and Recreation > Outdoor Activity", "SIGHT")))
+                .isEqualTo(CandidatePolicy.Role.SIGHT);
+    }
+
+    @Test
+    @DisplayName("이름에 경기장·체육관·벡스코가 들어도 식당·카페·항구·사적지·박물관이면 경기·행사 장소가 아니다")
+    void namedPlacesThatAreNotVenues() {
+        assertThat(CandidatePolicy.isEventOnlySight("우리풍천장어 꼼장어체육관",
+                "Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant")).isFalse();
+        assertThat(CandidatePolicy.isEventOnlySight("더벤티 벡스코점", "Dining and Drinking > Cafe, Coffee, and Tea House"))
+                .isFalse();
+        assertThat(CandidatePolicy.isEventOnlySight("수영만 요트경기장", "Landmarks and Outdoors > Harbor or Marina")).isFalse();
+        assertThat(CandidatePolicy.isEventOnlySight("동대문운동장 조명탑", "Landmarks and Outdoors > Historic and Protected Site"))
+                .isFalse();
+        assertThat(CandidatePolicy.isEventOnlySight("동대문운동장기념관", "Arts and Entertainment > Museum > History Museum"))
+                .isFalse();
+    }
+
+    @Test
     @DisplayName("사용자가 직접 고른 곳은 명시 목록에 있어도 보강 역할을 쓴다")
     void userSelectedKeepsRole() {
         assertThat(CandidatePolicy.roleOf(cand("효창근린공원", "Landmarks and Outdoors > Park", "SIGHT").asUserSelected()))

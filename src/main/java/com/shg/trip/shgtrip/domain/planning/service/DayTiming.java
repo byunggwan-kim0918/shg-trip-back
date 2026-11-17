@@ -45,6 +45,18 @@ final class DayTiming {
         return OpeningHoursText.isOpenDuring(c.openingHours(), dow, startMin, endMin);
     }
 
+    /**
+     * 늦게 여는 곳을 미리 오후에 둘 때 보는 영업시간. 백화점·쇼핑몰·아울렛은 영업시간이 거의 비어 있어 이 업종의 흔한 시간으로 본다.
+     * 공용 하루 확정과 판정은 실제 데이터만 본다. 하루 확정이 이 값을 쓰면 옮길 장치가 없는 v1이 요청 의도 장소를 뺀다.
+     */
+    static String openingHoursOf(PlaceCandidate c) {
+        if (c.openingHours() != null && !c.openingHours().isBlank()) return c.openingHours();
+        String lower = c.category() == null ? "" : c.category().toLowerCase(java.util.Locale.ROOT);
+        return RETAIL_COMPLEX.stream().anyMatch(lower::contains) ? ScheduleTuning.RETAIL_COMPLEX_HOURS : c.openingHours();
+    }
+
+    private static final List<String> RETAIL_COMPLEX = List.of("department store", "shopping mall", "outlet");
+
     static StepData buildStep(DayState day, PlaceCandidate cand, int startMin, int endMin,
                               TransportLeg leg, List<AlternativeData> alternatives) {
         return new StepData(

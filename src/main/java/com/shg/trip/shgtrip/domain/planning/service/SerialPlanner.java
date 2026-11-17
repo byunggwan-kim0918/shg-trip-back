@@ -86,7 +86,7 @@ public class SerialPlanner {
     }
 
     public Result schedule(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args) {
-        return run(selection, candidates, args, Picks.AS_PLACED, Set.of(), true);
+        return run(selection, candidates, args, Picks.AS_PLACED, Set.of(), new DaySelection(DaySelector.NONE, 0), true);
     }
 
     /**
@@ -100,24 +100,30 @@ public class SerialPlanner {
      */
     public Result plan(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args, int dayCount,
                        Picks picks) {
-        return plan(selection, candidates, args, dayCount, picks, true);
+        return plan(selection, candidates, args, dayCount, picks, DaySelector.NONE, true);
+    }
+
+    /** @param selector 날짜를 직접 고를 때 그날 먼저 쓸 장소를 고른다. 받은 날짜대로 확정하면 부르지 않는다 */
+    public Result plan(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args, int dayCount,
+                       Picks picks, DaySelector selector) {
+        return plan(selection, candidates, args, dayCount, picks, selector, true);
     }
 
     /** 결과를 버리고 기준 좌표만 쓸 확정. 의도 반영률을 세는 요약 로그(불변식 요약·의도 시간대·날짜 직접 선택)를 남기지 않는다. */
     public Result planWithoutSummary(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args,
                                      int dayCount, Picks picks) {
-        return plan(selection, candidates, args, dayCount, picks, false);
+        return plan(selection, candidates, args, dayCount, picks, DaySelector.NONE, false);
     }
 
     private Result plan(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args, int dayCount,
-                        Picks picks, boolean summary) {
+                        Picks picks, DaySelector selector, boolean summary) {
         // 선택 단계의 의도도 intentProtected로 붙으므로 그 전에 약속 장소를 정한다.
         Set<String> promised = candidates.stream()
                 .filter(c -> c.userSelected() || c.intentProtected())
                 .map(SerialPlanner::keyOf)
                 .collect(Collectors.toSet());
         if (selection.days() != null && selection.days().size() == dayCount) {
-            return run(selection, candidates, args, picks, promised, summary);
+            return run(selection, candidates, args, picks, promised, new DaySelection(selector, dayCount), summary);
         }
         log.warn("선택 결과의 날짜 수가 여행 일수와 달라 요청 의도와 예약 숙소만 쓴다: 선택 {}일, 여행 {}일",
                 selection.days() == null ? 0 : selection.days().size(), dayCount);
@@ -129,15 +135,17 @@ public class SerialPlanner {
                         null))
                 .toList();
         return run(new SelectionOutput("", days, List.of(), List.of()), IntentHints.apply(selection, candidates), args,
-                Picks.IGNORE, promised, summary);
+                Picks.IGNORE, promised, new DaySelection(selector, dayCount), summary);
     }
 
+    private record DaySelection(DaySelector selector, int dayCount) {}
+
     private Result run(SelectionOutput selection, List<PlaceCandidate> candidates, ScheduleArgs args, Picks picks,
-                       Set<String> promised, boolean summary) {
+                       Set<String> promised, DaySelection daySelection, boolean summary) {
         TripNotes notes = new TripNotes();
         CityBlockPlanner.BlockScheduler withinCity =
                 (blockSelection, blockCandidates, blockArgs, earlier) -> scheduleWithinCity(blockSelection,
-                        blockCandidates, blockArgs, earlier, notes, picks, promised, summary);
+                        blockCandidates, blockArgs, earlier, notes, picks, promised, daySelection, summary);
         RouteOptimizer.ScheduleResult result = args.cities() != null
                 ? CityBlockPlanner.schedule(selection, candidates, args, withinCity)
                 : withinCity.schedule(selection, candidates, args, PlanState.Earlier.NONE);
@@ -149,7 +157,7 @@ public class SerialPlanner {
     private RouteOptimizer.ScheduleResult scheduleWithinCity(SelectionOutput selection, List<PlaceCandidate> candidates,
                                                              ScheduleArgs args, PlanState.Earlier earlier,
                                                              TripNotes notes, Picks picks, Set<String> promised,
-                                                             boolean summary) {
+                                                             DaySelection daySelection, boolean summary) {
         boolean choosesDays = picks != Picks.AS_PLACED;
         Set<Integer> promisedHere = candidates.stream().filter(c -> promised.contains(keyOf(c)))
                 .map(PlaceCandidate::index).collect(Collectors.toCollection(TreeSet::new));
@@ -166,7 +174,10 @@ public class SerialPlanner {
             // 빈 시간 채우기는 예비 목록만 본다. 직접 고르지 못한 선택 장소도 거기에 있어야 채우기에 쓰인다.
             s.spare.removeAll(preferred);
             s.spare.addAll(preferred);
-            s.days.forEach(d -> d.morningOnlyFirst = true);
+            s.days.forEach(d -> {
+                d.morningOnlyFirst = true;
+                d.cafeCap = ScheduleTuning.CAFES_PER_DAY_PICKED;
+            });
             DayPicker.prepare(s, args.hub(), preferred, promisedHere);
             s.days.forEach(d -> reserved.addAll(d.placeIndices));
             s.days.forEach(d -> {
@@ -187,8 +198,10 @@ public class SerialPlanner {
             DayState day = s.days.get(i);
             Integer previousLodging = i > 0 ? s.days.get(i - 1).accommodationIndex : null;
             if (choosesDays) {
+                boolean endsTrip = DayState.endsTrip(s.days, i);
+                Set<Integer> today = chooseToday(s, day, previousLodging, endsTrip, preferred, daySelection);
                 notes.shortfall.put(day.dayNumber,
-                        DayPicker.fill(s, day, previousLodging, DayState.endsTrip(s.days, i), preferred,
+                        DayPicker.fill(s, day, previousLodging, endsTrip, today.isEmpty() ? preferred : today,
                                 notes.lastDinnerKind));
                 reserved.addAll(day.placeIndices);
                 notes.picks.put(day.dayNumber, day.placeIndices.stream()
@@ -213,6 +226,26 @@ public class SerialPlanner {
                 s.cfg);
         IntentHints.logOutcome(withIntent, steps);
         return new RouteOptimizer.ScheduleResult(AlternativeBuilder.pruneUsedAndRenumber(steps), unresolved);
+    }
+
+    /** 선택기가 고른 장소 가운데 그날 허용 후보만 남긴다. 비면 날짜 전체의 선택 장소를 그대로 쓴다. */
+    private static Set<Integer> chooseToday(PlanState s, DayState day, Integer previousLodging, boolean endsTrip,
+                                            Set<Integer> preferred, DaySelection daySelection) {
+        if (daySelection.selector() == DaySelector.NONE) return Set.of();
+        DaySelector.DayOptions options = DayPicker.options(s, day, previousLodging, endsTrip, preferred,
+                daySelection.dayCount());
+        if (options == null) return Set.of();
+        Set<Integer> chosen;
+        try {
+            chosen = daySelection.selector().choose(options);
+        } catch (RuntimeException e) {
+            // 선택기 실패로 생성을 실패시키지 않는다. 그날은 날짜 직접 선택이 혼자 고른다.
+            log.warn("날짜별 선택기 실패 day={}: {}", day.dayNumber, e.getMessage());
+            return Set.of();
+        }
+        Set<Integer> allowed = chosen.stream().filter(options::allows).collect(Collectors.toCollection(TreeSet::new));
+        log.info("날짜별 선택기 day={}: 고름 {} / 허용 후보 안 {}", day.dayNumber, chosen.size(), allowed.size());
+        return allowed;
     }
 
     private static String dinnerKind(List<StepData> daySteps, CandidateLookup lookup) {
@@ -244,9 +277,8 @@ public class SerialPlanner {
     }
 
     /**
-     * 영업시간·시작 상한에 걸려 빠진 장소를 그날 다시 넣고 영업시간에 맞는 시간대 맨 앞에 둔다. 경로 순서는 영업시간을 보지
-     * 않아 늦게 여는 곳이 아침 첫 자리에, 일찍 닫는 곳이 오후 끝에 놓인다. 사용자가 고른 장소는 빠지지 않아 늦게 여는 곳이면
-     * 처음부터 그 시간대로 보낸다.
+     * 첫 확정 뒤 늦게 여는 낮 볼거리와 영업시간에 걸려 빠진 장소를 영업시간에 맞는 시간대 맨 앞에 고정한다. 경로 순서는 영업시간을
+     * 보지 않아 늦게 여는 곳이 아침 첫 자리에 놓이고, 사용자가 고른 곳과 기본 영업시간으로 보는 곳은 하루 확정이 빼지도 않는다.
      *
      * @return 다시 넣거나 시간대를 정한 장소가 있으면 true
      */
@@ -255,8 +287,7 @@ public class SerialPlanner {
         boolean placed = false;
         for (Integer idx : day.placeIndices) {
             PlaceCandidate c = byIndex(s.candidates, idx);
-            if (c == null || !c.userSelected() || day.openingSlots.containsKey(idx)
-                    || !CandidatePolicy.roleOf(c).isVisit()) continue;
+            if (c == null || day.openingSlots.containsKey(idx) || !CandidatePolicy.roleOf(c).isVisit()) continue;
             DayState.Slot slot = slotFor(c, day, morningStart);
             if (slot == DayState.Slot.AFTERNOON_FIRST && opensWithin(c, day, slot, morningStart)) {
                 day.openingSlots.put(idx, slot);
@@ -279,7 +310,8 @@ public class SerialPlanner {
 
     private static DayState.Slot slotFor(PlaceCandidate c, DayState day, int morningStart) {
         if (DayTiming.timePreference(c) == TimePreference.EVENING) return DayState.Slot.EVENING_FIRST;
-        List<int[]> ranges = day.dayOfWeek == null ? null : OpeningHoursText.rangesFor(c.openingHours(), day.dayOfWeek);
+        List<int[]> ranges = day.dayOfWeek == null ? null
+                : OpeningHoursText.rangesFor(DayTiming.openingHoursOf(c), day.dayOfWeek);
         if (ranges == null || ranges.isEmpty()) return DayState.Slot.MORNING_FIRST;
         int opens = ranges.get(0)[0];
         if (opens >= ScheduleTuning.DINNER_START) return DayState.Slot.EVENING_FIRST;
@@ -295,7 +327,7 @@ public class SerialPlanner {
             case AFTERNOON_FIRST -> ScheduleTuning.LUNCH_START + ScheduleTuning.DINING_VISIT_MINUTES;
             case EVENING_FIRST -> ScheduleTuning.DINNER_START + ScheduleTuning.DINING_VISIT_MINUTES;
         };
-        Integer openFrom = OpeningHoursText.earliestStart(c.openingHours(), day.dayOfWeek, slotStart,
+        Integer openFrom = OpeningHoursText.earliestStart(DayTiming.openingHoursOf(c), day.dayOfWeek, slotStart,
                 DayTiming.resolveVisitMinutes(c));
         return openFrom == null || (openFrom >= 0 && openFrom - slotStart <= ScheduleTuning.OPENING_WAIT_LIMIT_MINUTES);
     }

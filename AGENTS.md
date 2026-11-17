@@ -14,7 +14,7 @@ docker compose up -d                 # PostgreSQL(pgvector) · Valkey · LocalSt
 
 `.env`는 `.env.example`을 복사해 만든다. 직접 채울 키는 `DB_PASSWORD`(`docker-compose.yml`과 같은 값), `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, OAuth 클라이언트 한 쌍 이상이고 나머지는 로컬 기본값이 있다.
 
-배치는 `SPRING_PROFILES_ACTIVE=batch`, 품질 평가는 `--spring.profiles.active=local,eval --eval.mode=score|corpus|replay|files|pool|rejected`로 jar를 한 번 실행한다(`--eval.pipeline`은 기본 `recorded`로 생성 기록의 경로를 따르고 `v1`·`v2`로 고정할 수 있다. v2 재실행은 `SerialPlanner`로 하고, `--eval.selection=guided|picker`를 더하면 날짜는 `DayPicker`가 정한다. 둘 다 기록된 선택의 요청 의도·거점·숙소·예비 장소를 쓰고, guided는 기록된 선택이 날짜에 놓은 장소를 같은 거리 안에서 먼저 쓴다. `--eval.supplement=near`는 생성처럼 날마다 기준 좌표 둘레에서 후보를 보완한 뒤 다시 정해 DB를 읽으므로 로컬 복사본에 붙여 돌린다). LLM을 부르는 실행은 끝난 뒤 프로세스가 종료됐는지 확인한다.
+배치는 `SPRING_PROFILES_ACTIVE=batch`, 품질 평가는 `--spring.profiles.active=local,eval --eval.mode=score|corpus|replay|files|pool|rejected`로 jar를 한 번 실행한다(`--eval.pipeline`은 기본 `recorded`로 생성 기록의 경로를 따르고 `v1`·`v2`로 고정할 수 있다. v2 재실행은 `SerialPlanner`로 하고, `--eval.selection=guided|picker`를 더하면 날짜는 `DayPicker`가 정한다. 둘 다 기록된 선택의 요청 의도·거점·숙소·예비 장소를 쓰고, guided는 기록된 선택이 날짜에 놓은 장소를 같은 거리 안에서 먼저 쓴다. `--eval.supplement=near`는 생성처럼 날마다 기준 좌표 둘레에서 후보를 보완한 뒤 다시 정해 DB를 읽으므로 로컬 복사본에 붙여 돌린다. `--eval.day-selector=haiku|sonnet`은 guided|picker에서 그날 후보를 모델이 먼저 고르게 하는 비교용이고 운영에는 붙이지 않는다). LLM을 부르는 실행은 끝난 뒤 프로세스가 종료됐는지 확인한다.
 
 ## 구조
 
@@ -35,7 +35,7 @@ docker compose up -d                 # PostgreSQL(pgvector) · Valkey · LocalSt
 
 ## 일정 품질 작업
 
-- 생성부터 돌리지 않는다. `EvalRunner` 재채점·리플레이와 `scripts/quality_metrics.sql`로 먼저 재고, 기준선은 [docs/eval-baseline.md](docs/eval-baseline.md)다.
+- 생성부터 돌리지 않는다. `EvalRunner` 재채점·리플레이와 `scripts/quality_metrics.sql`로 먼저 재고, 기준선은 [docs/eval-baseline.md](docs/eval-baseline.md)다. 여행자가 바로 문제로 느끼는 결함(같은 곳 쪼개기·어두운 야외·긴 공백·늦은 종료 등)은 `scripts/eval/traveler-checks.py`로 센다.
 - 생성 요청 바디는 `ItineraryGenerateRequest` 필드명과 대조한다. 이름이 틀린 필드(`transportMode` 등)는 조용히 무시되고 기본값으로 떨어진다.
 - 프롬프트 문구로 설득하기보다 후보 풀(`VectorSearchQueryService`)과 결정론 단계를 먼저 고친다.
 - 여러 코드 경로 중 일부에만 있는 검증을 의심한다. 장소 판정은 `PlaceCategoryConstants`의 공용 게이트를 거치게 한다.

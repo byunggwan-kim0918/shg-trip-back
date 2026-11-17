@@ -24,9 +24,15 @@ final class VarietyLedger {
 
     private final Set<String> kinds = new HashSet<>();
     private final Set<String> groups = new HashSet<>();
+    private final int cafeCap;
     private int cafes;
 
     private VarietyLedger(Collection<Integer> places, Integer replaced, List<PlaceCandidate> candidates) {
+        this(places, replaced, candidates, CAFE_PER_DAY_CAP);
+    }
+
+    private VarietyLedger(Collection<Integer> places, Integer replaced, List<PlaceCandidate> candidates, int cafeCap) {
+        this.cafeCap = cafeCap;
         for (Integer idx : places) {
             if (!idx.equals(replaced)) add(byIndex(candidates, idx));
         }
@@ -34,12 +40,12 @@ final class VarietyLedger {
 
     /** 그날 이미 든 끼니와 같은 종류이거나 하루 카페 상한을 넘기는 후보를 막는다. */
     static Predicate<PlaceCandidate> admitsOnDay(DayState day, List<PlaceCandidate> candidates) {
-        return new VarietyLedger(day.placeIndices, null, candidates)::admits;
+        return new VarietyLedger(day.placeIndices, null, candidates, day.cafeCap)::admits;
     }
 
     /** 그날의 {@code replaced} 자리를 바꿀 후보. 바뀌어 나갈 장소는 세지 않는다. */
     static Predicate<PlaceCandidate> admitsReplacing(DayState day, Integer replaced, List<PlaceCandidate> candidates) {
-        return new VarietyLedger(day.placeIndices, replaced, candidates)::admits;
+        return new VarietyLedger(day.placeIndices, replaced, candidates, day.cafeCap)::admits;
     }
 
     /** day 목록을 고치는 도중이라 아직 반영하지 않은 구성({@code places})으로 본다. */
@@ -49,7 +55,7 @@ final class VarietyLedger {
 
     /** {@code incoming}을 차례로 그날에 넣어도 모두 통과하는지. 여러 곳을 한꺼번에 옮길 때 서로 겹치는 것도 막는다. */
     static boolean admitsAll(DayState day, Collection<Integer> incoming, List<PlaceCandidate> candidates) {
-        VarietyLedger ledger = new VarietyLedger(day.placeIndices, null, candidates);
+        VarietyLedger ledger = new VarietyLedger(day.placeIndices, null, candidates, day.cafeCap);
         for (Integer idx : incoming) {
             PlaceCandidate c = byIndex(candidates, idx);
             if (!ledger.admits(c)) return false;
@@ -83,7 +89,7 @@ final class VarietyLedger {
         String kind = mealKindOf(c);
         if (kind != null) return kinds.stream().noneMatch(k -> PlaceCategoryConstants.sameMealKind(k, kind));
         if (c.mealEligible()) return true;
-        return !isCafeLike(c) || cafes < CAFE_PER_DAY_CAP;
+        return !isCafeLike(c) || cafes < cafeCap;
     }
 
     /** 반복으로 셀 수 있는 끼니 종류. 끼니가 아니거나 종류를 모르면 null. */

@@ -1140,7 +1140,7 @@ class OptimizedGenerationExecutorTest {
         when(serialPlanner.planWithoutSummary(any(), anyList(), any(), eq(4), eq(SerialPlanner.Picks.PREFER)))
                 .thenReturn(new SerialPlanner.Result(fourDays, List.of(), List.of(), firstPicks,
                         Map.of(1, new double[]{35.6764, 139.6993})));
-        when(serialPlanner.plan(any(), anyList(), any(), eq(4), eq(SerialPlanner.Picks.PREFER))).thenReturn(
+        when(serialPlanner.plan(any(), anyList(), any(), eq(4), eq(SerialPlanner.Picks.PREFER), any())).thenReturn(
                 new SerialPlanner.Result(fourDays, List.of(), List.of(), finalPicks, Map.of()));
         when(indexResultMapper.toDraftItineraryData(eq(fourDays), eq("도쿄"), anyString(), anyList(), anyList()))
                 .thenReturn(draftData);
@@ -1152,7 +1152,8 @@ class OptimizedGenerationExecutorTest {
         ArgumentCaptor<List<PlaceCandidate>> finalPass = ArgumentCaptor.forClass(List.class);
         verify(serialPlanner).planWithoutSummary(any(), firstPass.capture(), any(), eq(4),
                 eq(SerialPlanner.Picks.PREFER));
-        verify(serialPlanner).plan(any(), finalPass.capture(), any(), eq(4), eq(SerialPlanner.Picks.PREFER));
+        verify(serialPlanner).plan(any(), finalPass.capture(), any(), eq(4), eq(SerialPlanner.Picks.PREFER),
+                eq(DaySelector.NONE));
         List<PlaceCandidate> first = firstPass.getValue();
         List<PlaceCandidate> second = finalPass.getValue();
         assertThat(second).hasSize(first.size() + 1);
@@ -1174,7 +1175,7 @@ class OptimizedGenerationExecutorTest {
         SerialPlanner.Result noAnchors = new SerialPlanner.Result(fixedSteps, List.of(), List.of(), dayOnePicks(1),
                 Map.of());
         when(serialPlanner.planWithoutSummary(any(), anyList(), any(), anyInt(), any())).thenReturn(noAnchors);
-        when(serialPlanner.plan(any(), anyList(), any(), anyInt(), any())).thenReturn(noAnchors);
+        when(serialPlanner.plan(any(), anyList(), any(), anyInt(), any(), any())).thenReturn(noAnchors);
         stubSave(45L);
 
         executor.execute("job-v2a", request, 1L, emitter);
@@ -1182,7 +1183,7 @@ class OptimizedGenerationExecutorTest {
         ArgumentCaptor<List<PlaceCandidate>> firstPass = ArgumentCaptor.forClass(List.class);
         ArgumentCaptor<List<PlaceCandidate>> finalPass = ArgumentCaptor.forClass(List.class);
         verify(serialPlanner).planWithoutSummary(any(), firstPass.capture(), any(), anyInt(), any());
-        verify(serialPlanner).plan(any(), finalPass.capture(), any(), anyInt(), any());
+        verify(serialPlanner).plan(any(), finalPass.capture(), any(), anyInt(), any(), any());
         assertThat(finalPass.getValue()).isEqualTo(firstPass.getValue());
         verify(vectorSearchQueryService, never()).searchNearEach(any(), any(), anyList(), eq(nearRing), anyInt());
         // 숙소가 없는 풀이라 선택 결과의 하루 기준 보완만 한 번 돈다.
@@ -1214,7 +1215,7 @@ class OptimizedGenerationExecutorTest {
         when(planningPipeline.serialFor(any())).thenReturn(true);
         SerialPlanner.Result v2 = new SerialPlanner.Result(fixedSteps, List.of(), List.of(), dayOnePicks(1), Map.of());
         when(serialPlanner.planWithoutSummary(any(), anyList(), any(), anyInt(), any())).thenReturn(v2);
-        when(serialPlanner.plan(any(), anyList(), any(), anyInt(), any())).thenReturn(v2);
+        when(serialPlanner.plan(any(), anyList(), any(), anyInt(), any(), any())).thenReturn(v2);
         stubSave(49L);
         when(hardValidator.validate(draftData)).thenReturn(HardValidationResult.fail("스텝 시각 역전"),
                 HardValidationResult.pass());

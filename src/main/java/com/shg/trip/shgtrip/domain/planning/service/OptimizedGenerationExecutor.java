@@ -380,7 +380,7 @@ public class OptimizedGenerationExecutor {
         }
         try {
             CandidateSupplement.Planned planned = candidateSupplement.planWithReserve(serialPlanner, selection,
-                    candidates, args, input, exclusions, dayCount, SerialPlanner.Picks.PREFER);
+                    candidates, args, input, exclusions, dayCount, SerialPlanner.Picks.PREFER, DaySelector.NONE);
             return new Scheduled(planned.result().steps(), planned.candidates(),
                     new ScheduledBy(ScheduledBy.Pipeline.V2, planned.result().selection()));
         } catch (RuntimeException e) {
