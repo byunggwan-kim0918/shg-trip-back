@@ -28,6 +28,11 @@ public record StepData(
                 transportationDuration, transportationDistance, transportationCost, notes, estimatedCost);
     }
 
+    public StepData withNotes(String newNotes) {
+        return new StepData(stepOrder, dayNumber, startTime, endTime, place, alternatives, transportationMode,
+                transportationDuration, transportationDistance, transportationCost, newNotes, estimatedCost);
+    }
+
     public StepData withEndTime(String end) {
         return new StepData(stepOrder, dayNumber, startTime, end, place, alternatives, transportationMode,
                 transportationDuration, transportationDistance, transportationCost, notes, estimatedCost);

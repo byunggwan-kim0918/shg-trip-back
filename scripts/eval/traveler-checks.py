@@ -13,6 +13,20 @@ python3 -I scripts/eval/traveler-checks.py --traces a.jsonl,b.jsonl [--dump DIR]
 같은 음식 3번: 같은 음식 종류(cuisine)가 여행에서 3끼 이상이다.
 개점 전 쇼핑: 영업시간을 모르는 백화점·쇼핑몰·상점을 10시 전에 시작한다(시장 제외).
 카페 2곳 이상: 하루에 카페·베이커리·디저트가 2곳 이상이다. 판정 규칙(CAFE_PER_DAY_CAP, 3곳부터)보다 엄격한 여행자 기준이다.
+끼니 누락: 점심·저녁 시간을 걸치는 날에 그 시간 식사가 없다.
+영업 안 하는 때 방문: 영업시간을 아는 곳을 닫힌 시각·휴무일에 간다.
+요청 장소 누락: 사용자가 고르거나 요청 의도로 정한 장소가 일정에 없다.
+도보 과다: 도보 여행의 하루 직선 이동이 12km를 넘는다(실제 걷는 거리는 1.3배 안팎).
+되돌아가는 동선: 하루 이동 합이 가장 먼 곳까지 왕복의 2.5배를 넘는다.
+식사 원정: 앞뒤 장소 사이 동선에서 식당 때문에 도보 3km·차 15km 넘게 돌아간다.
+이동이 하루 절반: 6시간 넘는 날에 머무는 시간보다 이동·대기가 길다.
+관광 수 페이스 밖: 도착·출발이 없는 온전한 날의 관광 수가 페이스 범위보다 적거나 한 곳 넘게 많다.
+이른 시작: 첫 볼거리가 8:30 전에 시작한다.
+권역 여러 곳: 하루 볼거리가 서로 떨어진 권역 셋 이상에 흩어져 있다(권역 반경 도보 3km·차 15km·그 밖 8km).
+동행에 비해 과함: 부모님 동반은 하루 관광 4곳 이상이거나 9시간을 넘고, 아이 동반은 관광 3곳 이상이다(--requests가 있을 때).
+출발 여유 없음: 출발 시각이 있는 날 마지막 볼거리가 출발 2시간 전보다 늦게 끝난다.
+
+--requests  실생성 요청과 결과(cases.json:results.json). 동행·출발 시각을 일정과 짝짓는다.
 """
 import argparse
 import datetime
@@ -39,7 +53,33 @@ NOT_VISIT = re.compile(r"Dining and Drinking|Lodging|Transport Hub|Travel and Tr
 SHOP = re.compile(r"Department Store|Shopping Mall|Shopping Plaza|Outlet|Clothing|Boutique|Electronics")
 LINE = re.compile(r"d(\d+) (\d\d):(\d\d)-(\d\d):(\d\d) (.*?) \| (.*?) \|")
 CHECKS = ["같은 곳 쪼개기", "어두운 야외", "볼 것 없는 곳", "관광 없는 날", "긴 공백", "늦은 종료", "같은 음식 3번",
-          "개점 전 쇼핑", "카페 2곳 이상"]
+          "개점 전 쇼핑", "카페 2곳 이상", "끼니 누락", "영업 안 하는 때 방문", "요청 장소 누락", "도보 과다",
+          "되돌아가는 동선", "식사 원정", "이동이 하루 절반", "관광 수 페이스 밖", "이른 시작", "권역 여러 곳",
+          "동행에 비해 과함", "출발 여유 없음"]
+AREA_KM = {"walk": 3.0, "car": 15.0, "any": 8.0}
+LUNCH = (11 * 60 + 30, 13 * 60 + 30)
+DINNER = (17 * 60 + 30, 19 * 60 + 30)
+WALK_DAY_KM = {"walk": 12.0}
+SIGHTS = {"relaxed": (1, 2), "normal": (2, 3), "tight": (3, 5)}
+DAYS = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
+TIME_RANGE = re.compile(r"(\d{1,2}):(\d{2})\s*~\s*(\d{1,2}):(\d{2})")
+
+
+def open_ranges(hours, weekday):
+    """"요일: HH:MM ~ HH:MM" 형식에서 그 요일 영업 구간(분). 휴무면 [], 알 수 없으면 None."""
+    if not hours:
+        return None
+    for part in hours.split(","):
+        part = part.strip()
+        if part.startswith(DAYS[weekday]):
+            if "휴무" in part:
+                return []
+            out = []
+            for m in TIME_RANGE.finditer(part):
+                a, b = int(m.group(1)) * 60 + int(m.group(2)), int(m.group(3)) * 60 + int(m.group(4))
+                out.append((a, b if b > a else b + 1440))
+            return out or None
+    return None
 
 
 def km(a, b):
@@ -93,7 +133,22 @@ def steps_from_trace(d):
     return steps
 
 
-def check(d, steps):
+def areas(points, radius):
+    """반경 안에서 서로 이어지는 점끼리 한 권역으로 묶어 권역 수를 센다."""
+    left, count = list(points), 0
+    while left:
+        group, count = [left.pop()], count + 1
+        while True:
+            near = [p for p in left if any(km(p, g) <= radius for g in group)]
+            if not near:
+                break
+            for p in near:
+                left.remove(p)
+            group += near
+    return count
+
+
+def check(d, steps, request=None):
     by_name = {}
     for c in d.get("candidates") or []:
         for key in (c.get("name"), c.get("nameKo")):
@@ -163,6 +218,82 @@ def check(d, steps):
         cafes = [s["name"] for s in ds if CAFE.search(s["category"])]
         if len(cafes) >= 2:
             found["카페 2곳 이상"].append(f"{tag} " + ", ".join(cafes))
+    args = d.get("scheduleArgs") or {}
+    transport, pace = args.get("transportPref") or "any", args.get("pace") or "normal"
+    sel = d.get("selection") or {}
+    cands = d.get("candidates") or []
+    names_in_plan = {s["name"] for s in steps}
+    wanted = [c for c in cands if c.get("userSelected") or c.get("intentProtected")]
+    wanted += [cands[i - 1] for i in (sel.get("highlightIndices") or []) if 0 < i <= len(cands)]
+    for c in {c["name"]: c for c in wanted}.values():
+        if "Lodging" in (c.get("category") or "") or "Transport" in (c.get("category") or ""):
+            continue
+        if c["name"] not in names_in_plan and (c.get("nameKo") or "") not in names_in_plan:
+            found["요청 장소 누락"].append(c.get("nameKo") or c["name"])
+    last_day = max(days) if days else 0
+    for day, ds in days.items():
+        tag = f"{day}일차"
+        weekday = (start + datetime.timedelta(days=day - 1)).weekday()
+        meals = [s for s in ds if "Dining and Drinking" in s["category"] and not CAFE.search(s["category"])]
+        span = (ds[0]["start"], ds[-1]["end"]) if ds else (0, 0)
+        for name, (a, b) in (("점심", LUNCH), ("저녁", DINNER)):
+            if span[0] <= a and span[1] >= b and not any(a - 30 <= m["start"] <= b for m in meals):
+                found["끼니 누락"].append(f"{tag} {name}")
+        for s in ds:
+            c = by_name.get(s["name"]) or {}
+            if "Lodging" in s["category"] or "Transport" in s["category"]:
+                continue
+            ranges = open_ranges(c.get("openingHours"), weekday)
+            if ranges is not None and not any(a <= s["start"] and s["end"] <= b for a, b in ranges):
+                found["영업 안 하는 때 방문"].append(f"{tag} {s['name']} {s['start'] // 60}:{s['start'] % 60:02d}"
+                                               + (" (휴무)" if ranges == [] else ""))
+        pts = [coords(s) for s in ds if coords(s) is not None]
+        legs = [km(a, b) for a, b in zip(pts, pts[1:])]
+        if transport in WALK_DAY_KM and sum(legs) > WALK_DAY_KM[transport]:
+            found["도보 과다"].append(f"{tag} 직선 {sum(legs):.1f}km")
+        if len(pts) >= 4:
+            straight = km(pts[0], pts[-1])
+            far = max(km(pts[0], p) for p in pts)
+            if sum(legs) > 2.5 * max(far * 2, straight, 3.0):
+                found["되돌아가는 동선"].append(f"{tag} 이동 {sum(legs):.1f}km, 가장 먼 곳 {far:.1f}km")
+        for i, m in enumerate(ds):
+            if m not in meals or i == 0 or i == len(ds) - 1:
+                continue
+            a, b, x = coords(ds[i - 1]), coords(ds[i + 1]), coords(m)
+            if a and b and x:
+                detour = km(a, x) + km(x, b) - km(a, b)
+                limit = 3.0 if transport == "walk" else 15.0
+                if detour > limit:
+                    found["식사 원정"].append(f"{tag} {m['name']} 우회 {detour:.1f}km")
+        busy = sum(s["end"] - s["start"] for s in ds)
+        if ds and span[1] - span[0] > 360 and (span[1] - span[0] - busy) > (span[1] - span[0]) / 2:
+            found["이동이 하루 절반"].append(f"{tag} 머문 {busy}분 / 하루 {span[1] - span[0]}분")
+        n_sights = len([s for s in ds if visit(s)])
+        lo, hi = SIGHTS.get(pace, (2, 3))
+        full_day = ds and span[0] <= 10 * 60 and span[1] >= 18 * 60 and day not in (1, last_day)
+        if full_day and (n_sights < lo or n_sights > hi + 1):
+            found["관광 수 페이스 밖"].append(f"{tag} {pace} 관광 {n_sights}곳")
+        first = next((s for s in ds if visit(s)), None)
+        if first and first["start"] < 8 * 60 + 30:
+            found["이른 시작"].append(f"{tag} {first['name']} {first['start'] // 60}:{first['start'] % 60:02d}")
+    companion = (request or {}).get("companion")
+    departure = (request or {}).get("departureTime") or args.get("departureTime")
+    for day, ds in days.items():
+        tag = f"{day}일차"
+        sights = [s for s in ds if visit(s)]
+        pts = [coords(s) for s in sights if coords(s) is not None]
+        if areas(pts, AREA_KM.get(transport, 8.0)) >= 3:
+            found["권역 여러 곳"].append(f"{tag} 권역 {areas(pts, AREA_KM.get(transport, 8.0))}곳")
+        span = ds[-1]["end"] - ds[0]["start"] if ds else 0
+        if companion == "parents" and (len(sights) >= 4 or span > 9 * 60):
+            found["동행에 비해 과함"].append(f"{tag} 부모님 관광 {len(sights)}곳, {span // 60}시간")
+        if companion == "family" and len(sights) >= 3:
+            found["동행에 비해 과함"].append(f"{tag} 아이 동반 관광 {len(sights)}곳")
+        if departure and day == last_day and sights:
+            deadline = int(departure[:2]) * 60 + int(departure[3:5]) - 120
+            if sights[-1]["end"] > deadline:
+                found["출발 여유 없음"].append(f"{tag} {sights[-1]['name']} ~{sights[-1]['end'] // 60}:"
+                                          f"{sights[-1]['end'] % 60:02d}, 출발 {departure}")
     for kind, places in meal_kinds.items():
         if len(places) >= 3:
             found["같은 음식 3번"].append(f"{kind} {len(places)}끼: " + ", ".join(places))
@@ -175,8 +306,18 @@ def main():
     ap.add_argument("--dump")
     ap.add_argument("--ids")
     ap.add_argument("--examples", type=int, default=3)
+    ap.add_argument("--requests")
     a = ap.parse_args()
     traces = load_traces(a.traces.split(","))
+    requests = {}
+    if a.requests:
+        for pair in a.requests.split(","):
+            cases_path, results_path = pair.split(":")
+            cases = {c["id"]: c for c in json.load(open(cases_path, encoding="utf-8"))}
+            for cid, r in json.load(open(results_path, encoding="utf-8")).items():
+                iid = (r.get("complete") or {}).get("itineraryId")
+                if iid is not None and cid in cases:
+                    requests[str(iid)] = dict(cases[cid], case=cid)
     ids = a.ids.split(",") if a.ids else list(traces)
     per = {c: [] for c in CHECKS}
     total = 0
@@ -194,7 +335,7 @@ def main():
         if not steps:
             continue
         total += 1
-        for c, hits in check(d, steps).items():
+        for c, hits in check(d, steps, requests.get(i)).items():
             per[c].append((i, hits))
     print(f"일정 {total}건")
     print("| 결함 | 일정 수 | 건수 | 예 |")

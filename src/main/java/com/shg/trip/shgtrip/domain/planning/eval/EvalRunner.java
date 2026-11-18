@@ -57,7 +57,9 @@ import java.util.*;
  * score: 저장본만 채점 / replay: 현재 코드로 다시 돌려 비교 / corpus: 기록 있는 일정 전부 replay
  * / pool: 기록의 보강 입력으로 벡터 검색만 다시 돌려 후보 풀을 pool-{id}.tsv로 남긴다(질의 임베딩 호출이 나간다)
  * / files: {@code --eval.files}(쉼표로 여러 개)의 {@link TraceFile} JSON 줄을 DB 없이 replay한다
- * / rejected: 관문에서 막혀 일정 없이 남은 기록을 다시 돌려 rejected-{기록 id}.txt로 남긴다(eval.ids는 기록 id).
+ * / rejected: 관문에서 막혀 일정 없이 남은 기록을 다시 돌려 rejected-{기록 id}.txt로 남긴다(eval.ids는 기록 id)
+ * / trip: {@code --eval.drafts} 폴더의 기록된 초안과 편집으로 {@link TripPlanner} 흐름을 다시 짓는다(장소 DB와 근처
+ * 검색의 질의 임베딩 호출이 필요하다).
  *
  * <p>{@code --eval.pipeline}: 재실행에 쓸 확정 단계. recorded(기본)는 생성 기록이 확정한 단계를 따르고(기록이 없으면 v1),
  * v1은 {@link RouteOptimizer}, v2는 {@link SerialPlanner}다. v2로 확정한 기록은 날짜를 직접 정한 결과라
@@ -84,6 +86,7 @@ public class EvalRunner implements CommandLineRunner {
     private final VectorSearchQueryService vectorSearchQueryService;
     private final CandidateSupplement candidateSupplement;
     private final DaySelectionCallGenerator daySelectionCallGenerator;
+    private final DraftEvalRunner draftEvalRunner;
 
     private static final Map<String, SerialPlanner.Picks> PICKS_BY_SELECTION = Map.of(
             "guided", SerialPlanner.Picks.PREFER, "picker", SerialPlanner.Picks.IGNORE);
@@ -110,6 +113,17 @@ public class EvalRunner implements CommandLineRunner {
 
     @Value("${eval.files:}")
     private String files;
+
+    /** trip 모드가 읽고 쓰는 기록 폴더. */
+    @Value("${eval.drafts:}")
+    private String drafts;
+
+    /** 있으면 trip 모드가 먼저 이 요청 파일의 {@code eval.draft-ids} 가운데 기록이 없는 것을 모델로 받는다(비용 발생). */
+    @Value("${eval.draft-requests:}")
+    private String draftRequests;
+
+    @Value("${eval.draft-ids:}")
+    private String draftIds;
 
     @Value("${eval.pipeline:recorded}")
     private String pipeline;
@@ -164,6 +178,15 @@ public class EvalRunner implements CommandLineRunner {
         }
         if ("pool".equals(mode)) {
             dumpPools();
+            System.exit(SpringApplication.exit(context, () -> 0));
+            return;
+        }
+        if ("trip".equals(mode)) {
+            if (!draftRequests.isBlank()) {
+                List<String> ids = Arrays.stream(draftIds.split(",")).map(String::trim).filter(x -> !x.isEmpty()).toList();
+                draftEvalRunner.recordTrips(draftRequests, ids, drafts);
+            }
+            draftEvalRunner.runTrips(drafts, outDir);
             System.exit(SpringApplication.exit(context, () -> 0));
             return;
         }

@@ -47,9 +47,10 @@ final class PlaceRestrictions {
     private static final List<String> RAW_DISH_WORDS = List.of("육회", "육사시미", "게장", "생굴");
     /** 이름에 걸린 낱말이 다른 말의 일부인 경우("체육회관"의 육회, "가게장터"의 게장). 이름에서만 지운다. */
     private static final List<String> NAME_EXCLUSIONS = List.of("회관", "게장터");
-    /** 보강이 한식·면요리로만 분류하는 해산물 요리. 공용 요리 분류(조개·장어·게·회)에 없는 것만 둔다. */
+    /** 보강이 한식·면요리로 분류해 공용 요리 분류에 잡히지 않는 해산물 요리. 이름·태그로 본다. */
     private static final List<String> SEAFOOD_DISH_WORDS = List.of("해물", "해산물", "낙지", "쭈꾸미", "주꾸미", "문어",
             "오징어", "갈치", "고등어", "아구찜", "아귀", "복국", "복어", "전복", "새우", "매운탕", "짬뽕", "어묵", "오뎅",
+            "바지락", "조개", "꼬막", "홍합", "굴국", "굴밥", "굴보쌈", "대게", "홍게", "게장", "물회", "생선", "장어", "멍게",
             "海鮮", "海鲜", "seafood");
     /** 공용 분류가 국물·면·일식으로 세는 돼지·닭 요리. 공용 고기 낱말에 넣으면 세부 유형이 바뀐다. */
     private static final List<String> PORK_DISH_WORDS = List.of("돈까스", "돈카츠", "トンカツ", "豚", "とんこつ",
