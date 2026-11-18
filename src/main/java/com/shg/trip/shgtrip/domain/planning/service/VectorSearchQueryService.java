@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -282,6 +283,35 @@ public class VectorSearchQueryService {
         float[] vector = slot != null ? embedOne(slot.queryText()) : null;
         if (vector == null) return List.of();
         return searchNearWith(input, role, slot, vector, center, radiusKm, limit, startIndex);
+    }
+
+    /** 근처 검색을 여러 번 하는 계획 한 건이 역할별 질의 임베딩을 한 번만 하도록 묶는다. */
+    public NearSearch nearSearch(VectorEnrichedInput input) {
+        return new NearSearch(input);
+    }
+
+    /** 계획 한 건 안에서만 쓴다. 여러 스레드가 나눠 쓰지 않는다. */
+    public final class NearSearch {
+        private final VectorEnrichedInput input;
+        private final Map<SearchRole, Prepared> prepared = new EnumMap<>(SearchRole.class);
+
+        private NearSearch(VectorEnrichedInput input) {
+            this.input = input;
+        }
+
+        public List<PlaceCandidate> search(SearchRole role, double[] center, double radiusKm, int limit,
+                                           int startIndex) {
+            if (center == null || limit <= 0) return List.of();
+            Prepared p = prepared.computeIfAbsent(role, r -> {
+                SearchSlot slot = slotFor(input, r);
+                return new Prepared(slot, slot == null ? null : embedOne(slot.queryText()));
+            });
+            if (p.vector() == null) return List.of();
+            return searchNearWith(input, role, p.slot(), p.vector(), center, radiusKm, limit, startIndex);
+        }
+    }
+
+    private record Prepared(SearchSlot slot, float[] vector) {
     }
 
     /**
