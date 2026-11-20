@@ -36,39 +36,11 @@ public final class PlaceCategoryConstants {
             "역", "공항", "터미널", "항구", "airport", "station", "terminal", "port"
     );
 
-    /**
-     * 교통시설 이름 판정. 부분 문자열로 보면 "Sports Complex"("port")·"역사박물관"("역")이 허브가 되므로
-     * 한 글자 키워드는 경계 조건을, 영문은 단어 경계를 붙인다. "항"은 관광 어항이 많아 넣지 않는다.
-     * 중국어 역은 "北京南站"처럼 이름 끝의 "站"으로 드러나고, 주유소(加油站)·사이트(网站)·택배 거점(驿站)은 뺀다.
-     */
-    private static final java.util.regex.Pattern TRANSIT_FACILITY_NAME = java.util.regex.Pattern.compile(
-            "공항|터미널|여객|선착장|부두|도선|카페리|페리"
-            + "|[가-힣]역(?![사원전])"                       // 서울역 O / 역사박물관·역원 X
-            + "|\\bairport\\b|\\bterminal\\b|\\bferry\\b|\\bpier\\b"
-            + "|\\b(?:train|bus|subway|metro|railway)?\\s*station\\b"
-            + "|空港|ターミナル|フェリー|(?<!道の)駅(?!前)"        // 道の駅는 휴게소, 駅前○○는 역 앞 가게
-            + "|机场|機場|航站楼|航廈|火车站|火車站|高铁站|高鐵站|车站|車站|地铁站|捷運|客运站|客運站|码头|碼頭"
-            + "|(?<!加油|充电|充電|服务|服務|网|網|驿|驛|气象|氣象|工作)站(?=$|[\\s(（])"
-            + "|sân bay|bến xe|bến phà|(?<!\\S)(?-i:Ga)\\s",      // "Ga Hà Nội" O / "Gà rán" X
-            java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
-
     /** 여객시설임이 이름에 드러나는 신호. 관광 스텝이 될 수 없어 방문 후보에서 뺀다. 시딩·검증·동선이 같은 목록을 본다. */
     private static final java.util.regex.Pattern PASSENGER_FACILITY_NAME = java.util.regex.Pattern.compile(
             "여객|터미널|대합실|선착장|부두|도선|카페리"
             + "|ターミナル|航站楼|航廈|客运站|客運站|bến xe",
             java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE);
-
-    /**
-     * 허브 본체가 아닌 부속 시설 POI 신호. Foursquare에 "Immigration Check"·"주차장" 같은 하위 POI가
-     * 공항과 같은 카테고리로 섞여 있어, 거르지 않으면 일정 첫 스텝이 출입국심사대가 된다.
-     */
-    private static final Set<String> HUB_SUB_FACILITY_KEYWORDS = Set.of(
-            "immigration", "check-in", "checkin", "security", "gate", "counter",
-            "baggage", "lounge", "parking", "주차", "수하물", "출입국", "심사", "탑승구",
-            "駐車場", "手荷物", "保安検査", "出国審査", "入国審査", "ラウンジ", "搭乗口",
-            "停车场", "停車場", "行李", "安检", "安檢", "登机口", "登機門", "值机", "出入境", "贵宾室", "貴賓室",
-            "bãi đỗ xe", "bãi giữ xe", "hành lý", "phòng chờ"
-    );
 
     /** 야간 방문이 부적합한 야외/주간 성격 카테고리 신호 (일몰 전 버킷에만 배치). */
     private static final Set<String> DAYTIME_OUTDOOR_KEYWORDS = Set.of(
@@ -80,17 +52,6 @@ public final class PlaceCategoryConstants {
         if (category == null) return false;
         String lower = category.toLowerCase();
         return ACCOMMODATION_KEYWORDS.stream().anyMatch(lower::contains);
-    }
-
-    public static boolean isTransitHub(String name, String category) {
-        String combined = ((name != null ? name : "") + " " + (category != null ? category : "")).toLowerCase();
-        return TRANSIT_HUB_KEYWORDS.stream().anyMatch(combined::contains);
-    }
-
-    /** 카테고리 오적재(마을이 Bus Station 등)가 있어 도착/출발 허브는 이름으로 한 번 더 거른다. */
-    public static boolean hasTransitNameSignal(String name) {
-        if (name == null) return false;
-        return TRANSIT_FACILITY_NAME.matcher(name).find();
     }
 
     /**
@@ -110,12 +71,6 @@ public final class PlaceCategoryConstants {
     public static boolean isPassengerFacility(String name) {
         if (name == null) return false;
         return PASSENGER_FACILITY_NAME.matcher(name).find();
-    }
-
-    public static boolean isHubSubFacility(String name) {
-        if (name == null) return false;
-        String lower = name.toLowerCase();
-        return HUB_SUB_FACILITY_KEYWORDS.stream().anyMatch(lower::contains);
     }
 
     /** 대분류는 DINING이지만 식사 슬롯에 부적합해 scheduleDay가 저녁 활동으로 다룬다. */
@@ -291,7 +246,7 @@ public final class PlaceCategoryConstants {
     // ── 사용자 입력(마법사) ↔ 검색 슬롯 매핑 ─────────────────────────────────────
     // 여행지별 특수 규칙은 두지 않는다. 판단은 이 표와 DB 데이터로만 한다.
 
-    /** 검색 슬롯 역할. RouteOptimizer가 식사·숙소·허브를 채우는 데 필요한 고정 구조. */
+    /** 검색 슬롯 역할. 근처 검색이 끼니·카페·숙소·허브·관광을 역할별로 찾는다. */
     public enum SearchRole { TRANSPORTATION, RESTAURANT, CAFE, ACCOMMODATION, ATTRACTION }
 
     /**
@@ -459,7 +414,6 @@ public final class PlaceCategoryConstants {
 
     /**
      * 슬롯별 최소 cosine 유사도. 없으면 데이터가 부족할 때 limit를 채우려고 무관한 장소를 끌어온다.
-     * 후보가 줄면 FallbackDecider가 COMPACT/FALLBACK으로 이어받는다.
      * 768차원 halfvec 기준이다. 같은 후보의 유사도가 1536차원보다 대분류별 중앙값 0.013~0.027 높다.
      */
     private static final Map<SearchRole, Double> SLOT_MIN_SIMILARITY = Map.of(
@@ -585,50 +539,6 @@ public final class PlaceCategoryConstants {
             }
         }
         return null;
-    }
-
-    /**
-     * 마법사 카테고리 id → 일정에 그 유형이 등장했는지 판정할 키워드. DB category는 영어이고 name/tags는
-     * 한국어인 경우가 많아 한/영을 함께 둔다. 대분류로 판정하는 유형은 여기 넣지 않는다.
-     */
-    private static final Map<String, Set<String>> USER_CATEGORY_MATCH_KEYWORDS = Map.ofEntries(
-            Map.entry("viewpoint", Set.of("전망", "뷰포인트", "展望", "viewpoint", "observation", "observatory", "lookout", "scenic")),
-            Map.entry("beach", Set.of("해변", "해수욕장", "해안", "beach", "coast")),
-            Map.entry("market", Set.of("시장", "장터", "market", "bazaar")),
-            Map.entry("trail", Set.of("둘레길", "산책로", "올레", "트레일", "trail", "hiking", "walkway", "promenade")),
-            Map.entry("experience", Set.of("체험", "액티비티", "레저", "experience", "activity", "adventure", "recreation")),
-            Map.entry("shopping", Set.of("쇼핑", "백화점", "몰", "면세", "shopping", "mall", "department store", "boutique", "store")),
-            Map.entry("nightlife", Set.of("나이트", "바", "펍", "포차", "클럽", "라운지", "nightlife", "bar", "pub", "club", "lounge")),
-            Map.entry("nature", Set.of("공원", "숲", "폭포", "정원", "수목원", "park", "forest", "waterfall", "garden", "nature", "mountain", "lake")),
-            Map.entry("museum", Set.of("박물관", "미술관", "전시", "기념관", "museum", "gallery", "exhibit")),
-            Map.entry("theme_park", Set.of("테마파크", "놀이공원", "워터파크", "theme park", "amusement", "water park")),
-            Map.entry("spa", Set.of("스파", "온천", "찜질", "사우나", "웰니스", "spa", "onsen", "hot spring", "sauna", "wellness")),
-            Map.entry("temple", Set.of("사찰", "사(寺)", "절", "성당", "교회", "향교", "서원", "temple", "shrine", "church", "cathedral", "monastery")),
-            Map.entry("street_food", Set.of("길거리", "노점", "포장마차", "먹거리", "분식", "street food", "food stall", "snack"))
-    );
-
-    public static boolean matchesUserCategory(String categoryId, String name, String category, List<String> tags) {
-        if (categoryId == null) return false;
-        String id = categoryId.trim().toLowerCase();
-        String major = majorCategory(category);
-
-        switch (id) {
-            case "restaurant" -> { return "DINING".equals(major); }
-            case "cafe" -> { return "CAFE".equals(major); }
-            case "accommodation" -> { return "LODGING".equals(major); }
-            case "attraction" -> { return "ATTRACTION".equals(major); }
-            default -> { /* 아래 키워드 매칭 */ }
-        }
-
-        Set<String> keywords = USER_CATEGORY_MATCH_KEYWORDS.get(id);
-        if (keywords == null) return false;
-
-        StringBuilder sb = new StringBuilder();
-        if (name != null) sb.append(name).append(' ');
-        if (category != null) sb.append(category).append(' ');
-        if (tags != null) tags.forEach(t -> sb.append(t).append(' '));
-        String combined = sb.toString().toLowerCase();
-        return keywords.stream().anyMatch(combined::contains);
     }
 
     // ── 총칭 카테고리 세부 유형 추론 ────────────────────────────────────────────

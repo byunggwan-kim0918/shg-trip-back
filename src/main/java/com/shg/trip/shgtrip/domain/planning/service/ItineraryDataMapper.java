@@ -32,8 +32,6 @@ import java.util.stream.Stream;
 public class ItineraryDataMapper {
 
     private final PlaceRepository placeRepository;
-    private final FallbackStepReorderer fallbackStepReorderer;
-    private final ItineraryAutoFixer autoFixer;
 
     /** 여행지 기준 오매칭 판정 거리(km). 제주↔서울(약 450km) 같은 도시 단위 오매칭을 걸러낸다. */
     private static final double DESTINATION_DISTANCE_THRESHOLD_KM = 150;
@@ -43,34 +41,20 @@ public class ItineraryDataMapper {
 
     /** 트랜잭션 경계는 호출자 {@code ItinerarySaveHelper.save()}가 쥔다. 조립과 저장을 분리해 둔다. */
     public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId) {
-        return toEntity(data, input, userId, false, null);
+        return toEntity(data, input, userId, null);
     }
 
     /**
-     * @param alreadyOptimized RouteOptimizer가 day/순서/시간/교통을 이미 확정했으면 true.
-     *                          autoFixer/optimize()를 다시 돌리면 식사 슬롯 등 확정된 구조가 깨진다.
-     */
-    public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId, boolean alreadyOptimized) {
-        return toEntity(data, input, userId, alreadyOptimized, null);
-    }
-
-    /**
-     * @param referenceCenters 여행지별 후보 좌표 median 중심점. 장소는 가장 가까운 중심점에서 잰다(도쿄+오사카 일정).
+     * @param referenceCenters 여행 도시 중심점. 장소는 가장 가까운 중심점에서 잰다(도쿄+오사카 일정).
      *                         null이나 빈 목록이면 일정에 든 장소들의 median을 자체 기준으로 쓴다.
      */
     public Itinerary toEntity(ItineraryData data, EnrichedInput input, Long userId,
-                              boolean alreadyOptimized, List<double[]> referenceCenters) {
+                              List<double[]> referenceCenters) {
         Map<String, PlaceData> uniquePlaces = collectUniquePlaces(data);
 
         Map<String, Place> placeCache = batchResolvePlaces(uniquePlaces, referenceCenters);
 
-        List<StepData> optimizedSteps;
-        if (alreadyOptimized) {
-            optimizedSteps = data.steps();
-        } else {
-            ItineraryData deduped = autoFixer.fix(data);
-            optimizedSteps = fallbackStepReorderer.optimize(deduped.steps(), placeCache);
-        }
+        List<StepData> steps = data.steps();
 
         Itinerary itinerary = Itinerary.builder()
                 .userId(userId)
@@ -84,12 +68,12 @@ public class ItineraryDataMapper {
                 .qualityNotices(data.qualityNotices())
                 .build();
 
-        if (optimizedSteps != null) {
-            int totalDays = totalDays(input, optimizedSteps);
+        if (steps != null) {
+            int totalDays = totalDays(input, steps);
             int dropped = 0;
             boolean precededByDrop = false;
             StepData pendingTransfer = null;
-            for (StepData stepData : optimizedSteps) {
+            for (StepData stepData : steps) {
                 if (lookupPlace(stepData.place(), placeCache) == null) {
                     dropped++;
                     precededByDrop = true;
@@ -186,7 +170,7 @@ public class ItineraryDataMapper {
             }
         }
 
-        // 호출자가 준 기준은 후보 수십 건의 median이고, 자체 median은 일정 장소 몇 개짜리라 약하다.
+        // 호출자가 준 도시 중심이 일정 장소 몇 개짜리 자체 median보다 믿을 만하다.
         boolean selfDerivedReference = referenceCenters == null || referenceCenters.isEmpty();
         List<double[]> centers = selfDerivedReference
                 ? Stream.ofNullable(medianOf(found.values())).toList() : referenceCenters;
@@ -224,8 +208,7 @@ public class ItineraryDataMapper {
     }
 
     /**
-     * Fallback 경로는 기준 좌표를 넘기지 않아서, 이게 없으면 오매칭 가드가 통째로 꺼진다.
-     * 표본이 {@value #MEDIAN_MIN_SAMPLE} 미만이면 null을 준다.
+     * 기준 좌표를 받지 못하면 이것으로 오매칭을 거른다. 표본이 {@value #MEDIAN_MIN_SAMPLE} 미만이면 null을 준다.
      */
     private double[] medianOf(java.util.Collection<Place> places) {
         List<Double> lats = new ArrayList<>();

@@ -42,13 +42,13 @@ public class ItinerarySaveHelper {
     /**
      * 관문이 HARD로 판정하면 {@link QualityGate.Rejected}를 던지고 저장하지 않는다.
      *
-     * @param referenceCenters 여행지별 후보 좌표 median 중심점. 후보 풀이 없는 fallback 경로는 null.
+     * @param referenceCenters 여행지별 중심점. null이면 일정에 든 장소들의 median을 쓴다.
      */
     @Transactional
-    public Saved save(ItineraryData data, EnrichedInput input, Long userId, boolean alreadyOptimized,
+    public Saved save(ItineraryData data, EnrichedInput input, Long userId,
                       List<double[]> referenceCenters, QualityGate.PlanContext planContext) {
         activeUserGuard.lockActive(userId);
-        Itinerary itinerary = itineraryDataMapper.toEntity(data, input, userId, alreadyOptimized, referenceCenters);
+        Itinerary itinerary = itineraryDataMapper.toEntity(data, input, userId, referenceCenters);
         // 매퍼는 DB에서 못 찾은 장소의 스텝을 버린다. 전부 버려지면 제목만 있는 빈 일정이 저장되고
         // 성공으로 집계돼 쿼터까지 깎이므로, 저장 전에 실패로 돌린다.
         if (itinerary.getSteps().isEmpty()) {

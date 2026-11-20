@@ -41,7 +41,7 @@ public final class GeoUtils {
         return lat.compareTo(BigDecimal.ZERO) == 0 && lng.compareTo(BigDecimal.ZERO) == 0;
     }
 
-    // RouteOptimizer(생성)와 ItineraryService(대안 선택 재계산)가 같은 leg 추정을 써야 표시가 어긋나지 않는다.
+    // 생성과 ItineraryService(대안 선택 재계산)가 같은 leg 추정을 써야 표시가 어긋나지 않는다.
     /** 직선거리 → 도로거리 환산 계수. 해안도로·중산간 우회를 반영한다. */
     public static final double ROAD_DISTANCE_FACTOR = 1.3;
 

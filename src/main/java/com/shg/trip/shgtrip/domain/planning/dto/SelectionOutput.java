@@ -27,17 +27,6 @@ public record SelectionOutput(
         this(concept, days, pairs, spareIndices, highlightIndices, restIndices, List.of());
     }
 
-    /**
-     * days만 바꾼 사본. 필드를 나열해 다시 만들면 새 필드가 추가될 때 그 경로에서 조용히 유실된다.
-     */
-    public SelectionOutput withDays(List<DayPlan> newDays) {
-        return new SelectionOutput(concept, newDays, pairs, spareIndices, highlightIndices, restIndices, timing);
-    }
-
-    public SelectionOutput withDaysAndSpare(List<DayPlan> newDays, List<Integer> newSpare) {
-        return new SelectionOutput(concept, newDays, pairs, newSpare, highlightIndices, restIndices, timing);
-    }
-
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record DayPlan(
         int dayNumber,

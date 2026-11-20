@@ -3,9 +3,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
-import lombok.extern.slf4j.Slf4j;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,14 +12,9 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTimes.byIndex;
-import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTimes.formatMinutes;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTimes.toMinutesOrZero;
-import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.DEFAULT_EVENING_CAP_MINUTES;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.DINNER_END;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.DINNER_START;
-import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.EARLY_FINISH_MINUTES;
-import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LARGE_GAP_MINUTES;
-import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LUNCH_END;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.LUNCH_START;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.distanceLimits;
 
@@ -32,7 +25,6 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.distan
  * <p>검사 항목은 기계적 축(슬롯 충족·거리·종료 시각)에 한정된다.
  * 빈 시간·메뉴 반복·하루 관광지 수 같은 여행자 체감 축은 보지 않는다.
  */
-@Slf4j
 final class InvariantChecker {
 
     /**
@@ -108,99 +100,7 @@ final class InvariantChecker {
     }
 
     /**
-     * 이전에 충족하던 상위 불변식(식사 슬롯 → 하루 거리 예산)이 깨졌으면 그 사유를, 아니면 null을 반환한다.
-     * 하위 불변식(커버리지·유형 상한) 악화는 보지 않는다.
-     */
-    String findPriorityRegression(Map<Integer, DayStatus> before, Map<Integer, DayStatus> after) {
-        for (Map.Entry<Integer, DayStatus> entry : after.entrySet()) {
-            DayStatus prev = before.get(entry.getKey());
-            if (prev == null) continue;
-            DayStatus now = entry.getValue();
-            if (prev.lunch() && !now.lunch()) return "day" + entry.getKey() + " 점심 소실";
-            if (prev.dinner() && !now.dinner() && now.dinnerRequired()) return "day" + entry.getKey() + " 저녁 소실";
-            if (prev.lodging() && !now.lodging() && now.lodgingRequired()) return "day" + entry.getKey() + " 숙소 소실";
-            if (prev.withinBudget() && !now.withinBudget()) {
-                return "day" + entry.getKey() + " 거리 예산 초과(" + String.format("%.0f", now.totalKm()) + "km)";
-            }
-            if (prev.attraction() && !now.attraction()) return "day" + entry.getKey() + " 관광 소실";
-        }
-        return null;
-    }
-
-    /**
-     * 흩어진 보정 로그만으로는 최종 일정을 읽을 수 없어 루프 종료 후 day별 한 줄 요약을 남긴다.
-     *
-     * @return 남은 위반("day{n} 라벨"). 비어 있으면 모든 구조적 불변식을 만족한 일정이다. 사용자 안내는 {@link ItineraryRules}로 만든다
-     */
-    List<String> summarize(List<DayState> days, List<StepData> steps, String pace,
-                           String transportPref, List<PlaceCandidate> candidates, ScheduleConfig cfg) {
-        Map<Integer, DayStatus> status = evaluate(days, steps, transportPref, candidates, pace);
-        double[] limits = distanceLimits(transportPref, pace);
-        int eveningCap = cfg != null ? cfg.eveningCap : DEFAULT_EVENING_CAP_MINUTES;
-        int violationDays = 0;
-        List<String> unresolved = new ArrayList<>();
-
-        for (Map.Entry<Integer, DayStatus> entry : status.entrySet()) {
-            DayStatus st = entry.getValue();
-            List<String> violations = new ArrayList<>();
-            int dayNumber = entry.getKey();
-            if (!st.lunch()) {
-                violations.add("점심 없음");
-            }
-            if (st.dinnerRequired() && !st.dinner()) {
-                violations.add("저녁 없음");
-            }
-            if (st.lodgingRequired() && !st.lodging()) {
-                violations.add("숙소 없음");
-            }
-            if (!"relaxed".equals(pace) && !st.attraction()) {
-                violations.add("관광 없음");
-            }
-            if (!st.withinBudget()) {
-                violations.add("거리 초과");
-            }
-            if (st.endMinutes() > 0 && st.endMinutes() < EARLY_FINISH_MINUTES && !st.endsEarlyByDeparture()) {
-                violations.add("조기 종료(" + formatMinutes(st.endMinutes()) + ")");
-            }
-            if (st.missedDeparture()) {
-                violations.add("출발 시각 초과");
-            }
-            if (st.endMinutes() > eveningCap && !st.lateByArrival()) {
-                violations.add("늦은 종료(" + formatMinutes(st.endMinutes()) + ")");
-            }
-            // 고정된 식사 슬롯 사이에 먼 곳을 억지로 끼우면 "앉아서 3시간"이 "2.5시간 운전"이 된다.
-            // 그래서 메우지 못한 긴 공백은 고치지 않고 위반으로만 남긴다.
-            int gap = maxIntraDayGap(steps, dayNumber);
-            if (gap >= LARGE_GAP_MINUTES) {
-                violations.add("긴 공백(" + gap + "분)");
-            }
-            if (!violations.isEmpty()) violationDays++;
-            violations.forEach(v -> unresolved.add("day" + dayNumber + " " + v));
-
-            log.info("불변식 요약 day={}: 점심={} 저녁={}{} 숙소={}{} 관광={} 거리={}km(표시 {}km, 상한 {}km) 최대구간={}km 종료={} | {}",
-                    entry.getKey(),
-                    st.lunch() ? "O" : "X",
-                    st.dinner() ? "O" : "X",
-                    st.dinnerRequired() ? "" : "(불필요)",
-                    st.lodging() ? "O" : "X",
-                    st.lodgingRequired() ? "" : "(불필요)",
-                    st.attraction() ? "O" : "X",
-                    String.format("%.0f", st.totalKm()),
-                    String.format("%.0f", st.totalKm() * GeoUtils.ROAD_DISTANCE_FACTOR),
-                    String.format("%.0f", limits[1]),
-                    String.format("%.0f", st.maxLegKm()),
-                    formatMinutes(st.endMinutes()),
-                    violations.isEmpty() ? "위반 없음" : String.join(", ", violations));
-        }
-        if (violationDays > 0) {
-            log.warn("불변식 미해소 day {}개 / 전체 {}개", violationDays, status.size());
-        }
-        return unresolved;
-    }
-
-    /**
      * 식사 시간창(시작 60분 전까지 허용) 안에 식사 가능한 장소가 있는지.
-     * 끼니 수리({@link MealPlanner})와 정의가 다르면 수리 뒤에도 검사가 위반을 계속 잡아 무한 루프가 된다.
      */
     static boolean hasMealInWindow(List<StepData> daySteps, int windowStart, int windowEnd) {
         return hasMealInWindow(daySteps, windowStart, windowEnd, InvariantChecker::isMealByName);
@@ -235,23 +135,6 @@ final class InvariantChecker {
 
     private static boolean isMealByName(StepData s) {
         return PlaceCategoryConstants.isMealPlace(s.place().name(), s.place().category());
-    }
-
-    /**
-     * 그 day에서 연속한 두 스텝 사이의 최대 공백(분). 스텝이 1개 이하면 0.
-     */
-    static int maxIntraDayGap(List<StepData> steps, int dayNumber) {
-        List<StepData> daySteps = steps.stream()
-                .filter(s -> s.dayNumber() == dayNumber)
-                .sorted(java.util.Comparator.comparingInt(s -> toMinutesOrZero(s.startTime())))
-                .toList();
-        int max = 0;
-        for (int i = 1; i < daySteps.size(); i++) {
-            int gap = toMinutesOrZero(daySteps.get(i).startTime())
-                    - toMinutesOrZero(daySteps.get(i - 1).endTime());
-            if (gap > max) max = gap;
-        }
-        return max;
     }
 
     /** 사용자가 준 출발 시각에 맞춰 허브에 닿지 못하는 날. */

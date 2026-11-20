@@ -1,7 +1,7 @@
 """관광 장소의 여행자용 사실을 Haiku로 채워 place_facts에 넣는다.
 
-사용: set -a; . ./.env; set +a; python scripts/eval/place-facts.py --db trip_prodcopy [--limit N] [--threads 8]
-이미 채운 장소는 건너뛰므로 끊겨도 다시 실행하면 이어서 한다.
+사용: set -a; . ./.env; set +a; python scripts/eval/place-facts.py --db trip_prodcopy [--scope overseas] [--limit N] [--threads 8]
+이미 채운 장소는 건너뛰므로 끊겨도 다시 실행하면 이어서 한다. --count는 모델을 부르지 않고 대상 수와 예상 비용만 낸다.
 """
 import argparse
 import json
@@ -9,14 +9,23 @@ import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import anthropic
 import psycopg
 
 REGIONS = ['Seoul', 'Busan', 'Jeju', 'Gyeongju', 'Gangneung', 'Jeonju', 'Yeosu', 'Daegu', 'Daejeon', 'Gwangju',
            'Suwon', 'Incheon']
+OVERSEAS_REGIONS = [d["name"] for d in json.loads(
+    (Path(__file__).resolve().parents[2] / "src/main/resources/destinations.json").read_text(encoding="utf-8"))]
 MODEL = 'claude-haiku-5-5'
 BATCH = 15
+# 견적용 장소당 비용. 국내 2.7만 곳을 채운 비용 기준이다.
+COST_PER_PLACE = 0.92 / 27_137
+
+OVERSEAS_INTRO = """너는 한국인 여행자를 위한 해외 여행 작가다. 장소는 일본·중국·대만·베트남에 있다. 대표 명소의 예는 기요미즈데라, 센소지, 타이베이 101, 호이안 구시가지다.
+상위 장소를 쓸 때는 대표 장소의 한국어 이름(현지 발음 한글 표기)을 쓴다.
+"""
 
 SYSTEM = """너는 한국 국내 여행을 잘 아는 여행 작가다. 장소 목록을 받아 장소마다 여행자에게 필요한 사실을 report_facts로 낸다.
 모르는 것은 추측하지 말고 기본값을 쓴다. 장소마다 따로 판단한다.
@@ -57,7 +66,7 @@ lock = threading.Lock()
 usage = {"in": 0, "out": 0, "done": 0, "failed": 0}
 
 
-def targets(conn, limit):
+def targets(conn, limit, regions):
     sql = """
         select p.id, coalesce(p.name_ko, p.name), p.category, p.region, p.address
         from places p
@@ -68,14 +77,14 @@ def targets(conn, limit):
         order by coalesce(p.wikidata_sitelinks, 0) desc, p.id
     """ + (" limit %s" % int(limit) if limit else "")
     with conn.cursor() as cur:
-        cur.execute(sql, (REGIONS,))
+        cur.execute(sql, (regions,))
         return cur.fetchall()
 
 
-def ask(client, rows):
+def ask(client, rows, system):
     lines = "\n".join(f"{r[0]} | {r[1]} | {r[2]} | {r[3]} | {r[4]}" for r in rows)
     msg = client.messages.create(
-        model=MODEL, max_tokens=4000, system=SYSTEM, tools=[TOOL],
+        model=MODEL, max_tokens=4000, system=system, tools=[TOOL],
         tool_choice={"type": "tool", "name": "report_facts"},
         thinking={"type": "disabled"},
         messages=[{"role": "user", "content": "id | 이름 | 분류 | 도시 | 주소\n" + lines}])
@@ -86,10 +95,10 @@ def ask(client, rows):
     return block.input.get("places", [])
 
 
-def work(client, dsn, rows):
+def work(client, dsn, rows, system):
     ids = {r[0] for r in rows}
     try:
-        facts = [f for f in ask(client, rows) if f.get("id") in ids]
+        facts = [f for f in ask(client, rows, system) if f.get("id") in ids]
     except Exception as e:  # 한 묶음 실패는 다음 실행에서 다시 묻는다
         with lock:
             usage["failed"] += len(rows)
@@ -112,18 +121,26 @@ def main():
     ap.add_argument("--db", required=True)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--threads", type=int, default=8)
+    ap.add_argument("--scope", choices=["domestic", "overseas"], default="domestic")
+    ap.add_argument("--count", action="store_true")
     args = ap.parse_args()
+    overseas = args.scope == "overseas"
+    regions = OVERSEAS_REGIONS if overseas else REGIONS
+    # 국내 프롬프트의 판정 기준은 그대로 두고 첫 문단만 바꾼다. 기준이 달라지면 국내와 해외 사실을 같은 값으로 읽지 못한다.
+    system = OVERSEAS_INTRO + SYSTEM.split("\n", 1)[1] if overseas else SYSTEM
     if args.db == "trip":
         sys.exit("trip DB에는 쓰지 않는다. 복사본을 지정한다.")
     dsn = f"host=localhost port=5432 dbname={args.db} user=weShg password={os.environ['DB_PASSWORD']}"
     with psycopg.connect(dsn, autocommit=True) as conn:
-        rows = targets(conn, args.limit)
-    print(f"대상 {len(rows)}건", flush=True)
+        rows = targets(conn, args.limit, regions)
+    print(f"대상 {len(rows)}건, 예상 약 ${len(rows) * COST_PER_PLACE:.2f}", flush=True)
+    if args.count:
+        return
     client = anthropic.Anthropic(max_retries=4)
     batches = [rows[i:i + BATCH] for i in range(0, len(rows), BATCH)]
     with ThreadPoolExecutor(args.threads) as pool:
         for b in batches:
-            pool.submit(work, client, dsn, b)
+            pool.submit(work, client, dsn, b, system)
     cost = usage["in"] * 0.10 / 1e6 + usage["out"] * 0.50 / 1e6
     print(f"완료 {usage['done']}건, 실패 {usage['failed']}건, 입력 {usage['in']} / 출력 {usage['out']} 토큰, "
           f"약 ${cost:.2f}")

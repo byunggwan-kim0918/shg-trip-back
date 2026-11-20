@@ -6,7 +6,6 @@ import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 import com.shg.trip.shgtrip.domain.planning.service.ai.DraftCallGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -20,7 +19,6 @@ import java.util.Set;
  */
 @Slf4j
 @Component
-@Profile("eval")
 @RequiredArgsConstructor
 public class TripPlanner {
 
@@ -65,7 +63,7 @@ public class TripPlanner {
      * 모델이 적은 장소 이름이 일정에 없을 수 있다.
      */
     public Planned finish(DraftItineraryPlanner.Request base, String prompt, DraftCallGenerator.Drafted drafted) {
-        TripSkeletonPlanner.Skeleton skeleton = skeletonPlanner.build(base.with(drafted.plan(), Map.of(), Set.of()));
+        TripSkeletonPlanner.Skeleton skeleton = skeletonPlanner.build(base.withDraft(drafted.plan()));
         DraftItineraryPlanner.Result first = planner.plan(skeleton.request());
         Built built = assemble(skeleton, first);
         List<String> problems = editProblems(built);
@@ -90,7 +88,7 @@ public class TripPlanner {
 
     /** 모델을 부르지 않고 기록된 초안과 편집으로 일정을 다시 짓고 검사한다. */
     public Built build(DraftItineraryPlanner.Request base, DraftPlan draft, List<DraftEdit> edits) {
-        TripSkeletonPlanner.Skeleton skeleton = skeletonPlanner.build(base.with(draft, Map.of(), Set.of()));
+        TripSkeletonPlanner.Skeleton skeleton = skeletonPlanner.build(base.withDraft(draft));
         DraftItineraryPlanner.Result result = planner.plan(skeleton.request());
         if (edits != null && !edits.isEmpty()) result = planner.applyEdits(skeleton.request(), result, edits);
         return assemble(skeleton, result);
@@ -100,7 +98,7 @@ public class TripPlanner {
         DraftItineraryPlanner.Request request = skeleton.request();
         List<ItineraryVerifier.Violation> violations = verifier.verify(skeleton.conditions(),
                 request.input().startDate(), result.frames().size(), result.steps(), result.candidates(),
-                request.cityNames());
+                request.cities());
         return new Built(skeleton, result, violations, DraftItineraryPlanner.travelerNotes(result),
                 tripNotes(skeleton, result, violations));
     }
@@ -126,7 +124,8 @@ public class TripPlanner {
         List<String> out = new ArrayList<>(skeleton.conflicts());
         for (ItineraryVerifier.Violation v : violations) {
             if ("DAILY_TRANSIT".equals(v.code())) {
-                out.add(v.day() + "일차는 이동 시간이 깁니다(" + v.message().replaceAll("^.* (\\d+)분$", "$1") + "분). 들르는 곳들이 서로 멀어 줄이지 못했습니다.");
+                out.add(v.day() + "일차는 이동 시간이 길어요(" + v.message().replaceAll("^.* (\\d+)분$", "$1")
+                        + "분). 들르는 곳들이 서로 멀어 줄이지 못했어요.");
                 continue;
             }
             if (!"WANT_MISSING".equals(v.code())) continue;
@@ -135,8 +134,8 @@ public class TripPlanner {
             if (want == null) continue;
             String noFood = want.food() == null ? null : "요청 음식 '" + want.food() + "'";
             String why = noFood != null && result.notes().stream().anyMatch(n -> n.contains(noFood))
-                    ? " 여행지에서 그 음식을 낸다고 메뉴로 확인되는 식당을 찾지 못했습니다." : "";
-            out.add("요청하신 '" + want.text() + "'은(는) 일정에 넣지 못했습니다." + why);
+                    ? " 여행지에서 그 음식을 낸다고 메뉴로 확인되는 식당을 찾지 못했어요." : "";
+            out.add("요청하신 '" + want.text() + "'은(는) 일정에 넣지 못했어요." + why);
         }
         return out;
     }

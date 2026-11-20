@@ -14,14 +14,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * {@link InvariantChecker} 단위 테스트.
- *
- * <p>이 검사 로직은 {@code RouteOptimizer} 안에 있을 때는 단독 테스트가 불가능했다 —
- * 판정을 확인하려면 4천 줄짜리 {@code schedule()}을 통째로 돌려서 나온 일정을 역산해야 했고,
- * 그래서 "숙소가 검사 항목에 없다"는 사실이 오랫동안 드러나지 않았다.
- * 여기서는 원하는 하루를 직접 만들어 판정만 확인한다.
- */
+/** {@link InvariantChecker} 판정을 원하는 하루를 직접 만들어 확인한다. */
 class InvariantCheckerTest {
 
     private final InvariantChecker checker = new InvariantChecker();
@@ -143,88 +136,6 @@ class InvariantCheckerTest {
                     .isCloseTo(13.0 / 1.3, org.assertj.core.data.Offset.offset(0.1));
             assertThat(checker.evaluate(days, domestic, "car", List.of(), "normal").get(1).totalKm())
                     .isCloseTo(117.0 / 1.3, org.assertj.core.data.Offset.offset(0.1));
-        }
-    }
-
-    @Nested
-    @DisplayName("findPriorityRegression - 상위 불변식 역전 탐지")
-    class PriorityRegression {
-
-        @Test
-        @DisplayName("점심이 있던 day에서 점심이 사라지면 역전으로 본다")
-        void detectsLunchLoss() {
-            Map<Integer, DayStatus> before = Map.of(1, status(true, true, true));
-            Map<Integer, DayStatus> after = Map.of(1, status(false, true, true));
-
-            assertThat(checker.findPriorityRegression(before, after)).isEqualTo("day1 점심 소실");
-        }
-
-        @Test
-        @DisplayName("숙소가 사라지면 역전으로 본다")
-        void detectsLodgingLoss() {
-            Map<Integer, DayStatus> before = Map.of(1, status(true, true, true));
-            Map<Integer, DayStatus> after = Map.of(1, status(true, true, false));
-
-            assertThat(checker.findPriorityRegression(before, after)).isEqualTo("day1 숙소 소실");
-        }
-
-        @Test
-        @DisplayName("악화가 없으면 null")
-        void noRegression() {
-            Map<Integer, DayStatus> same = Map.of(1, status(true, true, true));
-
-            assertThat(checker.findPriorityRegression(same, same)).isNull();
-        }
-    }
-
-    @Nested
-    @DisplayName("summarize - 남은 위반")
-    class Summarize {
-
-        @Test
-        @DisplayName("모든 불변식을 만족하면 남은 위반이 없다")
-        void noViolationsWhenClean() {
-            List<DayState> days = List.of(day(1, 5));
-            List<StepData> steps = List.of(
-                    step(1, "12:00", "13:10", "점심식당", RESTAURANT),
-                    step(1, "14:00", "15:30", "관광지", ATTRACTION),
-                    step(1, "18:00", "19:10", "저녁식당", RESTAURANT),
-                    step(1, "19:30", "20:00", "호텔", "Travel and Transportation > Lodging > Hotel"));
-
-            List<String> unresolved = checker.summarize(days, steps, "normal", "car", List.of(), null);
-
-            assertThat(unresolved).isEmpty();
-        }
-
-        @Test
-        @DisplayName("숙소 미배정은 귀가일을 빼고 남은 위반으로 잡힌다")
-        void reportsMissingLodging() {
-            List<DayState> days = List.of(day(1, null), day(2, null));
-            List<StepData> steps = List.of(
-                    step(1, "12:00", "13:10", "점심식당", RESTAURANT),
-                    step(1, "14:00", "15:30", "관광지", ATTRACTION),
-                    step(1, "18:00", "19:10", "저녁식당", RESTAURANT),
-                    step(2, "12:00", "13:10", "점심식당", RESTAURANT),
-                    step(2, "14:00", "15:30", "관광지", ATTRACTION),
-                    step(2, "18:00", "19:10", "저녁식당", RESTAURANT));
-
-            List<String> unresolved = checker.summarize(days, steps, "normal", "car", List.of(), null);
-
-            assertThat(unresolved).contains("day1 숙소 없음").doesNotContain("day2 숙소 없음");
-        }
-
-        @Test
-        @DisplayName("relaxed 페이스는 관광지가 없어도 위반으로 보지 않는다")
-        void relaxedPaceSkipsAttraction() {
-            List<DayState> days = List.of(day(1, 5));
-            List<StepData> steps = List.of(
-                    step(1, "12:00", "13:10", "점심식당", RESTAURANT),
-                    step(1, "18:00", "19:10", "저녁식당", RESTAURANT));
-
-            assertThat(checker.summarize(days, steps, "relaxed", "car", List.of(), null))
-                    .doesNotContain("day1 관광 없음");
-            assertThat(checker.summarize(days, steps, "normal", "car", List.of(), null))
-                    .contains("day1 관광 없음");
         }
     }
 

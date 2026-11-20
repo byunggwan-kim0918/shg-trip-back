@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * estimateLeg — 일정 생성(RouteOptimizer)과 대안 선택 재계산(ItineraryService)이 공유하는
+ * estimateLeg — 일정 생성과 대안 선택 재계산(ItineraryService)이 공유하는
  * 이동 추정 공식. 두 경로의 표시가 어긋나지 않도록 단일 소스로 고정한다.
  */
 class GeoUtilsTest {

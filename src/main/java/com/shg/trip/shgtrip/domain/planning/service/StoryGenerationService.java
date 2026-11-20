@@ -16,7 +16,7 @@ import java.util.Map;
 
 /**
  * 구조 일정 저장(complete) 뒤 critical path 밖에서 Haiku story를 채운다.
- * OptimizedGenerationExecutor 안에 두면 @Async self-invocation이 프록시를 우회해 동기로 돈다.
+ * TripGenerationExecutor 안에 두면 @Async self-invocation이 프록시를 우회해 동기로 돈다.
  */
 @Slf4j
 @Component

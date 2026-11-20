@@ -14,7 +14,6 @@ import com.shg.trip.shgtrip.global.config.AnthropicProperties;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.annotation.Profile;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
@@ -26,12 +25,11 @@ import java.util.Map;
 /** Sonnet이 장소 이름으로 일정 초안을 쓴다. 시각·이동·숙소 선택은 코드가 한다. */
 @Slf4j
 @Service
-@Profile("eval")
 public class DraftCallGenerator {
 
     private static final String TOOL_NAME = "submit_draft";
     /** 하루 초안 출력 토큰. 항목 7개 안팎과 예비 4개, 이유 문장에 여유를 둔다. 빠듯하면 긴 여행의 뒷날이 잘린다. */
-    private static final int TOKENS_PER_DAY = 900;
+    private static final int TOKENS_PER_DAY = 1200;
     private static final int BASE_TOKENS = 500;
 
     private final AnthropicClient anthropicClient;
@@ -150,7 +148,7 @@ public class DraftCallGenerator {
                 anthropicProperties.maxOutputTokens());
         for (int attempt = 1; attempt <= 2; attempt++) {
             Message message = call(userMessage, maxTokens);
-            DraftPlan plan = parse(message);
+            DraftPlan plan = withinDays(withoutMalformedItems(parse(message)), days);
             if (wellFormed(plan, days)) {
                 long cacheRead = message.usage().cacheReadInputTokens().orElse(0L);
                 log.info("초안 완료: days={}, inputTokens={}, outputTokens={}, 캐시읽음={}", days,
@@ -172,15 +170,14 @@ public class DraftCallGenerator {
     private static final java.util.Set<String> WANT_KINDS = java.util.Set.of("place", "food", "activity", "city");
 
     /**
-     * 날짜 번호가 어긋나거나 요구에 id·말이 없으면 그날 항목이나 요구가 일정에서 조용히 빠진다. 자동 도구 호출은 스키마의
-     * 필수 칸을 강제하지 않아 항목의 시간대·종류도 비어 올 수 있다.
+     * 날짜 번호가 어긋나거나 요구에 id·말이 없으면 그날이나 요구가 일정에서 조용히 빠진다. 문장으로만 말한 요구는 다른
+     * 곳에서 되살릴 수 없어 다시 부른다.
      */
     static boolean wellFormed(DraftPlan plan, int days) {
         if (plan == null || plan.days() == null || plan.days().size() != days) return false;
         java.util.Set<Integer> seen = new java.util.HashSet<>();
         for (DraftPlan.Day d : plan.days()) {
             if (d == null || d.day() < 1 || d.day() > days || !seen.add(d.day())) return false;
-            if (!itemsWellFormed(d.items()) || !itemsWellFormed(d.spares())) return false;
         }
         for (DraftPlan.Want w : plan.wants() == null ? List.<DraftPlan.Want>of() : plan.wants()) {
             if (w == null || blank(w.id()) || blank(w.text()) || !oneOf(WANT_KINDS, w.kind())) return false;
@@ -188,11 +185,44 @@ public class DraftCallGenerator {
         return true;
     }
 
-    private static boolean itemsWellFormed(List<DraftPlan.Item> items) {
-        for (DraftPlan.Item i : items == null ? List.<DraftPlan.Item>of() : items) {
-            if (i == null || blank(i.name()) || !oneOf(SLOTS, i.slot()) || !oneOf(ITEM_KINDS, i.kind())) return false;
+    /**
+     * 자동 도구 호출은 스키마의 필수 칸을 강제하지 않아 항목의 시간대·종류가 비어 올 수 있다. 그런 항목은 놓을 칸이 없어
+     * 빼고 초안은 쓴다. 요구에 딸린 항목이 빠지면 뼈대 단계가 그 요구를 다시 넣는다.
+     */
+    static DraftPlan withoutMalformedItems(DraftPlan plan) {
+        if (plan == null || plan.days() == null) return plan;
+        int dropped = 0;
+        List<DraftPlan.Day> days = new java.util.ArrayList<>();
+        for (DraftPlan.Day d : plan.days()) {
+            if (d == null) {
+                days.add(null);
+                continue;
+            }
+            List<DraftPlan.Item> items = wellFormedItems(d.items());
+            List<DraftPlan.Item> spares = wellFormedItems(d.spares());
+            dropped += size(d.items()) - items.size() + size(d.spares()) - spares.size();
+            days.add(new DraftPlan.Day(d.day(), d.area(), d.lodgingArea(), items, spares));
         }
-        return true;
+        if (dropped > 0) log.warn("초안 항목 {}개를 형식 불일치로 뺌", dropped);
+        return new DraftPlan(plan.concept(), plan.wants(), days);
+    }
+
+    /** 여행 날 수보다 많은 날을 쓴 초안은 남는 날만 버린다. 그 날에만 있던 요구는 뼈대 단계가 다시 넣는다. */
+    static DraftPlan withinDays(DraftPlan plan, int days) {
+        if (plan == null || plan.days() == null || plan.days().size() <= days) return plan;
+        List<DraftPlan.Day> kept = plan.days().stream().filter(d -> d == null || d.day() <= days).toList();
+        log.warn("초안이 {}일을 넘겨 {}일치를 냄, 남는 날을 뺌", days, plan.days().size());
+        return new DraftPlan(plan.concept(), plan.wants(), kept);
+    }
+
+    private static List<DraftPlan.Item> wellFormedItems(List<DraftPlan.Item> items) {
+        return (items == null ? List.<DraftPlan.Item>of() : items).stream()
+                .filter(i -> i != null && !blank(i.name()) && oneOf(SLOTS, i.slot()) && oneOf(ITEM_KINDS, i.kind()))
+                .toList();
+    }
+
+    private static int size(List<?> list) {
+        return list == null ? 0 : list.size();
     }
 
     /** 불변 Set은 null을 물으면 예외를 던진다. */

@@ -26,13 +26,20 @@ final class FerryAreaFilter {
 
     private FerryAreaFilter() {}
 
+    /** @param pool 비율 가드를 잴 후보 풀(검색 결과 전체) */
+    static List<String> activeTokens(List<String> ferryOnlyAreas, String description,
+                                     List<String> customPlaceNames, List<PlaceCandidate> pool) {
+        return activeTokens(ferryOnlyAreas, description, customPlaceNames, token -> pool.isEmpty() ? 0
+                : (double) pool.stream().filter(c -> containsToken(c.address(), token)).count() / pool.size());
+    }
+
     /**
      * 사용자가 요청 문장·직접 입력 장소에서 언급한 섬은 가고 싶다는 뜻이라 토큰에서 뺀다.
      *
-     * @param pool 비율 가드를 잴 후보 풀(검색 결과 전체)
+     * @param shareOf 토큰이 걸리는 장소의 비율. 섬 토큰이 아닌 지역 이름이면 여행지 장소 상당수가 빠진다
      */
     static List<String> activeTokens(List<String> ferryOnlyAreas, String description,
-                                     List<String> customPlaceNames, List<PlaceCandidate> pool) {
+                                     List<String> customPlaceNames, java.util.function.ToDoubleFunction<String> shareOf) {
         if (ferryOnlyAreas == null || ferryOnlyAreas.isEmpty()) return List.of();
         List<String> active = new ArrayList<>();
         for (String raw : ferryOnlyAreas) {
@@ -43,10 +50,9 @@ final class FerryAreaFilter {
                 log.info("도선 섬 제외 해제: '{}' — 사용자가 요청에서 언급", token);
                 continue;
             }
-            long hits = pool.stream().filter(c -> containsToken(c.address(), token)).count();
-            if (!pool.isEmpty() && (double) hits / pool.size() >= MAX_POOL_SHARE) {
-                log.warn("도선 섬 토큰 무시: '{}'가 후보 {}개 중 {}개에 걸림 — 부속섬 토큰이 아닐 가능성",
-                        token, pool.size(), hits);
+            double share = shareOf.applyAsDouble(token);
+            if (share >= MAX_POOL_SHARE) {
+                log.warn("도선 섬 토큰 무시: '{}'가 장소 {}%에 걸림, 부속섬 토큰이 아닐 가능성", token, Math.round(share * 100));
                 continue;
             }
             active.add(token);
@@ -59,8 +65,7 @@ final class FerryAreaFilter {
         if (tokens.isEmpty()) return candidates;
         List<PlaceCandidate> kept = new ArrayList<>(candidates.size());
         for (PlaceCandidate c : candidates) {
-            String hit = c.userSelected() ? null
-                    : tokens.stream().filter(t -> containsToken(c.address(), t)).findFirst().orElse(null);
+            String hit = hit(c, tokens);
             if (hit == null) {
                 kept.add(c);
             } else {
@@ -70,8 +75,21 @@ final class FerryAreaFilter {
         return kept;
     }
 
+    /** @return 걸린 토큰, 없거나 사용자가 고른 장소면 null */
+    static String hit(PlaceCandidate c, List<String> tokens) {
+        if (c.userSelected()) return null;
+        return tokens.stream().filter(t -> containsToken(c.address(), t)).findFirst().orElse(null);
+    }
+
+    /** 섬 이름 뒤에 로·길이 붙으면 육지의 도로명이다("오동도로"는 여수 시내 도로). */
     private static boolean containsToken(String address, String token) {
-        return address != null && address.contains(token);
+        if (address == null) return false;
+        for (int i = address.indexOf(token); i >= 0; i = address.indexOf(token, i + 1)) {
+            int next = i + token.length();
+            char after = next < address.length() ? address.charAt(next) : ' ';
+            if (after != '로' && after != '길') return true;
+        }
+        return false;
     }
 
     /**

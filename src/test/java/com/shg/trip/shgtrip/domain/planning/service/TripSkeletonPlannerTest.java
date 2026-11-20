@@ -1,10 +1,13 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.planning.dto.DraftPlan;
+import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -33,6 +36,47 @@ class TripSkeletonPlannerTest {
                 });
         assertThat(all).filteredOn(i -> "w2".equals(i.want())).hasSize(1);
         assertThat(notes).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("초안이 빠뜨린 꼭 할 경험은 사용자가 정한 시각의 요구로 넣는다")
+    void userWantMissingFromDraftIsAdded() {
+        DraftPlan draft = new DraftPlan("부산", List.of(), List.of(new DraftPlan.Day(1, "해운대", null, List.of(), List.of())));
+        Map<String, PlaceCandidate> pinned = new HashMap<>();
+        List<String> notes = new ArrayList<>();
+
+        DraftPlan out = TripSkeletonPlanner.withUserWants(draft,
+                List.of(new DraftItineraryPlanner.UserWant("광안리 야경", "광안리", "evening", null)), pinned, notes);
+
+        assertThat(out.wants()).singleElement().satisfies(w -> {
+            assertThat(w.id()).isEqualTo("user1");
+            assertThat(w.kind()).isEqualTo("activity");
+            assertThat(w.time()).isEqualTo("evening");
+            assertThat(w.satisfy()).containsExactly("광안리");
+        });
+        assertThat(pinned).isEmpty();
+        assertThat(notes).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("초안이 같은 요구를 적었으면 새로 넣지 않고 고른 장소와 사용자가 정한 시각을 붙인다")
+    void userWantMatchingDraftIsPinned() {
+        DraftPlan.Want w = new DraftPlan.Want("w1", "place", "해동용궁사 가보기", "해동용궁사", null, null, List.of());
+        DraftPlan draft = new DraftPlan("부산", List.of(w), List.of());
+        PlaceCandidate temple = new PlaceCandidate(0, 5L, "해동용궁사", "부산", "Spiritual Center", List.of(), "Busan",
+                "KR", new BigDecimal("35.18"), new BigDecimal("129.22"), null, null, 1.0, null, null, null, null, false,
+                null, null, null, null, "SIGHT", null, false, null);
+        Map<String, PlaceCandidate> pinned = new HashMap<>();
+
+        DraftPlan out = TripSkeletonPlanner.withUserWants(draft,
+                List.of(new DraftItineraryPlanner.UserWant("해동용궁사", "해동용궁사", "sunrise", temple)), pinned,
+                new ArrayList<>());
+
+        assertThat(out.wants()).singleElement().satisfies(x -> {
+            assertThat(x.id()).isEqualTo("w1");
+            assertThat(x.time()).isEqualTo("sunrise");
+        });
+        assertThat(pinned).containsEntry("w1", temple);
     }
 
     @Test

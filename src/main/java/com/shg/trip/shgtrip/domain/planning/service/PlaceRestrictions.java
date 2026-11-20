@@ -54,7 +54,18 @@ final class PlaceRestrictions {
             "海鮮", "海鲜", "seafood");
     /** 공용 분류가 국물·면·일식으로 세는 돼지·닭 요리. 공용 고기 낱말에 넣으면 세부 유형이 바뀐다. */
     private static final List<String> PORK_DISH_WORDS = List.of("돈까스", "돈카츠", "トンカツ", "豚", "とんこつ",
-            "감자탕", "뼈해장국", "순대", "제육");
+            "감자탕", "뼈해장국", "순대", "제육", "고기국수", "차슈");
+    /** 이름의 요리가 소고기로 만드는 것. 보강 주재료 태그가 틀려도 요리 이름이 재료를 정한다. */
+    private static final List<String> BEEF_DISH_WORDS = List.of("곰탕", "설렁탕", "찜갈비", "육개장", "소머리", "선지",
+            "양평해장국", "도가니", "꼬리곰탕", "육회", "차돌", "우설", "규동", "규카츠", "牛");
+    /** 돼지·소 어느 쪽인지 이름만으로는 모르는 내장 요리. 구이 낱말처럼 재료를 아는 근거가 없을 때 양쪽으로 본다. */
+    private static final List<String> EITHER_MEAT_DISH_WORDS = List.of("곱창", "막창", "대창");
+    /** 고기나 고기 육수를 쓰는 경우가 대부분인 요리. 고기 전체를 피할 때만 본다. */
+    private static final List<String> MEAT_BROTH_WORDS = List.of("해장국", "국밥", "수육", "편육", "내장", "냉면", "밀면",
+            "라멘", "ラーメン", "らーめん", "拉麺", "쌀국수", "phở");
+    /** 고기 없이 끓이는 국물 요리. 이름에 있으면 국물 낱말로 고기를 추정하지 않는다. */
+    private static final List<String> MEATLESS_BROTH_WORDS = List.of("콩나물", "황태", "북어", "다슬기", "올갱이", "재첩",
+            "매생이", "굴국밥");
     private static final List<String> CHICKEN_DISH_WORDS = List.of("삼계탕", "백숙", "鶏", "唐揚げ", "からあげ");
 
     private static final Set<String> SEAFOOD_LEAVES = Set.of("seafood restaurant", "sushi restaurant",
@@ -84,12 +95,6 @@ final class PlaceRestrictions {
     /** 음식 종류를 알려 주지 않는 태그. */
     private static final Set<String> GENERIC_FOOD_TAGS = Set.of("식당", "한식", "일식", "중식", "양식", "레스토랑",
             "음식점", "맛집", "분식");
-
-    /** fallback 모델이 붙이는 종류 → 판정에 쓸 카테고리. "쇼핑"은 시장에도 붙어 이름으로만 본다. */
-    private static final Map<String, String> FALLBACK_KINDS = Map.of(
-            "맛집", "Dining and Drinking > Restaurant",
-            "카페", "Dining and Drinking > Cafe",
-            "숙소", "Travel and Transportation > Lodging");
 
     private final Set<PlaceRestriction> restrictions;
 
@@ -186,13 +191,6 @@ final class PlaceRestrictions {
         if (key != null) keys.add(key);
     }
 
-    /** fallback 경로의 모델 출력은 이름과 모델이 붙인 종류("맛집"·"쇼핑")뿐이다. */
-    boolean blocksName(String name, String kind) {
-        if (restrictions.isEmpty() || name == null) return false;
-        String category = kind == null ? null : FALLBACK_KINDS.get(kind.strip());
-        return violatedBy(name, null, category, null, null, null, null, null, true) != null;
-    }
-
     private PlaceRestriction violatedBy(String name, String nameKo, String category, List<String> tags,
                                         String cuisine, String placeRole, PlaceAttributes attributes,
                                         Integer recommendedMinutes, boolean knowsDuration) {
@@ -239,7 +237,8 @@ final class PlaceRestrictions {
             case BEEF -> f.beef();
             case CHICKEN -> f.chicken();
             case MEAT -> "MEAT".equals(f.cuisine()) || (f.guessesMeat() && f.grill()) || f.pork() || f.beef() || f.chicken()
-                    || PlaceAttributes.MEAT_INGREDIENTS.stream().anyMatch(f::ingredient);
+                    || PlaceAttributes.MEAT_INGREDIENTS.stream().anyMatch(f::ingredient)
+                    || f.mentionsAny(MEAT_BROTH_WORDS) && !f.mentionsAny(MEATLESS_BROTH_WORDS);
             default -> false;
         };
     }
@@ -356,7 +355,7 @@ final class PlaceRestrictions {
 
         boolean grill() {
             return "MEAT".equals(cuisine) || EITHER_MEAT_LEAVES.contains(leaf)
-                    || mentionsAny(PlaceCategoryConstants.GRILL_WORDS);
+                    || mentionsAny(PlaceCategoryConstants.GRILL_WORDS) || mentionsAny(EITHER_MEAT_DISH_WORDS);
         }
 
         boolean ingredient(String kind) {
@@ -377,7 +376,7 @@ final class PlaceRestrictions {
         }
 
         private boolean namesBeef() {
-            return mentionsAny(PlaceCategoryConstants.BEEF_WORDS);
+            return mentionsAny(PlaceCategoryConstants.BEEF_WORDS) || mentionsAny(BEEF_DISH_WORDS);
         }
 
         private boolean mentionsAny(List<String> words) {

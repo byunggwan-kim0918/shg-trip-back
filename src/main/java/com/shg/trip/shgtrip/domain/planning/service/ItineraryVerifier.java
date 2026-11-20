@@ -1,14 +1,12 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
-import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.time.DayOfWeek;
@@ -26,7 +24,6 @@ import java.util.regex.Pattern;
  * 완성된 일정이 여행 조건과 사실을 지키는지 검사한다. 고치지 않는다.
  */
 @Component
-@Profile("eval")
 @RequiredArgsConstructor
 public class ItineraryVerifier {
 
@@ -65,8 +62,28 @@ public class ItineraryVerifier {
 
     private final PlaceFactsReader factsReader;
 
+    /** 출발 허브로 떠나기 전 이보다 짧게 남으면 그날은 관광 없이 떠나는 날이다. */
+    private static final int MIN_DEPARTURE_DAY_MINUTES = 120;
+    private static final int DAY_START_MINUTES = 9 * 60 + 30;
+
+    /**
+     * 출발 허브의 수속 시간을 빼고 그날 쓸 수 있는 시간. 짓는 쪽과 같이 허브를 모르면 공항으로 보고, 차로 다니는데
+     * 허브 없이 끝나면 차로 돌아가는 날로 본다.
+     */
+    private static int usableBeforeDeparture(TripConditions conditions, List<Visit> lastDay, String country) {
+        int departure = conditions.departure().getHour() * 60 + conditions.departure().getMinute();
+        PlaceCandidate end = lastDay.isEmpty() ? null : lastDay.get(lastDay.size() - 1).place();
+        boolean toHub = end != null && CandidatePolicy.roleOf(end) == CandidatePolicy.Role.TRANSIT;
+        int lead = !toHub && "car".equals(conditions.transport()) ? 0
+                : TripHubs.departureBuffer(toHub ? end : null, country) + TripHubs.HUB_TRAVEL_MINUTES;
+        return departure - lead - DAY_START_MINUTES;
+    }
+
+    /** @param cities 여행 도시. 첫 도시의 나라로 시간대와 공휴일을 본다 */
     public List<Violation> verify(TripConditions conditions, LocalDate startDate, int dayCount,
-                                  List<StepData> steps, List<PlaceCandidate> candidates, List<String> cityNames) {
+                                  List<StepData> steps, List<PlaceCandidate> candidates, List<Destination> cities) {
+        String country = cities.isEmpty() ? null : cities.get(0).country();
+        List<String> cityNames = cities.stream().map(Destination::nameKo).toList();
         Map<Long, PlaceCandidate> byId = new HashMap<>();
         for (PlaceCandidate c : candidates) if (c.placeId() != null) byId.put(c.placeId(), c);
         Map<Long, PlaceFactsReader.PlaceFact> facts = factsReader.find(byId.keySet());
@@ -79,15 +96,17 @@ public class ItineraryVerifier {
             days.computeIfAbsent(s.dayNumber(), k -> new ArrayList<>()).add(new Visit(s, c, start, end));
         }
         List<Violation> out = new ArrayList<>();
-        wants(conditions, days, startDate, facts, out);
-        cityDays(conditions, days, cityNames, out);
+        wants(conditions, days, startDate, country, facts, out);
+        cityDays(conditions, days, cities, out);
         for (int d = 1; d <= dayCount; d++) {
             List<Visit> day = days.getOrDefault(d, List.of());
             LocalDate date = startDate.plusDays(d - 1);
             boolean first = d == 1;
             boolean last = d == dayCount;
             boolean lateArrival = first && conditions.arrival() != null && conditions.arrival().getHour() >= 18;
-            if (activities(day).isEmpty() && !lateArrival) {
+            boolean earlyDeparture = last && conditions.departure() != null && usableBeforeDeparture(conditions,
+                    day, country) < MIN_DEPARTURE_DAY_MINUTES;
+            if (activities(day).isEmpty() && !lateArrival && !earlyDeparture) {
                 out.add(new Violation("EMPTY_DAY", Severity.FATAL, d, d + "일차에 일정이 없음", null));
                 continue;
             }
@@ -97,7 +116,7 @@ public class ItineraryVerifier {
             }
             meals(day, d, first, last, conditions, out);
             pace(day, d, first, last, conditions, out);
-            openings(day, d, date, facts, out);
+            openings(day, d, date, country, facts, out);
             movement(day, d, conditions, out);
             if (last && conditions.departure() != null) departure(day, d, conditions, out);
         }
@@ -128,8 +147,9 @@ public class ItineraryVerifier {
             return !stayOrHub() && !eatery();
         }
 
+        /** 해외 장소는 원어 이름 대신 한국어 이름이다. 요청과 이름 규칙이 한국어라 원어로 보면 맞는 곳도 놓친다. */
         String name() {
-            return Objects.toString(place.name(), "");
+            return Objects.toString(place.displayName(), "");
         }
     }
 
@@ -137,7 +157,7 @@ public class ItineraryVerifier {
         return day.stream().filter(v -> !v.stayOrHub()).toList();
     }
 
-    private void wants(TripConditions conditions, Map<Integer, List<Visit>> days, LocalDate startDate,
+    private void wants(TripConditions conditions, Map<Integer, List<Visit>> days, LocalDate startDate, String country,
                        Map<Long, PlaceFactsReader.PlaceFact> facts, List<Violation> out) {
         for (TripConditions.Want want : conditions.wants()) {
             List<Visit> hits = new ArrayList<>();
@@ -147,7 +167,7 @@ public class ItineraryVerifier {
                 }
             }
             // 같은 장소를 낮에도 지나가면 시각 조건을 지킨 방문을 찾는다.
-            Visit hit = hits.stream().filter(v -> timingMet(want, v, startDate)).findFirst()
+            Visit hit = hits.stream().filter(v -> timingMet(want, v, startDate, country)).findFirst()
                     .orElse(hits.isEmpty() ? null : hits.get(0));
             if (hit == null) {
                 out.add(new Violation("WANT_MISSING", Severity.FATAL, 0, "요청한 '" + want.text() + "'이(가) 없음",
@@ -159,8 +179,8 @@ public class ItineraryVerifier {
             LocalDate date = startDate.plusDays(hit.step().dayNumber() - 1);
             double[] at = CandidateGeo.coordsOf(hit.place());
             if (at == null) continue;
-            int sunrise = SolarClock.sunrise(date, at[0], at[1]);
-            int sunset = SolarClock.sunset(date, at[0], at[1]);
+            int sunrise = SolarClock.sunrise(date, at[0], at[1], country);
+            int sunset = SolarClock.sunset(date, at[0], at[1], country);
             boolean sunriseWant = "sunrise".equals(timing) || want.text().contains("일출");
             if (sunriseWant && hit.start() > sunrise + SUNRISE_SLACK) {
                 out.add(new Violation("WANT_TIME", Severity.FATAL, hit.step().dayNumber(),
@@ -190,15 +210,16 @@ public class ItineraryVerifier {
         return parent.length() >= 2 && (key(want.text()).contains(parent) || parent.contains(key(want.text())));
     }
 
-    private static boolean timingMet(TripConditions.Want want, Visit v, LocalDate startDate) {
+    private static boolean timingMet(TripConditions.Want want, Visit v, LocalDate startDate, String country) {
         if (want.timing() == null) return true;
         double[] at = CandidateGeo.coordsOf(v.place());
         if (at == null) return true;
         LocalDate date = startDate.plusDays(v.step().dayNumber() - 1);
         if ("sunrise".equals(want.timing()) || want.text().contains("일출")) {
-            return v.start() <= SolarClock.sunrise(date, at[0], at[1]) + SUNRISE_SLACK;
+            return v.start() <= SolarClock.sunrise(date, at[0], at[1], country) + SUNRISE_SLACK;
         }
-        return !"evening".equals(want.timing()) || v.start() >= SolarClock.sunset(date, at[0], at[1]) - EVENING_EARLY;
+        return !"evening".equals(want.timing())
+                || v.start() >= SolarClock.sunset(date, at[0], at[1], country) - EVENING_EARLY;
     }
 
     /** 장소 이름이나 식당 메뉴에 요청한 말이 들어 있는지. 일출·야경 같은 시간 말은 떼고 본다. */
@@ -210,6 +231,7 @@ public class ItineraryVerifier {
         if (want.isEmpty()) return false;
         String name = key(BRACKETS.matcher(v.name()).replaceAll(""));
         if (name.contains(want) || (want.length() >= 3 && want.contains(name) && name.length() >= 3)) return true;
+        if (DraftPlaceResolver.dropsInfix(name, want)) return true;
         // "고소동 벽화마을"과 "고소동 천사벽화마을"처럼 낱말이 모두 이름에 들어 있으면 같은 곳이다.
         List<String> words = java.util.Arrays.stream(cleaned.trim().split("\\s+")).map(ItineraryVerifier::key)
                 .filter(w -> w.length() >= 2).toList();
@@ -253,16 +275,15 @@ public class ItineraryVerifier {
         if (GENERIC_DISH.contains(dish)) return false;
         String menu = c.attributes() == null || c.attributes().official() == null ? ""
                 : String.join(" ", c.attributes().official().values());
-        String text = key(String.join(" ", Objects.toString(c.name(), ""), Objects.toString(c.cuisine(), ""),
+        String text = key(String.join(" ", Objects.toString(c.name(), ""), Objects.toString(c.nameKo(), ""),
+                Objects.toString(c.cuisine(), ""),
                 c.tags() == null ? "" : String.join(" ", c.tags()), menu));
         return text.contains(dish);
     }
 
-    private void cityDays(TripConditions conditions, Map<Integer, List<Visit>> days, List<String> cityNames,
+    private void cityDays(TripConditions conditions, Map<Integer, List<Visit>> days, List<Destination> cities,
                           List<Violation> out) {
         if (conditions.cityDays() == null || conditions.cityDays().isEmpty()) return;
-        List<Destination> cities = cityNames.stream().map(DomesticCities::find)
-                .flatMap(java.util.Optional::stream).toList();
         if (cities.size() < 2) return;
         Map<String, Integer> actual = new HashMap<>();
         for (List<Visit> day : days.values()) {
@@ -335,19 +356,20 @@ public class ItineraryVerifier {
         }
     }
 
-    private void openings(List<Visit> day, int d, LocalDate date, Map<Long, PlaceFactsReader.PlaceFact> facts,
-                          List<Violation> out) {
+    private void openings(List<Visit> day, int d, LocalDate date, String country,
+                          Map<Long, PlaceFactsReader.PlaceFact> facts, List<Violation> out) {
         DayOfWeek dow = date.getDayOfWeek();
         for (Visit v : activities(day)) {
             PlaceFactsReader.PlaceFact f = facts.get(v.place().placeId());
             if (f != null && Boolean.FALSE.equals(f.reachable())) {
                 out.add(new Violation("UNREACHABLE", Severity.FATAL, d, v.name() + "은(는) 일반 관광객이 갈 수 없음", null));
             }
-            if (KoreanHolidays.museumsClosed(date) && DayBuilder.isMuseum(v.place())) {
+            if (TripCalendar.museumsClosed(country, date) && DayBuilder.isMuseum(v.place())) {
                 out.add(new Violation("CLOSED", Severity.FATAL, d, v.name() + " 명절 휴관", null));
                 continue;
             }
-            String hours = DayTiming.openingHoursOf(v.place());
+            String hours = OpeningHoursText.withClosedDays(DayTiming.openingHoursOf(v.place()),
+                    f == null ? null : f.closedDays());
             if (OpeningHoursText.isClosedOnDay(hours, dow)) {
                 out.add(new Violation("CLOSED", Severity.FATAL, d, v.name() + " 휴무일", null));
             } else if (!OpeningHoursText.isOpenDuring(hours, dow, v.start(), v.end())) {

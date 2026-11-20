@@ -8,7 +8,7 @@ import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * TravelPlannerService ↔ ItineraryGenerationExecutor 순환 의존성을 끊으려고 분리했다.
+ * TravelPlannerService와 생성 실행기가 서로를 참조하지 않도록 취소 상태를 따로 둔다.
  * <p>
  * 취소 플래그를 Redis에 둬야 "유저당 동시 1개" 불변식이 인스턴스를 넘어 유지된다.
  * 진실의 원천은 Redis 키이고, 로컬 캐시는 매 폴링마다 Redis를 때리지 않기 위한 것이다.

@@ -158,7 +158,7 @@ class PlaceRestrictionsTest {
                 Arguments.of(BEEF, place("큰집 설렁탕", RESTAURANT, List.of("식당", "설렁탕", "탕·국밥"), "SOUP", "MEAL",
                         ingredients("BEEF")), true),
                 Arguments.of(BEEF, place("큰집 설렁탕", RESTAURANT, List.of("식당", "설렁탕", "탕·국밥"), "SOUP", "MEAL",
-                        null), false),
+                        null), true),
                 Arguments.of(PORK, place("큰집 설렁탕", RESTAURANT, List.of("식당", "설렁탕", "탕·국밥"), "SOUP", "MEAL",
                         ingredients("BEEF")), false),
                 Arguments.of(BEEF, place("명가갈비", "Dining and Drinking > Restaurant > Steakhouse", List.of("식당", "갈비"),
@@ -248,7 +248,19 @@ class PlaceRestrictionsTest {
                 Arguments.of(SHOPPING, place("안경거리", "Landmarks and Outdoors > Other Great Outdoors",
                         List.of("안경거리", "쇼핑거리"), null, "SHOPPING", null), true),
                 Arguments.of(SHOPPING, place("라라브레드 여수점", "Retail > Food and Beverage Retail",
-                        List.of("빵집", "베이커리"), null, "SHOPPING", null), false));
+                        List.of("빵집", "베이커리"), null, "SHOPPING", null), false),
+                // 요리 이름이 재료를 정한다. 보강 태그가 다른 고기를 말해도 그렇다
+                Arguments.of(BEEF, place("수복찜갈비", "Dining and Drinking > Restaurant > Steakhouse",
+                        List.of("식당", "찜갈비", "돼지고기"), "MEAT", "MEAL", null), true),
+                Arguments.of(BEEF, dining("늘곰탕", "SOUP", "식당", "한식", "탕·국밥"), true),
+                Arguments.of(MEAT, dining("일품양평해장국대릉원점", "SOUP", "식당", "한식", "탕·국밥"), true),
+                Arguments.of(MEAT, dining("삼백집 콩나물해장국", "SOUP", "식당", "한식", "탕·국밥"), false),
+                Arguments.of(MEAT, dining("해밀진주냉면", "NOODLE", "식당", "면요리"), true),
+                Arguments.of(MEAT, dining("동경라멘학교", "JAPANESE", "식당", "일식"), true),
+                Arguments.of(PORK, dining("해밀진주냉면", "NOODLE", "식당", "면요리"), false),
+                Arguments.of(PORK, dining("올래국수 고기국수", "NOODLE", "식당", "면요리"), true),
+                Arguments.of(PORK, place("스카이 제일막창", RESTAURANT, List.of("식당"), "CHINESE", "MEAL", null), true),
+                Arguments.of(PORK, place("소곱창 명가", RESTAURANT, List.of("식당", "소고기"), "MEAT", "MEAL", null), false));
     }
 
     @Test
@@ -359,27 +371,6 @@ class PlaceRestrictionsTest {
         assertThat(seafood.isUnknownFood(new VectorSearchResult(2L, "카페 소요", "주소", "Dining and Drinking > Cafe",
                 List.of(), "Busan", "KR", BigDecimal.ONE, BigDecimal.ONE, null, null, null, null, 0.8, "CAFE", null,
                 null, null))).isFalse();
-    }
-
-    @Test
-    @DisplayName("fallback 모델 출력은 이름과 모델이 붙인 종류로 보고, 등산·트레킹은 이름에 적힌 곳만 뺀다")
-    void blocksFallbackNames() {
-        PlaceRestrictions r = PlaceRestrictions.of(List.of(SEAFOOD, HIKING, SHOPPING));
-
-        assertThat(r.blocksName("해운대 횟집", "맛집")).isTrue();
-        assertThat(r.blocksName("한라산 등산로", "관광")).isTrue();
-        assertThat(r.blocksName("신세계 백화점", "쇼핑")).isTrue();
-        assertThat(r.blocksName("섭지코지", "관광")).isFalse();
-        assertThat(r.blocksName("성산일출봉", "관광")).isFalse();
-        assertThat(r.blocksName("용눈이오름", "관광")).isFalse();
-        assertThat(r.blocksName("동문시장", "쇼핑")).isFalse();
-        assertThat(r.blocksName("흑돼지거리", "맛집")).isFalse();
-
-        PlaceRestrictions trekking = PlaceRestrictions.of(List.of(TREKKING));
-        assertThat(trekking.blocksName("한라산 트레킹", "관광")).isTrue();
-        assertThat(trekking.blocksName("용눈이오름", "관광")).isFalse();
-        assertThat(trekking.blocksName("서귀포매일올레시장", "쇼핑")).isFalse();
-        assertThat(PlaceRestrictions.of(List.of(NIGHTLIFE)).blocksName("광안리 포차", "맛집")).isTrue();
     }
 
     private static VectorSearchResult result(String name, String cuisine, List<String> tags) {

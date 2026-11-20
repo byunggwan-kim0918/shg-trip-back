@@ -202,10 +202,4 @@ public final class CandidatePolicy {
                 c.cuisine());
     }
 
-    /** 바꿔 넣어도 하루 구성이 그대로인 역할끼리인지(식사↔식사, 카페↔카페, 관광 계열끼리). */
-    static boolean sameRole(PlaceCandidate a, PlaceCandidate b) {
-        Role ra = roleOf(a);
-        Role rb = roleOf(b);
-        return ra == rb || (ra.isVisit() && rb.isVisit());
-    }
 }

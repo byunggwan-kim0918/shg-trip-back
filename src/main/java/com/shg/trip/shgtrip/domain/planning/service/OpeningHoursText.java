@@ -53,6 +53,18 @@ final class OpeningHoursText {
     }
 
     /**
+     * 영업시간이 없는 곳에 정기 휴무 요일만 적은 영업시간. 적지 않은 요일은 판독 불가로 남아 열림으로 본다.
+     * 영업시간이 있으면 그 값이 휴무 요일 판단보다 정확해 그대로 둔다.
+     */
+    static String withClosedDays(String openingHours, java.util.Set<DayOfWeek> closedDays) {
+        if (openingHours != null && !openingHours.isBlank() || closedDays == null || closedDays.isEmpty()) {
+            return openingHours;
+        }
+        return closedDays.stream().sorted().map(d -> KO_DAYS.get(d.getValue() - 1) + ": 휴무")
+                .collect(java.util.stream.Collectors.joining(", "));
+    }
+
+    /**
      * {@code [startMin, endMin]} 구간 전체가 그 요일 영업시간 안에 들어가는지.
      * 판독할 수 없으면 true(열림 가정).
      */
@@ -65,28 +77,6 @@ final class OpeningHoursText {
             if (r[0] <= startMin && end <= r[1]) return true;
         }
         return false;
-    }
-
-    /**
-     * {@code notBefore} 이후로 {@code duration}분을 통째로 담을 수 있는 가장 이른 시작 시각.
-     *
-     * <p>개장 직전에 배정된 곳은 버리기보다 열 때까지 늦추는 편이 맞는 경우가 많다.
-     *
-     * @return {@code null} = 판독 불가(제약 없음), {@code -1} = 그 요일엔 불가능,
-     *         그 외 = 시작 시각(분)
-     */
-    static Integer earliestStart(String openingHours, DayOfWeek dow, int notBefore, int duration) {
-        List<int[]> ranges = rangesFor(openingHours, dow);
-        if (ranges == null) return null;
-        if (ranges.isEmpty()) return -1;
-
-        int best = -1;
-        for (int[] r : ranges) {
-            int start = Math.max(notBefore, r[0]);
-            if (start + Math.max(0, duration) > r[1]) continue;
-            if (best < 0 || start < best) best = start;
-        }
-        return best;
     }
 
     /**

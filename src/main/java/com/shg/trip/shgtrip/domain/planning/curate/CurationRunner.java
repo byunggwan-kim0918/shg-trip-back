@@ -7,7 +7,7 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationResultStore;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationStream;
-import com.shg.trip.shgtrip.domain.planning.service.OptimizedGenerationExecutor;
+import com.shg.trip.shgtrip.domain.planning.service.TripGenerationExecutor;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,7 +46,7 @@ public class CurationRunner implements CommandLineRunner {
     record Item(String key, ItineraryGenerateRequest request) {
     }
 
-    private final OptimizedGenerationExecutor executor;
+    private final TripGenerationExecutor executor;
     private final GenerationResultStore resultStore;
     private final ItineraryRepository itineraryRepository;
     private final ObjectMapper objectMapper;

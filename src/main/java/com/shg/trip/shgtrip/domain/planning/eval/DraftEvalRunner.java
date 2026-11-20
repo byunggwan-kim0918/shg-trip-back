@@ -2,7 +2,12 @@ package com.shg.trip.shgtrip.domain.planning.eval;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
+import com.shg.trip.shgtrip.domain.place.destination.Destination;
+import com.shg.trip.shgtrip.domain.place.destination.Destinations;
+import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
+import com.shg.trip.shgtrip.domain.planning.dto.EnrichmentResult;
 import com.shg.trip.shgtrip.domain.planning.dto.DraftEdit;
 import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryVerifier;
@@ -12,9 +17,14 @@ import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.service.DraftItineraryPlanner;
+import com.shg.trip.shgtrip.domain.planning.service.DraftRequestFactory;
 import com.shg.trip.shgtrip.domain.planning.service.ai.DraftCallGenerator;
+import com.shg.trip.shgtrip.domain.planning.service.ai.OptimizedClaudeAIService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.SpringApplication;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
@@ -23,13 +33,12 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -37,34 +46,57 @@ import java.util.stream.Stream;
 /**
  * 여행 초안을 모델로 받아 기록하고, 기록된 초안과 편집으로 일정을 다시 지어 검사한다.
  * 파일마다 {@code {"id", "request", "plan", "edits"}}이고, 결과는 읽기용 markdown과 검사용 JSON 줄로 남긴다.
+ *
+ * <p>{@code --eval.mode=trip --eval.drafts=<기록 폴더> --eval.out=<결과 폴더>}로 jar를 한 번 실행한다.
+ * {@code --eval.draft-requests}(요청 JSON 줄)와 {@code --eval.draft-ids}를 주면 기록이 없는 id만 먼저 모델로 기록한다(비용 발생).
  */
 @Slf4j
 @Component
 @Profile("eval")
 @RequiredArgsConstructor
-class DraftEvalRunner {
+class DraftEvalRunner implements CommandLineRunner {
 
-    /** 국내 도시 이름 → 장소 DB region과 중심 좌표. */
-    private static final Map<String, Object[]> CITIES = Map.ofEntries(
-            Map.entry("서울", new Object[]{"Seoul", 37.5665, 126.9780}),
-            Map.entry("부산", new Object[]{"Busan", 35.1796, 129.0756}),
-            Map.entry("제주", new Object[]{"Jeju", 33.4996, 126.5312}),
-            Map.entry("경주", new Object[]{"Gyeongju", 35.8562, 129.2247}),
-            Map.entry("강릉", new Object[]{"Gangneung", 37.7519, 128.8761}),
-            Map.entry("전주", new Object[]{"Jeonju", 35.8242, 127.1480}),
-            Map.entry("여수", new Object[]{"Yeosu", 34.7604, 127.6622}),
-            Map.entry("대구", new Object[]{"Daegu", 35.8714, 128.6014}),
-            Map.entry("대전", new Object[]{"Daejeon", 36.3504, 127.3845}),
-            Map.entry("광주", new Object[]{"Gwangju", 35.1595, 126.8526}),
-            Map.entry("수원", new Object[]{"Suwon", 37.2636, 127.0286}),
-            Map.entry("인천", new Object[]{"Incheon", 37.4563, 126.7052}));
+    @org.springframework.beans.factory.annotation.Value("${eval.mode:trip}")
+    private String mode;
+
+    @org.springframework.beans.factory.annotation.Value("${eval.drafts:}")
+    private String drafts;
+
+    @org.springframework.beans.factory.annotation.Value("${eval.draft-requests:}")
+    private String draftRequests;
+
+    @org.springframework.beans.factory.annotation.Value("${eval.draft-ids:}")
+    private String draftIds;
+
+    @org.springframework.beans.factory.annotation.Value("${eval.out:build/eval}")
+    private String outDir;
 
     @org.springframework.beans.factory.annotation.Value("${eval.draft-threads:6}")
     private int threads;
 
+    /** true면 기록할 때 운영처럼 입력 보강(Haiku)을 불러 결과를 기록에 남긴다. 다시 지을 때는 남긴 결과를 쓴다. */
+    @org.springframework.beans.factory.annotation.Value("${eval.enrich:false}")
+    private boolean enrich;
+
     private final ObjectMapper objectMapper;
     private final ItineraryVerifier verifier;
     private final TripPlanner tripPlanner;
+    private final DraftRequestFactory requestFactory;
+    private final Destinations destinations;
+    private final OptimizedClaudeAIService enrichService;
+    private final ApplicationContext context;
+
+    @Override
+    public void run(String... args) throws IOException {
+        if (!"trip".equals(mode)) throw new IllegalArgumentException("eval.mode는 trip만 있다: " + mode);
+        if (drafts.isBlank()) throw new IllegalArgumentException("--eval.drafts=<기록 폴더>가 필요하다");
+        if (!draftRequests.isBlank()) {
+            List<String> ids = Arrays.stream(draftIds.split(",")).map(String::trim).filter(x -> !x.isEmpty()).toList();
+            recordTrips(draftRequests, ids, drafts);
+        }
+        runTrips(drafts, outDir);
+        System.exit(SpringApplication.exit(context, () -> 0));
+    }
 
     /**
      * 요청마다 초안을 받고, 하루의 취지가 깨졌으면 한 번 고쳐 id마다 기록한다. 이미 있는 파일은 다시 부르지 않는다.
@@ -94,9 +126,10 @@ class DraftEvalRunner {
             String id = file.getFileName().toString().replace(".json", "");
             JsonNode row = byId.get(id);
             JsonNode req = row.get("request");
-            DraftItineraryPlanner.Request base = requestOf(req, null);
-            String prompt = DraftItineraryPlanner.prompt(base.input(), base.cityCenter(), base.arrival(),
-                    base.departure(), mustDo(req));
+            JsonNode enriched = Files.exists(file) ? objectMapper.readTree(file.toFile()).get("enriched")
+                    : enrich ? enrichedOf(req) : null;
+            DraftItineraryPlanner.Request base = requestOf(req, enriched);
+            String prompt = DraftItineraryPlanner.prompt(base);
             long started = System.currentTimeMillis();
             Map<String, Object> saved;
             DraftCallGenerator.Drafted drafted;
@@ -115,6 +148,7 @@ class DraftEvalRunner {
                 saved = new LinkedHashMap<>();
                 saved.put("id", id);
                 saved.put("request", req);
+                if (enriched != null) saved.put("enriched", enriched);
                 saved.put("expect", row.get("expect"));
                 saved.put("prompt", prompt);
                 saved.put("plan", drafted.plan());
@@ -152,7 +186,7 @@ class DraftEvalRunner {
             String id = root.get("id").asText();
             JsonNode req = root.get("request");
             try {
-                DraftItineraryPlanner.Request base = requestOf(req, null);
+                DraftItineraryPlanner.Request base = requestOf(req, root.get("enriched"));
                 DraftPlan plan = objectMapper.treeToValue(root.get("plan"), DraftPlan.class);
                 List<DraftEdit> edits = root.hasNonNull("edits")
                         ? List.of(objectMapper.treeToValue(root.get("edits"), DraftEdit[].class)) : List.of();
@@ -161,7 +195,7 @@ class DraftEvalRunner {
                 int days = result.frames().size();
                 List<ItineraryVerifier.Violation> violations = verifier.verify(
                         withSatisfy(conditionsOf(root.path("expect"), req), trip.skeleton().conditions()),
-                        base.input().startDate(), days, result.steps(), result.candidates(), base.cityNames());
+                        base.input().startDate(), days, result.steps(), result.candidates(), base.cities());
                 StringBuilder md = new StringBuilder(render(id, req, result));
                 if (!root.path("finished").asBoolean(true)) md.append("편집 단계 미완료 기록\n");
                 if (!trip.dayNotes().isEmpty() || !trip.tripNotes().isEmpty()) {
@@ -214,13 +248,6 @@ class DraftEvalRunner {
         }
         return new TripConditions(wants, expect.cityDays(), expect.avoid(), expect.lowMobility(), expect.transport(),
                 expect.arrival(), expect.departure(), designed.pace());
-    }
-
-    private static List<String> mustDo(JsonNode req) {
-        List<String> out = new ArrayList<>();
-        req.path("requiredExperiences").forEach(x -> out.add(x.path("text").asText()
-                + ("morning".equals(x.path("timing").asText()) ? " (아침)" : " (저녁)")));
-        return out;
     }
 
     @FunctionalInterface
@@ -292,31 +319,36 @@ class DraftEvalRunner {
         }
     }
 
-    private DraftItineraryPlanner.Request requestOf(JsonNode req, DraftPlan draft) {
-        List<String> cityNames = new ArrayList<>();
-        for (String c : req.get("destination").asText().split(",")) cityNames.add(c.trim());
-        List<String> regions = cityNames.stream().map(c -> (String) CITIES.get(c)[0]).toList();
-        Object[] first = CITIES.get(cityNames.get(0));
-        List<PlaceRestriction> restrictions = new ArrayList<>();
-        if (req.has("restrictions")) req.get("restrictions").forEach(r -> restrictions.add(PlaceRestriction.valueOf(r.asText())));
-        List<String> themes = new ArrayList<>();
-        req.path("themes").forEach(t -> themes.add(t.asText()));
-        List<String> categories = new ArrayList<>();
-        req.path("categories").forEach(t -> categories.add(t.asText()));
-        VectorEnrichedInput input = new VectorEnrichedInput(
-                req.get("destination").asText(), themes, categories, req.path("pace").asText("normal"),
-                req.path("transportPref").asText("any"), BigDecimal.valueOf(req.path("budget").asLong(1_000_000)),
-                LocalDate.parse(req.get("startDate").asText()), LocalDate.parse(req.get("endDate").asText()),
-                req.path("description").asText(null), List.of(), req.get("destination").asText(), "KR", regions,
-                List.of(), Map.of(), null, null, null, null, Map.of(),
-                VectorEnrichedInput.companionOf(req.path("companion").asText(null)),
-                req.has("partySize") ? req.get("partySize").asInt() : null, List.of(),
-                restrictions.isEmpty() ? null : restrictions);
-        return new DraftItineraryPlanner.Request(input, draft, cityNames,
-                new double[]{(double) first[1], (double) first[2]},
-                req.has("arrivalTime") ? LocalTime.parse(req.get("arrivalTime").asText()) : null,
-                req.has("departureTime") ? LocalTime.parse(req.get("departureTime").asText()) : null,
-                null, null, mustDo(req), Map.of(), Set.of());
+    /** 운영과 같은 변환으로 초안 요청을 만든다. 보강 기록이 없으면 보강 모델 없이 여행지 이름에서 지역을 찾는다. */
+    private DraftItineraryPlanner.Request requestOf(JsonNode req, JsonNode enriched) throws IOException {
+        ItineraryGenerateRequest request = objectMapper.treeToValue(req, ItineraryGenerateRequest.class);
+        VectorEnrichedInput input = enriched != null && !enriched.isNull()
+                ? objectMapper.treeToValue(enriched, VectorEnrichedInput.class) : unenriched(request);
+        return requestFactory.prepare(request, input).request();
+    }
+
+    private JsonNode enrichedOf(JsonNode req) throws IOException {
+        EnrichmentResult result = enrichService.enrichInput(objectMapper.treeToValue(req, ItineraryGenerateRequest.class));
+        if (!result.valid()) throw new IllegalStateException("입력 보강 거부 " + result.errorCode() + ": " + result.errorMessage());
+        return objectMapper.valueToTree(result.enrichedInput());
+    }
+
+    private VectorEnrichedInput unenriched(ItineraryGenerateRequest r) {
+        List<String> regions = new ArrayList<>();
+        String country = "KR";
+        for (String name : r.destination().split(",")) {
+            Destination city = DomesticCities.find(name.trim()).or(() -> destinations.findByName(name.trim()))
+                    .orElseThrow(() -> new IllegalArgumentException("모르는 여행지: " + name));
+            regions.add(city.name());
+            country = city.country();
+        }
+        List<PlaceRestriction> restrictions = r.restrictions() == null || r.restrictions().isEmpty() ? null
+                : r.restrictions();
+        return new VectorEnrichedInput(r.destination(), r.themes(), r.categories(),
+                r.pace() == null ? "normal" : r.pace(), r.transportPref() == null ? "any" : r.transportPref(),
+                r.budget() == null ? BigDecimal.valueOf(1_000_000) : r.budget(), r.startDate(), r.endDate(),
+                r.description(), List.of(), r.destination(), country, regions, List.of(), Map.of(), null, null, null,
+                null, Map.of(), VectorEnrichedInput.companionOf(r.companion()), r.partySize(), List.of(), restrictions);
     }
 
     /** 이보다 긴 빈 시간은 자유 시간으로 보인다. 빈칸으로 두면 일정이 끊긴 것처럼 읽힌다. */
