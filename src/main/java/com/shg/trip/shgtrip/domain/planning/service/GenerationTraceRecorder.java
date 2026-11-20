@@ -7,9 +7,7 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.GenerationTrace;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
-import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
-import com.shg.trip.shgtrip.domain.planning.dto.ScheduleArgs;
-import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
+import com.shg.trip.shgtrip.domain.planning.dto.DraftPlan;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.user.service.ActiveUserGuard;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
@@ -29,8 +27,9 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class GenerationTraceRecorder {
 
-    /** 필드 의미가 바뀔 때만 올린다. 필드 추가는 그대로 둔다. */
-    static final int TRACE_VERSION = 1;
+    /** 필드 의미가 바뀔 때만 올린다. */
+    static final int TRIP_TRACE_VERSION = 2;
+    static final String TRIP_PIPELINE = "trip";
 
     private final GenerationTraceRepository traceRepository;
     private final ObjectMapper objectMapper;
@@ -38,55 +37,60 @@ public class GenerationTraceRecorder {
     private final ActiveUserGuard activeUserGuard;
     private final TransactionTemplate transactionTemplate;
 
-    public void record(Itinerary saved, String jobId, ItineraryGenerateRequest request,
-                       VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
-                       SelectionOutput finalSelection, List<PlaceCandidate> candidates, int searchPoolSize,
-                       ScheduleArgs args, ScheduledBy scheduledBy, long totalMs, ItineraryRules.Verdict quality) {
-        write(saved.getId(), saved.getUserId(), saved, jobId, request, enrichedInput, rawSelection, finalSelection,
-                candidates, searchPoolSize, args, scheduledBy, totalMs, quality, null);
+    /**
+     * @param draft   모델 초안
+     * @param planned 짓기까지 끝났으면 편집·검사 결과. 짓기에서 예외가 났으면 null
+     */
+    public record TripRun(DraftItineraryPlanner.Request request, String prompt, DraftPlan draft,
+                          TripPlanner.Planned planned, long totalMs) {
     }
 
     /**
-     * 관문에서 막혀 저장하지 않은 생성. 일정 없이 남기고 {@code --eval.mode=rejected}로 다시 돌려 원인을 본다.
-     * 거부 건수는 itinerary_id가 없는 기록으로 센다. 구조 검증 거부의 판정은 저장 전 미리보기라 HARD가 아닐 수 있다.
-     *
-     * @param searchPoolSize 선택 모델이 본 후보 수
-     * @param rejectReason   판정 규칙 밖의 거부 사유(구조 검증 실패). 판정으로 거부했으면 null
+     * @param saved        저장한 일정. 관문에서 막혀 저장하지 않았으면 null
+     * @param quality      저장 관문 판정. 판정 전에 끝났으면 null
+     * @param rejectReason 판정 밖의 실패 사유. 판정으로 끝났으면 null
      */
-    public void recordRejected(Long userId, String jobId, ItineraryGenerateRequest request,
-                               VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
-                               SelectionOutput finalSelection, List<PlaceCandidate> candidates, int searchPoolSize,
-                               ScheduleArgs args, ScheduledBy scheduledBy, long totalMs,
-                               ItineraryRules.Verdict quality, String rejectReason) {
-        write(null, userId, null, jobId, request, enrichedInput, rawSelection, finalSelection,
-                candidates, searchPoolSize, args, scheduledBy, totalMs, quality, rejectReason);
-    }
-
-    private void write(Long itineraryId, Long userId, Itinerary saved, String jobId, ItineraryGenerateRequest request,
-                       VectorEnrichedInput enrichedInput, SelectionOutput rawSelection,
-                       SelectionOutput finalSelection, List<PlaceCandidate> candidates, int searchPoolSize,
-                       ScheduleArgs args, ScheduledBy scheduledBy, long totalMs, ItineraryRules.Verdict quality,
-                       String rejectReason) {
+    public void recordTrip(Itinerary saved, Long userId, String jobId, ItineraryGenerateRequest request,
+                           VectorEnrichedInput input, TripRun run, ItineraryRules.Verdict quality,
+                           String rejectReason) {
         try {
+            TripPlanner.Planned p = run.planned();
+            Map<String, Object> outcome = new LinkedHashMap<>();
+            outcome.put("problems", p == null ? List.of() : p.problems());
+            outcome.put("edits", p == null ? List.of() : p.edits());
+            outcome.put("violations", p == null ? List.of() : p.built().violations());
+            outcome.put("tripNotes", p == null ? List.of() : p.built().tripNotes());
+            outcome.put("notes", p == null ? List.of() : p.built().result().notes());
+            DraftItineraryPlanner.Request r = run.request();
+            Map<String, Object> args = new LinkedHashMap<>();
+            args.put("cities", r.cities().stream().map(c -> c.name()).toList());
+            args.put("arrival", r.arrival());
+            args.put("departure", r.departure());
+            args.put("mustDo", r.mustDo());
+            args.put("prompt", run.prompt());
+            Map<String, Object> models = new LinkedHashMap<>();
+            models.put("haiku", anthropicProperties.haiku());
+            models.put("sonnet", anthropicProperties.sonnet());
+            models.put("sonnetInputTokens", p == null ? null : p.inputTokens());
+            models.put("sonnetOutputTokens", p == null ? null : p.outputTokens());
             GenerationTrace trace = GenerationTrace.builder()
-                    .itineraryId(itineraryId)
+                    .itineraryId(saved == null ? null : saved.getId())
                     .userId(userId)
                     .jobId(jobId)
-                    .traceVersion(TRACE_VERSION)
+                    .traceVersion(TRIP_TRACE_VERSION)
                     .request(json(request))
-                    .enrichedInput(json(enrichedInput))
-                    .selectionRaw(json(rawSelection))
-                    .selectionFinal(json(finalSelection))
-                    .candidates(json(candidates))
-                    .searchPoolSize(searchPoolSize)
+                    .enrichedInput(json(input))
+                    // 칼럼 이름은 옛 기록과 같다. selection_raw는 초안, selection_final은 편집·검사, schedule_args는 초안 요청이다.
+                    .selectionRaw(json(run.draft()))
+                    .selectionFinal(json(outcome))
+                    .candidates(json(p == null ? List.of() : p.built().result().candidates()))
+                    .searchPoolSize(p == null ? null : p.built().result().candidates().size())
                     .scheduleArgs(json(args))
-                    .models(json(Map.of("haiku", anthropicProperties.haiku(),
-                            "sonnet", anthropicProperties.sonnet())))
-                    .totalMs(totalMs)
+                    .models(json(models))
+                    .totalMs(run.totalMs())
                     .score(scoreJson(quality, rejectReason, jobId))
                     .generatedSteps(saved == null ? null : snapshotJson(saved))
-                    .pipeline(scheduledBy.pipeline().label())
-                    .dayPicks(scheduledBy.dayPicks() == null ? null : json(scheduledBy.dayPicks()))
+                    .pipeline(TRIP_PIPELINE)
                     .build();
             // 요청 문장이 들어 있어 탈퇴가 trace를 지운 뒤에 들어가면 안 된다.
             transactionTemplate.executeWithoutResult(status -> {
@@ -94,7 +98,7 @@ public class GenerationTraceRecorder {
                 traceRepository.save(trace);
             });
         } catch (Exception e) {
-            log.warn("생성 기록 저장 실패 (itineraryId={}, jobId={}): {}", itineraryId, jobId, e.getMessage());
+            log.warn("생성 기록 저장 실패 (jobId={}): {}", jobId, e.getMessage());
         }
     }
 

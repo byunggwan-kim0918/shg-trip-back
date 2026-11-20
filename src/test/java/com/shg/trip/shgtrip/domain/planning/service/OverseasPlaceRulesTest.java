@@ -15,27 +15,8 @@ class OverseasPlaceRulesTest {
     private static final String ATTRACTION = "Landmarks and Outdoors > Tourist Attraction";
 
     @Test
-    @DisplayName("교통시설 이름: 공항·역·버스터미널·부두를 잡고, 道の駅·駅前·加油站·Gà는 잡지 않는다")
-    void transitNameSignal() {
-        for (String hub : List.of("成田国際空港", "東京駅", "上海虹桥火车站", "上海虹桥站", "北京南站 (北京南站)",
-                "高鐵台中站", "浦东国际机场", "桃園國際機場",
-                "捷運台北車站", "台北轉運站 客運站", "Sân bay Tân Sơn Nhất", "Ga Hà Nội", "Bến xe Miền Đông",
-                "서울역", "Narita International Airport")) {
-            assertThat(PlaceCategoryConstants.hasTransitNameSignal(hub)).as(hub).isTrue();
-        }
-        for (String notHub : List.of("道の駅 富士吉田", "駅前ラーメン", "中国石化加油站", "特斯拉充电站", "菜鸟驿站",
-                "站前小吃", "Cơm Gà Bà Buội",
-                "Gà Rán Popeyes", "역사박물관")) {
-            assertThat(PlaceCategoryConstants.hasTransitNameSignal(notHub)).as(notHub).isFalse();
-        }
-    }
-
-    @Test
-    @DisplayName("공항 부속시설과 여객시설은 현지어로도 알아보고, 관광 부두는 여객시설로 보지 않는다")
-    void hubSubFacilityAndPassengerFacility() {
-        assertThat(PlaceCategoryConstants.isHubSubFacility("成田空港 第1ターミナル 駐車場")).isTrue();
-        assertThat(PlaceCategoryConstants.isHubSubFacility("浦东机场 停车场")).isTrue();
-        assertThat(PlaceCategoryConstants.isHubSubFacility("Narita International Airport")).isFalse();
+    @DisplayName("여객시설은 현지어로도 알아보고, 관광 부두는 여객시설로 보지 않는다")
+    void passengerFacility() {
         assertThat(PlaceCategoryConstants.isPassengerFacility("新宿バスターミナル")).isTrue();
         assertThat(PlaceCategoryConstants.isPassengerFacility("淡水漁人碼頭")).isFalse();
     }
@@ -84,18 +65,6 @@ class OverseasPlaceRulesTest {
         assertThat(PlaceCategoryConstants.isVisitableEntity("어떤곳", "", "KR")).isFalse();
         assertThat(PlaceCategoryConstants.isVisitableEntity("어떤곳", "서울특별시", null)).isFalse();
         assertThat(PlaceCategoryConstants.isVisitableEntity("어떤곳", "서울특별시 종로구 사직로 161", "KR")).isTrue();
-    }
-
-    @Test
-    @DisplayName("지점명: 괄호 속 店과 공백 뒤 …店을 떼고, 공백 없이 붙은 이름은 그대로 둔다")
-    void branchSuffix() {
-        assertThat(AlternativeBuilder.stripBranchSuffix("星巴克(人民广场店)")).isEqualTo("星巴克");
-        assertThat(AlternativeBuilder.stripBranchSuffix("鼎泰豐（信義店）")).isEqualTo("鼎泰豐");
-        assertThat(AlternativeBuilder.stripBranchSuffix("一蘭 渋谷店")).isEqualTo("一蘭");
-        assertThat(AlternativeBuilder.stripBranchSuffix("大阪焼肉・ホルモン\u3000ふたご\u3000心斎橋店"))
-                .isEqualTo(AlternativeBuilder.stripBranchSuffix("大阪焼肉ホルモン ふたご"));
-        assertThat(AlternativeBuilder.stripBranchSuffix("一蘭渋谷店")).isEqualTo("一蘭渋谷店");
-        assertThat(AlternativeBuilder.stripBranchSuffix("흑본오겹 함덕점")).isEqualTo("흑본오겹");
     }
 
     @Test

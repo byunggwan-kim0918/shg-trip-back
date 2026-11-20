@@ -33,8 +33,4 @@ public record StepData(
                 transportationDuration, transportationDistance, transportationCost, newNotes, estimatedCost);
     }
 
-    public StepData withEndTime(String end) {
-        return new StepData(stepOrder, dayNumber, startTime, end, place, alternatives, transportationMode,
-                transportationDuration, transportationDistance, transportationCost, notes, estimatedCost);
-    }
 }

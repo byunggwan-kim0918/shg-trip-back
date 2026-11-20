@@ -156,7 +156,6 @@ class ItineraryGenerateRequestValidationTest {
                 .contains("꼭 하고 싶은 경험은 최대 5개까지 가능합니다.");
         assertThat(messages(withRequired(List.of(noArea, badTiming))))
                 .contains("경험의 지역 키워드가 비어 있습니다.", "지원하지 않는 시간대입니다.");
-        assertThat(withRequired(List.of(ok)).withTripFactsInDescription().requiredExperiences()).containsExactly(ok);
     }
 
     @Test
@@ -173,7 +172,7 @@ class ItineraryGenerateRequestValidationTest {
     }
 
     @Test
-    @DisplayName("피할 장소 id는 JSON 필드 avoidPlaceIds로 읽히고, 10개 초과·빈 값을 막고, 문장용 사본에도 남는다")
+    @DisplayName("피할 장소 id는 JSON 필드 avoidPlaceIds로 읽히고, 10개 초과·빈 값을 막는다")
     void avoidPlaceIds() throws Exception {
         var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().findAndAddModules().build();
         var req = mapper.readValue("""
@@ -183,14 +182,13 @@ class ItineraryGenerateRequestValidationTest {
 
         assertThat(req.avoidPlaceIds()).containsExactly(9L, 12L);
         assertThat(messages(req)).isEmpty();
-        assertThat(req.withTripFactsInDescription().avoidPlaceIds()).containsExactly(9L, 12L);
         assertThat(messages(withAvoid(java.util.Collections.nCopies(11, 1L))))
                 .contains("피할 장소는 최대 10개까지 가능합니다.");
         assertThat(messages(withAvoid(java.util.Arrays.asList(1L, null)))).contains("피할 장소 값이 비어 있습니다.");
     }
 
     @Test
-    @DisplayName("피할 조건은 JSON 필드 restrictions로 읽히고, 모르는 값·20개 초과·빈 값을 막고, 문장용 사본에도 남는다")
+    @DisplayName("피할 조건은 JSON 필드 restrictions로 읽히고, 모르는 값·20개 초과·빈 값을 막는다")
     void restrictions() throws Exception {
         var mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder().findAndAddModules().build();
         String json = """
@@ -202,7 +200,6 @@ class ItineraryGenerateRequestValidationTest {
 
         assertThat(req.restrictions()).containsExactly(PlaceRestriction.SEAFOOD, PlaceRestriction.HIKING);
         assertThat(messages(req)).isEmpty();
-        assertThat(req.withTripFactsInDescription().restrictions()).isEqualTo(req.restrictions());
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> mapper.readValue(
                         json.formatted(base, base.plusDays(2), "\"FISH\""), ItineraryGenerateRequest.class))
                 .isInstanceOf(com.fasterxml.jackson.databind.exc.InvalidFormatException.class);
@@ -230,16 +227,4 @@ class ItineraryGenerateRequestValidationTest {
                 null, null, null, null, required, null, null);
     }
 
-    @Test
-    @DisplayName("문장만 읽는 경로용 사본에 동행·인원·도착·출발이 문장으로 붙는다")
-    void tripFactsAppendedToDescription() {
-        var req = new ItineraryGenerateRequest(ItineraryGenerateRequest.PlanningMode.AUTO, "제주도", List.of("healing"),
-                List.of("attraction"), null, null, null, base, base.plusDays(2), "바다 보고 싶어요", null, null,
-                "parents", 3, "15:00", "11:00");
-
-        assertThat(req.withTripFactsInDescription().description())
-                .isEqualTo("바다 보고 싶어요 (동행 부모님 동반 3명, 첫날 15:00 도착, 마지막 날 11:00 출발)");
-        var plain = request(ItineraryGenerateRequest.PlanningMode.AUTO, null, base, base.plusDays(2), null, null);
-        assertThat(plain.withTripFactsInDescription()).isSameAs(plain);
-    }
 }

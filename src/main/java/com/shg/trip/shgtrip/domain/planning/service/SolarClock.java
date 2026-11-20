@@ -3,27 +3,27 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import java.time.LocalDate;
 
 /**
- * 일출·일몰 시각(KST, 자정부터 분). NOAA 근사식이라 국내에서 실제와 2~3분 안쪽으로 맞는다.
+ * 일출·일몰 시각(현지 시각, 자정부터 분). NOAA 근사식이라 국내에서 실제와 2~3분 안쪽으로 맞는다.
  * 야외 장소는 해 지기 전, 야경은 해 진 뒤라는 판단이 이 시각에 걸린다.
  */
 final class SolarClock {
 
-    private static final double KST_OFFSET_MINUTES = 540;
     private static final double SUN_ALTITUDE = 90.833;
 
     private SolarClock() {
     }
 
-    static int sunset(LocalDate date, double lat, double lon) {
-        return (int) Math.round(solarNoon(date, lon) + 4 * hourAngle(date, lat));
+    /** @param country 시간대를 정할 나라 코드. 모르면 한국 시간이다 */
+    static int sunset(LocalDate date, double lat, double lon, String country) {
+        return (int) Math.round(solarNoon(date, lon, country) + 4 * hourAngle(date, lat));
     }
 
-    static int sunrise(LocalDate date, double lat, double lon) {
-        return (int) Math.round(solarNoon(date, lon) - 4 * hourAngle(date, lat));
+    static int sunrise(LocalDate date, double lat, double lon, String country) {
+        return (int) Math.round(solarNoon(date, lon, country) - 4 * hourAngle(date, lat));
     }
 
-    private static double solarNoon(LocalDate date, double lon) {
-        return 720 - 4 * lon - equationOfTime(gamma(date)) + KST_OFFSET_MINUTES;
+    private static double solarNoon(LocalDate date, double lon, String country) {
+        return 720 - 4 * lon - equationOfTime(gamma(date)) + TripCalendar.utcOffsetMinutes(country);
     }
 
     private static double gamma(LocalDate date) {

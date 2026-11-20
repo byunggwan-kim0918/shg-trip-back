@@ -14,21 +14,18 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 // Feature: llm-optimization, Property 7: 비현실적 입력 시 파이프라인 중단
 class OptimizedClaudeAIServicePropertyTest {
 
     private final OptimizedClaudeAIService service;
-    private final ClaudeAIService fallbackService;
 
     OptimizedClaudeAIServicePropertyTest() {
         AnthropicClient anthropicClient = mock(AnthropicClient.class);
         AnthropicProperties properties = new AnthropicProperties(
                 "claude-haiku-4-5-20250610", "claude-sonnet-4-20250514", 64000);
         ObjectMapper objectMapper = new ObjectMapper();
-        fallbackService = mock(ClaudeAIService.class);
-        service = new OptimizedClaudeAIService(anthropicClient, properties, objectMapper, fallbackService,
+        service = new OptimizedClaudeAIService(anthropicClient, properties, objectMapper,
                 com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath());
     }
 
@@ -41,8 +38,8 @@ class OptimizedClaudeAIServicePropertyTest {
      *
      * This test verifies: When parseEnrichResponse parses a JSON with valid=false,
      * the result ALWAYS has valid=false, non-null/non-empty errorCode and errorMessage,
-     * null enrichedInput (so no itinerary generation can proceed), and no interaction
-     * with fallback/generation services.
+     * null enrichedInput (so no itinerary generation can proceed), so no generation
+     * can proceed.
      *
      */
     @Property(tries = 100)
@@ -62,7 +59,7 @@ class OptimizedClaudeAIServicePropertyTest {
         ItineraryGenerateRequest request = createRequest();
 
         // Act: Parse the response (this is the core enrichInput logic)
-        EnrichmentResult result = service.parseEnrichResponse(invalidResponseJson, request);
+        EnrichmentResult result = service.readEnrichResponse(invalidResponseJson, request);
 
         // Assert 1: Result must be invalid (pipeline must abort)
         assertThat(result.valid()).isFalse();
@@ -77,9 +74,6 @@ class OptimizedClaudeAIServicePropertyTest {
         // Assert 4: Error message must be present (non-null, non-empty)
         assertThat(result.errorMessage()).isNotNull();
         assertThat(result.errorMessage()).isNotEmpty();
-
-        // Assert 5: No interaction with fallback service (pipeline aborted, no generation)
-        verifyNoInteractions(fallbackService);
     }
 
     /**
@@ -138,7 +132,7 @@ class OptimizedClaudeAIServicePropertyTest {
         ItineraryGenerateRequest request = createRequest();
 
         // Act
-        EnrichmentResult result = service.parseEnrichResponse(invalidResponseJson, request);
+        EnrichmentResult result = service.readEnrichResponse(invalidResponseJson, request);
 
         // Assert: Pipeline MUST still abort
         assertThat(result.valid()).isFalse();
@@ -149,9 +143,6 @@ class OptimizedClaudeAIServicePropertyTest {
         assertThat(result.errorCode()).isNotEmpty();
         assertThat(result.errorMessage()).isNotNull();
         assertThat(result.errorMessage()).isNotEmpty();
-
-        // Assert: No fallback service interaction (pipeline aborted at enrichment stage)
-        verifyNoInteractions(fallbackService);
     }
 
     // --- Arbitrary Providers ---

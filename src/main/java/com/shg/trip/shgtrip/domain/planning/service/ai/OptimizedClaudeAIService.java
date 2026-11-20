@@ -9,13 +9,14 @@ import com.shg.trip.shgtrip.domain.planning.dto.EnrichmentResult;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.TransportationHub;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
+import com.shg.trip.shgtrip.global.exception.BusinessException;
+import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -27,25 +28,23 @@ import java.util.stream.Collectors;
 public class OptimizedClaudeAIService {
 
     private static final int MAX_RETRIES = 2;
+    private static final int READ_ATTEMPTS = 2;
     /** 동행·섬·검색쿼리까지 담은 enrich JSON은 1024 토큰이면 잘린다. */
     private static final int ENRICH_MAX_TOKENS = 2048;
 
     private final AnthropicClient anthropicClient;
     private final AnthropicProperties anthropicProperties;
     private final ObjectMapper objectMapper;
-    private final ClaudeAIService fallbackService;
     private final Destinations destinations;
     private final String enrichPromptTemplate;
 
     public OptimizedClaudeAIService(AnthropicClient anthropicClient,
                                      AnthropicProperties anthropicProperties,
                                      ObjectMapper objectMapper,
-                                     ClaudeAIService fallbackService,
                                      Destinations destinations) {
         this.anthropicClient = anthropicClient;
         this.anthropicProperties = anthropicProperties;
         this.objectMapper = objectMapper;
-        this.fallbackService = fallbackService;
         this.destinations = destinations;
         this.enrichPromptTemplate = loadPromptTemplateSafe("prompts/enrich-input.txt")
                 .replace(EnrichDestinations.PLACEHOLDER, EnrichDestinations.promptLines(destinations));
@@ -53,11 +52,11 @@ public class OptimizedClaudeAIService {
 
     /**
      * 비현실적 입력이면 에러 코드와 수정 제안을 반환해 파이프라인을 중단한다.
-     * API 실패 시 최대 3회 재시도 후 legacy enrichInput으로 fallback한다.
+     * API 실패는 최대 3회 재시도하고, 응답을 읽지 못하면 한 번 다시 묻는다. 그래도 안 되면
+     * {@link ErrorCode#AI_SERVICE_ERROR}로 끝낸다.
      */
     public EnrichmentResult enrichInput(ItineraryGenerateRequest input) {
         String prompt = buildEnrichPrompt(input);
-
         try {
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(anthropicProperties.haiku())
@@ -65,37 +64,36 @@ public class OptimizedClaudeAIService {
                     .maxTokens(ENRICH_MAX_TOKENS)
                     .addUserMessage(prompt)
                     .build();
-
-            Message message = executeWithRetry(
-                    () -> anthropicClient.messages().create(params), MAX_RETRIES);
-            // 잘린 JSON은 legacy fallback으로 떨어져 동행·도선 섬·허브가 통째로 사라지므로 잘림을 로그로 드러낸다.
-            if (message.stopReason().isPresent()
-                    && message.stopReason().get().equals(com.anthropic.models.messages.StopReason.MAX_TOKENS)) {
-                log.warn("enrichInput 응답이 max_tokens({})에서 잘림 — 파싱 실패 시 legacy fallback", ENRICH_MAX_TOKENS);
+            for (int attempt = 1; attempt <= READ_ATTEMPTS; attempt++) {
+                Message message = executeWithRetry(
+                        () -> anthropicClient.messages().create(params), MAX_RETRIES);
+                if (message.stopReason().isPresent()
+                        && message.stopReason().get().equals(com.anthropic.models.messages.StopReason.MAX_TOKENS)) {
+                    log.warn("enrichInput 응답이 max_tokens({})에서 잘림", ENRICH_MAX_TOKENS);
+                }
+                String responseText = message.content().stream()
+                        .filter(block -> block.isText())
+                        .map(block -> block.asText().text())
+                        .collect(Collectors.joining());
+                EnrichmentResult result = readEnrichResponse(responseText, input);
+                if (result != null) return result;
             }
-
-            String responseText = message.content().stream()
-                    .filter(block -> block.isText())
-                    .map(block -> block.asText().text())
-                    .collect(Collectors.joining());
-
-            return parseEnrichResponse(responseText, input);
-
         } catch (Exception e) {
-            log.warn("enrichInput 실패, 기존 enrichInput으로 fallback: {}", e.getMessage());
-            return fallbackToLegacyEnrich(input);
+            log.warn("enrichInput 실패: {}", e.getMessage());
         }
+        throw enrichFailed();
     }
 
+    /** @return 읽은 결과. JSON이 없거나 읽지 못하면 null */
     @SuppressWarnings("unchecked")
-    EnrichmentResult parseEnrichResponse(String responseText, ItineraryGenerateRequest input) {
+    EnrichmentResult readEnrichResponse(String responseText, ItineraryGenerateRequest input) {
         try {
             // AI가 JSON 앞뒤에 설명을 붙이는 경우가 있다.
             int jsonStart = responseText.indexOf('{');
             int jsonEnd = responseText.lastIndexOf('}');
             if (jsonStart < 0 || jsonEnd <= jsonStart) {
-                log.warn("enrichInput: JSON not found in response, using fallback");
-                return fallbackToLegacyEnrich(input);
+                log.warn("enrichInput: JSON not found in response");
+                return null;
             }
 
             String jsonStr = responseText.substring(jsonStart, jsonEnd + 1);
@@ -191,42 +189,13 @@ public class OptimizedClaudeAIService {
 
         } catch (Exception e) {
             log.warn("enrichInput JSON 파싱 실패: {}", e.getMessage());
-            return fallbackToLegacyEnrich(input);
+            return null;
         }
     }
 
-    private EnrichmentResult fallbackToLegacyEnrich(ItineraryGenerateRequest input) {
-        try {
-            var legacyResult = fallbackService.enrichInput(input);
-
-            VectorEnrichedInput vectorEnrichedInput = new VectorEnrichedInput(
-                    legacyResult.destination(),
-                    legacyResult.themes(),
-                    legacyResult.categories(),
-                    legacyResult.pace(),
-                    legacyResult.transportPref(),
-                    legacyResult.budget(),
-                    legacyResult.startDate(),
-                    legacyResult.endDate(),
-                    legacyResult.description(),
-                    legacyResult.selectedPlaceIds(),
-                    legacyResult.destination(),   // normalizedDestination = 원본
-                    "",                            // country 미확인
-                    List.of(),                     // regions 미확인
-                    List.of(),                     // searchTags 미생성
-                    null,                          // regionAllocation 미생성
-                    estimateBudgetRange(legacyResult.budget(), legacyResult.startDate(), legacyResult.endDate()),
-                    "",                            // seasonContext 미생성
-                    legacyResult.enrichedContext(),
-                    null,                          // transportationHub 미생성
-                    null                           // categorySearchQueries 미생성
-            );
-
-            return EnrichmentResult.success(vectorEnrichedInput);
-        } catch (Exception fallbackEx) {
-            log.error("enrichInput fallback도 실패: {}", fallbackEx.getMessage());
-            throw fallbackEx;
-        }
+    /** 나라·지역 없이는 여행지 장소를 찾을 수 없어 보강 실패는 생성 실패다. */
+    private static BusinessException enrichFailed() {
+        return new BusinessException(ErrorCode.AI_SERVICE_ERROR, "여행 조건을 읽지 못했습니다. 잠시 후 다시 시도해 주세요.");
     }
 
     private String buildEnrichPrompt(ItineraryGenerateRequest input) {
@@ -306,23 +275,6 @@ public class OptimizedClaudeAIService {
                   "enrichedContext": "기존 형식의 텍스트 컨텍스트"
                 }
                 """;
-    }
-
-    private String estimateBudgetRange(BigDecimal budget, java.time.LocalDate startDate, java.time.LocalDate endDate) {
-        if (budget == null || startDate == null || endDate == null) {
-            return "MEDIUM";
-        }
-        long days = java.time.temporal.ChronoUnit.DAYS.between(startDate, endDate) + 1;
-        if (days <= 0) days = 1;
-        BigDecimal dailyBudget = budget.divide(BigDecimal.valueOf(days), java.math.RoundingMode.HALF_UP);
-        BigDecimal threshold500k = new BigDecimal("500000");
-        BigDecimal threshold150 = new BigDecimal("1500000");
-        BigDecimal threshold300 = new BigDecimal("3000000");
-
-        if (dailyBudget.compareTo(threshold500k) < 0) return "LOW";
-        if (dailyBudget.compareTo(threshold150) < 0) return "MEDIUM";
-        if (dailyBudget.compareTo(threshold300) < 0) return "HIGH";
-        return "LUXURY";
     }
 
     private <T> T executeWithRetry(Supplier<T> action, int maxRetries) {

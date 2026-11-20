@@ -27,6 +27,15 @@ class DraftPlaceResolverTest {
     }
 
     @Test
+    @DisplayName("질의 가운데 꾸밈말을 뺀 이름은 같은 곳으로 본다")
+    void dropsInfix() {
+        assertThat(DraftPlaceResolver.dropsInfix("대인시장", "대인예술시장")).isTrue();
+        assertThat(DraftPlaceResolver.dropsInfix("대인시장", "대인시장")).isFalse();
+        assertThat(DraftPlaceResolver.dropsInfix("남부시장", "대인예술시장")).isFalse();
+        assertThat(DraftPlaceResolver.dropsInfix("대인장", "대인예술시장")).isFalse();
+    }
+
+    @Test
     @DisplayName("같은 이름 > 앞부분·담음 > 질의가 이름을 담음 순이다")
     void tiers() {
         assertThat(DraftPlaceResolver.tier("해운대해수욕장", "해운대해수욕장")).isZero();

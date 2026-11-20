@@ -35,7 +35,7 @@ class DayBuilderTest {
     private static DayBuilder.Frame frame(LocalDate date, int start, int end, boolean hardEnd,
                                           List<DayBuilder.Stop> spares, List<PlaceCandidate> earlier) {
         return new DayBuilder.Frame(1, date, start, end, 22 * 60, 19 * 60 + 30, 5 * 60 + 15, null, null, null,
-                false, hardEnd, null, false, "walk", spares, earlier, Integer.MAX_VALUE, 1.0, null);
+                false, hardEnd, null, false, "walk", spares, earlier, Integer.MAX_VALUE, 1.0, null, "KR");
     }
 
     private static DayBuilder.Stop stop(PlaceCandidate p, String kind, String slot) {
@@ -162,7 +162,7 @@ class DayBuilderTest {
         DayBuilder.Frame open = frame(WEDNESDAY, 9 * 60, 21 * 60, false, spares, List.of());
         DayBuilder.Frame capped = new DayBuilder.Frame(open.dayNumber(), open.date(), open.startMin(), open.endMin(),
                 open.lodgingBy(), open.sunset(), open.sunrise(), null, null, null, false, false, null, false, "walk",
-                spares, List.of(), 2, 1.0, null);
+                spares, List.of(), 2, 1.0, null, "KR");
         List<DayBuilder.Stop> stops = List.of(stop(museum, "sight", "morning"), stop(lunch, "meal", "lunch"),
                 stop(dinner, "meal", "dinner"));
 
@@ -183,7 +183,7 @@ class DayBuilderTest {
 
         DayBuilder.Built built = DayBuilder.build(frame(WEDNESDAY, 9 * 60, 21 * 60, false, List.of(), List.of()),
                 List.of(stop(museum, "sight", "morning"),
-                        new DayBuilder.Stop(closed, "meal", "lunch", List.of(open), true, "돼지국밥")));
+                        new DayBuilder.Stop(closed, "meal", "lunch", List.of(open), true)));
 
         assertThat(names(built)).containsExactly("부산박물관", "쌍둥이돼지국밥");
     }
@@ -197,7 +197,7 @@ class DayBuilderTest {
 
         DayBuilder.Built built = DayBuilder.build(frame(WEDNESDAY, 9 * 60, 21 * 60, false, List.of(), List.of(yesterday)),
                 List.of(stop(museum, "sight", "morning"),
-                        new DayBuilder.Stop(yesterday, "meal", "lunch", List.of(other), false, "국밥")));
+                        new DayBuilder.Stop(yesterday, "meal", "lunch", List.of(other), false)));
 
         assertThat(names(built)).containsExactly("부산박물관", "쌍둥이돼지국밥");
     }

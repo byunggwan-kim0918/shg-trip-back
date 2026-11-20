@@ -20,6 +20,17 @@ class OpeningHoursTextTest {
     private static final int DINNER_END = 18 * 60 + 40;
 
     @Test
+    @DisplayName("영업시간이 없는 곳은 휴무 요일만 적어 그날은 닫고 다른 날은 판단을 보류한다")
+    void closedDaysWithoutHours() {
+        String hours = OpeningHoursText.withClosedDays(null, java.util.Set.of(DayOfWeek.MONDAY, DayOfWeek.TUESDAY));
+        assertThat(OpeningHoursText.isClosedOnDay(hours, DayOfWeek.MONDAY)).isTrue();
+        assertThat(OpeningHoursText.isClosedOnDay(hours, DayOfWeek.TUESDAY)).isTrue();
+        assertThat(OpeningHoursText.rangesFor(hours, DayOfWeek.WEDNESDAY)).isNull();
+        assertThat(OpeningHoursText.withClosedDays("월요일: 10:00 ~ 18:00", java.util.Set.of(DayOfWeek.MONDAY)))
+                .isEqualTo("월요일: 10:00 ~ 18:00");
+    }
+
+    @Test
     @DisplayName("표준 표기: 오전/오후 두 쪽 모두 명시")
     void standardKoreanRange() {
         String hours = "월요일: 오전 10:00 ~ 오후 10:00";
@@ -135,45 +146,4 @@ class OpeningHoursTextTest {
         assertThat(OpeningHoursText.rangesFor("월요일: 상시 영업", DayOfWeek.MONDAY)).isNull();
     }
 
-    @Test
-    @DisplayName("기존 isClosedOnDay 계약 유지: 고신뢰 휴무 신호에만 true")
-    void keepsLegacyClosedContract() {
-        assertThat(OpeningHoursText.isClosedOnDay("월요일: 휴무, 화요일: 오전 9시~오후 6시",
-                DayOfWeek.MONDAY)).isTrue();
-        assertThat(OpeningHoursText.isClosedOnDay("Monday: Closed, Tuesday: 9 AM ~ 6 PM",
-                DayOfWeek.MONDAY)).isTrue();
-        assertThat(OpeningHoursText.isClosedOnDay("월요일: 오전 9시~오후 6시", DayOfWeek.MONDAY)).isFalse();
-        assertThat(OpeningHoursText.isClosedOnDay(null, DayOfWeek.MONDAY)).isFalse();
-        assertThat(OpeningHoursText.isClosedOnDay("", DayOfWeek.MONDAY)).isFalse();
-    }
-
-    @Test
-    @DisplayName("earliestStart: 개장 전이면 개장 시각을, 그날 불가능하면 -1, 판독 불가면 null")
-    void earliestStartSemantics() {
-        String nineToSix = "월요일: 오전 9:00 ~ 오후 6:00";
-        // 08:36 도착 + 90분 체류 → 09:00으로 늦추면 들어간다
-        assertThat(OpeningHoursText.earliestStart(nineToSix, DayOfWeek.MONDAY, 8 * 60 + 36, 90))
-                .isEqualTo(9 * 60);
-        // 이미 영업 중이면 그대로
-        assertThat(OpeningHoursText.earliestStart(nineToSix, DayOfWeek.MONDAY, 10 * 60, 90))
-                .isEqualTo(10 * 60);
-        // 마감까지 90분이 안 남으면 그날은 불가능
-        assertThat(OpeningHoursText.earliestStart(nineToSix, DayOfWeek.MONDAY, 17 * 60 + 30, 90))
-                .isEqualTo(-1);
-        // 정기휴무도 불가능
-        assertThat(OpeningHoursText.earliestStart("월요일: 휴무일", DayOfWeek.MONDAY, 10 * 60, 90))
-                .isEqualTo(-1);
-        // 판독 불가 → 제약 없음
-        assertThat(OpeningHoursText.earliestStart(null, DayOfWeek.MONDAY, 10 * 60, 90)).isNull();
-        assertThat(OpeningHoursText.earliestStart("상시 영업", DayOfWeek.MONDAY, 10 * 60, 90)).isNull();
-    }
-
-    @Test
-    @DisplayName("earliestStart: 브레이크 타임이 있으면 다음 구간의 시작을 돌려준다")
-    void earliestStartSkipsBreak() {
-        String withBreak = "월요일: 오전 11:00 ~ 오후 3:00, 오후 4:30~10:00";
-        // 15:30 도착 + 70분 → 브레이크라 16:30부터
-        assertThat(OpeningHoursText.earliestStart(withBreak, DayOfWeek.MONDAY, 15 * 60 + 30, 70))
-                .isEqualTo(16 * 60 + 30);
-    }
 }

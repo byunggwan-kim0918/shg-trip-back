@@ -10,25 +10,6 @@ class DayState {
     final List<Integer> placeIndices;
     Integer accommodationIndex;
     Integer departureHubIndex;
-    /**
-     * 영업시간 판정용 요일. 여행 시작일을 모르면 null이고 판정을 건너뛴다(열림 가정).
-     */
-    java.time.DayOfWeek dayOfWeek;
-    /**
-     * 사용자가 고른 카테고리를 일정 전체에서 혼자 대표하는 장소 인덱스.
-     * 거리 트림에서 보호하지 않으면 사용자가 고른 카테고리가 0개가 된다.
-     *
-     * <p>itinerary 전체를 봐야 정하는 값이라 day마다 같은 집합을 들고 있다.
-     * 대표가 2곳 이상인 카테고리는 하나를 빼도 커버리지가 유지돼 넣지 않는다.
-     */
-    java.util.Set<Integer> coverageCriticalIndices = java.util.Set.of();
-    /**
-     * 그날 점심과 저녁 사이에 들르는 카페·디저트({@code ScheduleConfig.cafeStop}일 때만).
-     * 짧게 들르는 곳이라 우회 기여만 보면 가장 먼저 잘려 거리 트림에서 보호한다.
-     */
-    Integer cafeStopIndex;
-    /** 전날 묵은 숙소(도착 허브가 없는 날). 거리 예산이 아침 구간을 세는 출발점이며 스케줄할 때마다 다시 정한다. */
-    Integer startLodgingIndex;
     /** 첫날 도착 시각(분). 이보다 일찍 시작하지 않는다. 모르면 null. */
     Integer startNotBefore;
     /** 마지막 날 출발 허브에 닿아야 하는 시각(분). 모르면 null(기본 21:00). */
@@ -37,19 +18,6 @@ class DayState {
     boolean resumesAfterTransfer;
     /** 다음 도시로 넘어가기 전날. 구간의 마지막 날이어도 숙소·저녁이 필요하고 출발 허브가 없다. */
     boolean continuesAfter;
-    /** 오전 방문지 중 아침에만 성립하는 곳(아침 의도, 긴 등산)을 먼저 둔다. 날짜를 직접 고르는 확정만 켠다. */
-    boolean morningOnlyFirst;
-    /** 하루에 둘 카페·디저트 수. 날짜를 직접 고르는 확정은 카페를 관광 대신 쓰지 않게 하나로 줄인다. */
-    int cafeCap = ScheduleTuning.CAFE_PER_DAY_CAP;
-    /** 영업시간에 맞춰 시간대 맨 앞에 둘 장소. 날짜를 직접 고르는 확정만 붙인다. */
-    final java.util.Map<Integer, Slot> openingSlots = new java.util.HashMap<>();
-
-    enum Slot { MORNING_FIRST, AFTERNOON_FIRST, EVENING_FIRST }
-    private final List<Drop> drops = new ArrayList<>();
-    private final java.util.Set<Integer> dropBaseline = new java.util.HashSet<>();
-
-    /** @param replacedBy 그 자리에 대신 넣은 장소. 빼기만 했으면 null. 대신 넣은 장소도 같은 확정에서 다시 빠질 수 있다 */
-    record Drop(int index, DropReason reason, Integer replacedBy) {}
 
     DayState(SelectionOutput.DayPlan plan) {
         this.dayNumber = plan.dayNumber();
@@ -57,35 +25,6 @@ class DayState {
         this.placeIndices = new ArrayList<>(plan.placeIndices() != null ? plan.placeIndices() : List.of());
         this.accommodationIndex = plan.accommodationIndex();
         this.departureHubIndex = plan.departureHubIndex();
-    }
-
-    /** 그날 구성에서 빼고 사유를 남긴다. 전날 숙소처럼 순서에만 끼워 넣은 장소는 구성에 없어 남기지 않는다. */
-    void drop(Integer index, DropReason reason) {
-        if (placeIndices.remove(index)) drops.add(new Drop(index, reason, null));
-    }
-
-    /** 다른 장소로 바꾸기 직전에 부른다. */
-    void noteSwap(Integer index, DropReason reason, Integer replacedBy) {
-        if (placeIndices.contains(index)) drops.add(new Drop(index, reason, replacedBy));
-    }
-
-    /** 지금 구성을 기준으로 뺀 장소를 새로 센다. */
-    void resetDrops() {
-        drops.clear();
-        dropBaseline.clear();
-        dropBaseline.addAll(placeIndices);
-    }
-
-    /**
-     * {@link #resetDrops()} 때 구성에 있다가 지금 없는 장소와 처음 뺀 사유. 대신 넣었다가 다시 뺀 장소는
-     * 원래 구성이 아니라 나오지 않는다.
-     */
-    List<Drop> dropped() {
-        java.util.Set<Integer> seen = new java.util.HashSet<>();
-        return drops.stream()
-                .filter(d -> dropBaseline.contains(d.index()) && !placeIndices.contains(d.index()))
-                .filter(d -> seen.add(d.index()))
-                .toList();
     }
 
     /** 점심 시간대가 끝난 뒤 도착하거나 끝나기 전에 떠나는 날이면 false. 그날 점심을 요구하지 않는다. */
@@ -105,11 +44,6 @@ class DayState {
     private int lateMealEnd(int windowEnd) {
         return startNotBefore == null ? windowEnd
                 : Math.max(windowEnd, startNotBefore + ScheduleTuning.LATE_MEAL_WINDOW_MINUTES);
-    }
-
-    /** 사용자가 준 도착·출발 시각이 있는 날. 이런 날만 시간창 보정이 적용된다. */
-    boolean hasUserWindow() {
-        return startNotBefore != null || departureDeadline != null;
     }
 
     /** 출발 시각 때문에 일찍 끝나는 날. 사용자가 정한 일정이라 조기 종료로 보지 않는다. */

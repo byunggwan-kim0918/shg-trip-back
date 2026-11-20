@@ -85,7 +85,6 @@ public record PlaceCandidate(
                 intentProtected, intentTime, null);
     }
 
-    /** 의도는 필수 경험 매칭과 스케줄 직전(RouteOptimizer)에만 실린다. */
     public PlaceCandidate(int index, Long placeId, String name, String address,
                           String category, List<String> tags, String region, String country,
                           BigDecimal latitude, BigDecimal longitude, String description,
@@ -187,7 +186,7 @@ public record PlaceCandidate(
                 priceLevel, openingHours, recommendedTimeSlots, null, false, null, null, null, null);
     }
 
-    /** userSelected 플래그만 켠 사본 (dedupe 대표 선정 시 필수성 전파용). */
+    /** 사용자가 직접 고른 장소 표시만 켠 사본. 피할 조건·섬·같은 장소 판정이 이 장소는 빼지 않는다. */
     public PlaceCandidate asUserSelected() {
         if (userSelected) return this;
         return new PlaceCandidate(index, placeId, name, address, category, tags, region, country,
@@ -195,14 +194,6 @@ public record PlaceCandidate(
                 priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes, true,
                 admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
                 intentProtected, intentTime, attributes, nameKo, travelerFame);
-    }
-
-    public PlaceCandidate withIntent(boolean protect, String time) {
-        return new PlaceCandidate(index, placeId, name, address, category, tags, region, country,
-                latitude, longitude, description, rating, similarityScore,
-                priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
-                userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                protect, time, attributes, nameKo, travelerFame);
     }
 
     /** 인덱스만 바꾼 사본. 도시 구간으로 나눠 다시 번호를 매겨도 필수 경험 의도가 남아야 한다. */
@@ -214,28 +205,17 @@ public record PlaceCandidate(
                 intentProtected, intentTime, attributes, nameKo, travelerFame);
     }
 
-    /** DB에서 다시 읽은 속성·영업시간만 바꾼 사본(평가 재채점용). */
-    public PlaceCandidate withRefreshedFacts(PlaceAttributes newAttributes, String newOpeningHours) {
+    public PlaceCandidate withOpeningHours(String newOpeningHours) {
         return new PlaceCandidate(index, placeId, name, address, category, tags, region, country,
                 latitude, longitude, description, rating, similarityScore,
                 priceLevel, newOpeningHours, recommendedTimeSlots, recommendedDurationMinutes,
                 userSelected, admissionFee, subRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                intentProtected, intentTime, newAttributes, nameKo, travelerFame);
+                intentProtected, intentTime, attributes, nameKo, travelerFame);
     }
 
     /** 사용자 필수이거나 요청 의도의 핵심이면 트림·교체·이월에서 빼지 않는다. */
     public boolean keepsPlace() {
         return userSelected || intentProtected;
-    }
-
-    /** 세부지역만 채운 사본. 추출 실패(null)면 원본을 그대로 둔다(호출부가 region으로 폴백). */
-    public PlaceCandidate withSubRegion(String newSubRegion) {
-        if (newSubRegion == null || newSubRegion.isBlank()) return this;
-        return new PlaceCandidate(index, placeId, name, address, category, tags, region, country,
-                latitude, longitude, description, rating, similarityScore,
-                priceLevel, openingHours, recommendedTimeSlots, recommendedDurationMinutes,
-                userSelected, admissionFee, newSubRegion, userRatingCount, wikidataSitelinks, placeRole, cuisine,
-                intentProtected, intentTime, attributes, nameKo, travelerFame);
     }
 
     /**
@@ -263,11 +243,6 @@ public record PlaceCandidate(
     /** 화면·스토리에 쓰는 이름. 한국어 이름이 있으면 그것이다. */
     public String displayName() {
         return hasDistinctNameKo() ? nameKo : name;
-    }
-
-    /** 선택 프롬프트용 이름. 원문을 함께 줘야 모델이 같은 이름의 다른 장소와 구분한다("센소지 (浅草寺)"). */
-    public String promptName() {
-        return hasDistinctNameKo() ? nameKo + " (" + name + ")" : name;
     }
 
     private boolean hasDistinctNameKo() {

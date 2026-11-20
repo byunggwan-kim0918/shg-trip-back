@@ -8,14 +8,12 @@ import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.coordsOf;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.isHikeOfAtLeast;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.isLongHike;
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateTraits.subTypeOf;
 import static com.shg.trip.shgtrip.domain.planning.service.CostEstimator.estimateCost;
-import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTimes.byIndex;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTimes.formatMinutes;
 import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.*;
 
@@ -46,8 +44,7 @@ final class DayTiming {
     }
 
     /**
-     * 늦게 여는 곳을 미리 오후에 둘 때 보는 영업시간. 백화점·쇼핑몰·아울렛은 영업시간이 거의 비어 있어 이 업종의 흔한 시간으로 본다.
-     * 공용 하루 확정과 판정은 실제 데이터만 본다. 하루 확정이 이 값을 쓰면 옮길 장치가 없는 v1이 요청 의도 장소를 뺀다.
+     * 하루 확정과 검사가 보는 영업시간. 백화점·쇼핑몰·아울렛은 영업시간이 거의 비어 있어 이 업종의 흔한 시간으로 본다.
      */
     static String openingHoursOf(PlaceCandidate c) {
         if (c.openingHours() != null && !c.openingHours().isBlank()) return c.openingHours();
@@ -149,71 +146,6 @@ final class DayTiming {
             if (lower.contains(k)) return true;
         }
         return false;
-    }
-
-    /**
-     * 그 시각에 식사({@value ScheduleTuning#DINING_VISIT_MINUTES}분)가 가능한 후보만 남긴다.
-     * 요일을 모르거나 영업시간을 판독할 수 없으면 전부 통과한다(열림 가정).
-     */
-    static List<Integer> openAtSlot(List<Integer> meals, List<PlaceCandidate> candidates,
-                                    java.time.DayOfWeek dow, int slotStart) {
-        return meals.stream()
-                .filter(m -> isOpenDuring(byIndex(candidates, m), dow, slotStart,
-                        slotStart + DINING_VISIT_MINUTES))
-                .collect(Collectors.toList());
-    }
-
-    /**
-     * 오전/오후/저녁 시간창의 <b>분 단위 예산</b>.
-     *
-     * <p>활동 1개를 {@value ScheduleTuning#ACTIVITY_SLOT_MINUTES}분으로 고정해 개수로 세면 긴 체류 장소도 1칸만 차지해
-     * 버킷은 안 넘치는데 시계가 밀린다. 실제 체류시간으로 채우도록 분을 그대로 돌려준다.
-     */
-    private static int[] bucketBudgets(ScheduleConfig cfg, boolean hasLunch, boolean hasDinner, boolean hasBreakfast) {
-        int densityMinutes = cfg.densityDelta * ACTIVITY_SLOT_MINUTES;
-        int morningStart = cfg.morningStart + (hasBreakfast ? DINING_VISIT_MINUTES : 0);
-        // 점심·저녁은 시간대 시작에 고정되지만, 그보다 늦게 하루가 시작하면 그 뒤로 밀린다
-        int lunchEnd = Math.max(LUNCH_START, morningStart) + DINING_VISIT_MINUTES;
-        int dinnerEnd = Math.max(DINNER_START, morningStart) + DINING_VISIT_MINUTES;
-        if (hasLunch && hasDinner) {
-            int budgetM = Math.max(0, LUNCH_START - morningStart);
-            int budgetA = Math.max(ACTIVITY_SLOT_MINUTES, DINNER_START - lunchEnd + densityMinutes);
-            int budgetE = Math.max(0, cfg.eveningCap - dinnerEnd);
-            return new int[]{budgetM, budgetA, budgetE};
-        } else if (hasLunch) { // 저녁 없음 → 오후가 상한까지 확장
-            int budgetM = Math.max(0, LUNCH_START - morningStart);
-            int budgetA = Math.max(ACTIVITY_SLOT_MINUTES, cfg.eveningCap - lunchEnd + densityMinutes);
-            return new int[]{budgetM, budgetA, 0};
-        } else if (hasDinner) { // 점심 없이 저녁만(오후 도착) → 저녁 전까지가 오후
-            int budgetA = Math.max(0, DINNER_START - morningStart + densityMinutes);
-            int budgetE = Math.max(0, cfg.eveningCap - dinnerEnd);
-            return new int[]{0, budgetA, budgetE};
-        } else { // 식사 없음 → 하루 전체를 한 버킷으로
-            int budgetAll = Math.max(ACTIVITY_SLOT_MINUTES, cfg.eveningCap - morningStart + densityMinutes);
-            return new int[]{budgetAll, 0, 0};
-        }
-    }
-
-    /**
-     * 그날 쓸 수 있는 끼니로 예산을 잡는다. 사용자 시간창이 없으면 끼니 수만 본다.
-     * 시간창이 있으면 범위 밖 끼니를 세지 않고, 도착 허브에서 빠져나오는 시간을 앞쪽 버킷에서 뺀다.
-     */
-    static int[] dayBudgets(DayState day, ScheduleConfig cfg, int mealCount, int arrivalLeadMinutes) {
-        if (!day.hasUserWindow()) {
-            return bucketBudgets(cfg, mealCount >= 1, mealCount >= 2, mealCount >= 3);
-        }
-        boolean lunch = day.lunchInWindow() && mealCount >= 1;
-        boolean dinner = day.dinnerInWindow() && mealCount >= (lunch ? 2 : 1);
-        int[] budgets = bucketBudgets(cfg, lunch, dinner, mealCount >= 3);
-        if (day.startNotBefore != null && day.arrivalHubIndex != null) {
-            int left = arrivalLeadMinutes;
-            for (int i = 0; i < budgets.length && left > 0; i++) {
-                int used = Math.min(budgets[i], left);
-                budgets[i] -= used;
-                left -= used;
-            }
-        }
-        return budgets;
     }
 
     private static PlaceData toPlaceData(PlaceCandidate c) {

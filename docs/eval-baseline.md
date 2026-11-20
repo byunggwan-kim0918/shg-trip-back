@@ -1,3 +1,5 @@
+> 이 문서의 `score`·`corpus`·`replay`·`files`·`pool`·`rejected` 모드와 v1·v2 비교는 옛 생성기 기록이다. 지금 생성기는 `--eval.mode=trip`으로 잰다.
+
 # 일정 품질 기준선 — 2026-10-31
 
 평가 세트 `scripts/eval/eval-set.json` 20건(제주 11 · 서울 3 · 부산 2 · 경주 · 오사카 · 교토 · 도쿄)을

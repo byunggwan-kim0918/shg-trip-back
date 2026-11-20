@@ -120,7 +120,8 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /**
      * 공백·문장부호를 뺀 이름으로 찾는다. 이름이 질의를 담거나, 질의가 이름(최소 {@code minLength}자)을 담는 행이다.
-     * 모델이 쓴 "수원 통닭거리"와 DB의 "수원통닭거리"처럼 띄어쓰기만 다른 이름을 잇는다.
+     * 모델이 쓴 "수원 통닭거리"와 DB의 "수원통닭거리"처럼 띄어쓰기만 다른 이름을 잇는다. 해외 장소는 원어 이름 대신
+     * 한국어 이름(name_ko)으로도 찾는다.
      *
      * @param compact 소문자·공백·문장부호를 뺀 질의
      */
@@ -130,7 +131,10 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND latitude IS NOT NULL AND longitude IS NOT NULL
               AND (regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g') LIKE '%' || :compact || '%'
                    OR (length(regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g')) >= :minLength
-                       AND position(regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g') IN :compact) > 0))
+                       AND position(regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g') IN :compact) > 0)
+                   OR regexp_replace(lower(name_ko), '[[:space:][:punct:]]', '', 'g') LIKE '%' || :compact || '%'
+                   OR (length(regexp_replace(lower(name_ko), '[[:space:][:punct:]]', '', 'g')) >= :minLength
+                       AND position(regexp_replace(lower(name_ko), '[[:space:][:punct:]]', '', 'g') IN :compact) > 0))
             ORDER BY length(name), id
             LIMIT 200
             """, nativeQuery = true)
@@ -139,15 +143,31 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                                         @Param("regions") Collection<String> regions,
                                         @Param("roles") Collection<String> roles);
 
+    /** 공백·문장부호를 뺀 이름(또는 한국어 이름)이 {@code head}로 시작하고 {@code tail}로 끝나는 행. */
+    @Query(value = """
+            SELECT * FROM places
+            WHERE active AND merged_into_id IS NULL AND region IN (:regions) AND place_role IN (:roles)
+              AND latitude IS NOT NULL AND longitude IS NOT NULL
+              AND (regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g') LIKE :head || '%' || :tail
+                   OR regexp_replace(lower(name_ko), '[[:space:][:punct:]]', '', 'g') LIKE :head || '%' || :tail)
+            ORDER BY length(name), id
+            LIMIT 50
+            """, nativeQuery = true)
+    List<Place> findActiveByNameEdges(@Param("head") String head,
+                                      @Param("tail") String tail,
+                                      @Param("regions") Collection<String> regions,
+                                      @Param("roles") Collection<String> roles);
+
     /**
-     * 이름이나 관광공사 공식 메뉴(대표·취급 메뉴)·태그에 음식 이름이 든 식당을 기준 좌표에서 가까운 순으로 찾는다.
+     * 이름이나 관광공사 공식 메뉴(대표·취급 메뉴)·태그에 음식 이름이 든 식당·카페를 기준 좌표에서 가까운 순으로 찾는다.
      * 큰 도시는 "칼국수"만 수백 곳이라 거리 순서 없이 자르면 동선 근처 식당이 빠진다.
      */
     @Query(value = """
             SELECT * FROM places
-            WHERE active AND merged_into_id IS NULL AND region IN (:regions) AND place_role = 'MEAL'
+            WHERE active AND merged_into_id IS NULL AND region IN (:regions) AND place_role IN ('MEAL', 'CAFE')
               AND latitude IS NOT NULL AND longitude IS NOT NULL
               AND (regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g') LIKE '%' || :word || '%'
+                   OR regexp_replace(lower(name_ko), '[[:space:][:punct:]]', '', 'g') LIKE '%' || :word || '%'
                    OR coalesce(attributes -> 'official' ->> 'firstmenu', '') LIKE '%' || :word || '%'
                    OR coalesce(attributes -> 'official' ->> 'treatmenu', '') LIKE '%' || :word || '%'
                    OR array_to_string(tags, ' ') LIKE '%' || :word || '%')
@@ -181,6 +201,24 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
 
 
     boolean existsBySourceAndRegionAndName(String source, String region, String name);
+
+    /** 여행지 장소 가운데 주소에 이 낱말이 든 장소 수. 배로만 가는 섬 토큰이 지역 이름인지 가릴 때 쓴다. */
+    @Query("SELECT count(p) FROM Place p WHERE p.region IN :regions AND p.active = true AND p.mergedIntoId IS NULL"
+            + " AND p.address LIKE CONCAT('%', :token, '%')")
+    long countActiveByRegionsAndAddressContaining(@Param("regions") Collection<String> regions,
+                                                  @Param("token") String token);
+
+    @Query("SELECT count(p) FROM Place p WHERE p.region IN :regions AND p.active = true AND p.mergedIntoId IS NULL")
+    long countActiveByRegions(@Param("regions") Collection<String> regions);
+
+    /** 역할마다 생성에 쓸 수 있는 장소 수. 여행지에 장소가 적재되어 있는지 생성 전에 본다. */
+    @Query(value = """
+            SELECT place_role, count(*) FROM places
+            WHERE active AND merged_into_id IS NULL AND region IN (:regions)
+              AND latitude IS NOT NULL AND longitude IS NOT NULL AND place_role IS NOT NULL
+            GROUP BY place_role
+            """, nativeQuery = true)
+    List<Object[]> countRolesByRegions(@Param("regions") Collection<String> regions);
 
     /** 해외 여행지 관문(공항·역). 배치가 destinations.json gateways로 넣는다. */
     @Query("SELECT p FROM Place p WHERE p.region IN :regions AND p.source = 'gateway' AND p.active = true"

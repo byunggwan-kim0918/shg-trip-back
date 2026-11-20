@@ -55,10 +55,6 @@ openai:
   embedding-model: text-embedding-3-small
   embedding-dimensions: 768
 
-planning:
-  validation:
-    soft-threshold: 70
-
 cloud:
   aws:
     s3:

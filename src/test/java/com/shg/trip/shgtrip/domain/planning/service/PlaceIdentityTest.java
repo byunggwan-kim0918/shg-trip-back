@@ -135,20 +135,6 @@ class PlaceIdentityTest {
     }
 
     @Test
-    @DisplayName("좌표 없는 이름은 띄어쓰기·도시 이름·괄호 설명·영어 병기가 달라도 같은 곳이다")
-    void sameByName() {
-        PlaceCandidate gyeongpodae = place(7, "경포대", SIGHT, "Gangneung", 37.7952, 128.8966, 0);
-
-        assertThat(PlaceIdentity.sameByName("경포 대", gyeongpodae)).isTrue();
-        assertThat(PlaceIdentity.sameByName("강릉 경포대", gyeongpodae)).isTrue();
-        assertThat(PlaceIdentity.sameByName("경포대 (강릉)", gyeongpodae)).isTrue();
-        assertThat(PlaceIdentity.sameByName("경포대 Gyeongpodae Pavilion", gyeongpodae)).isTrue();
-        assertThat(PlaceIdentity.sameByName("경포해변", gyeongpodae)).isFalse();
-        assertThat(PlaceIdentity.sameByName("명동교자",
-                place(44, "명동교자 2", RESTAURANT, "Seoul", 37.5630, 126.9855, 0))).isFalse();
-    }
-
-    @Test
     @DisplayName("이름 키는 대소문자·띄어쓰기·문장부호만 지우고 지역·대분류로 나누며, 괄호 설명·영문 병기·짧은 이름은 묶지 않는다")
     void nameKey() {
         String park = "Landmarks and Outdoors > Park";

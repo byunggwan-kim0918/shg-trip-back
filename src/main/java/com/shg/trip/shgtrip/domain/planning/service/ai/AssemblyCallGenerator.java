@@ -20,7 +20,7 @@ import java.util.List;
 import java.util.function.Supplier;
 
 /**
- * RouteOptimizer가 확정한 일정 위에 concept을 반영한 story 텍스트만 생성한다.
+ * 코드가 확정한 일정 위에 concept을 반영한 story 텍스트만 생성한다.
  * 스키마에 구조 필드가 없어 순서·시간을 바꿀 수 없고, 비동기라 critical path 밖에서 동작한다.
  */
 @Slf4j
@@ -157,7 +157,7 @@ public class AssemblyCallGenerator {
         sb.append("\n");
 
         sb.append("## 확정된 일정 (순서·시간 변경 절대 불가, story만 작성)\n");
-        sb.append("형식: [stepOrder N] D일차(날짜, 요일) 시작-종료 장소명 (세부지역) · 역할 · 카테고리 · 설명\n");
+        sb.append("형식: [stepOrder N] D일차(날짜, 요일) 시작-종료 장소명 (세부지역) · 역할 · 카테고리 · 설명 · 넣은 이유\n");
         for (StepData step : fixedSteps) {
             sb.append("[stepOrder ").append(step.stepOrder()).append("] ")
                     .append(step.dayNumber()).append("일차");
@@ -173,6 +173,8 @@ public class AssemblyCallGenerator {
             if (category != null) sb.append(" · ").append(category);
             String description = shortDescription(step.place().description());
             if (description != null) sb.append(" · ").append(description);
+            // 이야기가 스텝 메모를 덮으므로 일정을 짤 때 적은 이유를 이야기에 담아야 화면에 남는다.
+            if (step.notes() != null && !step.notes().isBlank()) sb.append(" · 넣은 이유: ").append(step.notes());
             sb.append("\n");
         }
 

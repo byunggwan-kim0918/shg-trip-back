@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""국내 일정 생성 평가용 요청 세트를 만든다.
+"""일정 생성 평가용 요청 세트를 만든다. --scope overseas면 해외(일본 위주) 세트다.
 
 대화 입력(TripRequestMapper)이 만드는 요청과 같은 모양으로 만든다. 설명은 " / "로 이은 조각이다.
 같은 시드면 같은 세트가 나오고, 홀드아웃은 개발 중에 열어 보지 않는다.
@@ -80,6 +80,50 @@ CITIES = {
         themes=["food", "ocean", "culture"], walkable=True),
 }
 
+# 해외 여행지. 이름은 destinations.json의 한국어 이름과 같아야 한다.
+OVERSEAS_CITIES = {
+    "도쿄": dict(
+        sights=["센소지", "메이지 신궁", "시부야 스크램블 교차로", "도쿄 타워", "우에노 공원", "츠키지 장외시장", "도쿄 스카이트리", "신주쿠 교엔"],
+        foods=["스시", "라멘", "몬자야키", "텐동"],
+        night=["도쿄 타워 야경"], dawn=[],
+        themes=["shopping", "food", "culture", "nightview"], walkable=True),
+    "오사카": dict(
+        sights=["오사카성", "도톤보리", "유니버설 스튜디오 재팬", "구로몬 시장", "신세카이", "우메다 스카이 빌딩", "기요미즈데라", "후시미 이나리 신사", "나라 공원"],
+        foods=["타코야키", "오코노미야키", "쿠시카츠", "라멘"],
+        night=["우메다 스카이 빌딩 야경"], dawn=[],
+        themes=["food", "shopping", "culture"], walkable=True),
+    "후쿠오카": dict(
+        sights=["다자이후 텐만구", "오호리 공원", "캐널시티 하카타", "후쿠오카 타워", "모모치 해변", "나카스"],
+        foods=["돈코츠 라멘", "모츠나베", "멘타이코"],
+        night=["나카스 야타이"], dawn=[],
+        themes=["food", "shopping", "healing"], walkable=True),
+    "삿포로": dict(
+        sights=["오도리 공원", "삿포로 시계탑", "모이와산", "니조 시장", "삿포로 맥주 박물관", "오타루 운하"],
+        foods=["징기스칸", "수프카레", "미소 라멘", "해산물 덮밥"],
+        night=["모이와산 야경"], dawn=[],
+        themes=["nature", "food", "photo"], walkable=True),
+    "오키나와": dict(
+        sights=["슈리성", "국제거리", "츄라우미 수족관", "만좌모", "아메리칸 빌리지", "고우리 대교"],
+        foods=["오키나와 소바", "타코라이스", "아구 돼지"],
+        night=[], dawn=[],
+        themes=["ocean", "nature", "healing"], walkable=False),
+    "타이베이": dict(
+        sights=["타이베이 101", "국립고궁박물원", "스린 야시장", "중정기념당", "용산사", "지우펀"],
+        foods=["우육면", "샤오롱바오", "망고빙수"],
+        night=["스린 야시장"], dawn=[],
+        themes=["food", "culture", "nightview"], walkable=True),
+    "다낭": dict(
+        sights=["미케 해변", "바나 힐", "용다리", "한 시장", "오행산", "호이안 구시가지"],
+        foods=["쌀국수", "반미", "분짜"],
+        night=["용다리 야경"], dawn=[],
+        themes=["ocean", "food", "healing"], walkable=False),
+}
+
+# 해외는 일본 여행이 대부분이라 일본 여행지를 더 자주 고른다.
+OVERSEAS_WEIGHTS = [("도쿄", .25), ("오사카", .25), ("후쿠오카", .15), ("삿포로", .1), ("오키나와", .1),
+                    ("타이베이", .08), ("다낭", .07)]
+OVERSEAS_MULTI = [("도쿄", "오사카"), ("후쿠오카", "오사카")]
+
 # 거리상 하루 안에 오가기 어려워 나눠 묵는 짝. 150km 미만 짝(부산·경주, 전주·여수)도 일부러 넣는다.
 MULTI = [("서울", "부산"), ("부산", "경주"), ("전주", "여수"), ("서울", "제주"), ("부산", "제주"), ("강릉", "경주"), ("서울", "전주")]
 
@@ -107,8 +151,8 @@ def josa(word, with_final, without_final):
     return with_final if 0 <= code <= 11171 and code % 28 else without_final
 
 
-def interest_sentence(rng, city):
-    c = CITIES[city]
+def interest_sentence(rng, city, table):
+    c = table[city]
     picks = rng.sample(c["sights"], 2) if rng.random() < .5 else [rng.choice(c["sights"]), rng.choice(c["foods"])]
     a, b = picks
     style = rng.choice(["{a}{j} {b} 위주로 보고 싶어요.", "{a}{j} {b}{t} 꼭 넣어 주세요.", "{a} 가 보고 {b}도 먹고 싶어요."])
@@ -129,14 +173,15 @@ def companion_detail(rng, companion):
     return (1 if companion == "solo" else 2), None, {}
 
 
-def build(rng, idx, today):
+def build(rng, idx, today, overseas=False):
+    table = OVERSEAS_CITIES if overseas else CITIES
     multi = rng.random() < .06
     nights = pick(rng, NIGHTS)
     if multi:
         nights = max(nights, 3)
-        cities = list(rng.choice(MULTI))
+        cities = list(rng.choice(OVERSEAS_MULTI if overseas else MULTI))
     else:
-        cities = [rng.choice(list(CITIES))]
+        cities = [pick(rng, OVERSEAS_WEIGHTS) if overseas else rng.choice(list(CITIES))]
     city = cities[0]
     companion = pick(rng, COMPANIONS)
     party, companion_note, companion_expect = companion_detail(rng, companion)
@@ -146,8 +191,9 @@ def build(rng, idx, today):
         pace_w = [("normal", .5), ("relaxed", .4), ("tight", .1)]
     pace = pick(rng, pace_w)
 
-    walk_ok = all(CITIES[c]["walkable"] for c in cities) and not multi
-    mode = pick(rng, [("car", .4), ("transit", .35), ("walk", .25 if walk_ok else 0.0)])
+    walk_ok = all(table[c]["walkable"] for c in cities) and not multi
+    car_share = (.4 if not walk_ok else .05) if overseas else .4
+    mode = pick(rng, [("car", car_share), ("transit", .35), ("walk", .25 if walk_ok else 0.0)])
     if mode == "walk" and not walk_ok:
         mode = "transit"
     transport = {"car": "car", "walk": "walk"}.get(mode, "any")
@@ -156,7 +202,7 @@ def build(rng, idx, today):
     end = start + dt.timedelta(days=nights)
 
     fragments, expect = [], {"cities": cities, "companion": companion, **companion_expect}
-    sentence, wanted = interest_sentence(rng, city)
+    sentence, wanted = interest_sentence(rng, city, table)
     fragments.append("원하는 여행: " + sentence)
     expect["wanted"] = wanted
     if multi:
@@ -184,7 +230,7 @@ def build(rng, idx, today):
         expect["avoidActivity"] = text
 
     required = []
-    c = CITIES[city]
+    c = table[city]
     if rng.random() < .15 and (c["night"] or c["dawn"]):
         options = [(t, "evening") for t in c["night"]] + [(t, "morning") for t in c["dawn"]]
         text, timing = rng.choice(options)
@@ -206,9 +252,10 @@ def build(rng, idx, today):
     }
     request["categories"] = sorted({"attraction", "restaurant", "cafe"}
                                    | {THEME_CATEGORIES[t] for t in request["themes"] if t in THEME_CATEGORIES})
-    if rng.random() < .35:
+    # 해외는 비행기 시각을 거의 늘 안다.
+    if rng.random() < (.8 if overseas else .35):
         request["arrivalTime"] = rng.choice(ARRIVALS)
-    if rng.random() < .35:
+    if rng.random() < (.8 if overseas else .35):
         request["departureTime"] = rng.choice(DEPARTURES)
         if nights == 1 and request.get("arrivalTime", "00:00") >= "18:00" and request["departureTime"] <= "13:00":
             request["departureTime"] = "17:00"
@@ -232,13 +279,15 @@ def main():
     ap.add_argument("--seed", type=int, default=20261117)
     ap.add_argument("--today", default="2026-11-17")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--scope", choices=["domestic", "overseas"], default="domestic")
     args = ap.parse_args()
+    overseas = args.scope == "overseas"
     rng = random.Random(args.seed)
     today = dt.date.fromisoformat(args.today)
     with open(args.out, "w", encoding="utf-8") as f:
         for i in range(1, args.count + 1):
-            case_id = f"g{i:04d}"
-            request, expect = build(rng, i, today)
+            case_id = f"{'o' if overseas else 'g'}{i:04d}"
+            request, expect = build(rng, i, today, overseas)
             f.write(json.dumps({"id": case_id, "split": split_of(case_id, args.seed),
                                 "request": request, "expect": expect}, ensure_ascii=False) + "\n")
 

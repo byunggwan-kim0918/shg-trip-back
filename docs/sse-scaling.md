@@ -45,7 +45,7 @@ BFF 프록시는 세션·refresh 쿠키만 주고받아 sticky를 켜도 같은 
 (`aws_lb_target_group.app`)에는 stickiness 블록이 없어 기본값(꺼짐)이고, 이 그룹으로 보내는 private 리스너
 (`aws_lb_listener.private_http`)의 forward stickiness도 `enabled = false`다.
 
-ALB idle timeout은 60초다. 생성 중에는 30초마다 heartbeat를 보내(`OptimizedGenerationExecutor.executeWithHeartbeat`)
+ALB idle timeout은 60초다. 생성 중에는 30초마다 heartbeat를 보내(`TripGenerationExecutor.withHeartbeat`)
 연결이 끊기지 않는다.
 
 ## 해법 2 (코드): 작업 상태를 Redis로 공유

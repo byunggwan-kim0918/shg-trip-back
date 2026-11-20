@@ -63,15 +63,6 @@ public final class PlaceIdentity {
         return Optional.empty();
     }
 
-    /** fallback 경로의 모델 출력처럼 좌표가 없는 장소가 other와 같은 곳인가. 거리를 볼 수 없어 숙소·체인도 이름만으로 본다. */
-    static boolean sameByName(String name, PlaceCandidate other) {
-        if (name == null) return false;
-        Set<String> mine = new HashSet<>();
-        addForms(mine, name, other.region());
-        return overlaps(mine, bareNames(other)) || isBilingualTwin(name, other)
-                || (other.name() != null && isBilingualName(other.name().strip(), name.strip()));
-    }
-
     /**
      * 같은 지역·대분류에서 대소문자·띄어쓰기·문장부호만 지운 원래 이름, 너무 짧으면 null. 괄호 설명·영문 병기를 떼면 하위 시설
      * ("에버랜드 (주토피아)")과 다른 가게("Café …")까지 묶이고, 보강 한국어 이름은 다른 장소에도 같게 붙어 쓰지 않는다.

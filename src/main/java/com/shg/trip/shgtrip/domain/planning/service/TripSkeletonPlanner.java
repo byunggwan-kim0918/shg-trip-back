@@ -2,14 +2,13 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
-import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.planning.dto.DraftPlan;
+import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.TripCities;
 import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -29,7 +28,6 @@ import java.util.regex.Pattern;
  * 숙소 범위를, 도시를 옮기는 날은 옮긴 뒤 그 도시에서 보낼 시간이 남는지를 본다. 모델이 추천한 장소는 다루지 않는다.
  */
 @Component
-@Profile("eval")
 @RequiredArgsConstructor
 public class TripSkeletonPlanner {
 
@@ -44,8 +42,6 @@ public class TripSkeletonPlanner {
     static final double EVENING_TRANSIT_KM = 6;
     /** 도시 간 이동 뒤 그 도시에서 보낼 시간이 이보다 짧으면 그날을 그 도시의 하루로 볼 수 없다. */
     static final int MIN_CITY_MINUTES = 150;
-    private static final int AIRPORT_BUFFER = 90;
-    private static final int STATION_BUFFER = 20;
     private static final int DAY_START = 9 * 60 + 30;
     private static final int DAY_END = 21 * 60;
     /** 출발일에 쓸 시간이 이보다 짧으면 전날 밤을 출발 허브 가까이에 둔다. */
@@ -57,6 +53,7 @@ public class TripSkeletonPlanner {
     private static final Pattern LOW_WALKING = Pattern.compile("걷기\\s*(힘들|어려|불편)|다리가\\s*불편|휠체어|거동");
 
     private final DraftPlaceResolver resolver;
+    private final TripHubs hubs;
 
     /**
      * @param request   요구를 모두 날짜에 둔 초안과 숙소 범위·저녁 도시 이동을 담은 요청
@@ -72,7 +69,9 @@ public class TripSkeletonPlanner {
         int dayCount = (int) (input.endDate().toEpochDay() - input.startDate().toEpochDay()) + 1;
         List<String> conflicts = new ArrayList<>();
         List<String> notes = new ArrayList<>();
-        DraftPlan draft = withAllWants(base.draft(), dayCount, base.cityNames(), notes);
+        Map<String, PlaceCandidate> pinned = new HashMap<>(base.pinned());
+        DraftPlan draft = withAllWants(withUserWants(base.draft(), base.userWants(), pinned, notes), dayCount,
+                base.cityNames(), notes);
 
         Map<Integer, DraftItineraryPlanner.LodgingNeed> needs = new HashMap<>();
         Map<String, DraftPlan.Want> wants = new LinkedHashMap<>();
@@ -80,13 +79,78 @@ public class TripSkeletonPlanner {
         for (DraftPlan.Day day : nz(draft.days())) {
             for (DraftPlan.Item item : nz(day.items())) {
                 DraftPlan.Want w = wants.get(item.want());
-                if (w != null) timeNeed(base, w, day.day(), needs, conflicts);
+                if (w != null) timeNeed(base, w, pinned.get(w.id()), day.day(), needs, conflicts);
             }
         }
         Set<Integer> transfers = eveningTransfers(base, draft, dayCount, conflicts);
         departureNeed(base, draft, dayCount, needs);
-        return new Skeleton(base.with(draft, needs, transfers), conflicts, notes,
+        return new Skeleton(base.with(draft, pinned, needs, transfers), conflicts, notes,
                 conditions(base, wants.values(), base.cityNames()));
+    }
+
+    /**
+     * 요청 구조화 필드의 요구를 초안 요구에 맞춘다. 초안이 같은 요구를 적었으면 사용자가 정한 시각과 고른 장소를 붙이고,
+     * 적지 않았으면 새 요구로 넣는다. 초안의 요구만 따르면 모델이 빠뜨린 요구는 일정에도 검사에도 없다.
+     *
+     * @param pinned 요구 id마다 사용자가 고른 장소를 채운다
+     */
+    static DraftPlan withUserWants(DraftPlan draft, List<DraftItineraryPlanner.UserWant> userWants,
+                                   Map<String, PlaceCandidate> pinned, List<String> notes) {
+        if (userWants.isEmpty()) return draft;
+        List<DraftPlan.Want> wants = new ArrayList<>(nz(draft.wants()));
+        Set<String> ids = new HashSet<>();
+        wants.forEach(w -> ids.add(w.id()));
+        int next = 0;
+        for (DraftItineraryPlanner.UserWant u : userWants) {
+            int at = sameWant(wants, u);
+            if (at >= 0) {
+                DraftPlan.Want w = wants.get(at);
+                if (u.time() != null && !sameTime(u.time(), w.time())) {
+                    wants.set(at, new DraftPlan.Want(w.id(), w.kind(), w.text(), w.place(), w.food(), u.time(),
+                            w.satisfy()));
+                }
+                if (u.pinned() != null) pinned.put(w.id(), u.pinned());
+                continue;
+            }
+            String id;
+            do {
+                id = "user" + ++next;
+            } while (!ids.add(id));
+            String kind = u.pinned() == null && u.time() != null ? "activity" : "place";
+            wants.add(new DraftPlan.Want(id, kind, u.text(), u.place(), null, u.time(),
+                    u.place() == null ? List.of() : List.of(u.place())));
+            if (u.pinned() != null) pinned.put(id, u.pinned());
+            notes.add("초안이 빠뜨린 요청 조건을 요구로 넣음: " + u.text());
+        }
+        return new DraftPlan(draft.concept(), wants, draft.days());
+    }
+
+    /** 초안 요구 가운데 같은 것을 말하는 요구. 음식 요구는 장소 요청과 맞추지 않는다. */
+    private static int sameWant(List<DraftPlan.Want> wants, DraftItineraryPlanner.UserWant u) {
+        List<String> asked = new ArrayList<>();
+        for (String s : List.of(Objects.toString(u.text(), ""), Objects.toString(u.place(), ""),
+                u.pinned() == null ? "" : Objects.toString(u.pinned().name(), ""))) {
+            String k = DraftPlaceResolver.key(s);
+            if (k.length() >= 2) asked.add(k);
+        }
+        for (int i = 0; i < wants.size(); i++) {
+            DraftPlan.Want w = wants.get(i);
+            if ("food".equals(w.kind()) || "city".equals(w.kind())) continue;
+            List<String> named = new ArrayList<>(nz(w.satisfy()));
+            named.add(w.text());
+            named.add(w.place());
+            for (String s : named) {
+                String k = DraftPlaceResolver.key(s);
+                if (k.length() >= 2 && asked.stream().anyMatch(a -> a.contains(k) || k.contains(a))) return i;
+            }
+        }
+        return -1;
+    }
+
+    /** 일출·아침과 저녁·밤은 같은 때로 본다. */
+    private static boolean sameTime(String a, String b) {
+        if (b == null) return false;
+        return Objects.equals(timing(a), timing(b)) && (timing(a) != null || a.equals(b));
     }
 
     /** 초안이 어느 날에도 두지 않은 요구를 그 도시의 첫 온전한 날에 넣는다. 빠뜨린 요구는 일정에서 조용히 사라진다. */
@@ -136,23 +200,23 @@ public class TripSkeletonPlanner {
     }
 
     /** 시각이 있는 요구는 그 시각에 닿을 수 있는 곳에 전날 묵어야 한다. */
-    private void timeNeed(DraftItineraryPlanner.Request base, DraftPlan.Want w, int d,
+    private void timeNeed(DraftItineraryPlanner.Request base, DraftPlan.Want w, PlaceCandidate pin, int d,
                           Map<Integer, DraftItineraryPlanner.LodgingNeed> needs, List<String> conflicts) {
         String time = w.time();
         if (time == null || "food".equals(w.kind())) return;
         String name = w.place() != null ? w.place() : nz(w.satisfy()).stream().findFirst().orElse(null);
-        double[] at = name == null ? null : placeCenter(name, base);
+        double[] at = pin != null ? CandidateGeo.coordsOf(pin) : name == null ? null : placeCenter(name, base);
         if (at == null) return;
         String transport = Objects.toString(base.input().transportPref(), "any");
         if ("sunrise".equals(time)) {
             LocalDate date = base.input().startDate().plusDays(d - 1);
-            int sunrise = SolarClock.sunrise(date, at[0], at[1]);
+            int sunrise = SolarClock.sunrise(date, at[0], at[1], base.country());
             if (d == 1) {
                 int arrival = base.arrival() == null ? Integer.MAX_VALUE
                         : base.arrival().getHour() * 60 + base.arrival().getMinute();
                 if (arrival > sunrise - SUNRISE_LEAD) {
                     conflicts.add("'" + w.text() + "'은(는) 첫날 도착이 일출(" + ScheduleTimes.formatMinutes(sunrise)
-                            + ") 뒤라 첫날에는 볼 수 없습니다. 둘째 날 이후로 옮겨야 합니다.");
+                            + ") 뒤라 첫날에는 볼 수 없어요. 둘째 날 이후로 옮겨 다시 만들어 주세요.");
                 }
                 return;
             }
@@ -183,8 +247,7 @@ public class TripSkeletonPlanner {
     private Set<Integer> eveningTransfers(DraftItineraryPlanner.Request base, DraftPlan draft, int dayCount,
                                           List<String> conflicts) {
         Set<Integer> out = new HashSet<>();
-        List<Destination> cities = base.cityNames().stream().map(DomesticCities::find)
-                .flatMap(java.util.Optional::stream).toList();
+        List<Destination> cities = base.cities();
         if (cities.size() < 2) return out;
         Destination prev = null;
         for (int d = 1; d <= dayCount; d++) {
@@ -193,12 +256,12 @@ public class TripSkeletonPlanner {
             Destination city = cityOf(cities, day == null ? null : day.area());
             if (city == null) city = prev != null ? prev : cities.get(0);
             if (prev != null && prev != city) {
-                CityBlockPlanner.IntercityLeg leg = CityBlockPlanner.legBetween(city(prev), city(city),
+                IntercityLegs.IntercityLeg leg = IntercityLegs.legBetween(city(prev), city(city),
                         base.input().transportPref());
                 int end = DAY_END;
                 if (d == dayCount && base.departure() != null) {
-                    int buffer = "FLIGHT".equals(leg.mode()) || "제주".equals(city.nameKo()) ? AIRPORT_BUFFER
-                            : STATION_BUFFER;
+                    int buffer = TripHubs.departureBuffer("FLIGHT".equals(leg.mode()) || hubs.flies(city),
+                            base.country());
                     end = base.departure().getHour() * 60 + base.departure().getMinute() - buffer;
                 }
                 int left = end - (DAY_START + leg.minutes());
@@ -209,8 +272,9 @@ public class TripSkeletonPlanner {
                     int eveningLeft = end - DAY_START;
                     if (eveningLeft < MIN_CITY_MINUTES) {
                         conflicts.add(d + "일차 " + city.nameKo() + "에서 보낼 시간이 " + Math.max(0, eveningLeft)
-                                + "분뿐이라 " + city.nameKo() + " 일정이 성립하지 않습니다. "
-                                + (d == dayCount ? "출발 시각을 늦추거나 " : "") + city.nameKo() + " 날짜를 앞으로 옮겨야 합니다.");
+                                + "분뿐이라 " + city.nameKo() + " 일정이 어려워요. "
+                                + (d == dayCount ? "출발 시각을 늦추거나 " : "") + city.nameKo()
+                                + " 날짜를 앞당겨 다시 만들어 주세요.");
                     }
                 }
             }
@@ -226,21 +290,29 @@ public class TripSkeletonPlanner {
     private void departureNeed(DraftItineraryPlanner.Request base, DraftPlan draft, int dayCount,
                                Map<Integer, DraftItineraryPlanner.LodgingNeed> needs) {
         if (base.departure() == null || dayCount < 2 || needs.containsKey(dayCount - 1)) return;
-        List<Destination> cities = base.cityNames().stream().map(DomesticCities::find)
-                .flatMap(java.util.Optional::stream).toList();
-        if (cities.isEmpty()) return;
+        List<Destination> cities = base.cities();
         DraftPlan.Day last = dayOf(draft, dayCount);
         Destination city = cityOf(cities, last == null ? null : last.area());
         if (city == null) city = cities.get(cities.size() - 1);
-        String hub = DraftItineraryPlanner.mainHub(city.nameKo());
-        if (hub == null || !hub.contains("공항")) return;
-        int left = base.departure().getHour() * 60 + base.departure().getMinute() - AIRPORT_BUFFER - DAY_START;
+        PlaceCandidate given = DraftItineraryPlanner.servesCity(base.departureHub(), city, cities)
+                ? base.departureHub() : null;
+        if (given != null ? !TripHubs.isAirport(given) : !hubs.flies(city)) return;
+        int left = base.departure().getHour() * 60 + base.departure().getMinute()
+                - TripHubs.departureBuffer(true, base.country()) - DAY_START;
         if (left >= SHORT_LAST_DAY) return;
-        DraftPlaceResolver.Resolution r = resolver.resolve(hub, "transit", base.input().regions(), List.of(),
-                new double[]{city.lat(), city.lng()});
-        if (r.place() == null) return;
-        needs.put(dayCount - 1, new DraftItineraryPlanner.LodgingNeed(DraftPlaceResolver.coords(r.place()),
-                DEPARTURE_LODGING_KM, false, "출발일 시간이 짧아 " + hub + " 가까이"));
+        double[] at;
+        String hubName;
+        if (given != null) {
+            at = CandidateGeo.coordsOf(given);
+            hubName = given.displayName();
+        } else {
+            Place hub = hubs.mainHub(city, base.input().regions());
+            at = hub == null ? null : DraftPlaceResolver.coords(hub);
+            hubName = hub == null ? null : DraftPlaceResolver.shownName(hub);
+        }
+        if (at == null) return;
+        needs.put(dayCount - 1, new DraftItineraryPlanner.LodgingNeed(at, DEPARTURE_LODGING_KM, false,
+                "출발일 시간이 짧아 " + hubName + " 가까이"));
     }
 
     private boolean lodgesIn(String lodgingArea, Destination city, DraftItineraryPlanner.Request base) {
@@ -314,7 +386,7 @@ public class TripSkeletonPlanner {
     }
 
     private static TripCities.City city(Destination d) {
-        return new TripCities.City(d.name(), d.nameKo(), "KR", d.lat(), d.lng());
+        return new TripCities.City(d.name(), d.nameKo(), d.country(), d.lat(), d.lng());
     }
 
     private static DraftPlan.Day dayOf(DraftPlan draft, int d) {

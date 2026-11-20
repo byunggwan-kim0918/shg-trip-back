@@ -84,13 +84,11 @@ final class DayBuilder {
      *
      * @param kind    초안의 종류(sight·meal·cafe·night…)
      * @param protect 요청한 장소. 시간이 모자라면 요청하지 않은 장소를 먼저 뺀다
-     * @param label   이 칸을 넣은 초안의 말("두부두루치기"). 일정 메모로 남는다
      */
-    record Stop(PlaceCandidate place, String kind, String slot, List<PlaceCandidate> alternatives, boolean protect,
-                String label) {
+    record Stop(PlaceCandidate place, String kind, String slot, List<PlaceCandidate> alternatives, boolean protect) {
 
         Stop(PlaceCandidate place, String kind, String slot, List<PlaceCandidate> alternatives) {
-            this(place, kind, slot, alternatives, false, null);
+            this(place, kind, slot, alternatives, false);
         }
 
         boolean meal() {
@@ -120,23 +118,31 @@ final class DayBuilder {
      * @param maxSights  빈 시간을 채워 넣을 수 있는 하루 관광 수 상한. 페이스가 정한다
      * @param stayFactor 체류 시간 배수. 여유롭게는 한 곳에 오래, 빡빡하게는 짧게 머문다
      * @param lastLeg    숙소까지의 이동을 정해 둔 경우(저녁에 하는 도시 간 이동). null이면 거리로 계산한다
+     * @param country    여행 나라. 명절 휴관과 입국 시간을 정한다
      */
     record Frame(int dayNumber, LocalDate date, int startMin, int endMin, int lodgingBy, int sunset, int sunrise,
                  PlaceCandidate startAt, PlaceCandidate arrivalHub, PlaceCandidate endAt, boolean endIsHub,
                  boolean hardEnd, TransportLeg firstLeg, boolean slowWalk, String transportPref,
                  List<Stop> spares, List<PlaceCandidate> earlier, int maxSights, double stayFactor,
-                 TransportLeg lastLeg) {
+                 TransportLeg lastLeg, String country) {
 
         Frame withLodging(PlaceCandidate newStartAt, PlaceCandidate newEndAt) {
             return new Frame(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, newStartAt, arrivalHub,
                     newEndAt, endIsHub, hardEnd, firstLeg, slowWalk, transportPref, spares, earlier, maxSights,
-                    stayFactor, lastLeg);
+                    stayFactor, lastLeg, country);
         }
 
         Frame withSpares(List<Stop> newSpares, List<PlaceCandidate> newEarlier) {
             return new Frame(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, startAt, arrivalHub,
                     endAt, endIsHub, hardEnd, firstLeg, slowWalk, transportPref, newSpares, newEarlier, maxSights,
-                    stayFactor, lastLeg);
+                    stayFactor, lastLeg, country);
+        }
+
+        /** 도착 허브에서 빠져나오는 시간. 국제선은 입국 심사와 짐 찾기가 더 걸린다. */
+        int arrivalHubMinutes() {
+            if (arrivalHub == null) return 0;
+            return TripCalendar.isKorea(country) || !TripHubs.isAirport(arrivalHub) ? HUB_MINUTES
+                    : ScheduleTuning.ARRIVAL_HUB_MINUTES;
         }
     }
 
@@ -192,12 +198,12 @@ final class DayBuilder {
      * 점심 뒤에 시작하는 하루(오후 도착)는 점심 칸 끼니를 저녁으로 옮긴다. 저녁이 이미 있으면 요청한 끼니를 남긴다.
      */
     private static List<Stop> lunchAsDinner(Frame f, List<Stop> stops) {
-        int begin = f.startMin() + (f.arrivalHub() != null ? HUB_MINUTES : 0);
+        int begin = f.startMin() + f.arrivalHubMinutes();
         if (begin <= LUNCH_LATEST_START) return stops;
         List<Stop> out = new ArrayList<>();
         for (Stop s : stops) {
             out.add(s.meal() && "lunch".equals(s.slot())
-                    ? new Stop(s.place(), s.kind(), "dinner", s.alternatives(), s.protect(), s.label()) : s);
+                    ? new Stop(s.place(), s.kind(), "dinner", s.alternatives(), s.protect()) : s);
         }
         boolean askedDinner = out.stream().anyMatch(s -> s.meal() && "dinner".equals(s.slot()) && s.protect());
         Set<String> seen = new HashSet<>();
@@ -239,8 +245,8 @@ final class DayBuilder {
         int t = f.startMin();
         PlaceCandidate prev = f.startAt();
         if (f.arrivalHub() != null) {
-            steps.add(DayTiming.buildStep(day, f.arrivalHub(), t, t + HUB_MINUTES, null, List.of()));
-            t += HUB_MINUTES;
+            steps.add(DayTiming.buildStep(day, f.arrivalHub(), t, t + f.arrivalHubMinutes(), null, List.of()));
+            t += f.arrivalHubMinutes();
             prev = f.arrivalHub();
         }
         for (int i = 0; i < queue.size(); i++) {
@@ -314,9 +320,8 @@ final class DayBuilder {
             log.debug("day={} 배치 {} {}~{} (도착 {})", f.dayNumber(), stop.place().name(),
                     ScheduleTimes.formatMinutes(slot.start()), ScheduleTimes.formatMinutes(slot.end()),
                     ScheduleTimes.formatMinutes(slot.arrive()));
-            StepData built = DayTiming.buildStep(day, stop.place(), slot.start(), slot.end(), slot.leg(),
-                    alternativesOf(stop));
-            steps.add(stop.label() == null ? built : built.withNotes(stop.label()));
+            steps.add(DayTiming.buildStep(day, stop.place(), slot.start(), slot.end(), slot.leg(),
+                    alternativesOf(stop)));
             placed.add(stop);
             seen.add(stop.place());
             t = slot.end();
@@ -343,10 +348,15 @@ final class DayBuilder {
                     : placed.isEmpty() && f.arrivalHub() == null && f.firstLeg() != null ? f.firstLeg()
                     : legOf(prev, f.endAt(), f.transportPref(), f.slowWalk());
             int arrive = t + (leg == null ? 0 : leg.durationMin());
-            int limit = f.endIsHub() ? f.endMin() + HUB_MINUTES : f.lodgingBy();
+            int limit = f.endIsHub() ? f.endMin() + TripHubs.HUB_TRAVEL_MINUTES : f.lodgingBy();
             lateBy = arrive - limit;
             int stay = f.endIsHub() ? HUB_MINUTES : LODGING_MINUTES;
             steps.add(DayTiming.buildStep(day, f.endAt(), arrive, arrive + stay, leg, List.of()));
+        }
+        // 떠나기 전에 쓸 시간이 없는 출발일은 전날 숙소에서 나서는 것으로 둔다. 스텝이 없는 날은 저장 관문이 거부한다.
+        if (steps.isEmpty() && f.startAt() != null) {
+            steps.add(DayTiming.buildStep(day, f.startAt(), f.startMin(), f.startMin() + LODGING_MINUTES, null,
+                    List.of()));
         }
         return new Attempt(steps, placed, lateBy, lostProtected, Math.max(0, firstLossAt));
     }
@@ -386,7 +396,7 @@ final class DayBuilder {
         if (stop.evening() && !stop.meal()) start = Math.max(start, f.sunset() + NIGHT_AFTER_SUNSET);
         int duration = minutesOf(stop, f.stayFactor());
 
-        if (KoreanHolidays.museumsClosed(f.date()) && isMuseum(c)) {
+        if (TripCalendar.museumsClosed(f.country(), f.date()) && isMuseum(c)) {
             return null;
         }
         String hours = DayTiming.openingHoursOf(c);
@@ -424,7 +434,7 @@ final class DayBuilder {
         PlaceCandidate c = stop.place();
         if (stop.sunrise()) return "일출 시각 지남";
         if (stop.meal() && "lunch".equals(stop.slot())) return "점심 시간 지남";
-        if (KoreanHolidays.museumsClosed(f.date()) && isMuseum(c)) {
+        if (TripCalendar.museumsClosed(f.country(), f.date()) && isMuseum(c)) {
             return "명절 휴관";
         }
         List<int[]> ranges = OpeningHoursText.rangesFor(DayTiming.openingHoursOf(c), dow);
@@ -438,7 +448,7 @@ final class DayBuilder {
                                         Set<Long> excluded, TransportLeg override) {
         for (PlaceCandidate c : stop.alternatives() == null ? List.<PlaceCandidate>of() : stop.alternatives()) {
             if (c.placeId() != null && (used.contains(c.placeId()) || excluded.contains(c.placeId()))) continue;
-            Stop alt = new Stop(c, stop.kind(), stop.slot(), List.of(), stop.protect(), stop.label());
+            Stop alt = new Stop(c, stop.kind(), stop.slot(), List.of(), stop.protect());
             if (fit(f, dow, prev, alt, t, override) != null) return alt;
         }
         return null;
@@ -558,27 +568,27 @@ final class DayBuilder {
     }
 
     static boolean isMuseumOrPalace(PlaceCandidate c) {
-        String name = c.name() == null ? "" : c.name();
+        String name = java.util.Objects.toString(c.displayName(), "");
         return isMuseum(c) || name.endsWith("궁") || name.contains("궁 (") || name.contains("고궁") || name.contains("향교")
                 || name.contains("서원");
     }
 
     /** 다리는 야경으로만 본다. 낮에 다리를 관광지로 한 시간 넘게 두면 볼 것이 없다. */
     static boolean isBridge(PlaceCandidate c) {
-        String name = c.name() == null ? "" : c.name();
+        String name = java.util.Objects.toString(c.displayName(), "");
         String category = c.category() == null ? "" : c.category().toLowerCase(java.util.Locale.ROOT);
         return name.endsWith("대교") || category.contains("bridge");
     }
 
     /** 이름만 다른 같은 장소(첨성대/경주 첨성대, 경포호/경포호(철새도래지)). */
     static boolean sameSpotAsAny(PlaceCandidate c, List<PlaceCandidate> seen) {
-        String k = DraftPlaceResolver.key(c.name());
+        String k = DraftPlaceResolver.key(c.displayName());
         for (PlaceCandidate s : seen) {
             if (c.placeId() != null && c.placeId().equals(s.placeId())) return true;
             if (distanceKm(c, s) > SAME_SPOT_KM) continue;
             if (CandidatePolicy.roleOf(s) == CandidatePolicy.Role.MEAL) continue;
             if (distanceKm(c, s) <= SAME_GROUNDS_KM) return true;
-            String o = DraftPlaceResolver.key(s.name());
+            String o = DraftPlaceResolver.key(s.displayName());
             if (k.isEmpty() || o.isEmpty()) continue;
             if (k.contains(o) || o.contains(k) || (k.length() >= 2 && o.length() >= 2 && k.substring(0, 2).equals(o.substring(0, 2)))) {
                 return true;
@@ -590,7 +600,7 @@ final class DayBuilder {
     /** 명절 당일 휴관이 흔한 박물관·미술관·과학관·기념관. */
     static boolean isMuseum(PlaceCandidate c) {
         String category = c.category() == null ? "" : c.category().toLowerCase(java.util.Locale.ROOT);
-        String name = c.name() == null ? "" : c.name();
+        String name = java.util.Objects.toString(c.displayName(), "");
         return category.contains("museum") || category.contains("gallery")
                 || name.contains("박물관") || name.contains("미술관") || name.contains("과학관") || name.contains("기념관");
     }

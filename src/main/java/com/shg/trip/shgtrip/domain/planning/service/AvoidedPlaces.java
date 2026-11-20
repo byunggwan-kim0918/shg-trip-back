@@ -83,8 +83,9 @@ final class AvoidedPlaces {
         return kept;
     }
 
-    boolean blocksName(String name) {
-        return places.stream().anyMatch(a -> PlaceIdentity.sameByName(name, a));
+    /** 사용자가 고른 장소는 피할 장소와 같아도 남긴다. */
+    boolean matches(PlaceCandidate c) {
+        return !c.userSelected() && matchedAndLogged(c);
     }
 
     private boolean matchedAndLogged(PlaceCandidate c) {

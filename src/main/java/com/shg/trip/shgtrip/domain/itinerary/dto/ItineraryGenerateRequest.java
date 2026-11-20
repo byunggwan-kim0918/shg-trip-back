@@ -116,29 +116,6 @@ public record ItineraryGenerateRequest(
             String timing
     ) {}
 
-    /** 동행·인원·도착·출발을 요청 문장 끝에 덧붙인 사본. 문장만 읽는 경로(fallback)용. */
-    public ItineraryGenerateRequest withTripFactsInDescription() {
-        List<String> facts = new java.util.ArrayList<>();
-        String who = switch (companion == null ? "" : companion) {
-            case "solo" -> "혼자";
-            case "couple" -> "커플";
-            case "friends" -> "친구";
-            case "family" -> "아이와 함께하는 가족";
-            case "parents" -> "부모님 동반";
-            default -> null;
-        };
-        if (who != null) facts.add("동행 " + who + (partySize != null ? " " + partySize + "명" : ""));
-        else if (partySize != null) facts.add(partySize + "명");
-        if (arrivalTime != null) facts.add("첫날 " + arrivalTime + " 도착");
-        if (departureTime != null) facts.add("마지막 날 " + departureTime + " 출발");
-        if (facts.isEmpty()) return this;
-        String note = "(" + String.join(", ", facts) + ")";
-        String merged = description == null || description.isBlank() ? note : description + " " + note;
-        return new ItineraryGenerateRequest(mode, destination, themes, categories, pace, transportPref, budget,
-                startDate, endDate, merged, selectedPlaceIds, customPlaceNames, companion, partySize,
-                arrivalTime, departureTime, requiredExperiences, avoidPlaceIds, restrictions);
-    }
-
     public enum PlanningMode {
         AUTO, MANUAL
     }

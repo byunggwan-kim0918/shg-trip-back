@@ -3,9 +3,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
-import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
-import com.shg.trip.shgtrip.domain.planning.dto.TransportationHub;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -15,131 +13,11 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * 여행자 관점 품질 회귀 테스트 — itinerary 115(제주 3박4일 맛집 커플)에서 지적된 결함을 고정한다.
- *
- * <p>115 재구성 풀({@link Itinerary115Fixture})로 RouteOptimizer 전체를 돌려 "여행자가 겪는 실패"를
- * 성질로 검사하고, 개별 규칙은 작은 입력으로 따로 검사한다.
- */
+/** 여행자 관점 장소 판정 규칙(다인실 숙소·동행·카페·배로만 가는 섬)을 작은 입력으로 검사한다. */
 class TravelerQualityTest {
-
-    private final RouteOptimizer routeOptimizer = new RouteOptimizer();
-
-    @Nested
-    @DisplayName("115 재구성 풀")
-    class Itinerary115 {
-
-        private final List<PlaceCandidate> candidates = Itinerary115Fixture.candidates();
-        private final Map<String, PlaceCandidate> byName = candidates.stream()
-                .collect(Collectors.toMap(PlaceCandidate::name, Function.identity(), (a, b) -> a));
-        private final List<StepData> steps = routeOptimizer.schedule(Itinerary115Fixture.selection(), candidates,
-                ScheduleTestArgs.of("normal", "car", LocalDate.of(2026, 11, 1), List.of("food", "romance"),
-                        new TransportationHub("제주국제공항", "제주국제공항", "AIRPORT"), false, List.of("restaurant"))).steps();
-
-        @Test
-        @DisplayName("같은 음식 종류는 4일 일정 전체에서 2끼를 넘지 않는다 (태그까지 본다)")
-        void sameCuisineAtMostTwice() {
-            Map<String, Long> cuisineCount = steps.stream()
-                    .map(s -> byName.get(s.place().name()))
-                    .filter(c -> c != null && c.mealEligible())
-                    .map(c -> PlaceCategoryConstants.subType(c.name(), c.category(), c.tags(), c.description()))
-                    .filter(t -> !PlaceCategoryConstants.isGenericLeaf(t))
-                    .collect(Collectors.groupingBy(t -> t, Collectors.counting()));
-
-            assertThat(cuisineCount.values()).allSatisfy(n -> assertThat(n).isLessThanOrEqualTo(2));
-        }
-
-        @Test
-        @DisplayName("한라산 백록담 같은 긴 등산은 빈 시간 채우기로 들어오지 않는다")
-        void longHikeNeverGapFilled() {
-            assertThat(steps).noneMatch(s -> s.place().name().contains("백록담"));
-        }
-
-        @Test
-        @DisplayName("하루 중간에 3시간 이상 비는 날이 없다")
-        void noLargeGap() {
-            Map<Integer, List<StepData>> byDay = steps.stream()
-                    .collect(Collectors.groupingBy(StepData::dayNumber));
-            byDay.values().forEach(day -> {
-                for (int i = 1; i < day.size(); i++) {
-                    int gap = toMinutes(day.get(i).startTime()) - toMinutes(day.get(i - 1).endTime());
-                    assertThat(gap).as("day %d %s 앞 공백", day.get(i).dayNumber(), day.get(i).place().name())
-                            .isLessThan(180);
-                }
-            });
-        }
-
-        @Test
-        @DisplayName("매일 관광지가 1곳 이상 있다 (거리 트림이 관광지만 빼서 식당만 남는 날 방지)")
-        void everyDayHasAttraction() {
-            Map<Integer, Long> attractions = steps.stream()
-                    .filter(s -> "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(s.place().category())))
-                    .collect(Collectors.groupingBy(StepData::dayNumber, Collectors.counting()));
-            assertThat(attractions.keySet()).containsExactlyInAnyOrder(1, 2, 3, 4);
-        }
-
-        @Test
-        @DisplayName("같은 날 두 끼가 2시간 안에 붙지 않는다 (아침 10시 → 점심 11시 반 방지)")
-        void mealsAreSpacedOut() {
-            Map<Integer, List<StepData>> meals = steps.stream()
-                    .filter(s -> {
-                        PlaceCandidate c = byName.get(s.place().name());
-                        return c != null && c.mealEligible();
-                    })
-                    .collect(Collectors.groupingBy(StepData::dayNumber));
-            meals.values().forEach(day -> {
-                for (int i = 1; i < day.size(); i++) {
-                    assertThat(toMinutes(day.get(i).startTime()) - toMinutes(day.get(i - 1).startTime()))
-                            .as("day %d %s → %s", day.get(i).dayNumber(),
-                                    day.get(i - 1).place().name(), day.get(i).place().name())
-                            .isGreaterThanOrEqualTo(120);
-                }
-            });
-        }
-
-        @Test
-        @DisplayName("상한을 넘는 유형은 인기도 낮은 쪽부터 뺀다 — 성산일출봉이 남는다")
-        void prominentPlaceSurvivesTypeCap() {
-            assertThat(steps).anyMatch(s -> s.place().name().startsWith("성산일출봉"));
-        }
-    }
-
-    @Nested
-    @DisplayName("거리 트림")
-    class DistanceTrim {
-
-        @Test
-        @DisplayName("위반이 전날 숙소→첫 스텝 구간뿐이면 관광지를 빼지 않는다")
-        void doesNotTrimWhenTrimCannotReduceViolation() {
-            // day1은 동북(월정 부근), day2는 남서(산방산 부근) — 전날 숙소에서 56km.
-            List<PlaceCandidate> candidates = List.of(
-                    place(1, "동쪽점심", "Dining and Drinking > Restaurant", 33.548, 126.780),
-                    place(2, "동쪽관광", "Landmarks and Outdoors > Tourist Attraction", 33.540, 126.770),
-                    place(3, "동쪽저녁", "Dining and Drinking > Restaurant", 33.552, 126.795),
-                    place(4, "동쪽숙소", "Travel and Transportation > Lodging > Hotel", 33.552, 126.791),
-                    place(5, "서쪽관광1", "Landmarks and Outdoors > Tourist Attraction", 33.240, 126.546),
-                    place(6, "서쪽점심", "Dining and Drinking > Restaurant", 33.278, 126.280),
-                    place(7, "서쪽관광2", "Landmarks and Outdoors > Tourist Attraction", 33.199, 126.294),
-                    place(8, "서쪽저녁", "Dining and Drinking > Restaurant", 33.258, 126.417)
-            );
-            SelectionOutput selection = new SelectionOutput("concept",
-                    List.of(new SelectionOutput.DayPlan(1, null, List.of(1, 2, 3), 4, null),
-                            new SelectionOutput.DayPlan(2, null, List.of(5, 6, 7, 8), null, null)),
-                    List.of(), List.of());
-
-            List<StepData> steps = routeOptimizer.schedule(selection, candidates,
-                    ScheduleTestArgs.of("normal", "car", null, List.of(), null, false, List.of())).steps();
-
-            List<String> day2 = steps.stream().filter(s -> s.dayNumber() == 2)
-                    .map(s -> s.place().name()).toList();
-            assertThat(day2).contains("서쪽관광1", "서쪽관광2");
-        }
-    }
 
     @Nested
     @DisplayName("다인실 숙소 판정")
@@ -223,7 +101,7 @@ class TravelerQualityTest {
                             "Jeju", "KR", null, BigDecimal.valueOf(13000))));
             StepData lodging = step("펜션", "Travel and Transportation > Lodging", 120000, List.of());
 
-            List<StepData> scaled = OptimizedGenerationExecutor.scaleCostsForParty(List.of(meal, lodging), 2);
+            List<StepData> scaled = PartyCosts.scale(List.of(meal, lodging), 2);
 
             assertThat(scaled.get(0).estimatedCost()).isEqualByComparingTo("26000");
             assertThat(scaled.get(0).alternatives().get(0).estimatedCost()).isEqualByComparingTo("26000");
@@ -234,7 +112,7 @@ class TravelerQualityTest {
         @Test
         void unknownPartySizeKeepsCost() {
             StepData meal = step("식당", "Dining and Drinking > Restaurant", 13000, List.of());
-            assertThat(OptimizedGenerationExecutor.scaleCostsForParty(List.of(meal), null).get(0).estimatedCost())
+            assertThat(PartyCosts.scale(List.of(meal), null).get(0).estimatedCost())
                     .isEqualByComparingTo("13000");
         }
     }
@@ -313,6 +191,15 @@ class TravelerQualityTest {
         }
 
         @Test
+        @DisplayName("섬 이름으로 시작하는 육지 도로명 주소는 섬으로 보지 않는다")
+        void roadNamedAfterIslandIsMainland() {
+            PlaceCandidate aquarium = addressed(9, "아쿠아플라넷 여수", "전남 여수시 오동도로 61-11");
+            PlaceCandidate island = addressed(10, "오동도 동백숲", "전남 여수시 수정동 오동도");
+            assertThat(FerryAreaFilter.exclude(List.of(aquarium, island), List.of("오동도")))
+                    .extracting(PlaceCandidate::name).containsExactly("아쿠아플라넷 여수");
+        }
+
+        @Test
         @DisplayName("사용자가 직접 고른 섬 장소는 남는다")
         void keepsUserSelected() {
             List<PlaceCandidate> withSelected = List.of(pool.get(0).asUserSelected(), pool.get(1));
@@ -347,8 +234,4 @@ class TravelerQualityTest {
                 List.of(), null, "MEDIUM", "", "", null, Map.of(), companion, partySize, List.of());
     }
 
-    private static int toMinutes(String hhmm) {
-        String[] p = hhmm.split(":");
-        return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
-    }
 }

@@ -128,10 +128,6 @@ public final class ItineraryRules {
             return has(Severity.CORE);
         }
 
-        public Map<Rule, Long> countByRule() {
-            return violations.stream().collect(Collectors.groupingBy(Violation::rule,
-                    () -> new java.util.EnumMap<>(Rule.class), Collectors.counting()));
-        }
     }
 
     public Verdict evaluate(List<StepData> steps, List<PlaceCandidate> candidates, Context ctx) {

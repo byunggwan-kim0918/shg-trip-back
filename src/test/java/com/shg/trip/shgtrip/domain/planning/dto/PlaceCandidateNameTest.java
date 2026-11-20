@@ -17,16 +17,13 @@ class PlaceCandidateNameTest {
     }
 
     @Test
-    @DisplayName("한국어 이름이 있으면 화면은 한국어, 선택 프롬프트는 한국어 (원문)이다")
-    void displayAndPromptNames() {
+    @DisplayName("한국어 이름이 있으면 화면은 한국어 이름이다")
+    void displayNames() {
         PlaceCandidate sensoji = candidate("浅草寺", "센소지");
         assertThat(sensoji.displayName()).isEqualTo("센소지");
-        assertThat(sensoji.promptName()).isEqualTo("센소지 (浅草寺)");
 
         PlaceCandidate korean = candidate("성산일출봉", null);
         assertThat(korean.displayName()).isEqualTo("성산일출봉");
-        assertThat(korean.promptName()).isEqualTo("성산일출봉");
-        assertThat(candidate("Taipei 101", "Taipei 101").promptName()).isEqualTo("Taipei 101");
         assertThat(candidate("浅草寺", " ").displayName()).isEqualTo("浅草寺");
     }
 
@@ -36,8 +33,6 @@ class PlaceCandidateNameTest {
         PlaceCandidate c = candidate("浅草寺", "센소지");
         assertThat(c.reindexed(5).nameKo()).isEqualTo("센소지");
         assertThat(c.asUserSelected().nameKo()).isEqualTo("센소지");
-        assertThat(c.withIntent(true, "morning").nameKo()).isEqualTo("센소지");
-        assertThat(c.withSubRegion("台東区").nameKo()).isEqualTo("센소지");
-        assertThat(c.withRefreshedFacts(null, "월 휴무").nameKo()).isEqualTo("센소지");
+        assertThat(c.withOpeningHours("월요일: 휴무").nameKo()).isEqualTo("센소지");
     }
 }

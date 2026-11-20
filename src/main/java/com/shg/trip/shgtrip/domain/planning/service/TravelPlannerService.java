@@ -46,7 +46,7 @@ public class TravelPlannerService {
             "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
             Long.class);
 
-    private final OptimizedGenerationExecutor optimizedGenerationExecutor;
+    private final TripGenerationExecutor tripGenerationExecutor;
     private final GenerationResultStore resultStore;
     private final CancellationRegistry cancellationRegistry;
     private final StringRedisTemplate redisTemplate;
@@ -54,14 +54,14 @@ public class TravelPlannerService {
     private final GenerationEventLog eventLog;
     private final GenerationStreamRelay relay;
 
-    public TravelPlannerService(OptimizedGenerationExecutor optimizedGenerationExecutor,
+    public TravelPlannerService(TripGenerationExecutor tripGenerationExecutor,
                                 GenerationResultStore resultStore,
                                 CancellationRegistry cancellationRegistry,
                                 StringRedisTemplate redisTemplate,
                                 GenerationPolicyService generationPolicyService,
                                 GenerationEventLog eventLog,
                                 GenerationStreamRelay relay) {
-        this.optimizedGenerationExecutor = optimizedGenerationExecutor;
+        this.tripGenerationExecutor = tripGenerationExecutor;
         this.resultStore = resultStore;
         this.cancellationRegistry = cancellationRegistry;
         this.redisTemplate = redisTemplate;
@@ -97,7 +97,7 @@ public class TravelPlannerService {
         GenerationStream stream = new GenerationStream(jobId, () -> onJobFinished(jobId), eventLog.mirrorFor(jobId));
         jobs.put(jobId, new JobEntry(stream, userId, Instant.now()));
 
-        optimizedGenerationExecutor.execute(jobId, request, userId, stream);
+        tripGenerationExecutor.execute(jobId, request, userId, stream);
 
         return new GenerateJobResponse(jobId);
     }
@@ -148,19 +148,6 @@ public class TravelPlannerService {
             throw new BusinessException(ErrorCode.RESOURCE_NOT_FOUND, "완료된 생성 결과를 찾을 수 없습니다.");
         }
         return itineraryId;
-    }
-
-    /**
-     * 취소 플래그는 executor가 감지하도록 여기서 지우지 않는다.
-     */
-    public void cancelJob(String jobId) {
-        JobEntry entry = jobs.get(jobId);
-        Long userId = entry != null ? entry.userId() : null;
-        cancelJobInternal(jobId);
-        // 이 job이 활성 키의 소유자일 수 있어 CAS로 정리한다. 다른 job이 차지한 키는 건드리지 않는다.
-        if (userId != null) {
-            clearActiveUserIfMatches(userId, jobId);
-        }
     }
 
     public void cancelActiveJob(Long userId) {

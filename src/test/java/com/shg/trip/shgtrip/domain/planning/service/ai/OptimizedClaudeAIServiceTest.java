@@ -6,8 +6,9 @@ import com.anthropic.services.blocking.MessageService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.planning.dto.EnrichmentResult;
-import com.shg.trip.shgtrip.domain.planning.dto.EnrichedInput;
 import com.shg.trip.shgtrip.global.config.AnthropicProperties;
+import com.shg.trip.shgtrip.global.exception.BusinessException;
+import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.*;
@@ -29,7 +31,6 @@ class OptimizedClaudeAIServiceTest {
 
     @Mock private AnthropicClient anthropicClient;
     @Mock private MessageService messageService;
-    @Mock private ClaudeAIService fallbackService;
 
     private OptimizedClaudeAIService service;
     private AnthropicProperties properties;
@@ -39,7 +40,7 @@ class OptimizedClaudeAIServiceTest {
         ObjectMapper objectMapper = new ObjectMapper();
         properties = new AnthropicProperties("claude-haiku-4-5-20250610", "claude-sonnet-4-20250514", 64000);
         lenient().when(anthropicClient.messages()).thenReturn(messageService);
-        service = new OptimizedClaudeAIService(anthropicClient, properties, objectMapper, fallbackService,
+        service = new OptimizedClaudeAIService(anthropicClient, properties, objectMapper,
                 com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath());
     }
 
@@ -79,7 +80,7 @@ class OptimizedClaudeAIServiceTest {
                 }
                 """;
 
-        EnrichmentResult result = service.parseEnrichResponse(responseJson, createRequest());
+        EnrichmentResult result = service.readEnrichResponse(responseJson, createRequest());
 
         assertThat(result.valid()).isTrue();
         assertThat(result.enrichedInput()).isNotNull();
@@ -105,7 +106,7 @@ class OptimizedClaudeAIServiceTest {
                 }
                 """;
 
-        EnrichmentResult result = service.parseEnrichResponse(responseJson, createRequest());
+        EnrichmentResult result = service.readEnrichResponse(responseJson, createRequest());
 
         assertThat(result.valid()).isFalse();
         assertThat(result.enrichedInput()).isNull();
@@ -124,7 +125,7 @@ class OptimizedClaudeAIServiceTest {
                 }
                 """;
 
-        EnrichmentResult result = service.parseEnrichResponse(responseJson, createRequest());
+        EnrichmentResult result = service.readEnrichResponse(responseJson, createRequest());
 
         assertThat(result.valid()).isFalse();
         assertThat(result.errorCode()).isEqualTo("CONFLICTING_THEMES");
@@ -148,7 +149,7 @@ class OptimizedClaudeAIServiceTest {
                 }
                 """;
 
-        EnrichmentResult result = service.parseEnrichResponse(responseJson, createRequest());
+        EnrichmentResult result = service.readEnrichResponse(responseJson, createRequest());
 
         assertThat(result.valid()).isTrue();
         assertThat(result.enrichedInput().regionAllocation()).isNotNull();
@@ -174,7 +175,7 @@ class OptimizedClaudeAIServiceTest {
                 }
                 """;
 
-        EnrichmentResult result = service.parseEnrichResponse(responseJson, createRequest());
+        EnrichmentResult result = service.readEnrichResponse(responseJson, createRequest());
 
         assertThat(result.valid()).isTrue();
         assertThat(result.enrichedInput().regions()).containsExactly("Ho Chi Minh City", "Cu Chi");
@@ -198,30 +199,16 @@ class OptimizedClaudeAIServiceTest {
                 }
                 """ + "\n위 결과를 참고하세요.";
 
-        EnrichmentResult result = service.parseEnrichResponse(wrappedResponse, createRequest());
+        EnrichmentResult result = service.readEnrichResponse(wrappedResponse, createRequest());
 
         assertThat(result.valid()).isTrue();
         assertThat(result.enrichedInput().normalizedDestination()).isEqualTo("오사카");
     }
 
     @Test
-    @DisplayName("JSON이 없는 응답 시 fallback한다")
-    void parseEnrichResponse_noJson_fallsBackToLegacy() {
-        String invalidResponse = "이것은 JSON이 아닙니다 자연어 텍스트입니다";
-
-        EnrichedInput legacyResult = new EnrichedInput(
-                "도쿄", List.of("맛집"), List.of("음식"), "normal", "any",
-                BigDecimal.valueOf(1000000),
-                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 3),
-                null, "fallback 컨텍스트", null
-        );
-        given(fallbackService.enrichInput(any(ItineraryGenerateRequest.class)))
-                .willReturn(legacyResult);
-
-        EnrichmentResult result = service.parseEnrichResponse(invalidResponse, createRequest());
-
-        assertThat(result.valid()).isTrue();
-        assertThat(result.enrichedInput().enrichedContext()).isEqualTo("fallback 컨텍스트");
+    @DisplayName("JSON이 없는 응답은 읽지 못한 것으로 본다")
+    void readEnrichResponse_noJson_isUnreadable() {
+        assertThat(service.readEnrichResponse("이것은 JSON이 아닙니다 자연어 텍스트입니다", createRequest())).isNull();
     }
 
     @Test
@@ -241,7 +228,7 @@ class OptimizedClaudeAIServiceTest {
                 """;
 
         ItineraryGenerateRequest request = createRequest();
-        EnrichmentResult result = service.parseEnrichResponse(responseJson, request);
+        EnrichmentResult result = service.readEnrichResponse(responseJson, request);
 
         assertThat(result.enrichedInput().destination()).isEqualTo("도쿄");
         assertThat(result.enrichedInput().themes()).isEqualTo(List.of("맛집", "관광"));
@@ -252,29 +239,15 @@ class OptimizedClaudeAIServiceTest {
         assertThat(result.enrichedInput().endDate()).isEqualTo(LocalDate.of(2026, 8, 3));
     }
 
-    // ── enrichInput 통합 테스트 (API 실패 → fallback) ──
-
     @Test
-    @DisplayName("API 실패 시 기존 enrichInput으로 fallback한다")
-    void enrichInput_apiFailure_fallsBackToLegacy() {
+    @DisplayName("API가 계속 실패하면 AI 오류로 끝낸다")
+    void enrichInput_apiFailure_fails() {
         given(messageService.create(any(MessageCreateParams.class)))
                 .willThrow(new RuntimeException("API 연결 실패"));
 
-        EnrichedInput legacyResult = new EnrichedInput(
-                "도쿄", List.of("맛집", "관광"), List.of("음식", "관광"), "normal", "any",
-                BigDecimal.valueOf(1000000),
-                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 3),
-                "도쿄 여행", "레거시 컨텍스트", null
-        );
-        given(fallbackService.enrichInput(any(ItineraryGenerateRequest.class)))
-                .willReturn(legacyResult);
-
-        EnrichmentResult result = service.enrichInput(createRequest());
-
-        assertThat(result.valid()).isTrue();
-        assertThat(result.enrichedInput()).isNotNull();
-        assertThat(result.enrichedInput().enrichedContext()).isEqualTo("레거시 컨텍스트");
-        verify(fallbackService).enrichInput(any(ItineraryGenerateRequest.class));
+        assertThatThrownBy(() -> service.enrichInput(createRequest()))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getErrorCode()).isEqualTo(ErrorCode.AI_SERVICE_ERROR);
     }
 
     @Test
@@ -288,7 +261,7 @@ class OptimizedClaudeAIServiceTest {
                 }
                 """;
 
-        EnrichmentResult result = service.parseEnrichResponse(responseJson, createRequest());
+        EnrichmentResult result = service.readEnrichResponse(responseJson, createRequest());
 
         assertThat(result.valid()).isFalse();
         assertThat(result.errorCode()).isEqualTo("INVALID_INPUT");

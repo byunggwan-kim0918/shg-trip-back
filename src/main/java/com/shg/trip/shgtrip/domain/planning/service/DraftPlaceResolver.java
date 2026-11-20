@@ -4,7 +4,6 @@ import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
 import java.util.Collection;
@@ -19,12 +18,13 @@ import java.util.regex.Pattern;
  * 첫 낱말만으로 다시 찾지 않는다. "동명동 카페거리"가 "동명동소주집"으로 이어지는 식의 오연결이 난다.
  */
 @Component
-@Profile("eval")
 @RequiredArgsConstructor
 class DraftPlaceResolver {
 
     /** 질의가 이름을 담는 방향으로 이을 때 이름의 최소 길이. "남산"이 "남산서울타워야경"의 일부로 잡히지 않게 한다. */
     private static final int MIN_CONTAINED_NAME = 3;
+    /** 앞뒤 두 글자씩은 남아야 같은 곳의 다른 이름으로 본다. */
+    private static final int MIN_INFIXED_NAME = 4;
     /** 같은 순위 후보가 이만큼 넘게 떨어져 있으면 기준 좌표 없이는 고르지 않는다. */
     private static final double AMBIGUOUS_KM = 1.5;
     private static final Pattern NON_KEY = Pattern.compile("[\\s\\p{P}\\p{S}]+");
@@ -80,9 +80,9 @@ class DraftPlaceResolver {
                        double[] anchor) {
         Resolution last = Resolution.miss("too_short");
         List<String> variants = queryVariants(name, cityNames);
+        List<String> roles = kind == null ? ROLES.get("sight") : ROLES.getOrDefault(kind, ROLES.get("sight"));
         for (String query : variants) {
-            last = resolveKey(query, kind == null ? ROLES.get("sight") : ROLES.getOrDefault(kind, ROLES.get("sight")),
-                    regions, anchor, 3);
+            last = resolveKey(query, roles, regions, anchor, 3);
             if (last.place() != null) return last;
         }
         // 모델이 명소로 적은 카페·빵집(테라로사 커피공장, 성심당)은 이름이 거의 같을 때만 잇는다.
@@ -90,7 +90,34 @@ class DraftPlaceResolver {
             last = resolveKey(query, ANY_VISIT, regions, anchor, 2);
             if (last.place() != null) return last;
         }
+        for (String query : variants.subList(0, Math.min(2, variants.size()))) {
+            Resolution infixed = resolveInfixed(query, roles, regions);
+            if (infixed.place() != null) return infixed;
+        }
         return last;
+    }
+
+    /** 알려진 이름 가운데 꾸밈말이 낀 질의("대인예술시장")를 그 꾸밈말을 뺀 DB 이름("대인시장")으로 잇는다. */
+    private Resolution resolveInfixed(String query, List<String> roles, Collection<String> regions) {
+        if (query.length() < MIN_INFIXED_NAME + 2) return Resolution.miss("none");
+        List<Place> hits = placeRepository.findActiveByNameEdges(query.substring(0, 2),
+                        query.substring(query.length() - 2), regions, roles).stream()
+                .filter(DraftPlaceResolver::readableName)
+                .filter(p -> dropsInfix(bareKey(matchedName(p, query)), query))
+                .toList();
+        if (hits.isEmpty()) return Resolution.miss("none");
+        Place best = hits.stream().max(Comparator.comparingInt(DraftPlaceResolver::sitelinks)).orElseThrow();
+        boolean ambiguous = hits.stream().anyMatch(p -> distanceKm(coords(best), p) > AMBIGUOUS_KM);
+        return ambiguous ? Resolution.miss("ambiguous") : new Resolution(best, "ok");
+    }
+
+    /** 이름이 질의의 앞부분과 뒷부분만 남기고 가운데 두 글자 이상을 뺀 것인지. */
+    static boolean dropsInfix(String name, String query) {
+        if (name.length() < MIN_INFIXED_NAME || name.length() > query.length() - 2) return false;
+        for (int i = 2; i <= name.length() - 2; i++) {
+            if (query.startsWith(name.substring(0, i)) && query.endsWith(name.substring(i))) return true;
+        }
+        return false;
     }
 
     /**
@@ -133,9 +160,9 @@ class DraftPlaceResolver {
         if (rows.isEmpty()) return Resolution.miss("none");
 
         // 같은 순위면 이름난 곳이 먼저다. "창덕궁"이 글자 수가 가까운 부속 건물("창덕궁 약방")로 잡히지 않게 한다.
-        Comparator<Place> order = Comparator.comparingInt((Place p) -> rankTier(bareKey(p.getName()), query))
+        Comparator<Place> order = Comparator.comparingInt((Place p) -> rankTier(bareKey(matchedName(p, query)), query))
                 .thenComparing((Place p) -> -sitelinks(p))
-                .thenComparingInt(p -> Math.abs(bareKey(p.getName()).length() - query.length()));
+                .thenComparingInt(p -> Math.abs(bareKey(matchedName(p, query)).length() - query.length()));
         if (anchor != null) {
             order = order.thenComparingDouble(p -> distanceKm(anchor, p));
         } else {
@@ -143,7 +170,7 @@ class DraftPlaceResolver {
         }
         order = order.thenComparingInt(p -> key(p.getName()).length());
         List<Place> ranked = rows.stream()
-                .filter(p -> tier(bareKey(p.getName()), query) <= maxTier)
+                .filter(p -> tier(bareKey(matchedName(p, query)), query) <= maxTier)
                 .filter(DraftPlaceResolver::readableName)
                 .filter(p -> !NOT_A_PLACE.matcher(p.getName()).find() || NOT_A_PLACE.matcher(query).find())
                 .filter(p -> roles.contains("TRANSIT") || p.getCategory() == null
@@ -151,14 +178,26 @@ class DraftPlaceResolver {
                 .sorted(order).toList();
         if (ranked.isEmpty()) return Resolution.miss("none");
         Place best = ranked.get(0);
-        int bestTier = tier(bareKey(best.getName()), query);
+        int bestTier = tier(bareKey(matchedName(best, query)), query);
         if (anchor == null && bestTier > 0) {
             boolean ambiguous = ranked.stream().skip(1)
-                    .filter(p -> tier(bareKey(p.getName()), query) == bestTier && sitelinks(p) >= sitelinks(best))
+                    .filter(p -> tier(bareKey(matchedName(p, query)), query) == bestTier && sitelinks(p) >= sitelinks(best))
                     .anyMatch(p -> distanceKm(coords(best), p) > AMBIGUOUS_KM);
             if (ambiguous) return Resolution.miss("ambiguous");
         }
         return new Resolution(best, "ok");
+    }
+
+    /** 일정에 보이는 이름. 해외 장소는 한국어 이름이다. */
+    static String shownName(Place p) {
+        return p.getNameKo() != null && !p.getNameKo().isBlank() ? p.getNameKo() : p.getName();
+    }
+
+    /** 해외 장소는 원어 이름과 한국어 이름 가운데 질의에 더 가까운 쪽으로 순위를 매긴다. */
+    private static String matchedName(Place p, String query) {
+        String ko = p.getNameKo();
+        if (ko == null || ko.isBlank()) return p.getName();
+        return tier(bareKey(ko), query) < tier(bareKey(p.getName()), query) ? ko : p.getName();
     }
 
     /** 앞부분 일치와 담음은 같은 순위로 보고 덧붙은 글자가 적은 쪽을 고른다("자갈치시장"은 "부산 자갈치시장"이 "자갈치 시장 경매장"보다 낫다). */

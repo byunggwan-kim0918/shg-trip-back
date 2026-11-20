@@ -25,7 +25,7 @@ import static org.mockito.Mockito.*;
 
 /**
  * TravelPlannerService 단위 테스트.
- * 일정 생성 시 OptimizedGenerationExecutor가 호출되는지, 그리고 유저의 활성 jobId를
+ * 일정 생성 시 TripGenerationExecutor가 호출되는지, 그리고 유저의 활성 jobId를
  * Redis(active:user:{userId})로 관리하며 기존 작업을 취소하는지 검증.
  */
 @ExtendWith(MockitoExtension.class)
@@ -33,7 +33,7 @@ import static org.mockito.Mockito.*;
 class TravelPlannerServiceTest {
 
     @Mock
-    private OptimizedGenerationExecutor optimizedGenerationExecutor;
+    private TripGenerationExecutor tripGenerationExecutor;
 
     @Mock
     private GenerationResultStore resultStore;
@@ -62,13 +62,13 @@ class TravelPlannerServiceTest {
     void setUp() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         service = new TravelPlannerService(
-                optimizedGenerationExecutor, resultStore, cancellationRegistry, redisTemplate,
+                tripGenerationExecutor, resultStore, cancellationRegistry, redisTemplate,
                 generationPolicyService, eventLog, relay);
         when(eventLog.mirrorFor(anyString())).thenReturn(GenerationStream.Mirror.NONE);
     }
 
     @Test
-    @DisplayName("일정 생성 시 OptimizedGenerationExecutor를 호출한다")
+    @DisplayName("일정 생성 시 TripGenerationExecutor를 호출한다")
     void startGeneration_callsOptimizedExecutor() {
         // given — 기존 활성 job 없음 (getAndSet이 null 반환)
         when(valueOperations.getAndSet(eq("active:user:1"), anyString())).thenReturn(null);
@@ -81,7 +81,7 @@ class TravelPlannerServiceTest {
 
         // then
         assertThat(response.jobId()).isNotNull();
-        verify(optimizedGenerationExecutor).execute(eq(response.jobId()), eq(request), eq(userId), any(GenerationStream.class));
+        verify(tripGenerationExecutor).execute(eq(response.jobId()), eq(request), eq(userId), any(GenerationStream.class));
         // 활성 jobId를 Redis에 등록하고 TTL을 건다
         verify(valueOperations).getAndSet("active:user:1", response.jobId());
         verify(redisTemplate).expire(eq("active:user:1"), any());
@@ -106,7 +106,7 @@ class TravelPlannerServiceTest {
         assertThat(response.jobId()).isNotEqualTo(existingJobId);
         // 기존 job을 취소한다 (다른 인스턴스에서 시작됐을 수 있음)
         verify(cancellationRegistry).cancel(existingJobId);
-        verify(optimizedGenerationExecutor).execute(eq(response.jobId()), eq(request), eq(userId), any(GenerationStream.class));
+        verify(tripGenerationExecutor).execute(eq(response.jobId()), eq(request), eq(userId), any(GenerationStream.class));
     }
 
     @Test
@@ -128,7 +128,7 @@ class TravelPlannerServiceTest {
     void openStream_reattachesFreshEmitter() {
         GenerateJobResponse response = service.startGeneration(createRequest(), 1L);
         ArgumentCaptor<GenerationStream> captor = ArgumentCaptor.forClass(GenerationStream.class);
-        verify(optimizedGenerationExecutor).execute(eq(response.jobId()), any(), eq(1L), captor.capture());
+        verify(tripGenerationExecutor).execute(eq(response.jobId()), any(), eq(1L), captor.capture());
 
         SseEmitter first = service.openStream(response.jobId(), 1L);
         SseEmitter second = service.openStream(response.jobId(), 1L);

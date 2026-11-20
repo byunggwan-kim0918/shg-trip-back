@@ -45,8 +45,6 @@ import static org.mockito.Mockito.*;
 class ItineraryDataMapperTest {
 
     @Mock private PlaceRepository placeRepository;
-    @Mock private FallbackStepReorderer fallbackStepReorderer;
-    @Mock private ItineraryAutoFixer autoFixer;
 
     @InjectMocks
     private ItineraryDataMapper mapper;
@@ -119,7 +117,7 @@ class ItineraryDataMapperTest {
         ItineraryData data = new ItineraryData("도쿄", "도쿄", BigDecimal.ZERO, List.of(),
                 List.of(stepWithId(1, "星巴克", 10L, List.of(alt)), stepWithId(2, "星巴克", 11L, List.of())));
 
-        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true, List.of(TOKYO));
+        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, List.of(TOKYO));
 
         assertThat(itinerary.getSteps()).extracting(st -> st.getPlace().getId()).containsExactly(10L, 11L);
         assertThat(itinerary.getSteps().get(0).getAlternatives()).extracting(a -> a.getPlace().getId())
@@ -137,7 +135,7 @@ class ItineraryDataMapperTest {
                 stepWithId(1, "星巴克", 10L, List.of()),
                 stepWithId(2, "星巴克", 99L, List.of())));
 
-        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true, List.of(TOKYO));
+        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, List.of(TOKYO));
 
         assertThat(itinerary.getSteps()).extracting(st -> st.getPlace().getId()).containsExactly(10L, 20L);
     }
@@ -154,13 +152,13 @@ class ItineraryDataMapperTest {
                 stepWithId(2, "오사카 카페", 2L, List.of()),
                 stepWithId(3, "삿포로 카페", 3L, List.of())));
 
-        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true, List.of(TOKYO, OSAKA));
+        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, List.of(TOKYO, OSAKA));
 
         assertThat(itinerary.getSteps()).extracting(st -> st.getPlace().getId()).containsExactly(1L, 2L);
     }
 
     @Test
-    @DisplayName("대체 경로에서 모델이 쓴 스텝 설명도 틀린 일차 표현을 실제 일차로 고친다")
+    @DisplayName("모델이 쓴 스텝 설명도 틀린 일차 표현을 실제 일차로 고친다")
     void fixesDayWordsInModelNotes() {
         when(placeRepository.findByNameAndAddress("캐시장소", "addr-3"))
                 .thenReturn(Optional.of(placeAt("캐시장소", "addr-3", JEJU_LAT + 0.01, JEJU_LNG + 0.01)));
@@ -168,7 +166,7 @@ class ItineraryDataMapperTest {
                 List.of(), null, null, null, null, "마지막 날 아침, 바다를 보며 걸어요.", BigDecimal.ZERO);
 
         Itinerary itinerary = mapper.toEntity(new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(),
-                List.of(dayTwo)), jejuInput(), 1L, true, List.of(JEJU_CENTER));
+                List.of(dayTwo)), jejuInput(), 1L, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps().get(0).getNotes()).isEqualTo("둘째 날 아침, 바다를 보며 걸어요.");
     }
@@ -187,7 +185,7 @@ class ItineraryDataMapperTest {
                 BigDecimal.valueOf(1000000), null, null, null, null, null);
 
         Itinerary itinerary = mapper.toEntity(new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(),
-                List.of(first, last)), noDates, 1L, true, List.of(JEJU_CENTER));
+                List.of(first, last)), noDates, 1L, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps().get(0).getNotes()).isEqualTo("첫째 날 아침, 바다를 보며 걸어요.");
     }
@@ -199,7 +197,7 @@ class ItineraryDataMapperTest {
                 .thenReturn(Optional.of(placeAt("캐시장소", "addr-3", JEJU_LAT + 0.01, JEJU_LNG + 0.01)));
 
         Itinerary itinerary = mapper.toEntity(
-                oneStep("캐시장소", "addr-3"), jejuInput(), 1L, true, List.of(JEJU_CENTER));
+                oneStep("캐시장소", "addr-3"), jejuInput(), 1L, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps()).hasSize(1);
         assertThat(itinerary.getSteps().get(0).getPlace().getName()).isEqualTo("캐시장소");
@@ -213,7 +211,7 @@ class ItineraryDataMapperTest {
                 .thenReturn(Optional.of(placeAt("착한장소", "addr-1", SEOUL_LAT, SEOUL_LNG)));
 
         Itinerary itinerary = mapper.toEntity(
-                oneStep("착한장소", "addr-1"), jejuInput(), 1L, true, List.of(JEJU_CENTER));
+                oneStep("착한장소", "addr-1"), jejuInput(), 1L, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps()).isEmpty();
         verify(placeRepository, never()).save(any(Place.class));
@@ -225,7 +223,7 @@ class ItineraryDataMapperTest {
         when(placeRepository.findByNameAndAddress("서울장소", "addr-8"))
                 .thenReturn(Optional.of(placeAt("서울장소", "addr-8", SEOUL_LAT, SEOUL_LNG)));
 
-        Itinerary itinerary = mapper.toEntity(oneStep("서울장소", "addr-8"), jejuInput(), 1L, true);
+        Itinerary itinerary = mapper.toEntity(oneStep("서울장소", "addr-8"), jejuInput(), 1L);
 
         assertThat(itinerary.getSteps()).hasSize(1);
     }
@@ -237,7 +235,7 @@ class ItineraryDataMapperTest {
                 .thenReturn(Optional.empty());
 
         Itinerary itinerary = mapper.toEntity(
-                oneStep("DB에없는곳", "addr-9"), jejuInput(), 1L, true, List.of(JEJU_CENTER));
+                oneStep("DB에없는곳", "addr-9"), jejuInput(), 1L, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps()).isEmpty();
         // 과거엔 여기서 latitude=0, longitude=0, address="주소 미확인" 행을 저장했다
@@ -255,7 +253,7 @@ class ItineraryDataMapperTest {
         ItineraryData data = new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(),
                 List.of(step(1, "있는곳", "addr-a"), step(2, "없는곳", "addr-b")));
 
-        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true, List.of(JEJU_CENTER));
+        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps()).hasSize(1);
         assertThat(itinerary.getSteps().get(0).getPlace().getName()).isEqualTo("있는곳");
@@ -264,9 +262,6 @@ class ItineraryDataMapperTest {
     @Test
     @DisplayName("기준 좌표를 안 넘겨도 해소된 장소들의 median으로 거리 가드가 동작한다")
     void fallsBackToMedianOfResolvedPlaces() {
-        // Fallback 경로(ItineraryGenerationExecutor)는 referenceCenters를 넘기지 않는다.
-        // 예전엔 Redis 캐시/Google 검색이 기준을 만들어 줬지만 둘 다 사라졌다. 자체 median이
-        // 없으면 "제주 일정에 서울 좌표" 오매칭 가드가 통째로 꺼진다.
         for (int i = 0; i < MEDIAN_SAMPLE; i++) {
             String name = "제주장소" + i;
             when(placeRepository.findByNameAndAddress(name, "a" + i))
@@ -283,7 +278,7 @@ class ItineraryDataMapperTest {
         ItineraryData data = new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(), steps);
 
         // referenceCenters 없이 호출 — median이 제주로 잡혀 서울 장소만 걸러져야 한다
-        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true);
+        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L);
 
         assertThat(itinerary.getSteps()).hasSize(MEDIAN_SAMPLE);
         assertThat(itinerary.getSteps())
@@ -309,7 +304,7 @@ class ItineraryDataMapperTest {
                 List.of(step(1, "제주1", "j1"), step(2, "제주2", "j2"),
                         step(3, "서울1", "s1"), step(4, "서울2", "s2")));
 
-        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L, true);
+        Itinerary itinerary = mapper.toEntity(data, jejuInput(), 1L);
 
         assertThat(itinerary.getSteps()).hasSize(4);
     }
@@ -333,7 +328,7 @@ class ItineraryDataMapperTest {
 
         Itinerary itinerary = mapper.toEntity(
                 new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(), List.of(s)),
-                jejuInput(), 1L, true, List.of(JEJU_CENTER));
+                jejuInput(), 1L, List.of(JEJU_CENTER));
 
         var alts = itinerary.getSteps().get(0).getAlternatives();
         assertThat(alts).hasSize(1);
@@ -359,7 +354,7 @@ class ItineraryDataMapperTest {
 
         Itinerary itinerary = mapper.toEntity(
                 new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(), List.of(dropped, kept)),
-                jejuInput(), 1L, true, List.of(JEJU_CENTER));
+                jejuInput(), 1L, List.of(JEJU_CENTER));
 
         assertThat(itinerary.getSteps()).hasSize(1);
         ItineraryStep only = itinerary.getSteps().get(0);
@@ -382,7 +377,7 @@ class ItineraryDataMapperTest {
 
         Itinerary itinerary = mapper.toEntity(
                 new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(), List.of(dropped, kept)),
-                jejuInput(), 1L, true, List.of(JEJU_CENTER));
+                jejuInput(), 1L, List.of(JEJU_CENTER));
 
         ItineraryStep only = itinerary.getSteps().get(0);
         assertThat(only.getTransportationMode()).isEqualTo("TRAIN");
@@ -404,7 +399,7 @@ class ItineraryDataMapperTest {
 
         Itinerary itinerary = mapper.toEntity(
                 new ItineraryData("제주 여행", "제주", BigDecimal.ZERO, List.of(), List.of(droppedLodging, nextDay)),
-                jejuInput(), 1L, true, List.of(JEJU_CENTER));
+                jejuInput(), 1L, List.of(JEJU_CENTER));
 
         ItineraryStep only = itinerary.getSteps().get(0);
         assertThat(only.getTransportationMode()).isEqualTo("TRAIN");
@@ -417,7 +412,7 @@ class ItineraryDataMapperTest {
         when(placeRepository.findByNameAndAddress("장소", "addr-4"))
                 .thenReturn(Optional.of(placeAt("장소", "addr-4", JEJU_LAT, JEJU_LNG)));
 
-        mapper.toEntity(oneStep("장소", "addr-4"), jejuInput(), 1L, true, List.of(JEJU_CENTER));
+        mapper.toEntity(oneStep("장소", "addr-4"), jejuInput(), 1L, List.of(JEJU_CENTER));
 
         verify(placeRepository, never()).save(any(Place.class));
         verify(placeRepository, never()).saveAll(any());

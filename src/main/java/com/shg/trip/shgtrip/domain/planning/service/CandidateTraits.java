@@ -10,23 +10,12 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.*;
 /** 일정 보충·교체·대안이 같이 쓰는 후보 판정과 식별 키(세부 유형, 보충 가능 여부, 긴 등산, 이름 키). */
 final class CandidateTraits {
 
-    private static final int MIN_BRAND_BODY_LENGTH = 3;
-
     private CandidateTraits() {
     }
 
     /** DB places의 (name,address) 유니크 키와 같은 기준으로 정규화한 장소 동일성 키. */
     static String placeKey(String name, String address) {
         return normalizeName(name) + "|" + normalizeName(address);
-    }
-
-    /**
-     * 자동 보충으로 방문 스텝에 넣어도 되는 후보인지. 경유형은 Sonnet이 고른 것만 두고 코드가 늘리지 않는다.
-     */
-    static boolean isVisitableFill(PlaceCandidate c) {
-        // 행정 지정 구역·주소 불명 레코드는 어떤 보충 경로로도 넣지 않는다(공용 게이트).
-        return isVisitSpot(c) && !isViaRoute(c) && isWorthFilling(c)
-                && PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country());
     }
 
     static boolean isSelectable(PlaceCandidate c) {
@@ -99,18 +88,6 @@ final class CandidateTraits {
     }
 
     /**
-     * {@code c}가 {@code target} 자리를 대신할 수 있는지. 같은 역할(식사↔식사, 카페↔카페, 관광 계열끼리, 숙소↔숙소)이면서
-     * 방문 가능해야 한다. 교체·대안·휴무 회피·거리 교체가 모두 이 기준을 쓴다.
-     */
-    static boolean isSubstituteFor(PlaceCandidate target, PlaceCandidate c) {
-        if (target == null || c == null || !CandidatePolicy.sameRole(target, c)) return false;
-        if (CandidatePolicy.roleOf(c) == CandidatePolicy.Role.LODGING) {
-            return PlaceCategoryConstants.isVisitableEntity(c.name(), c.address(), c.country());
-        }
-        return isVisitableFill(c) && (!target.mealEligible() || c.mealEligible());
-    }
-
-    /**
      * 유형 상한·시간대 버킷·대안 매칭이 공유하는 세부 유형 키. 총칭 리프는 이름·태그·설명으로 추론된 유형이 돌아온다.
      */
     static String subTypeOf(PlaceCandidate c) {
@@ -127,53 +104,10 @@ final class CandidateTraits {
         return c != null && CandidatePolicy.roleOf(c) == CandidatePolicy.Role.CAFE;
     }
 
-    /** 식음료 가게의 브랜드(지점명을 뗀 이름). 체인의 다른 지점은 사용자에게 같은 가게라 반복을 셀 때 쓴다. 식당·카페가 아니면 null. */
-    static String diningBrand(PlaceCandidate c) {
-        if (c == null || c.name() == null || !(c.mealEligible() || isCafeLike(c))) return null;
-        return AlternativeBuilder.stripBranchSuffix(c.name());
-    }
-
-    /** 브랜드 집합에 같은 브랜드({@link #sameBrand})가 있는지. 식당·카페가 아니면 false. */
-    static boolean repeatsBrand(Set<String> brands, PlaceCandidate c) {
-        String brand = diningBrand(c);
-        return brand != null && brands.stream().anyMatch(b -> sameBrand(b, brand));
-    }
-
-    // 앞부분만 같은 상호는 "칼국수"·"칼국수집 ○○"처럼 다른 가게일 수 있어 뒤에 지점명이 붙은 경우만 같은 브랜드로 본다.
-    static boolean sameBrand(String a, String b) {
-        if (a == null || b == null) return false;
-        String x = a.toLowerCase(java.util.Locale.ROOT);
-        String y = b.toLowerCase(java.util.Locale.ROOT);
-        if (x.equals(y)) return true;
-        String shorter = x.length() <= y.length() ? x : y;
-        String longer = shorter == x ? y : x;
-        return shorter.length() >= MIN_BRAND_BODY_LENGTH && longer.startsWith(shorter)
-                && (longer.endsWith("점") || longer.endsWith("店"));
-    }
-
-    static Set<String> diningBrands(Collection<Integer> indices, List<PlaceCandidate> candidates) {
-        Set<String> brands = new HashSet<>();
-        for (Integer i : indices) {
-            String brand = diningBrand(byIndex(candidates, i));
-            if (brand != null) brands.add(brand);
-        }
-        return brands;
-    }
-
     static boolean namesOverlap(String placeName, String hubName) {
         String a = normalizeName(placeName);
         String b = normalizeName(hubName);
         return !a.isEmpty() && !b.isEmpty() && (a.contains(b) || b.contains(a));
     }
 
-    /** 끼니(DINING)든 카페·베이커리(CAFE)든 먹는 스텝이 연달아 붙으면 양쪽 다 망친다. */
-    static boolean isFoodCand(PlaceCandidate c) {
-        if (c == null) return false;
-        String major = PlaceCategoryConstants.majorCategory(c.category());
-        return "DINING".equals(major) || "CAFE".equals(major);
-    }
-
-    static boolean isDiningCand(PlaceCandidate c) {
-        return c != null && "DINING".equals(PlaceCategoryConstants.majorCategory(c.category()));
-    }
 }

@@ -4,7 +4,6 @@ import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants.SearchRole;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -12,7 +11,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * 슬롯은 RouteOptimizer가 식사·숙소·허브를 채우는 데 필요한 고정 5개 역할(교통/식당/카페/숙소/관광)이다.
+ * 슬롯은 근처 검색이 쓰는 고정 5개 역할(교통/식당/카페/숙소/관광)이다.
  * 관광 슬롯만 카테고리·테마별로 쪼갠다. 한 문장에 뭉치면 임베딩이 평균화돼 사용자 입력이 검색에 안 잡힌다.
  *
  * <p>LLM이 빠뜨려도 사용자 입력이 반영되도록 쿼리는 코드 템플릿으로 만들고,
@@ -28,7 +27,7 @@ public final class SearchQueryBuilder {
 
     /**
      * @param key         로그·limit 배분용 식별자("attraction:beach", "cafe" 등)
-     * @param role        고정 5개 역할 중 하나 (RouteOptimizer가 요구하는 구조)
+     * @param role        고정 5개 역할 중 하나
      * @param queryText   임베딩 대상 쿼리 문장
      * @param labelTokens 이 슬롯의 의미 라벨 토큰. 이름·태그가 여기 걸리면 랭킹 가점
      * @param excludedCategoryPatterns 이 슬롯에서 배제할 "명백히 틀린 대분류" 패턴
@@ -40,41 +39,6 @@ public final class SearchQueryBuilder {
                           List<String> excludedCategoryPatterns) {
             this(key, role, queryText, labelTokens, excludedCategoryPatterns, queryText);
         }
-    }
-
-    /**
-     * @param input enrichInput 결과 (normalizedDestination, searchTags 필수)
-     * @return 비어있지 않은 검색 쿼리 텍스트
-     * @throws IllegalArgumentException normalizedDestination이 blank이고 searchTags가 모두 blank인 경우
-     */
-    public static String buildSearchQuery(VectorEnrichedInput input) {
-        if (input == null) {
-            throw new IllegalArgumentException("VectorEnrichedInput must not be null");
-        }
-
-        List<String> parts = new ArrayList<>();
-
-        String destination = input.normalizedDestination();
-        if (destination != null && !destination.isBlank()) {
-            parts.add(destination.trim());
-        }
-
-        List<String> tags = input.searchTags();
-        if (tags != null) {
-            for (String tag : tags) {
-                if (tag != null && !tag.isBlank()) {
-                    parts.add(tag.trim());
-                }
-            }
-        }
-
-        String result = String.join(" ", parts);
-        if (result.isBlank()) {
-            throw new IllegalArgumentException(
-                    "Cannot build search query: both normalizedDestination and searchTags are blank");
-        }
-
-        return result;
     }
 
     /**
@@ -144,31 +108,6 @@ public final class SearchQueryBuilder {
         }
 
         return slots;
-    }
-
-    /**
-     * categorySearchQueries가 없으면 searchTags 단일 쿼리를 "attraction" 키로 감싼다(하위 호환).
-     *
-     * @param input enrichInput 결과 (categorySearchQueries 사용)
-     * @return 카테고리별 쿼리 맵 (key: category, value: query text)
-     */
-    public static Map<String, String> buildCategoryQueries(VectorEnrichedInput input) {
-        if (input == null) {
-            throw new IllegalArgumentException("VectorEnrichedInput must not be null");
-        }
-
-        Map<String, String> queries = new HashMap<>();
-
-        Map<String, String> categoryQueries = input.categorySearchQueries();
-        if (categoryQueries != null && !categoryQueries.isEmpty()) {
-            queries.putAll(categoryQueries);
-            return queries;
-        }
-
-        String fallbackQuery = buildSearchQuery(input);
-        queries.put("attraction", fallbackQuery);
-
-        return queries;
     }
 
     /** 라벨 토큰은 AI 힌트 없이 템플릿(의미 라벨)에서만 뽑는다. */
