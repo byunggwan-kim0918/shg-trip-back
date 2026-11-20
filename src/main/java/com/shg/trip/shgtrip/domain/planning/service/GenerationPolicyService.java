@@ -52,6 +52,11 @@ public class GenerationPolicyService {
     static final int MAX_TRIP_CHAT_PER_DAY = 200;
     private static final Duration TRIP_CHAT_MINUTE_TTL = Duration.ofMinutes(1);
     private static final Duration TRIP_CHAT_DAY_TTL = Duration.ofDays(1);
+    /** 대화 답이 욕설·모욕으로 판정된 횟수. 기준에 닿으면 그때부터 하루 동안 대화 입력을 막는다. */
+    private static final String TRIP_CHAT_ABUSE_KEY_PREFIX = "tripchat:abuse:";
+    private static final String TRIP_CHAT_ABUSE_TURN_KEY_PREFIX = "tripchat:abuse-turn:";
+    public static final int MAX_TRIP_CHAT_ABUSE = 3;
+    private static final Duration TRIP_CHAT_ABUSE_TTL = Duration.ofHours(24);
 
     /**
      * 사용자 입력 문제만 실패로 센다. AI 포맷 오류·{@code valid} 키 누락("INVALID_INPUT" 폴백)·미상 코드를
@@ -150,8 +155,12 @@ public class GenerationPolicyService {
 
     /**
      * 대화 입력 해석 호출 제한(고정 창). Redis 장애 시에는 통과시킨다. 입력을 막는 쪽 피해가 더 크다.
+     *
+     * @return 지금까지 센 부적절 표현 횟수. 해석 맥락의 경고 문구에 쓴다
      */
-    public void checkTripChatAllowed(Long userId) {
+    public int checkTripChatAllowed(Long userId) {
+        int abuse = tripChatAbuseCount(userId);
+        if (abuse >= MAX_TRIP_CHAT_ABUSE) throw new BusinessException(ErrorCode.TRIP_CHAT_LOCKED);
         long perMinute;
         long perDay;
         try {
@@ -160,7 +169,7 @@ public class GenerationPolicyService {
                     : incrementWindow(TRIP_CHAT_DAY_KEY_PREFIX + userId, TRIP_CHAT_DAY_TTL);
         } catch (Exception e) {
             log.warn("checkTripChatAllowed 조회 실패 — 통과(fail-open, user {}): {}", userId, e.getMessage());
-            return;
+            return abuse;
         }
         if (perMinute > MAX_TRIP_CHAT_PER_MINUTE) {
             throw new BusinessException(ErrorCode.TRIP_CHAT_RATE_LIMITED);
@@ -168,6 +177,39 @@ public class GenerationPolicyService {
         if (perDay > MAX_TRIP_CHAT_PER_DAY) {
             throw new BusinessException(ErrorCode.TRIP_CHAT_RATE_LIMITED,
                     "오늘 대화 답변 한도(" + MAX_TRIP_CHAT_PER_DAY + "회)를 모두 사용했어요. 내일 다시 이어서 할 수 있어요.");
+        }
+        return abuse;
+    }
+
+    /** Redis 장애 시 0. */
+    int tripChatAbuseCount(Long userId) {
+        try {
+            return (int) getCount(TRIP_CHAT_ABUSE_KEY_PREFIX + userId);
+        } catch (Exception e) {
+            log.warn("tripChatAbuseCount 조회 실패 (user {}): {}", userId, e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * 욕설·모욕 답을 센다. 기준에 닿은 순간부터 다시 하루를 잠가, 첫 경고 뒤 하루가 거의 지나 닿아도 바로 풀리지 않게 한다.
+     *
+     * 응답을 못 받은 사용자가 같은 턴을 다시 보내도 한 번만 센다.
+     *
+     * @return 이번까지 센 횟수. Redis 장애 시 0
+     */
+    public int recordTripChatAbuse(Long userId, String clientTurnId) {
+        String key = TRIP_CHAT_ABUSE_KEY_PREFIX + userId;
+        try {
+            Boolean firstTime = redisTemplate.opsForValue()
+                    .setIfAbsent(TRIP_CHAT_ABUSE_TURN_KEY_PREFIX + userId + ":" + clientTurnId, "1", TRIP_CHAT_ABUSE_TTL);
+            if (!Boolean.TRUE.equals(firstTime)) return (int) getCount(key);
+            long count = incrementWindow(key, TRIP_CHAT_ABUSE_TTL);
+            if (count >= MAX_TRIP_CHAT_ABUSE) redisTemplate.expire(key, TRIP_CHAT_ABUSE_TTL);
+            return (int) count;
+        } catch (Exception e) {
+            log.warn("recordTripChatAbuse 실패 (user {}): {}", userId, e.getMessage());
+            return 0;
         }
     }
 
@@ -200,7 +242,7 @@ public class GenerationPolicyService {
 
     private void moveCounters(String fromSuffix, List<String> toSuffixes) {
         if (toSuffixes.isEmpty()) return;
-        for (String prefix : List.of(FAIL_KEY_PREFIX, QUOTA_KEY_PREFIX, UNBILLED_KEY_PREFIX)) {
+        for (String prefix : List.of(FAIL_KEY_PREFIX, QUOTA_KEY_PREFIX, UNBILLED_KEY_PREFIX, TRIP_CHAT_ABUSE_KEY_PREFIX)) {
             String from = prefix + fromSuffix;
             try {
                 String value = redisTemplate.opsForValue().get(from);

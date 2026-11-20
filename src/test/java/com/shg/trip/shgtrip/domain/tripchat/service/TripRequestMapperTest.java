@@ -16,6 +16,9 @@ import org.springframework.core.io.ClassPathResource;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.time.LocalDate;
 import java.util.EnumSet;
 import java.util.List;
@@ -29,7 +32,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TripRequestMapperTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 11, 10);
-    private static final Validator VALIDATOR = Validation.buildDefaultValidatorFactory().getValidator();
+    private static final Validator VALIDATOR = Validation.byDefaultProvider().configure()
+            .clockProvider(() -> Clock.fixed(Instant.parse("2026-11-10T01:00:00Z"), ZoneId.of("Asia/Seoul")))
+            .buildValidatorFactory().getValidator();
 
     private static TripRequestMapper.Result map(Events e) {
         return TripRequestMapper.map(e.draft(), Map.of(), TODAY);
@@ -110,8 +115,8 @@ class TripRequestMapperTest {
     }
 
     @Test
-    @DisplayName("피하고 싶은 장소 이름은 요청 문장에 넣지 않는다")
-    void avoidPlaceNeverReachesDescription() {
+    @DisplayName("피할 장소는 이름 목록으로 따로 보내고 요청 문장은 사용자 말 그대로 둔다")
+    void avoidPlaceNamesTravelSeparately() {
         Events e = Events.busanTrip()
                 .user(DraftField.AVOID_PLACES, "감천문화마을")
                 .user(DraftField.NOTES, "감천문화마을은 빼줘")
@@ -119,7 +124,8 @@ class TripRequestMapperTest {
 
         TripRequestMapper.Result r = map(e);
 
-        assertThat(r.request().description()).doesNotContain("감천").contains("못 먹거나 피할 음식: 해산물");
+        assertThat(r.request().description()).contains("못 먹거나 피할 음식: 해산물", "기타: 감천문화마을은 빼줘");
+        assertThat(r.request().avoidPlaceNames()).containsExactly("감천문화마을");
         assertThat(r.request().avoidPlaceIds()).isNull();
         assertThat(r.notes().get(Slot.EXTRAS)).contains("감천문화마을 · " + GeneratorSupport.AVOID_PLACE_NOT_FOUND);
     }
@@ -234,7 +240,7 @@ class TripRequestMapperTest {
     }
 
     @Test
-    @DisplayName("이름이 맞은 피할 장소는 id로 보내고, 꼭 넣을 장소와 겹치면 빼지 않는다")
+    @DisplayName("이름이 맞은 피할 장소는 id와 맞춘 장소 이름으로 보내고, 꼭 넣을 장소와 겹치면 빼지 않는다")
     void matchedAvoidPlacesAreSentById() {
         Events e = Events.busanTrip().clearSlot(Slot.ANCHORS)
                 .user(DraftField.MUST_VISIT, "해운대해수욕장")
@@ -255,7 +261,7 @@ class TripRequestMapperTest {
 
         assertThat(r.request().avoidPlaceIds()).containsExactly(9L, 8L);
         assertThat(r.request().selectedPlaceIds()).containsExactly(5L, 6L);
-        assertThat(r.request().description()).doesNotContain("감천");
+        assertThat(r.request().avoidPlaceNames()).containsExactly("감천문화마을", "할매국밥");
         assertThat(r.notes().get(Slot.ANCHORS)).contains("해운대해수욕장 · " + GeneratorSupport.PLACE_INCLUDED,
                 "개미집(식당) · " + GeneratorSupport.PLACE_INCLUDED);
         assertThat(r.notes().get(Slot.EXTRAS)).contains("감천문화마을 · " + GeneratorSupport.AVOID_PLACE_EXCLUDED,
@@ -466,15 +472,33 @@ class TripRequestMapperTest {
     }
 
     @Test
-    @DisplayName("한 글자 피할 장소로는 다른 조각을 거르지 않는다")
-    void shortAvoidNameDoesNotFilter() {
-        String description = TripRequestMapper.describe(List.of("원하는 여행: 부산 바다", "숙소: 해운대 쪽 희망"),
-                List.of(item("산"), item("해운대")));
+    @DisplayName("하고 싶은 것이 많으면 최근 바람부터 상한까지 말한 순서대로 싣고, 줄였다고 알린다")
+    void prioritiesTextIsCapped() {
+        Events e = Events.busanTrip();
+        for (int i = 0; i < 20; i++) e.user(DraftField.PRIORITIES, "바다 앞 카페에서 오래 쉬기 " + i);
 
-        assertThat(description).isEqualTo("원하는 여행: 부산 바다");
+        TripRequestMapper.Result r = map(e);
+        String wishes = r.request().description().split(" / ")[0];
+
+        assertThat(wishes).doesNotContain("바다 보면서 느긋하게 쉬기").endsWith("오래 쉬기 19");
+        assertThat(wishes.indexOf("쉬기 18")).isLessThan(wishes.indexOf("쉬기 19"));
+        assertThat(wishes.length() - "원하는 여행: ".length()).isLessThanOrEqualTo(TripRequestMapper.MAX_PRIORITIES_TEXT);
+        assertThat(r.notes().get(Slot.MOOD)).contains(GeneratorSupport.PRIORITIES_TRIMMED);
     }
 
-    private static Draft.Item item(String text) {
-        return new Draft.Item(text, com.shg.trip.shgtrip.domain.tripchat.model.FieldSource.USER, text, null, null, 0);
+    @Test
+    @DisplayName("꼭 넣기로 해 빼지 않는 피할 장소는 이름 목록에 넣지 않는다")
+    void keptAvoidPlaceIsNotListed() {
+        Events e = Events.busanTrip().clearSlot(Slot.ANCHORS)
+                .user(DraftField.MUST_VISIT, "해운대해수욕장")
+                .user(DraftField.AVOID_PLACES, "해운대");
+        Map<String, PlaceMatch> matches = Map.of(
+                PlaceMatcher.key(DraftField.MUST_VISIT, "해운대해수욕장"), new PlaceMatch(5L, "해운대해수욕장", "ATTRACTION"),
+                PlaceMatcher.key(DraftField.AVOID_PLACES, "해운대"), new PlaceMatch(5L, "해운대해수욕장", "ATTRACTION"));
+
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+
+        assertThat(r.request().avoidPlaceNames()).isNull();
+        assertThat(r.request().selectedPlaceIds()).containsExactly(5L);
     }
 }

@@ -28,25 +28,27 @@ final class FerryAreaFilter {
 
     /** @param pool 비율 가드를 잴 후보 풀(검색 결과 전체) */
     static List<String> activeTokens(List<String> ferryOnlyAreas, String description,
-                                     List<String> customPlaceNames, List<PlaceCandidate> pool) {
-        return activeTokens(ferryOnlyAreas, description, customPlaceNames, token -> pool.isEmpty() ? 0
+                                     List<String> customPlaceNames, List<String> avoidPlaceNames,
+                                     List<PlaceCandidate> pool) {
+        return activeTokens(ferryOnlyAreas, description, customPlaceNames, avoidPlaceNames, token -> pool.isEmpty() ? 0
                 : (double) pool.stream().filter(c -> containsToken(c.address(), token)).count() / pool.size());
     }
 
     /**
-     * 사용자가 요청 문장·직접 입력 장소에서 언급한 섬은 가고 싶다는 뜻이라 토큰에서 뺀다.
+     * 사용자가 요청 문장·직접 입력 장소에서 언급한 섬은 가고 싶다는 뜻이라 토큰에서 뺀다. 피하겠다고 한 섬은 언급돼도 남긴다.
      *
      * @param shareOf 토큰이 걸리는 장소의 비율. 섬 토큰이 아닌 지역 이름이면 여행지 장소 상당수가 빠진다
      */
     static List<String> activeTokens(List<String> ferryOnlyAreas, String description,
-                                     List<String> customPlaceNames, java.util.function.ToDoubleFunction<String> shareOf) {
+                                     List<String> customPlaceNames, List<String> avoidPlaceNames,
+                                     java.util.function.ToDoubleFunction<String> shareOf) {
         if (ferryOnlyAreas == null || ferryOnlyAreas.isEmpty()) return List.of();
         List<String> active = new ArrayList<>();
         for (String raw : ferryOnlyAreas) {
             if (raw == null) continue;
             String token = raw.trim();
             if (token.length() < MIN_TOKEN_LENGTH) continue;
-            if (mentioned(token, description, customPlaceNames)) {
+            if (mentioned(token, description, customPlaceNames) && !avoided(token, avoidPlaceNames)) {
                 log.info("도선 섬 제외 해제: '{}' — 사용자가 요청에서 언급", token);
                 continue;
             }
@@ -96,12 +98,18 @@ final class FerryAreaFilter {
      * "우도면"은 보통 "우도"로 말하므로 행정 접미사(면·리·동·읍)를 뗀 이름도 본다.
      * 남는 이름이 한 글자면 아무 문장에나 걸려 보지 않는다.
      */
-    private static boolean mentioned(String token, String description, List<String> customPlaceNames) {
-        String stem = token;
+    private static String stem(String token) {
         char last = token.charAt(token.length() - 1);
-        if ((last == '면' || last == '리' || last == '동' || last == '읍') && token.length() - 1 >= 2) {
-            stem = token.substring(0, token.length() - 1);
-        }
+        boolean adminSuffix = last == '면' || last == '리' || last == '동' || last == '읍';
+        return adminSuffix && token.length() - 1 >= 2 ? token.substring(0, token.length() - 1) : token;
+    }
+
+    private static boolean avoided(String token, List<String> avoidPlaceNames) {
+        return TripExclusions.namesAvoided(token, avoidPlaceNames) || TripExclusions.namesAvoided(stem(token), avoidPlaceNames);
+    }
+
+    private static boolean mentioned(String token, String description, List<String> customPlaceNames) {
+        String stem = stem(token);
         List<String> texts = new ArrayList<>();
         if (description != null) texts.add(description);
         if (customPlaceNames != null) texts.addAll(customPlaceNames);

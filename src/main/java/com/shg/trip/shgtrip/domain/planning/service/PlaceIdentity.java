@@ -6,6 +6,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
@@ -33,6 +34,11 @@ public final class PlaceIdentity {
      */
     private static final double SAME_NAME_STAY_KM = 0.1;
     private static final int MIN_BARE_NAME = 2;
+    /** 딸린 행으로 볼 명소 이름의 최소 길이. 두 글자 이름("경포")으로 시작하는 곳은 다른 명소가 많다. */
+    private static final int MIN_PART_PREFIX = 3;
+    /** 명소 이름 뒤에 붙으면 그 명소의 부속 시설인 낱말. "롯데월드타워"처럼 다른 명소가 되는 꼬리는 넣지 않는다. */
+    private static final List<String> PART_SUFFIXES = List.of("중앙광장", "광장", "입구", "주차장", "물놀이장", "산책로",
+            "인증센터", "안내소", "매표소", "전망대", "중부", "동부", "서부", "남부", "북부");
     private static final Pattern NAME_SEPARATORS = Pattern.compile("[\\s\\p{Punct}\\p{IsPunctuation}]+");
     private static final Pattern TRAILING_NOTE = Pattern.compile("\\s*[(（\\[][^()（）\\[\\]]*[)）\\]]\\s*$");
     /** 영어 이름 꼬리. 괄호로 감싼 병기("東京ドームシティ (Tokyo Dome City)")도 받는다. */
@@ -71,6 +77,32 @@ public final class PlaceIdentity {
         String compact = name == null ? "" : compact(name);
         if (compact.length() < MIN_BARE_NAME) return null;
         return region + "|" + PlaceCategoryConstants.majorCategory(category) + "|" + compact;
+    }
+
+    /** 해변과 해수욕장은 같은 곳을 부르는 이름이다. 여행자가 "경포해변"이라 해도 장소 이름은 "경포해수욕장"일 수 있다. */
+    public static List<String> nameVariants(String name) {
+        String n = name == null ? "" : name.strip();
+        if (n.endsWith("해수욕장")) return List.of(n, n.substring(0, n.length() - 4) + "해변");
+        if (n.endsWith("해변")) return List.of(n, n.substring(0, n.length() - 2) + "해수욕장");
+        return List.of(n);
+    }
+
+    /** 피할 명소를 빼도 딸린 행("경포해변 중앙광장")이 남으면 같은 곳에 간다. */
+    static boolean isPartOf(PlaceCandidate c, PlaceCandidate sight) {
+        if (!Objects.equals(c.region(), sight.region()) || !withinKm(c, sight, OUTDOOR_SAME_NAME_KM)) return false;
+        if (!"ATTRACTION".equals(PlaceCategoryConstants.majorCategory(c.category()))
+                || !"ATTRACTION".equals(PlaceCategoryConstants.majorCategory(sight.category()))) return false;
+        Set<String> names = new HashSet<>(names(c));
+        names.addAll(bareNames(c));
+        for (String sightName : new String[]{sight.name(), sight.nameKo()}) {
+            if (sightName == null || sightName.isBlank()) continue;
+            for (String variant : nameVariants(bareName(sightName, sight.region()))) {
+                String key = compact(variant);
+                if (key.length() >= MIN_PART_PREFIX && names.stream().anyMatch(n -> n.startsWith(key)
+                        && PART_SUFFIXES.contains(n.substring(key.length())))) return true;
+            }
+        }
+        return false;
     }
 
     /** 이름 끝 괄호 설명("용지봉 (634m)")과 앞에 붙은 그 지역 도시 이름("강릉 경포대")을 뗀 이름. null이면 빈 문자열이다. */

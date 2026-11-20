@@ -84,6 +84,18 @@ public class PlaceMatcher {
      * @param avoiding 지역 이름("해운대")이 같은 이름 가게나 이름 일부가 겹치는 가게에 맞춰지면 안내와 결과가 어긋난다.
      */
     java.util.Optional<PlaceMatch> find(String name, String destination, boolean avoiding) {
+        PlaceMatch nonSight = null;
+        for (String variant : PlaceIdentity.nameVariants(name)) {
+            java.util.Optional<PlaceMatch> found = findExactly(variant, destination, avoiding);
+            if (found.isEmpty()) continue;
+            // "송정해변"이라고 하면 같은 이름 카페보다 별칭 이름의 해수욕장 행이 맞다.
+            if ("ATTRACTION".equals(found.get().major())) return found;
+            if (nonSight == null) nonSight = found.get();
+        }
+        return java.util.Optional.ofNullable(nonSight);
+    }
+
+    private java.util.Optional<PlaceMatch> findExactly(String name, String destination, boolean avoiding) {
         String query = TextNormalizer.key(name);
         if (query.length() < 2 || isGeneric(query)) return java.util.Optional.empty();
         try {

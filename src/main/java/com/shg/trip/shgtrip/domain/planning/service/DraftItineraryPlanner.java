@@ -114,7 +114,8 @@ public class DraftItineraryPlanner {
                           LocalTime arrival, LocalTime departure, PlaceCandidate arrivalHub,
                           PlaceCandidate departureHub, List<String> mustDo, List<UserWant> userWants,
                           Map<String, PlaceCandidate> pinned, PlaceCandidate bookedLodging, TripExclusions exclusions,
-                          Map<Integer, LodgingNeed> lodgingNeeds, Set<Integer> eveningTransfers) {
+                          Map<Integer, LodgingNeed> lodgingNeeds, Set<Integer> eveningTransfers,
+                          List<String> avoidPlaceNames) {
 
         public Request {
             if (cities == null || cities.isEmpty()) throw new IllegalArgumentException("여행 도시가 없다");
@@ -125,17 +126,18 @@ public class DraftItineraryPlanner {
             exclusions = exclusions == null ? TripExclusions.NONE : exclusions;
             lodgingNeeds = lodgingNeeds == null ? Map.of() : lodgingNeeds;
             eveningTransfers = eveningTransfers == null ? Set.of() : eveningTransfers;
+            avoidPlaceNames = avoidPlaceNames == null ? List.of() : List.copyOf(avoidPlaceNames);
         }
 
         public Request withDraft(DraftPlan newDraft) {
             return new Request(input, newDraft, cities, arrival, departure, arrivalHub, departureHub, mustDo,
-                    userWants, pinned, bookedLodging, exclusions, lodgingNeeds, eveningTransfers);
+                    userWants, pinned, bookedLodging, exclusions, lodgingNeeds, eveningTransfers, avoidPlaceNames);
         }
 
         public Request with(DraftPlan newDraft, Map<String, PlaceCandidate> newPinned,
                             Map<Integer, LodgingNeed> needs, Set<Integer> transfers) {
             return new Request(input, newDraft, cities, arrival, departure, arrivalHub, departureHub, mustDo,
-                    userWants, newPinned, bookedLodging, exclusions, needs, transfers);
+                    userWants, newPinned, bookedLodging, exclusions, needs, transfers, avoidPlaceNames);
         }
 
         /** 도시 한국어 이름. 초안 이름 앞의 도시명을 떼는 데 쓴다. */
@@ -227,6 +229,11 @@ public class DraftItineraryPlanner {
         }
         if (input.restrictions() != null && !input.restrictions().isEmpty()) {
             sb.append("피할 것: ").append(input.restrictions()).append('\n');
+        }
+        if (!req.avoidPlaceNames().isEmpty()) {
+            // 이름 하나가 줄을 바꿔 다른 프롬프트 항목처럼 보이지 않게 한다.
+            sb.append("가지 않을 곳: ").append(String.join(", ", req.avoidPlaceNames().stream()
+                    .map(n -> n.replaceAll("\\s+", " ").strip()).toList())).append('\n');
         }
         for (String m : req.mustDo()) sb.append("꼭 할 것: ").append(m).append('\n');
         return sb.toString();
@@ -963,6 +970,7 @@ public class DraftItineraryPlanner {
                 + String.join(" ", req.mustDo() == null ? List.of() : req.mustDo()));
         if (wanted.isEmpty()) return false;
         for (String name : List.of(Objects.toString(itemName, ""), Objects.toString(placeName, ""))) {
+            if (TripExclusions.namesAvoided(name, req.avoidPlaceNames())) continue;
             String k = DraftPlaceResolver.queryKey(name, req.cityNames());
             if (k.length() >= 3 && (wanted.contains(k) || wanted.contains(k.substring(0, 3)))) return true;
         }

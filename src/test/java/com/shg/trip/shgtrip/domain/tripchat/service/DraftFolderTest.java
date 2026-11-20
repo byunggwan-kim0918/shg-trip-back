@@ -34,7 +34,7 @@ class DraftFolderTest {
     void editClearsOnlyThatSlot() {
         Draft d = Events.busanTrip().clearSlot(Slot.MOOD).user(DraftField.PRIORITIES, "맛집 탐방").draft();
 
-        assertThat(d.value(DraftField.PRIORITIES)).isEqualTo("맛집 탐방");
+        assertThat(d.items(DraftField.PRIORITIES)).extracting(Draft.Item::text).containsExactly("맛집 탐방");
         assertThat(d.items(DraftField.THEMES)).isEmpty();
         assertThat(d.value(DraftField.PACE)).isNull();
         assertThat(d.value(DraftField.DESTINATION)).isEqualTo("부산");
@@ -67,5 +67,15 @@ class DraftFolderTest {
         Draft d = Events.of().inferred(DraftField.THEMES, "food").draft();
 
         assertThat(d.resolved(Slot.MOOD)).isFalse();
+    }
+
+    @Test
+    @DisplayName("하고 싶은 것은 여러 개가 함께 남는다")
+    void keepsEveryWish() {
+        Draft d = Events.of().user(DraftField.PRIORITIES, "흑돼지 먹기").user(DraftField.PRIORITIES, "조용한 카페 가기")
+                .draft();
+
+        assertThat(d.items(DraftField.PRIORITIES)).extracting(Draft.Item::text)
+                .containsExactly("흑돼지 먹기", "조용한 카페 가기");
     }
 }

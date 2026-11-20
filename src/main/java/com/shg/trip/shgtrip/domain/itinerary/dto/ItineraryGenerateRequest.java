@@ -79,8 +79,25 @@ public record ItineraryGenerateRequest(
 
         // 못 먹는 음식·피할 활동. selectedPlaceIds에 있는 장소는 해당해도 빼지 않는다
         @Size(max = 20, message = "피할 조건은 최대 20개까지 가능합니다.")
-        List<@NotNull(message = "피할 조건 값이 비어 있습니다.") PlaceRestriction> restrictions
+        List<@NotNull(message = "피할 조건 값이 비어 있습니다.") PlaceRestriction> restrictions,
+
+        // 피하고 싶다는 장소 이름. 요청 문장에 넣으면 이름 언급을 원하는 곳으로 읽는 단계가 있어 따로 받는다
+        @Size(max = 10, message = "피할 장소는 최대 10개까지 가능합니다.")
+        List<@NotBlank(message = "피할 장소 이름이 비어 있습니다.")
+             @Size(max = 50, message = "피할 장소 이름은 50자 이내여야 합니다.") String> avoidPlaceNames
 ) {
+    public ItineraryGenerateRequest(PlanningMode mode, String destination, List<String> themes, List<String> categories,
+                                    String pace, String transportPref, BigDecimal budget, LocalDate startDate,
+                                    LocalDate endDate, String description, List<Long> selectedPlaceIds,
+                                    List<String> customPlaceNames, String companion, Integer partySize,
+                                    String arrivalTime, String departureTime,
+                                    List<RequiredExperience> requiredExperiences, List<Long> avoidPlaceIds,
+                                    List<PlaceRestriction> restrictions) {
+        this(mode, destination, themes, categories, pace, transportPref, budget, startDate, endDate, description,
+                selectedPlaceIds, customPlaceNames, companion, partySize, arrivalTime, departureTime,
+                requiredExperiences, avoidPlaceIds, restrictions, null);
+    }
+
     public ItineraryGenerateRequest(PlanningMode mode, String destination, List<String> themes, List<String> categories,
                                     String pace, String transportPref, BigDecimal budget, LocalDate startDate,
                                     LocalDate endDate, String description, List<Long> selectedPlaceIds,

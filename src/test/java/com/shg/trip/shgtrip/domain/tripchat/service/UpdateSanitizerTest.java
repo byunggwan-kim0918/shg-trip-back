@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.tripchat.service;
 
 import com.shg.trip.shgtrip.domain.tripchat.model.DraftEvent;
 import com.shg.trip.shgtrip.domain.tripchat.model.DraftField;
+import com.shg.trip.shgtrip.domain.tripchat.model.EventOp;
 import com.shg.trip.shgtrip.domain.tripchat.model.FieldSource;
 import com.shg.trip.shgtrip.domain.tripchat.model.FieldStatus;
 import com.shg.trip.shgtrip.domain.tripchat.model.Interpretation;
@@ -21,7 +22,7 @@ class UpdateSanitizerTest {
     }
 
     private static List<DraftEvent> run(String answer, String outcome, Interpretation.Update... updates) {
-        Interpretation it = new Interpretation(List.of(updates), outcome, null, false);
+        Interpretation it = new Interpretation(List.of(updates), outcome, null, "answer", null);
         AtomicLong seq = new AtomicLong();
         return UpdateSanitizer.toEvents(it, Slot.CITY, answer, seq::incrementAndGet);
     }
@@ -106,12 +107,26 @@ class UpdateSanitizerTest {
     void inferredClearIsDropped() {
         List<DraftEvent> events = run("부산 말고", "answered",
                 u("LODGING", "clear", "", "inferred", ""),
-                u("MUST_VISIT", "remove", "블루라인파크", "user", ""),
                 u("DESTINATION", "clear", "", "user", "부산 말고"));
 
         assertThat(events).singleElement().satisfies(e -> {
             assertThat(e.field()).isEqualTo(DraftField.DESTINATION);
             assertThat(e.op()).isEqualTo(com.shg.trip.shgtrip.domain.tripchat.model.EventOp.CLEAR);
+        });
+    }
+
+    @Test
+    @DisplayName("여행자 말로 지운 항목은 근거 조각이 이번 답에 없어도 받고, 근거는 이번 답으로 남긴다")
+    void userRemoveKeepsAnswerAsEvidence() {
+        String answer = "이번엔 사람 없는 데서 쉬고 싶어요";
+        List<DraftEvent> events = run(answer, "answered",
+                u("PRIORITIES", "remove", "사람 많은 핫플 가기", "user", "사람 많은 핫플 좋아해요"),
+                u("PRIORITIES", "remove", "성수 둘러보기", "user", ""));
+
+        assertThat(events).hasSize(2).allSatisfy(e -> {
+            assertThat(e.op()).isEqualTo(com.shg.trip.shgtrip.domain.tripchat.model.EventOp.REMOVE);
+            assertThat(e.source()).isEqualTo(com.shg.trip.shgtrip.domain.tripchat.model.FieldSource.USER);
+            assertThat(e.raw()).isEqualTo(answer);
         });
     }
 
@@ -124,4 +139,26 @@ class UpdateSanitizerTest {
 
         assertThat(events).extracting(DraftEvent::field).containsExactly(DraftField.START_DATE);
     }
+
+    @Test
+    @DisplayName("목록 항목에 set으로 온 미정·맡김도 항목 상태로 받는다")
+    void listFieldOutcomeIgnoresOp() {
+        Interpretation.Update delegated = new Interpretation.Update("PRIORITIES", "set", "", "delegated", "user",
+                "맡길게", "", "");
+        List<DraftEvent> events = run("맡길게", "answered", delegated);
+
+        assertThat(events).singleElement().satisfies(e -> {
+            assertThat(e.field()).isNull();
+            assertThat(e.slot()).isEqualTo(Slot.MOOD);
+            assertThat(e.status()).isEqualTo(FieldStatus.DELEGATED);
+        });
+    }
+
+    @Test
+    @DisplayName("목록 항목을 set으로 보내면 값을 받지 않는다")
+    void listFieldRejectsSet() {
+        assertThat(run("흑돼지 먹고 싶어", "answered", u("PRIORITIES", "set", "흑돼지 먹기", "user", "흑돼지 먹고 싶어")))
+                .isEmpty();
+    }
+
 }

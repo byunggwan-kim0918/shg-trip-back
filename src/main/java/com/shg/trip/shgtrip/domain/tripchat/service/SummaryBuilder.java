@@ -44,7 +44,7 @@ public final class SummaryBuilder {
             case CITY -> draft.value(DraftField.DESTINATION);
             case DATES -> dates(draft, today);
             case COMPANY -> company(draft);
-            case MOOD -> draft.value(DraftField.PRIORITIES);
+            case MOOD -> joined(draft.items(DraftField.PRIORITIES));
             case TRANSPORT -> transport(draft);
             case ANCHORS -> anchors(draft);
             case EXTRAS -> extras(draft);
@@ -145,6 +145,10 @@ public final class SummaryBuilder {
         list(parts, "그 밖에", draft.items(DraftField.NOTES));
         List<String> present = parts.stream().filter(p -> p != null && !p.isBlank()).toList();
         return present.isEmpty() ? null : String.join(" · ", present);
+    }
+
+    private static String joined(List<Item> items) {
+        return items.isEmpty() ? null : String.join(", ", items.stream().map(Item::text).toList());
     }
 
     private static void list(List<String> parts, String label, List<Item> items) {

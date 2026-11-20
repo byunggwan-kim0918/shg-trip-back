@@ -95,6 +95,10 @@ final class AvoidedPlaces {
                 log.info("피할 장소 제외: {}(id={}) ← 피할 장소 id={}, 근거 {}", c.name(), c.placeId(), a.placeId(), basis.get());
                 return true;
             }
+            if (PlaceIdentity.isPartOf(c, a)) {
+                log.info("피할 장소 제외: {}(id={}) ← 피할 장소 id={}에 딸린 행", c.name(), c.placeId(), a.placeId());
+                return true;
+            }
         }
         return false;
     }

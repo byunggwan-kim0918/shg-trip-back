@@ -56,6 +56,11 @@ public enum ErrorCode {
             HttpStatus.UNPROCESSABLE_ENTITY),
     GENERATION_UNBILLED_LIMIT("PLANNING_012", "기준에 못 미친 생성이 반복돼 잠시 생성을 멈췄어요.",
             HttpStatus.TOO_MANY_REQUESTS),
+    TRIP_CHAT_NOT_UNDERSTOOD("PLANNING_013", "무슨 뜻인지 잘 모르겠어요. 여행 이야기로 다시 말해주세요.",
+            HttpStatus.UNPROCESSABLE_ENTITY),
+    TRIP_CHAT_INAPPROPRIATE("PLANNING_014", "이런 표현이 이어지면 대화 이용이 제한될 수 있어요.",
+            HttpStatus.UNPROCESSABLE_ENTITY),
+    TRIP_CHAT_LOCKED("PLANNING_015", "부적절한 표현이 반복돼 24시간 동안 대화 입력이 제한됐어요.", HttpStatus.TOO_MANY_REQUESTS),
 
     // External
     EXTERNAL_API_ERROR("EXTERNAL_001", "외부 API 오류가 발생했습니다.", HttpStatus.BAD_GATEWAY),

@@ -190,4 +190,33 @@ class PlaceMatcherTest {
         assertThat(PlaceMatcher.isGeneric("남산")).isFalse();
         org.mockito.Mockito.verifyNoInteractions(placeService);
     }
+
+    @Test
+    @DisplayName("해변과 해수욕장은 같은 이름으로 보고 피할 장소를 찾는다")
+    void beachAliasFindsAvoidPlace() {
+        PlaceService placeService = mock(PlaceService.class);
+        when(placeService.searchPlaces(any(), any(Pageable.class))).thenReturn(Page.empty());
+        when(placeService.searchPlacesInRegions(eq("경포해변"), eq(Set.of("Gangneung")), anyInt())).thenReturn(List.of(
+                place(2, "경포해변 중앙광장", "강원특별자치도 강릉시 강문동", "Landmarks and Outdoors > Plaza")));
+        when(placeService.searchPlacesInRegions(eq("경포해수욕장"), eq(Set.of("Gangneung")), anyInt())).thenReturn(List.of(
+                place(1, "경포해수욕장", "강원특별자치도 강릉시 강문동", "Landmarks and Outdoors > Beach")));
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+
+        assertThat(matcher.find("경포해변", "강릉", true)).get().extracting(PlaceMatch::placeId).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("첫 이름에 같은 이름 가게만 맞아도 다른 별칭의 관광지 행을 먼저 받는다")
+    void avoidPrefersSightAcrossAliases() {
+        PlaceService placeService = mock(PlaceService.class);
+        when(placeService.searchPlaces(any(), any(Pageable.class))).thenReturn(Page.empty());
+        when(placeService.searchPlacesInRegions(eq("송정해변"), eq(Set.of("Busan")), anyInt())).thenReturn(List.of(
+                place(3, "송정해변", "부산광역시 해운대구 송정동", "Dining and Drinking > Cafe")));
+        when(placeService.searchPlacesInRegions(eq("송정해수욕장"), eq(Set.of("Busan")), anyInt())).thenReturn(List.of(
+                place(4, "송정해수욕장", "부산광역시 해운대구 송정동", "Landmarks and Outdoors > Beach")));
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+
+        assertThat(matcher.find("송정해변", "부산", true)).get().extracting(PlaceMatch::placeId).isEqualTo(4L);
+        assertThat(matcher.find("송정해변", "부산", false)).get().extracting(PlaceMatch::placeId).isEqualTo(4L);
+    }
 }

@@ -115,7 +115,8 @@ public class OptimizedClaudeAIService {
             String country = getStringOrDefault(parsed, "country", "");
             List<String> regions = EnrichDestinations.canonicalRegions(getListOrDefault(parsed, "regions"), destinations);
             List<String> mentioned = EnrichDestinations.mentionedDestinations(regions,
-                    input.destination() + " " + (input.description() != null ? input.description() : ""), destinations);
+                    input.destination() + " " + (input.description() != null ? input.description() : ""), destinations,
+                    input.avoidPlaceNames());
             if (!mentioned.isEmpty()) {
                 log.info("요청 문장에 나온 근교 여행지 추가: {}", mentioned);
                 regions = java.util.stream.Stream.concat(regions.stream(), mentioned.stream()).toList();

@@ -17,13 +17,21 @@ import java.util.Set;
 /**
  * 답 다음에 무엇을 할지 코드가 정한다. 모델은 되묻기가 필요한지만 제안한다.
  * 항목은 정해진 순서로 묻고 이미 답한 항목은 건너뛴다. 되묻기는 항목당 한 번이고,
- * 예약 시간 누락·조건 충돌·생성 불가 날짜는 그와 별개로 한 번씩만 묻는다.
+ * 예약 시간 누락·생성 불가 날짜는 그와 별개로 한 번씩, 조건 충돌은 부딪히는 내용마다 한 번씩 묻는다.
  */
 public final class NextStepPolicy {
 
     /** 폭주 방지용 상한. 보통은 질문 6개 안팎에서 확인 화면으로 간다. */
     static final int MAX_QUESTIONS = 10;
+    /** 반응 문장은 질문 위 한 줄이다. 프롬프트의 50자보다 조금 넉넉히 받고 넘으면 코드 문구로 대신한다. */
+    static final int MAX_REPLY = 70;
+    /**
+     * 다른 답에 일부가 나와도 한 번은 직접 묻는 항목. 하고 싶은 것·정해둔 것은 여러 가지라 지나가며 한 말 하나로 건너뛰면
+     * 여행자가 나머지를 말할 기회가 없다.
+     */
+    private static final Set<Slot> OPEN_SLOTS = Set.of(Slot.MOOD, Slot.ANCHORS);
     private static final Set<String> CRITICAL_REASONS = Set.of("booking_time_missing", "conflict");
+    static final String CONFLICT_KEY_PREFIX = "CRITICAL:conflict:";
 
     private NextStepPolicy() {}
 
@@ -36,14 +44,18 @@ public final class NextStepPolicy {
 
     public static Decision decide(Draft draft, Set<String> askedKeys, OpenQuestion answered, Interpretation it,
                                   String answerKind, boolean datesTouched, LocalDate today) {
-        if (it != null && it.offTopic() && answered.kind() != QuestionKind.FIX && answered.kind() != QuestionKind.EXTRA) {
-            return new Decision(answered.withLead(QuestionBank.OFF_TOPIC_LEAD));
-        }
-        if (answered.kind() == QuestionKind.FIX || answered.kind() == QuestionKind.EXTRA) {
-            return new Decision(null);
+        boolean onReview = answered.kind() == QuestionKind.FIX || answered.kind() == QuestionKind.EXTRA;
+        if (it != null && !it.isAnswer() && !onReview) {
+            String reply = reply(it);
+            return new Decision(answered.withLead(reply != null ? reply : QuestionBank.OFF_TOPIC_LEAD));
         }
         boolean text = "text".equals(answerKind);
         boolean budgetLeft = askedKeys.size() < MAX_QUESTIONS;
+        // 확인 화면에서 덧붙인 말도 앞의 말과 부딪히면 되묻는다. 조용히 한쪽을 고르면 여행자가 알아챌 길이 없다.
+        if (onReview) {
+            OpenQuestion critical = text && budgetLeft ? modelFollowUp(draft, askedKeys, answered, it, today) : null;
+            return new Decision(critical);
+        }
 
         if (datesTouched && text && budgetLeft) {
             OpenQuestion dateFollowUp = dateFollowUp(draft, askedKeys, today);
@@ -58,16 +70,31 @@ public final class NextStepPolicy {
 
         if (answered.kind() == QuestionKind.EDIT && answered.returnToReview()) return new Decision(null);
 
-        String lead = leadAfter(answered, draft, answerKind);
+        String lead = leadAfter(answered, draft, answerKind, it);
         for (Slot slot : Slot.ASK_ORDER) {
-            if (draft.resolved(slot)) continue;
+            if (OPEN_SLOTS.contains(slot) ? alreadyAsked(slot, draft, askedKeys, answered) : draft.resolved(slot)) {
+                continue;
+            }
             if (!budgetLeft) return new Decision(null);
             return new Decision(QuestionBank.base(slot, draft, today, lead));
         }
         return new Decision(null);
     }
 
-    private static String leadAfter(OpenQuestion answered, Draft draft, String answerKind) {
+    // 여행자가 바람을 모두 취소해도 이미 물은 항목을 처음 문구로 다시 묻지 않는다.
+    private static boolean alreadyAsked(Slot slot, Draft draft, Set<String> askedKeys, OpenQuestion answered) {
+        return askedKeys.contains("BASE:" + slot) || draft.outcomes().containsKey(slot)
+                || answered.slot() == slot && answered.kind() == QuestionKind.EDIT;
+    }
+
+    /** 모델이 쓴 반응 문장. 길이 검사를 통과할 때만 쓰고, 아니면 코드 문구로 대신한다. */
+    static String reply(Interpretation it) {
+        return it == null ? null : fit(it.reply(), MAX_REPLY);
+    }
+
+    private static String leadAfter(OpenQuestion answered, Draft draft, String answerKind, Interpretation it) {
+        String reply = reply(it);
+        if (reply != null && "text".equals(answerKind)) return reply;
         if (answered.kind() == QuestionKind.FOLLOW_UP) {
             return "unknown".equals(answerKind) ? QuestionBank.UNDECIDED_LEAD : QuestionBank.FOLLOW_UP_DONE_LEAD;
         }
@@ -122,7 +149,6 @@ public final class NextStepPolicy {
     private static OpenQuestion modelFollowUp(Draft draft, Set<String> askedKeys, OpenQuestion answered,
                                               Interpretation it, LocalDate today) {
         Slot slot = answered.slot();
-        if (slot == Slot.EXTRAS) return null;
         Interpretation.FollowUp f = it == null ? null : it.followUp();
         String outcome = it == null || it.slotOutcome() == null ? "" : it.slotOutcome().toLowerCase(Locale.ROOT);
         boolean unclear = outcome.equals("unclear");
@@ -131,7 +157,13 @@ public final class NextStepPolicy {
 
         String reason = wanted && f.reason() != null ? f.reason().toLowerCase(Locale.ROOT) : "vague";
         boolean critical = CRITICAL_REASONS.contains(reason);
-        String key = critical ? "CRITICAL:" + reason + ":" + slot : "FOLLOW_UP:" + slot;
+        boolean onReview = answered.kind() == QuestionKind.FIX || answered.kind() == QuestionKind.EXTRA;
+        if ((slot == Slot.EXTRAS || onReview) && !critical) return null;
+        // 충돌 되묻기의 답이 다시 부딪히면 문구만 바꿔 계속 묻게 되므로 메모로 넘긴다.
+        boolean conflict = reason.equals("conflict");
+        if (conflict && answered.askKey() != null && answered.askKey().startsWith(CONFLICT_KEY_PREFIX)) return null;
+        // 한 항목에서도 부딪히는 내용이 다르면 따로 묻는다. 묻지 못한 충돌은 모델이 기록하지 않아 답이 사라진다.
+        String key = critical ? "CRITICAL:" + reason + ":" + slot + ":" + titleKey(f) : "FOLLOW_UP:" + slot;
         if (askedKeys.contains(key)) return null;
         if (!critical) {
             if (answered.kind() == QuestionKind.FOLLOW_UP) return null;
@@ -139,15 +171,29 @@ public final class NextStepPolicy {
             if (status == FieldStatus.UNDECIDED || status == FieldStatus.ANY
                     || status == FieldStatus.DELEGATED || status == FieldStatus.NONE) return null;
         }
-        OpenQuestion fromModel = wanted ? fromModel(slot, key, f) : null;
-        return fromModel != null ? fromModel : QuestionBank.followUpTemplate(slot, key, today);
+        OpenQuestion fromModel = wanted ? fromModel(slot, key, f, reply(it)) : null;
+        if (fromModel != null) return fromModel;
+        // 정해진 문구는 무엇이 부딪혔는지 말하지 못해 충돌은 묻지 않고 메모로 넘긴다.
+        return conflict ? null : QuestionBank.followUpTemplate(slot, key, today);
+    }
+
+    private static String titleKey(Interpretation.FollowUp f) {
+        return f == null || f.title() == null ? "" : TextNormalizer.key(f.title());
+    }
+
+    /** 모델이 부딪힌다고 본 답을 이번 결정이 되묻지 못했는지. 그런 답은 기록된 것이 없어 메모로라도 남겨야 한다. */
+    static boolean conflictUnasked(Interpretation it, Decision d) {
+        if (it == null || !it.isAnswer()) return false;
+        Interpretation.FollowUp f = it.followUp();
+        if (f == null || !f.needed() || !"conflict".equalsIgnoreCase(f.reason())) return false;
+        OpenQuestion q = d.question();
+        return q == null || q.askKey() == null || !q.askKey().startsWith(CONFLICT_KEY_PREFIX);
     }
 
     /** 모델 문구는 길이·개수 검사를 통과할 때만 쓴다. */
-    static OpenQuestion fromModel(Slot slot, String key, Interpretation.FollowUp f) {
+    static OpenQuestion fromModel(Slot slot, String key, Interpretation.FollowUp f, String lead) {
         String title = fit(f.title(), 60);
         if (title == null) return null;
-        String lead = fit(f.lead(), 40);
         List<String> examples = f.examples() == null ? List.of() : f.examples().stream()
                 .map(e -> fit(e, 40)).filter(e -> e != null).distinct().limit(3).toList();
         String placeholder = fit(f.placeholder(), 40);

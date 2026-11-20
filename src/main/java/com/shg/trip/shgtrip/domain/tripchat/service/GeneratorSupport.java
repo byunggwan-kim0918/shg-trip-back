@@ -97,12 +97,13 @@ public final class GeneratorSupport {
     public static final String BUDGET_EXCLUDING_LODGING = "숙박을 뺀 예산은 그대로 전달할 수 없어 참고만 해요.";
     public static final String BUDGET_NEEDS_PARTY = "인원을 알려주면 일행 전체 예산으로 계산해요.";
     public static final String AVOID_PLACE_EXCLUDED = "일정과 대안에서 빼요.";
-    public static final String AVOID_PLACE_NOT_FOUND = "이름으로 장소를 찾지 못해 빼지 못해요.";
+    public static final String AVOID_PLACE_NOT_FOUND = "장소를 찾지 못해 확실히 빼지는 못해요.";
     public static final String AVOID_PLACE_KEPT = "일정에 꼭 넣기로 한 곳이라 빼지 않아요.";
     public static final String AVOID_PLACE_HUB = "공항·역은 뺄 수 없어요.";
     public static final String AVOID_PLACES_FULL = "피할 곳은 10곳까지만 뺄 수 있어요.";
     public static final String CONDITIONS_REFERENCE = "좋아하는 음식이나 기타 요청은 장소를 고를 때 참고만 해요.";
     public static final String APPROX_TIME = "대략적인 시간은 참고만 해요.";
+    public static final String PRIORITIES_TRIMMED = "하고 싶은 게 많아 최근에 말한 것 위주로 반영해요.";
     public static final String FOOD_EXCLUDED = "이 음식을 주로 파는 식당은 빼요. 다른 메뉴에 들어 있을 수는 있어요.";
     public static final String BAR_EXCLUDED = "술집은 일정과 대안에서 빼요.";
     public static final String HIKING_EXCLUDED = "산에 오르는 등산 코스는 빼요. 둘레길 같은 걷는 길이나 낮은 산은 남을 수 있어요.";
