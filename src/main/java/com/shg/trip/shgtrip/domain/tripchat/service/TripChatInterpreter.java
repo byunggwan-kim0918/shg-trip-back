@@ -36,10 +36,12 @@ import java.util.stream.Collectors;
 @Component
 public class TripChatInterpreter {
 
-    private static final long MAX_TOKENS = 1200;
-    private static final Duration TIMEOUT = Duration.ofSeconds(10);
+    /** 판단 메모와 바람별 updates를 함께 쓰는 긴 첫 답도 잘리지 않을 만큼. 평소 출력은 수백 토큰이다. */
+    private static final long MAX_TOKENS = 2000;
+    private static final Duration TIMEOUT = Duration.ofSeconds(15);
     private static final int MAX_ATTEMPTS = 2;
     private static final long RETRY_BACKOFF_MS = 500;
+    static final Duration LONGEST_CALL = TIMEOUT.multipliedBy(MAX_ATTEMPTS).plusMillis(RETRY_BACKOFF_MS);
 
     private static final JsonOutputFormat FORMAT = JsonOutputFormat.builder().schema(schema()).build();
 
@@ -60,9 +62,20 @@ public class TripChatInterpreter {
 
     public record Result(Interpretation interpretation, Usage usage) {}
 
+    private static final class TruncatedException extends IllegalStateException {
+        TruncatedException() {
+            super("응답 중단: max_tokens");
+        }
+    }
+
     public static class InterpretException extends RuntimeException {
         public InterpretException(String message, Throwable cause) {
             super(message, cause);
+        }
+
+        /** 응답을 받았지만 잘려 쓸 수 없었으면 true. 호출 비용은 이미 들었다. */
+        public boolean answeredButTruncated() {
+            return getCause() instanceof TruncatedException;
         }
     }
 
@@ -76,7 +89,7 @@ public class TripChatInterpreter {
                         .cacheControl(CacheControlEphemeral.builder().build())
                         .build()))
                 .outputConfig(OutputConfig.builder().format(FORMAT).build())
-                .addUserMessage(context + "\n<answer>\n" + answer + "\n</answer>")
+                .addUserMessage(context + "\n<answer>" + jsonString(TextNormalizer.untag(answer)) + "</answer>")
                 .build();
         RequestOptions options = RequestOptions.builder().timeout(TIMEOUT).build();
 
@@ -85,13 +98,17 @@ public class TripChatInterpreter {
             long started = System.currentTimeMillis();
             try {
                 Message message = client.messages().create(params, options);
-                Interpretation interpretation = parse(message);
                 Usage usage = new Usage(message.usage().inputTokens(), message.usage().outputTokens(),
                         message.usage().cacheReadInputTokens().orElse(0L), System.currentTimeMillis() - started);
-                return new Result(interpretation, usage);
+                // 거절과 잘림은 같은 답으로 다시 보내도 대개 같은 결과라 재시도하지 않는다.
+                if (StopReason.REFUSAL.equals(message.stopReason().orElse(null))) {
+                    return new Result(Interpretation.refused(), usage);
+                }
+                return new Result(parse(message), usage);
             } catch (RuntimeException e) {
                 last = e;
                 log.warn("대화 답 해석 실패 (시도 {}/{}): {}", attempt, MAX_ATTEMPTS, e.getMessage());
+                if (e instanceof TruncatedException) break;
                 if (attempt < MAX_ATTEMPTS) sleep(RETRY_BACKOFF_MS * attempt);
             }
         }
@@ -100,8 +117,8 @@ public class TripChatInterpreter {
 
     Interpretation parse(Message message) {
         StopReason stop = message.stopReason().orElse(null);
-        if (StopReason.REFUSAL.equals(stop) || StopReason.MAX_TOKENS.equals(stop)) {
-            throw new IllegalStateException("응답 중단: " + stop);
+        if (StopReason.MAX_TOKENS.equals(stop)) {
+            throw new TruncatedException();
         }
         String json = message.content().stream()
                 .filter(b -> b.isText())
@@ -137,16 +154,18 @@ public class TripChatInterpreter {
         Map<String, Object> followUp = object(Map.of(
                 "needed", type("boolean"),
                 "reason", enumOf(List.of("none", "tentative", "vague", "booking_time_missing", "conflict")),
-                "lead", type("string"),
                 "title", type("string"),
                 "desc", type("string"),
                 "examples", array(type("string")),
                 "placeholder", type("string")));
-        Map<String, Object> root = object(Map.of(
-                "updates", array(update),
-                "slotOutcome", enumOf(List.of("answered", "tentative", "undecided", "any", "delegated", "none", "unclear")),
-                "followUp", followUp,
-                "offTopic", type("boolean")));
+        Map<String, Object> rootProperties = new LinkedHashMap<>();
+        rootProperties.put("kind", enumOf(Interpretation.KINDS));
+        rootProperties.put("check", type("string"));
+        rootProperties.put("updates", array(update));
+        rootProperties.put("slotOutcome", enumOf(List.of("answered", "tentative", "undecided", "any", "delegated", "none", "unclear")));
+        rootProperties.put("followUp", followUp);
+        rootProperties.put("reply", type("string"));
+        Map<String, Object> root = orderedObject(rootProperties);
 
         JsonOutputFormat.Schema.Builder b = JsonOutputFormat.Schema.builder();
         root.forEach((k, v) -> b.putAdditionalProperty(k, JsonValue.from(v)));
@@ -156,10 +175,15 @@ public class TripChatInterpreter {
     private static Map<String, Object> object(Map<String, Object> properties) {
         Map<String, Object> sorted = new LinkedHashMap<>();
         properties.keySet().stream().sorted().forEach(k -> sorted.put(k, properties.get(k)));
+        return orderedObject(sorted);
+    }
+
+    /** 모델은 속성을 스키마 순서대로 쓴다. 판단(kind·check)이 결과(updates·reply)보다 먼저 나와야 결과가 판단을 따른다. */
+    private static Map<String, Object> orderedObject(Map<String, Object> properties) {
         Map<String, Object> o = new LinkedHashMap<>();
         o.put("type", "object");
-        o.put("properties", sorted);
-        o.put("required", List.copyOf(sorted.keySet()));
+        o.put("properties", properties);
+        o.put("required", List.copyOf(properties.keySet()));
         o.put("additionalProperties", false);
         return o;
     }
@@ -180,6 +204,15 @@ public class TripChatInterpreter {
         Map<String, Object> m = type("array");
         m.put("items", items);
         return m;
+    }
+
+    /** 답은 여행자가 쓴 데이터라 JSON 문자열로 감싸 지침과 경계를 분명히 한다. */
+    private String jsonString(String answer) {
+        try {
+            return objectMapper.writeValueAsString(answer);
+        } catch (IOException e) {
+            throw new IllegalStateException("답 직렬화 실패", e);
+        }
     }
 
     private static String load(String path) {

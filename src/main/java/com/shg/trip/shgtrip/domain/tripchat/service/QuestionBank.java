@@ -25,14 +25,14 @@ public final class QuestionBank {
     private record Copy(String title, String description, String placeholder, List<String> examples) {}
 
     public static OpenQuestion base(Slot slot, Draft draft, LocalDate today, String lead) {
-        Copy c = baseCopy(slot, draft, today);
+        Copy c = baseCopy(slot, draft, today, draft.resolved(slot));
         return new OpenQuestion(newId(), slot, QuestionKind.BASE, lead, c.title(), c.description(), c.placeholder(),
                 c.examples(), false, slot == Slot.ANCHORS ? OpenQuestion.TOOL_NONE : null,
                 "BASE:" + slot, null, false);
     }
 
     public static OpenQuestion edit(Slot slot, Draft draft, LocalDate today, String prefill, boolean returnToReview) {
-        Copy c = baseCopy(slot, draft, today);
+        Copy c = baseCopy(slot, draft, today, false);
         return new OpenQuestion(newId(), slot, QuestionKind.EDIT, EDIT_LEAD, c.title(), c.description(),
                 c.placeholder(), c.examples(), false, slot == Slot.ANCHORS ? OpenQuestion.TOOL_NONE : null,
                 "EDIT:" + slot, prefill, returnToReview);
@@ -105,7 +105,7 @@ public final class QuestionBank {
         };
     }
 
-    private static Copy baseCopy(Slot slot, Draft draft, LocalDate today) {
+    private static Copy baseCopy(Slot slot, Draft draft, LocalDate today, boolean alreadyHeard) {
         return switch (slot) {
             case CITY -> new Copy("어디로 떠나볼까요?",
                     "도시 이름만 적어도 좋아요. 떠올린 여행이 있다면 함께 들려주세요.", "가고 싶은 곳을 적어주세요",
@@ -119,12 +119,18 @@ public final class QuestionBank {
             }
             case COMPANY -> new Copy("누구와 함께 가나요?", "함께하는 사람을 알려주세요.", "예: 연인과 함께",
                     List.of("연인과 함께", "친구 3명이랑, 나까지 4명", "부모님과 5살 아이, 총 4명"));
-            case MOOD -> new Copy("이번 여행에서 뭘 하고 싶어요?",
+            case MOOD -> alreadyHeard ? new Copy("그 밖에 하고 싶은 게 더 있나요?",
+                    "앞에서 말한 것도 기억하고 있어요. 더 없으면 그렇다고 해도 괜찮아요.", "예: 저녁엔 야경도 보고 싶어",
+                    List.of("저녁엔 야경도 보고 싶어", "그거면 충분해"))
+                    : new Copy("이번 여행에서 뭘 하고 싶어요?",
                     "꼭 멋진 계획이 없어도 괜찮아요. 떠오르는 느낌이면 충분해요.", "예: 바다 보면서 느긋하게 쉬고 싶어",
                     List.of("낮에는 쉬고 저녁에는 야경 보고 싶어", "맛있는 거 먹고 골목 구경할래", "아직 잘 모르겠어"));
             case TRANSPORT -> new Copy("여행지에서는 어떻게 이동하나요?", "생각해둔 이동 방법을 짧게 알려주세요.",
                     "예: 차 가져갈 거야", List.of("자동차 이용할 거임", "주로 걸어 다닐래", "걸어 다니다 멀면 택시 탈래"));
-            case ANCHORS -> anchorsCopy(draft.value(DraftField.DESTINATION));
+            case ANCHORS -> alreadyHeard ? new Copy("그 밖에 정해둔 게 더 있나요?",
+                    "앞에서 말한 것은 기억하고 있어요. 더 정해둔 숙소·장소·예약이 있다면 알려주세요.", "예: 정해둔 건 그게 다야",
+                    List.of("정해둔 건 그게 다야", "숙소는 아직 없어"))
+                    : anchorsCopy(draft.value(DraftField.DESTINATION));
             case EXTRAS -> new Copy("더 알려주고 싶은 게 있어요", "예산, 도착 시간, 피할 음식 등 무엇이든",
                     "예: 첫날 오후 3시에 도착해. 해산물은 못 먹어.", List.of());
         };

@@ -112,13 +112,14 @@ public class DraftRequestFactory {
         TripExclusions exclusions = new TripExclusions(PlaceRestrictions.of(input.restrictions()),
                 AvoidedPlaces.load(placeRepository, request.avoidPlaceIds()),
                 FerryAreaFilter.activeTokens(input.ferryOnlyAreas(), input.description(), request.customPlaceNames(),
+                        request.avoidPlaceNames(),
                         token -> addressShare(input.regions(), token)),
                 displacedBySelection(selected));
         DraftItineraryPlanner.Request draftRequest = new DraftItineraryPlanner.Request(input, null, cities,
                 time(request.arrivalTime()), time(request.departureTime()),
                 arrivalHub == null ? null : PlaceCandidates.of(arrivalHub, 0),
                 departureHub == null ? null : PlaceCandidates.of(departureHub, 0), mustDo, wants, Map.of(), booked,
-                exclusions, Map.of(), Set.of());
+                exclusions, Map.of(), Set.of(), request.avoidPlaceNames());
         return new Prepared(draftRequest, input, notices);
     }
 

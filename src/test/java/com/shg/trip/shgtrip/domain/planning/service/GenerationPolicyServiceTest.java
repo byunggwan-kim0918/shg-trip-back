@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -257,5 +258,53 @@ class GenerationPolicyServiceTest {
 
         verify(valueOps).set("generation:quota:200", "5", Duration.ofSeconds(600));
         verify(redisTemplate).delete("generation:quota:ident:h1");
+    }
+
+    @Test
+    @DisplayName("대화 입력: 부적절 표현 횟수를 세고 기준에 닿으면 하루 동안 잠근다")
+    void tripChatAbuseLocksAtLimit() {
+        when(valueOps.setIfAbsent(startsWith("tripchat:abuse-turn:100:"), eq("1"), eq(Duration.ofHours(24))))
+                .thenReturn(true);
+        when(valueOps.increment("tripchat:abuse:100")).thenReturn(1L, 3L);
+        assertThat(service.recordTripChatAbuse(USER, "t1")).isEqualTo(1);
+        verify(redisTemplate, never()).expire("tripchat:abuse:100", Duration.ofHours(24));
+
+        assertThat(service.recordTripChatAbuse(USER, "t2")).isEqualTo(3);
+        verify(redisTemplate).expire("tripchat:abuse:100", Duration.ofHours(24));
+
+        when(valueOps.get("tripchat:abuse:100")).thenReturn("3");
+        assertThatThrownBy(() -> service.checkTripChatAllowed(USER))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.TRIP_CHAT_LOCKED);
+    }
+
+    @Test
+    @DisplayName("대화 입력: 같은 턴을 다시 보내면 부적절 표현을 다시 세지 않는다")
+    void tripChatAbuseCountsTurnOnce() {
+        when(valueOps.setIfAbsent("tripchat:abuse-turn:100:t1", "1", Duration.ofHours(24))).thenReturn(false);
+        when(valueOps.get("tripchat:abuse:100")).thenReturn("1");
+
+        assertThat(service.recordTripChatAbuse(USER, "t1")).isEqualTo(1);
+        verify(valueOps, never()).increment("tripchat:abuse:100");
+    }
+
+    @Test
+    @DisplayName("대화 입력: 통과하면 지금까지 센 부적절 표현 횟수를 돌려준다")
+    void tripChatAllowedReturnsAbuseCount() {
+        when(valueOps.get("tripchat:abuse:100")).thenReturn("2");
+        when(valueOps.increment(startsWith("tripchat:rate:"))).thenReturn(1L);
+
+        assertThat(service.checkTripChatAllowed(USER)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("대화 입력: 부적절 표현 카운터는 Redis 장애 시 0으로 보고 막지 않는다")
+    void tripChatAbuseFailsOpen() {
+        when(valueOps.get("tripchat:abuse:100")).thenThrow(new RuntimeException("redis down"));
+        when(valueOps.setIfAbsent(startsWith("tripchat:abuse-turn:"), eq("1"), eq(Duration.ofHours(24))))
+                .thenThrow(new RuntimeException("redis down"));
+
+        assertThat(service.tripChatAbuseCount(USER)).isZero();
+        assertThat(service.recordTripChatAbuse(USER, "t1")).isZero();
     }
 }

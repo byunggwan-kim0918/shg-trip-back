@@ -2,7 +2,9 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -35,5 +37,25 @@ public final class TripExclusions {
         if (avoided.matches(c)) return "피할 장소";
         if (FerryAreaFilter.hit(c, ferryTokens) != null) return "배로만 가는 섬";
         return null;
+    }
+
+    /**
+     * 이름이 피하겠다고 한 곳을 품는지(해변·해수욕장 별칭 포함). 요청 문장에는 "우도는 싫어"처럼 피하는 말도 들어 있어,
+     * 이름 언급을 원하는 곳으로 읽는 단계는 이것으로 예외를 둔다. 반대 방향은 보지 않는다. "우도봉"을 피해도 "우도"는 원할 수 있다.
+     */
+    public static boolean namesAvoided(String name, Collection<String> avoidNames) {
+        String key = compact(name);
+        if (key.length() < 2 || avoidNames == null) return false;
+        for (String avoided : avoidNames) {
+            for (String variant : PlaceIdentity.nameVariants(avoided)) {
+                String a = compact(variant);
+                if (a.length() >= 2 && key.contains(a)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static String compact(String text) {
+        return text == null ? "" : text.replaceAll("[\\s\\p{IsPunctuation}]", "").toLowerCase(Locale.ROOT);
     }
 }

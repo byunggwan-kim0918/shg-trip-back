@@ -88,7 +88,8 @@ class DraftEvalRunner implements CommandLineRunner {
 
     @Override
     public void run(String... args) throws IOException {
-        if (!"trip".equals(mode)) throw new IllegalArgumentException("eval.mode는 trip만 있다: " + mode);
+        if ("chat".equals(mode)) return;
+        if (!"trip".equals(mode)) throw new IllegalArgumentException("eval.mode는 trip·chat만 있다: " + mode);
         if (drafts.isBlank()) throw new IllegalArgumentException("--eval.drafts=<기록 폴더>가 필요하다");
         if (!draftRequests.isBlank()) {
             List<String> ids = Arrays.stream(draftIds.split(",")).map(String::trim).filter(x -> !x.isEmpty()).toList();
@@ -362,11 +363,12 @@ class DraftEvalRunner implements CommandLineRunner {
                 .append(" / 페이스 ").append(req.path("pace").asText())
                 .append(" / 동행 ").append(req.path("companion").asText()).append(' ')
                 .append(req.path("partySize").asText()).append("명");
-        if (req.has("arrivalTime")) sb.append(" / 도착 ").append(req.get("arrivalTime").asText());
-        if (req.has("departureTime")) sb.append(" / 출발 ").append(req.get("departureTime").asText());
+        if (req.hasNonNull("arrivalTime")) sb.append(" / 도착 ").append(req.get("arrivalTime").asText());
+        if (req.hasNonNull("departureTime")) sb.append(" / 출발 ").append(req.get("departureTime").asText());
         sb.append("\n요청 문장: ").append(req.path("description").asText("")).append('\n');
-        if (req.has("requiredExperiences")) sb.append("꼭 할 것: ").append(req.get("requiredExperiences")).append('\n');
-        if (req.has("restrictions")) sb.append("피할 것: ").append(req.get("restrictions")).append('\n');
+        if (req.hasNonNull("requiredExperiences")) sb.append("꼭 할 것: ").append(req.get("requiredExperiences")).append('\n');
+        if (req.hasNonNull("restrictions")) sb.append("피할 것: ").append(req.get("restrictions")).append('\n');
+        if (req.hasNonNull("avoidPlaceNames")) sb.append("가지 않을 곳: ").append(req.get("avoidPlaceNames")).append('\n');
         int day = 0;
         Integer prevEnd = null;
         for (StepData s : result.steps()) {

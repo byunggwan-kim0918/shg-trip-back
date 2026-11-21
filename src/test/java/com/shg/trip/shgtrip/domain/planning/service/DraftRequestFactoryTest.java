@@ -115,6 +115,23 @@ class DraftRequestFactoryTest {
         assertThat(prepared.notices()).anyMatch(n -> n.contains("'해운대 호텔'") && n.contains("'광안 호텔'"));
     }
 
+    @Test
+    @DisplayName("피할 장소 이름은 요청 문장이 아니라 초안 프롬프트의 가지 않을 곳 줄로 간다")
+    void avoidPlaceNamesReachDraftPrompt() {
+        ItineraryGenerateRequest base = request("car", List.of());
+        ItineraryGenerateRequest avoiding = new ItineraryGenerateRequest(base.mode(), base.destination(),
+                base.themes(), base.categories(), base.pace(), base.transportPref(), base.budget(), base.startDate(),
+                base.endDate(), base.description(), null, null, base.companion(), base.partySize(),
+                base.arrivalTime(), base.departureTime(), base.requiredExperiences(), null, base.restrictions(),
+                List.of("감천문화마을", "해운대"));
+
+        DraftRequestFactory.Prepared prepared = factory.prepare(avoiding, enriched("KR", "car", "Busan"));
+
+        assertThat(DraftItineraryPlanner.prompt(prepared.request())).contains("가지 않을 곳: 감천문화마을, 해운대");
+        assertThat(DraftItineraryPlanner.prompt(factory.prepare(base, enriched("KR", "car", "Busan")).request()))
+                .doesNotContain("가지 않을 곳");
+    }
+
     private static Place lodging(long id, String name, double lat, double lng) {
         return Place.builder().id(id).name(name).address("부산").category("Travel and Transportation > Lodging > Hotel")
                 .region("Busan").country("KR").placeRole("LODGING").latitude(BigDecimal.valueOf(lat))

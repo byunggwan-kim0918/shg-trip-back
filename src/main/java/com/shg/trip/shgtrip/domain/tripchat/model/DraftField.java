@@ -13,7 +13,8 @@ public enum DraftField {
     NIGHTS(Slot.DATES, false),
     COMPANION(Slot.COMPANY, false),
     PARTY_SIZE(Slot.COMPANY, false),
-    PRIORITIES(Slot.MOOD, false),
+    /** 하고 싶은 것 하나가 항목 하나다. 한 항목을 철회해도 같은 답의 다른 바람은 남는다. */
+    PRIORITIES(Slot.MOOD, true),
     THEMES(Slot.MOOD, true),
     CATEGORIES(Slot.MOOD, true),
     PACE(Slot.MOOD, false),

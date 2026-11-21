@@ -97,7 +97,7 @@ class TripGenerationExecutorTest {
                 VectorEnrichedInput.CompanionType.COUPLE, 2, List.of());
         base = new DraftItineraryPlanner.Request(input, null, List.of(DomesticCities.find("부산").orElseThrow()),
                 null, LocalTime.of(15, 0), null, null, List.of(), List.of(), Map.of(), null, null, Map.of(),
-                Set.of());
+                Set.of(), List.of());
         drafted = new DraftCallGenerator.Drafted(new DraftPlan("바다 여행", List.of(), List.of()), 100, 50);
 
         when(planningCountries.isEnabled(any())).thenReturn(true);

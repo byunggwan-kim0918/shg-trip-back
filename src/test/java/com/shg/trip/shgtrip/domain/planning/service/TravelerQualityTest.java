@@ -166,7 +166,7 @@ class TravelerQualityTest {
         @DisplayName("섬 주소의 장소는 빠지고 나머지는 남는다")
         void excludesIslandPlaces() {
             List<String> tokens = FerryAreaFilter.activeTokens(List.of("우도면", "추자면"), "맛집 커플여행",
-                    List.of(), pool);
+                    List.of(), List.of(), pool);
             assertThat(FerryAreaFilter.exclude(pool, tokens)).extracting(PlaceCandidate::name)
                     .doesNotContain("섬소나이 우도본점").contains("형돈", "외돌개");
         }
@@ -174,20 +174,34 @@ class TravelerQualityTest {
         @Test
         @DisplayName("요청 문장에서 섬을 언급하면 제외하지 않는다 (\"우도\" ↔ \"우도면\")")
         void keepsWhenUserMentionsIsland() {
-            assertThat(FerryAreaFilter.activeTokens(List.of("우도면"), "우도 가보고 싶어요", List.of(), pool))
+            assertThat(FerryAreaFilter.activeTokens(List.of("우도면"), "우도 가보고 싶어요", List.of(), List.of(), pool))
                     .isEmpty();
+        }
+
+        @Test
+        @DisplayName("섬 안의 한 곳만 피하면 섬을 원하는 말은 그대로 섬 제외를 푼다")
+        void avoidingPlaceOnIslandStillReleasesIsland() {
+            assertThat(FerryAreaFilter.activeTokens(List.of("우도면"), "원하는 여행: 우도에서 자전거 타기", List.of(),
+                    List.of("우도봉"), pool)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("피하겠다고 한 섬은 요청 문장에 나와도 제외를 풀지 않는다")
+        void keepsExcludingAvoidedIsland() {
+            assertThat(FerryAreaFilter.activeTokens(List.of("우도면"), "기타: 우도는 배 타야 해서 싫음", List.of(),
+                    List.of("우도"), pool)).containsExactly("우도면");
         }
 
         @Test
         @DisplayName("풀의 20% 이상을 지우는 토큰은 잘못된 값으로 보고 무시한다")
         void ignoresTokenThatHitsTooMuch() {
-            assertThat(FerryAreaFilter.activeTokens(List.of("제주특별자치도"), null, List.of(), pool)).isEmpty();
+            assertThat(FerryAreaFilter.activeTokens(List.of("제주특별자치도"), null, List.of(), List.of(), pool)).isEmpty();
         }
 
         @Test
         @DisplayName("3자 미만 토큰은 무시한다")
         void ignoresShortToken() {
-            assertThat(FerryAreaFilter.activeTokens(List.of("리", "면"), null, List.of(), pool)).isEmpty();
+            assertThat(FerryAreaFilter.activeTokens(List.of("리", "면"), null, List.of(), List.of(), pool)).isEmpty();
         }
 
         @Test

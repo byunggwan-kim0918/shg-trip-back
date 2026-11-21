@@ -136,4 +136,39 @@ class AvoidedPlacesTest {
         assertThat(avoided.exclude(pool)).isSameAs(pool);
         verify(placeRepository, never()).findAllById(any());
     }
+
+    @Test
+    @DisplayName("피할 명소에 딸린 근처 행(별칭 이름 포함)은 빼고, 이름만 비슷한 다른 명소와 식당은 남긴다")
+    void excludesRowsBelongingToAvoidedSight() {
+        String beach = "Landmarks and Outdoors > Beach";
+        AvoidedPlaces avoided = AvoidedPlaces.of(List.of(
+                candidate(1L, "경포해수욕장", null, beach, "Gangneung", 37.8055, 128.9089, null)));
+
+        List<PlaceCandidate> kept = avoided.exclude(List.of(
+                candidate(2L, "경포해변 중앙광장", null, "Landmarks and Outdoors > Plaza", "Gangneung", 37.8050, 128.9080,
+                        null),
+                candidate(3L, "경포해수욕장 물놀이장", null, beach, "Gangneung", 37.8060, 128.9090, null),
+                candidate(4L, "경포호", null, "Landmarks and Outdoors > Lake", "Gangneung", 37.7960, 128.8980, null),
+                candidate(5L, "경포해변 횟집", null, "Dining and Drinking > Restaurant", "Gangneung", 37.8050, 128.9085,
+                        null),
+                candidate(6L, "경포해변 스카이워크", null, beach, "Gangneung", 37.8052, 128.9087, null)));
+
+        assertThat(kept).extracting(PlaceCandidate::placeId).containsExactly(4L, 5L, 6L);
+    }
+
+    @Test
+    @DisplayName("이름 앞부분이 같아도 부속 시설이 아닌 다른 명소는 빼지 않는다")
+    void keepsDifferentSightSharingNamePrefix() {
+        String park = "Arts and Entertainment > Theme Park";
+        AvoidedPlaces avoided = AvoidedPlaces.of(List.of(
+                candidate(1L, "롯데월드", null, park, "Seoul", 37.5111, 127.0982, null)));
+
+        List<PlaceCandidate> kept = avoided.exclude(List.of(
+                candidate(2L, "롯데월드타워", null, "Landmarks and Outdoors > Tower", "Seoul", 37.5125, 127.1025, null),
+                candidate(3L, "롯데월드 아쿠아리움", null, "Arts and Entertainment > Aquarium", "Seoul", 37.5130, 127.1040,
+                        null),
+                candidate(4L, "롯데월드 입구", null, park, "Seoul", 37.5112, 127.0985, null)));
+
+        assertThat(kept).extracting(PlaceCandidate::placeId).containsExactly(2L, 3L);
+    }
 }

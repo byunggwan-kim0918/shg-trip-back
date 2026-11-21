@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.planning.service.ai;
 
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
+import com.shg.trip.shgtrip.domain.planning.service.TripExclusions;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -79,7 +80,8 @@ final class EnrichDestinations {
      * 요청 문장에 같은 여행 묶음 근교 여행지의 한국어 별칭("만리장성")이 나오면 그 여행지를 돌려준다. 모델이 도시만 내면
      * 근교 명소가 검색되지 않는다. 한국어 이름("나라"·"후에"·"이란")은 일반 문장에도 나와 별칭만 본다.
      */
-    static List<String> mentionedDestinations(List<String> regions, String text, Destinations destinations) {
+    static List<String> mentionedDestinations(List<String> regions, String text, Destinations destinations,
+                                              List<String> avoidPlaceNames) {
         if (regions == null || regions.isEmpty() || text == null || text.isBlank()) return List.of();
         String compact = text.replaceAll("\\s+", "");
         Set<String> roots = regions.stream().map(destinations::rootOf).collect(Collectors.toSet());
@@ -87,8 +89,9 @@ final class EnrichDestinations {
         for (Destination d : destinations.all()) {
             if (out.size() >= MAX_MENTIONED_DESTINATIONS) break;
             if (regions.contains(d.name()) || !roots.contains(destinations.rootOf(d.name()))) continue;
-            if (d.aliases().stream().filter(EnrichDestinations::isKoreanAlias)
-                    .anyMatch(a -> compact.contains(a.replaceAll("\\s+", "")))) {
+            List<String> aliases = d.aliases().stream().filter(EnrichDestinations::isKoreanAlias).toList();
+            if (aliases.stream().anyMatch(a -> TripExclusions.namesAvoided(a, avoidPlaceNames))) continue;
+            if (aliases.stream().anyMatch(a -> compact.contains(a.replaceAll("\\s+", "")))) {
                 out.add(d.name());
             }
         }

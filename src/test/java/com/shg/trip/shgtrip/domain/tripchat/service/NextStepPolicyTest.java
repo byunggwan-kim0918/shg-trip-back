@@ -26,13 +26,14 @@ class NextStepPolicyTest {
     }
 
     private static Interpretation answered() {
-        return new Interpretation(List.of(), "answered", null, false);
+        return new Interpretation(List.of(), "answered", null, "answer", null);
     }
 
     private static Interpretation withFollowUp(String outcome, String reason) {
         return new Interpretation(List.of(), outcome, new Interpretation.FollowUp(true, reason,
-                "걷는 쪽으로 생각 중이군요.", "먼 곳은 택시나 버스도 괜찮아요?", "가까운 곳만 걸어서 둘러봐도 좋아요.",
-                List.of("가까운 곳만 걸어 다닐래", "멀면 다른 교통편도 괜찮아"), "예: 멀면 택시도 괜찮아"), false);
+                "먼 곳은 택시나 버스도 괜찮아요?", "가까운 곳만 걸어서 둘러봐도 좋아요.",
+                List.of("가까운 곳만 걸어 다닐래", "멀면 다른 교통편도 괜찮아"), "예: 멀면 택시도 괜찮아"), "answer",
+                "걷는 쪽으로 생각 중이군요.");
     }
 
     private static NextStepPolicy.Decision decide(Draft draft, Set<String> asked, OpenQuestion q, Interpretation it,
@@ -60,7 +61,8 @@ class NextStepPolicyTest {
     void noFollowUpForSufficientAnswer() {
         Draft d = Events.busanTrip().clearSlot(Slot.ANCHORS).draft();
 
-        NextStepPolicy.Decision decision = decide(d, new HashSet<>(), base(Slot.TRANSPORT), answered(), false);
+        NextStepPolicy.Decision decision = decide(d, new HashSet<>(Set.of("BASE:MOOD")), base(Slot.TRANSPORT),
+                answered(), false);
 
         assertThat(decision.question().slot()).isEqualTo(Slot.ANCHORS);
         assertThat(decision.question().lead()).isEqualTo("차를 이용하는 여행으로 기억해둘게요.");
@@ -150,7 +152,50 @@ class NextStepPolicyTest {
                 withFollowUp("answered", "booking_time_missing"), false).question();
 
         assertThat(q).isNotNull();
-        assertThat(q.askKey()).isEqualTo("CRITICAL:booking_time_missing:ANCHORS");
+        assertThat(q.askKey()).startsWith("CRITICAL:booking_time_missing:ANCHORS:");
+    }
+
+    @Test
+    @DisplayName("같은 항목이라도 부딪히는 내용이 다르면 다시 묻고, 묻지 못한 충돌은 표시한다")
+    void secondConflictOnSameSlotIsAsked() {
+        Draft d = Events.busanTrip().draft();
+        OpenQuestion extra = new OpenQuestion("extra", Slot.EXTRAS, QuestionKind.EXTRA, null, "더 알려주고 싶은 게 있어요",
+                null, null, List.of(), false, null, null, null, true);
+        Interpretation first = conflict("닭고기는 계속 빼둘까요?");
+        Interpretation second = conflict("회는 날것인데 넣을까요?");
+        Set<String> asked = new HashSet<>();
+
+        NextStepPolicy.Decision d1 = decide(d, asked, extra, first, false);
+        asked.add(d1.question().askKey());
+        NextStepPolicy.Decision d2 = decide(d, asked, extra, second, false);
+        NextStepPolicy.Decision again = decide(d, asked, extra, first, false);
+
+        assertThat(d2.question().title()).isEqualTo("회는 날것인데 넣을까요?");
+        assertThat(NextStepPolicy.conflictUnasked(second, d2)).isFalse();
+        assertThat(again.review()).isTrue();
+        assertThat(NextStepPolicy.conflictUnasked(first, again)).isTrue();
+        assertThat(NextStepPolicy.conflictUnasked(answered(), again)).isFalse();
+    }
+
+    @Test
+    @DisplayName("충돌 되묻기의 답이 다시 부딪히거나 모델 문구를 쓸 수 없으면 묻지 않고 메모로 넘긴다")
+    void conflictWithoutUsableQuestionGoesToNote() {
+        Draft d = Events.busanTrip().draft();
+        OpenQuestion conflictQuestion = QuestionBank.followUp(Slot.MOOD, NextStepPolicy.CONFLICT_KEY_PREFIX + "MOOD:x",
+                "l", "t", "d", "p", List.of());
+        Interpretation again = conflict("다른 문장으로 다시 묻기");
+        Interpretation noTitle = conflict("");
+
+        NextStepPolicy.Decision afterConflict = decide(d, new HashSet<>(Set.of("BASE:MOOD")), conflictQuestion, again, false);
+        NextStepPolicy.Decision blankTitle = decide(d, new HashSet<>(), base(Slot.MOOD), noTitle, false);
+
+        assertThat(NextStepPolicy.conflictUnasked(again, afterConflict)).isTrue();
+        assertThat(NextStepPolicy.conflictUnasked(noTitle, blankTitle)).isTrue();
+    }
+
+    private static Interpretation conflict(String title) {
+        return new Interpretation(List.of(), "answered", new Interpretation.FollowUp(true, "conflict", title,
+                "알려주시면 맞춰둘게요.", List.of("빼줘", "넣어줘"), "예: 빼줘"), "answer", "앞의 말과 달라요.");
     }
 
     @Test
@@ -177,8 +222,8 @@ class NextStepPolicyTest {
     @Test
     @DisplayName("모든 항목을 답하면 확인 화면으로 간다")
     void reviewWhenAllResolved() {
-        assertThat(decide(Events.busanTrip().draft(), new HashSet<>(), base(Slot.ANCHORS), answered(), false).review())
-                .isTrue();
+        assertThat(decide(Events.busanTrip().draft(), new HashSet<>(Set.of("BASE:MOOD")), base(Slot.ANCHORS),
+                answered(), false).review()).isTrue();
     }
 
     @Test
@@ -194,7 +239,7 @@ class NextStepPolicyTest {
     @DisplayName("여행과 무관한 답이면 같은 질문을 짧은 안내와 함께 다시 보인다")
     void offTopic() {
         OpenQuestion q = base(Slot.COMPANY);
-        Interpretation it = new Interpretation(List.of(), "unclear", null, true);
+        Interpretation it = new Interpretation(List.of(), "unclear", null, "off_topic", null);
 
         OpenQuestion again = decide(Events.of().draft(), new HashSet<>(), q, it, false).question();
 
@@ -203,13 +248,120 @@ class NextStepPolicyTest {
     }
 
     @Test
+    @DisplayName("여행 답이 아니면 모델의 반응 문장을 앞에 두고 같은 질문을 다시 묻는다")
+    void notAnAnswerUsesModelReply() {
+        OpenQuestion q = base(Slot.CITY);
+        Interpretation it = new Interpretation(List.of(), "unclear", null, "nonsense",
+                "무슨 뜻인지 잘 모르겠어요. 가고 싶은 곳을 다시 알려주세요.");
+
+        OpenQuestion again = decide(Events.of().draft(), new HashSet<>(), q, it, false).question();
+
+        assertThat(again.id()).isEqualTo(q.id());
+        assertThat(again.lead()).isEqualTo("무슨 뜻인지 잘 모르겠어요. 가고 싶은 곳을 다시 알려주세요.");
+    }
+
+    @Test
+    @DisplayName("모델의 반응 문장을 다음 질문 앞에 두고, 너무 길면 코드 문구를 쓴다")
+    void modelReplyLeadsNextQuestion() {
+        Draft d = Events.of().user(DraftField.DESTINATION, "군산").draft();
+        Interpretation short_ = new Interpretation(List.of(), "answered", null, "answer", "군산 여행이군요.");
+        Interpretation long_ = new Interpretation(List.of(), "answered", null, "answer", "가".repeat(80));
+
+        assertThat(decide(d, new HashSet<>(Set.of("BASE:CITY")), base(Slot.CITY), short_, false).question().lead())
+                .isEqualTo("군산 여행이군요.");
+        assertThat(decide(d, new HashSet<>(Set.of("BASE:CITY")), base(Slot.CITY), long_, false).question().lead())
+                .isEqualTo("군산 여행을 생각하고 있군요.");
+    }
+
+    @Test
+    @DisplayName("확인 화면에서 덧붙인 말이 앞의 말과 부딪히면 되묻고, 아니면 확인 화면으로 돌아간다")
+    void reviewExtraAsksBackOnlyOnConflict() {
+        Draft d = Events.busanTrip().draft();
+        OpenQuestion extra = new OpenQuestion("extra", Slot.EXTRAS, QuestionKind.EXTRA, null, "더 알려주고 싶은 게 있어요",
+                null, null, List.of(), false, null, null, null, true);
+        Interpretation conflict = new Interpretation(List.of(), "answered", new Interpretation.FollowUp(true,
+                "conflict", "닭고기는 계속 빼둘까요?", "", List.of("빼줘", "넣어줘"), "예: 빼줘"), "answer",
+                "앞에서 닭고기 알레르기가 있다고 하셨어요.");
+        Interpretation vague = new Interpretation(List.of(), "answered", new Interpretation.FollowUp(true,
+                "vague", "조금만 더 알려줄래요?", "", List.of(), ""), "answer", null);
+
+        OpenQuestion q = decide(d, new HashSet<>(), extra, conflict, false).question();
+
+        assertThat(q.kind()).isEqualTo(QuestionKind.FOLLOW_UP);
+        assertThat(q.title()).isEqualTo("닭고기는 계속 빼둘까요?");
+        assertThat(q.lead()).isEqualTo("앞에서 닭고기 알레르기가 있다고 하셨어요.");
+        assertThat(decide(d, new HashSet<>(), extra, vague, false).review()).isTrue();
+        assertThat(decide(d, new HashSet<>(), extra, answered(), false).review()).isTrue();
+    }
+
+    @Test
     @DisplayName("길이를 넘는 모델 문구는 항목 템플릿으로 바꾼다")
     void longModelCopyFallsBackToTemplate() {
-        Interpretation it = new Interpretation(List.of(), "unclear", new Interpretation.FollowUp(true, "vague", "",
-                "가".repeat(80), "", List.of(), ""), false);
+        Interpretation it = new Interpretation(List.of(), "unclear", new Interpretation.FollowUp(true, "vague",
+                "가".repeat(80), "", List.of(), ""), "answer", "");
 
         OpenQuestion q = decide(Events.of().draft(), new HashSet<>(), base(Slot.MOOD), it, false).question();
 
         assertThat(q.title()).isEqualTo("어떤 순간이 더 끌리나요?");
+    }
+
+    @Test
+    @DisplayName("다른 답에서 하고 싶은 것이 나왔어도 취향은 한 번 직접 묻는다")
+    void asksOpenSlotOnceEvenIfMentioned() {
+        Draft d = Events.of().user(DraftField.DESTINATION, "강릉")
+                .user(DraftField.START_DATE, "2026-12-31").user(DraftField.END_DATE, "2027-01-01")
+                .user(DraftField.PRIORITIES, "새해 해돋이 보기").user(DraftField.COMPANION, "couple", "남친이랑").draft();
+
+        NextStepPolicy.Decision first = decide(d, new HashSet<>(Set.of("BASE:CITY", "BASE:DATES", "BASE:COMPANY")),
+                base(Slot.COMPANY), answered(), false);
+
+        assertThat(first.question().slot()).isEqualTo(Slot.MOOD);
+        assertThat(first.question().title()).isEqualTo("그 밖에 하고 싶은 게 더 있나요?");
+
+        NextStepPolicy.Decision second = decide(d, new HashSet<>(Set.of("BASE:CITY", "BASE:DATES", "BASE:COMPANY",
+                "BASE:MOOD")), base(Slot.MOOD), answered(), false);
+
+        assertThat(second.question().slot()).isEqualTo(Slot.TRANSPORT);
+    }
+
+    @Test
+    @DisplayName("지나가며 말한 여행지·날짜는 다시 묻지 않는다")
+    void closedSlotsStaySkipped() {
+        Draft d = Events.of().user(DraftField.DESTINATION, "부산")
+                .user(DraftField.START_DATE, "2026-11-20").user(DraftField.END_DATE, "2026-11-25").draft();
+
+        NextStepPolicy.Decision decision = decide(d, new HashSet<>(Set.of("BASE:CITY")), base(Slot.CITY), answered(),
+                true);
+
+        assertThat(decision.question().slot()).isEqualTo(Slot.COMPANY);
+    }
+
+    @Test
+    @DisplayName("이미 물은 취향은 여행자가 바람을 모두 취소해도 다시 묻지 않는다")
+    void askedOpenSlotIsNotAskedAgain() {
+        Draft d = Events.of().user(DraftField.DESTINATION, "제주")
+                .user(DraftField.START_DATE, "2026-12-01").user(DraftField.END_DATE, "2026-12-03")
+                .user(DraftField.COMPANION, "couple", "남편이랑").user(DraftField.PRIORITIES, "바다 산책")
+                .clearSlot(Slot.MOOD).draft();
+        assertThat(d.resolved(Slot.MOOD)).isFalse();
+
+        NextStepPolicy.Decision decision = decide(d, new HashSet<>(Set.of("BASE:CITY", "BASE:DATES", "BASE:COMPANY",
+                "BASE:MOOD")), base(Slot.MOOD), answered(), false);
+
+        assertThat(decision.question().slot()).isEqualTo(Slot.TRANSPORT);
+    }
+
+    @Test
+    @DisplayName("묻는 도중 취향을 고쳐 답하면 바로 이어서 취향을 다시 묻지 않는다")
+    void editedOpenSlotIsNotAskedRightAway() {
+        Draft d = Events.of().user(DraftField.DESTINATION, "부산")
+                .user(DraftField.START_DATE, "2026-11-20").user(DraftField.END_DATE, "2026-11-25")
+                .user(DraftField.COMPANION, "couple", "남자친구랑").user(DraftField.PRIORITIES, "맛집 탐방").draft();
+        OpenQuestion edit = QuestionBank.edit(Slot.MOOD, d, TODAY, null, false);
+
+        NextStepPolicy.Decision decision = decide(d, new HashSet<>(Set.of("BASE:CITY", "BASE:DATES", "BASE:COMPANY")),
+                edit, answered(), false);
+
+        assertThat(decision.question().slot()).isEqualTo(Slot.TRANSPORT);
     }
 }

@@ -51,19 +51,22 @@ public final class UpdateSanitizer {
             DraftField field = enumOrNull(DraftField.class, u.field());
             EventOp op = enumOrNull(EventOp.class, u.op());
             if (field == null || op == null) continue;
-            if (field.isList() ? op == EventOp.SET : (op == EventOp.ADD || op == EventOp.REMOVE)) continue;
             String raw = rawOrNull(u.raw(), answer);
             if (outOfRangePhrase != null && isDateField(field)
                     && (raw == null || TextNormalizer.containsKey(raw, outOfRangePhrase))) continue;
 
+            // 미정·맡김은 항목 상태라 연산 종류와 상관없이 받는다.
             FieldStatus status = parseStatus(u.status());
             if (status != FieldStatus.KNOWN) {
                 events.add(DraftEvent.slotOutcome(seq.getAsLong(), field.slot(), status, raw));
                 continue;
             }
-            // 지우기는 사용자가 그렇게 말했을 때만 받는다. 모델 추론으로 사용자 값이 사라지면 안 된다.
-            boolean saidByUser = raw != null && !"inferred".equals(lower(u.source()));
-            if ((op == EventOp.CLEAR || op == EventOp.REMOVE) && !saidByUser) continue;
+            if (field.isList() ? op == EventOp.SET : (op == EventOp.ADD || op == EventOp.REMOVE)) continue;
+            if (op == EventOp.CLEAR || op == EventOp.REMOVE) {
+                // 모델 추론만으로 여행자 값을 지우지 않는다. 지우게 한 말은 이번 답에 있으므로 근거가 답에 없으면 답 전체를 남긴다.
+                if ("inferred".equals(lower(u.source()))) continue;
+                if (raw == null) raw = TextNormalizer.cap(answer, MAX_RAW);
+            }
             if (op == EventOp.CLEAR) {
                 events.add(DraftEvent.clearField(seq.getAsLong(), field));
                 continue;
@@ -102,7 +105,8 @@ public final class UpdateSanitizer {
     }
 
     private static String rawOrNull(String raw, String answer) {
-        String r = TextNormalizer.cap(raw, MAX_RAW);
+        // 답은 JSON 문자열로 보내므로 모델이 줄바꿈을 \n 글자 그대로 옮겨 적을 수 있다.
+        String r = TextNormalizer.cap(raw == null ? null : raw.replace("\\n", " "), MAX_RAW);
         if (r == null) return null;
         return TextNormalizer.containsKey(answer, r) ? r : null;
     }

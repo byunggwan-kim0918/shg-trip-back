@@ -45,14 +45,21 @@ class EnrichDestinationsTest {
     }
 
     @Test
+    @DisplayName("피하겠다고 한 근교 여행지는 요청 문장에 나와도 더하지 않는다")
+    void mentionedDestinationsSkipAvoided() {
+        assertThat(EnrichDestinations.mentionedDestinations(List.of("Beijing"), "기타: 만리장성은 빼줘", destinations,
+                List.of("만리장성"))).isEmpty();
+    }
+
+    @Test
     @DisplayName("요청 문장의 근교 여행지 한국어 별칭은 같은 묶음일 때만 더하고, 한국어 이름은 일반 문장 오탐이라 보지 않는다")
     void mentionedDestinations() {
         assertThat(EnrichDestinations.mentionedDestinations(List.of("Beijing"),
-                "베이징 3박4일 자금성, 천단, 만리장성과 베이징 오리구이", destinations)).containsExactly("Badaling");
-        assertThat(EnrichDestinations.mentionedDestinations(List.of("Osaka"), "여러 나라 음식을 먹고 싶어요", destinations))
+                "베이징 3박4일 자금성, 천단, 만리장성과 베이징 오리구이", destinations, List.of())).containsExactly("Badaling");
+        assertThat(EnrichDestinations.mentionedDestinations(List.of("Osaka"), "여러 나라 음식을 먹고 싶어요", destinations, List.of()))
                 .isEmpty();
-        assertThat(EnrichDestinations.mentionedDestinations(List.of("Tokyo"), "만리장성도 보고 싶어요", destinations)).isEmpty();
-        assertThat(EnrichDestinations.mentionedDestinations(List.of("Beijing", "Badaling"), "만리장성", destinations))
+        assertThat(EnrichDestinations.mentionedDestinations(List.of("Tokyo"), "만리장성도 보고 싶어요", destinations, List.of())).isEmpty();
+        assertThat(EnrichDestinations.mentionedDestinations(List.of("Beijing", "Badaling"), "만리장성", destinations, List.of()))
                 .isEmpty();
     }
 

@@ -11,7 +11,12 @@ final class TextNormalizer {
     static String key(String text) {
         if (text == null) return "";
         String nfc = Normalizer.normalize(text, Normalizer.Form.NFC).toLowerCase(Locale.ROOT);
-        return nfc.replaceAll("[\\s\\p{Punct}·~…“”‘’「」『』()（）]", "");
+        return nfc.replaceAll("[\\s\\p{Punct}·~…“”‘’「」『』()（）＜＞]", "");
+    }
+
+    /** 해석 맥락에 넣는 여행자 글. 꺾쇠를 전각으로 바꿔 글 안에 맥락 태그를 흉내 내도 태그로 읽히지 않게 한다. */
+    static String untag(String text) {
+        return text == null ? null : text.replace('<', '＜').replace('>', '＞');
     }
 
     static boolean containsKey(String haystack, String needle) {

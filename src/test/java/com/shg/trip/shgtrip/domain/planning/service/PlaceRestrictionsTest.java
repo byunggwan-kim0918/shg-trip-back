@@ -373,6 +373,20 @@ class PlaceRestrictionsTest {
                 null, null))).isFalse();
     }
 
+    @Test
+    @DisplayName("피할 이름을 품은 이름만 같은 곳으로 본다. 더 짧은 이름·두 글자 미만·다른 이름은 보지 않는다")
+    void avoidedNames() {
+        assertThat(TripExclusions.namesAvoided("우도면", List.of("우도"))).isTrue();
+        assertThat(TripExclusions.namesAvoided("경포해수욕장", List.of("경포해변"))).isTrue();
+        assertThat(TripExclusions.namesAvoided("서빈백사 (우도)", List.of("우도"))).isTrue();
+        assertThat(TripExclusions.namesAvoided("성산일출봉", List.of("우도"))).isFalse();
+        assertThat(TripExclusions.namesAvoided("우도", null)).isFalse();
+        assertThat(TripExclusions.namesAvoided("산", List.of("남산"))).isFalse();
+        assertThat(TripExclusions.namesAvoided("우도", List.of("우도봉"))).isFalse();
+        assertThat(TripExclusions.namesAvoided("돼지국밥", List.of("쌍둥이돼지국밥"))).isFalse();
+        assertThat(TripExclusions.namesAvoided("남산·N서울타워", List.of("남산N서울타워"))).isTrue();
+    }
+
     private static VectorSearchResult result(String name, String cuisine, List<String> tags) {
         return new VectorSearchResult(1L, name, "주소", RESTAURANT, tags, "Busan", "KR", BigDecimal.ONE,
                 BigDecimal.ONE, null, null, null, null, 0.8, "MEAL", cuisine, null, null);

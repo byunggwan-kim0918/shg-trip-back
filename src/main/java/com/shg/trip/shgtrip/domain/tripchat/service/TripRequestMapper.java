@@ -29,6 +29,8 @@ import java.util.Set;
 public final class TripRequestMapper {
 
     static final int MAX_TRIP_DAYS = 10;            // ItineraryGenerateRequest @ValidDateRange(maxDays = 10)
+    /** 하고 싶은 것은 목록이라 끝없이 늘 수 있다. 넘치면 보완 질문으로도 줄일 수 없어 요청 문장에는 최근 것부터 이만큼만 싣는다. */
+    static final int MAX_PRIORITIES_TEXT = 200;
     static final int MAX_DESCRIPTION = 500;         // ItineraryGenerateRequest description @Size
     static final int MAX_DESTINATION = 50;
     static final long MAX_BUDGET = 100_000_000L;
@@ -88,8 +90,10 @@ public final class TripRequestMapper {
         tasteNotes(draft, themes, pace, notes);
         if (themes.isEmpty()) themes.addAll(GeneratorSupport.DEFAULT_THEMES);
         if (categories.isEmpty()) categories.addAll(deriveCategories(themes));
-        String priorities = draft.value(DraftField.PRIORITIES);
-        if (priorities != null) fragments.add(0, "원하는 여행: " + priorities);
+        List<Item> wishes = draft.items(DraftField.PRIORITIES);
+        List<Item> kept = latestWithin(wishes, MAX_PRIORITIES_TEXT);
+        if (!kept.isEmpty()) fragments.add(0, "원하는 여행: " + String.join(", ", kept.stream().map(Item::text).toList()));
+        if (kept.size() < wishes.size()) addNote(notes, Slot.MOOD, GeneratorSupport.PRIORITIES_TRIMMED);
 
         Fact transport = draft.fact(DraftField.TRANSPORT).orElse(null);
         boolean tentative = transport != null && transport.source() == FieldSource.TENTATIVE;
@@ -121,9 +125,10 @@ public final class TripRequestMapper {
         restrictionFragment("못 먹거나 피할 음식", draft.items(DraftField.FOOD_AVOID), restrictions, fragments, notes);
         restrictionFragment("피하고 싶은 활동", draft.items(DraftField.AVOID_ACTIVITIES), restrictions, fragments, notes);
         listFragment("기타", draft.items(DraftField.NOTES), fragments, notes);
-        List<Long> avoidPlaceIds = avoidPlaces(draft, matches, placeIds, notes);
+        List<String> avoidPlaceNames = new ArrayList<>();
+        List<Long> avoidPlaceIds = avoidPlaces(draft, matches, placeIds, notes, avoidPlaceNames);
 
-        String description = describe(fragments, draft.items(DraftField.AVOID_PLACES));
+        String description = fragments.isEmpty() ? null : String.join(SEPARATOR, fragments);
         if (description != null && description.length() > MAX_DESCRIPTION) {
             blockers.add(new Blocker("description_too_long", Slot.EXTRAS, "더 알려준 내용을 조금 줄여줄래요?",
                     "추가 조건은 " + MAX_DESCRIPTION + "자까지 전달할 수 있어요. 꼭 필요한 것만 다시 알려주세요.",
@@ -140,7 +145,7 @@ public final class TripRequestMapper {
                 themes.stream().limit(10).toList(), categories.stream().limit(10).toList(), pace, transportPref,
                 budget, start, end, description, selected, List.of(), companion, partySize, arrival, departure,
                 required.isEmpty() ? null : required, avoidPlaceIds.isEmpty() ? null : avoidPlaceIds,
-                restrictions.isEmpty() ? null : List.copyOf(restrictions));
+                restrictions.isEmpty() ? null : List.copyOf(restrictions), avoidPlaceNames.isEmpty() ? null : avoidPlaceNames);
         return new Result(request, blockers, notes, description, days);
     }
 
@@ -269,12 +274,14 @@ public final class TripRequestMapper {
         }
     }
 
+    // names에는 빼지 않기로 한 공항·역·꼭 넣을 곳을 담지 않는다. 맞춘 곳은 지역 낱말("해운대") 대신 장소 이름으로 담아 지역 전체를 피하지 않게 한다.
     private static List<Long> avoidPlaces(Draft draft, Map<String, PlaceMatch> matches, Set<Long> placeIds,
-                                          Map<Slot, List<String>> notes) {
+                                          Map<Slot, List<String>> notes, List<String> names) {
         Set<Long> out = new LinkedHashSet<>();
         for (Item item : userItems(draft, DraftField.AVOID_PLACES)) {
             PlaceMatch m = matches.get(PlaceMatcher.key(DraftField.AVOID_PLACES, item.text()));
             if (m == null) {
+                addName(names, item.text());
                 addNote(notes, Slot.EXTRAS, item.text() + " · " + GeneratorSupport.AVOID_PLACE_NOT_FOUND);
             } else if ("TRANSIT_HUB".equals(m.major())) {
                 addNote(notes, Slot.EXTRAS, m.name() + " · " + GeneratorSupport.AVOID_PLACE_HUB);
@@ -284,10 +291,16 @@ public final class TripRequestMapper {
                 addNote(notes, Slot.EXTRAS, GeneratorSupport.placeLabel(m) + " · " + GeneratorSupport.AVOID_PLACES_FULL);
             } else {
                 out.add(m.placeId());
+                addName(names, m.name());
                 addNote(notes, Slot.EXTRAS, GeneratorSupport.placeLabel(m) + " · " + GeneratorSupport.AVOID_PLACE_EXCLUDED);
             }
         }
         return List.copyOf(out);
+    }
+
+    private static void addName(List<String> names, String name) {
+        String n = TextNormalizer.cap(name, MAX_DESTINATION);
+        if (names.size() < MAX_AVOID_PLACES && !names.contains(n)) names.add(n);
     }
 
     /**
@@ -418,14 +431,17 @@ public final class TripRequestMapper {
         }
     }
 
-    /** 생성기는 요청 문장에 이름이 나온 명소를 후보에 더하므로, 피하고 싶다는 장소 이름이 든 조각은 보내지 않는다. */
-    static String describe(List<String> fragments, List<Item> avoidPlaces) {
-        // 한 글자 이름("산")으로 거르면 "부산"·"예산"이 든 조각까지 빠진다.
-        List<Item> names = avoidPlaces.stream().filter(a -> TextNormalizer.key(a.text()).length() >= 2).toList();
-        List<String> kept = fragments.stream()
-                .filter(f -> names.stream().noneMatch(a -> TextNormalizer.containsKey(f, a.text())))
-                .toList();
-        return kept.isEmpty() ? null : String.join(SEPARATOR, kept);
+    /** 여러 턴에 걸쳐 생각이 바뀌므로 넘치면 오래된 바람부터 뺀다. 남은 것은 말한 순서를 지킨다. */
+    private static List<Item> latestWithin(List<Item> items, int max) {
+        List<Item> kept = new ArrayList<>();
+        int length = 0;
+        for (int i = items.size() - 1; i >= 0; i--) {
+            int added = items.get(i).text().length() + (kept.isEmpty() ? 0 : 2);
+            if (!kept.isEmpty() && length + added > max) break;
+            kept.add(0, items.get(i));
+            length += added;
+        }
+        return kept;
     }
 
     private static List<String> deriveCategories(List<String> themes) {

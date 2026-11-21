@@ -60,6 +60,7 @@ import static org.mockito.Mockito.verify;
 class TripChatServiceTest {
 
     private static final Long USER = 7L;
+    private static final String ENOUGH = "그거면 충분해";
     private static final String BUSAN_ALL = "부산 11월 20일부터 25일까지 남자친구랑 둘이, 바다 보면서 느긋하게 쉬고 싶고 "
             + "자동차 이용할 거임. 정해둔 건 없어";
 
@@ -80,7 +81,8 @@ class TripChatServiceTest {
         ObjectMapper om = JsonMapper.builder().findAndAddModules().build();
         Clock clock = Clock.fixed(Instant.parse("2026-11-10T01:00:00Z"), ZoneId.of("Asia/Seoul"));
         service = new TripChatService(repository, interpreter, placeMatcher, generationPolicyService,
-                travelPlannerService, activeUserGuard, Validation.buildDefaultValidatorFactory().getValidator(), om,
+                travelPlannerService, activeUserGuard, Validation.byDefaultProvider().configure().clockProvider(() -> clock)
+                        .buildValidatorFactory().getValidator(), om,
                 new TransactionTemplate(new NoResourceTransactionManager()), clock,
                 new PlanningCountries(List.of("KR", "JP"), Destinations.fromClasspath()));
 
@@ -138,7 +140,7 @@ class TripChatServiceTest {
                         upd("DESTINATION", "부산", "user", "부산"),
                         upd("START_DATE", "2026-11-20", "user", "11월 20일부터 25일까지"),
                         upd("END_DATE", "2026-11-25", "user", "11월 20일부터 25일까지"),
-                        upd("COMPANION", "couple", "user", "남자친구랑 둘이")), "answered", null, false)));
+                        upd("COMPANION", "couple", "user", "남자친구랑 둘이")), "answered", null, "answer", null)));
 
         TripChatResponse r = answer(start, "부산 11월 20일부터 25일까지 남자친구랑 둘이");
 
@@ -157,7 +159,7 @@ class TripChatServiceTest {
                 .willReturn(result(new Interpretation(List.of(
                         upd("DESTINATION", "상하이", "user", "상하이"),
                         upd("START_DATE", "2026-11-20", "user", "11월 20일부터 25일까지"),
-                        upd("END_DATE", "2026-11-25", "user", "11월 20일부터 25일까지")), "answered", null, false)));
+                        upd("END_DATE", "2026-11-25", "user", "11월 20일부터 25일까지")), "answered", null, "answer", null)));
 
         TripChatResponse r = answer(start, "상하이 11월 20일부터 25일까지");
 
@@ -173,7 +175,7 @@ class TripChatServiceTest {
     void duplicateTurnIsAppliedOnce() {
         TripChatResponse start = service.create(USER, "req-1");
         given(interpreter.interpret(anyString(), eq("부산"))).willReturn(result(new Interpretation(
-                List.of(upd("DESTINATION", "부산", "user", "부산")), "answered", null, false)));
+                List.of(upd("DESTINATION", "부산", "user", "부산")), "answered", null, "answer", null)));
         TripChatAnswerRequest req = new TripChatAnswerRequest(start.question().id(), "turn-1", "text", "부산");
 
         TripChatResponse first = service.answer(USER, id(start), req);
@@ -203,7 +205,7 @@ class TripChatServiceTest {
         given(interpreter.interpret(anyString(), eq("부산")))
                 .willThrow(new TripChatInterpreter.InterpretException("down", null))
                 .willReturn(result(new Interpretation(List.of(upd("DESTINATION", "부산", "user", "부산")),
-                        "answered", null, false)));
+                        "answered", null, "answer", null)));
 
         assertThatThrownBy(() -> service.answer(USER, id(start), req))
                 .isInstanceOf(BusinessException.class)
@@ -229,7 +231,7 @@ class TripChatServiceTest {
                 concurrent.add(e);
             }
             assertThat(service.current(USER).pending()).isEqualTo("부산");
-            return result(new Interpretation(List.of(upd("DESTINATION", "부산", "user", "부산")), "answered", null, false));
+            return result(new Interpretation(List.of(upd("DESTINATION", "부산", "user", "부산")), "answered", null, "answer", null));
         });
 
         service.answer(USER, id(start), new TripChatAnswerRequest(start.question().id(), "turn-1", "text", "부산"));
@@ -248,12 +250,12 @@ class TripChatServiceTest {
                         upd("START_DATE", "2026-11-20", "user", "11월 20일부터 25일까지"),
                         upd("END_DATE", "2026-11-25", "user", "11월 20일부터 25일까지"),
                         upd("COMPANION", "couple", "user", "남자친구랑 둘이"),
-                        upd("PRIORITIES", "바다 보면서 느긋하게 쉬기", "user", "바다 보면서 느긋하게 쉬고 싶고"),
+                        add("PRIORITIES", "바다 보면서 느긋하게 쉬기", "user", "바다 보면서 느긋하게 쉬고 싶고"),
                         upd("TRANSPORT", "walk", "tentative", "흠 걸어서?")), "answered",
-                        new Interpretation.FollowUp(true, "tentative", "걷는 쪽으로 생각 중이군요.",
-                                "먼 곳은 택시나 버스도 괜찮아요?", "가까운 곳만 걸어서 둘러봐도 좋아요.",
+                        new Interpretation.FollowUp(true, "tentative", "먼 곳은 택시나 버스도 괜찮아요?",
+                                "가까운 곳만 걸어서 둘러봐도 좋아요.",
                                 List.of("가까운 곳만 걸어 다닐래", "멀면 다른 교통편도 괜찮아"), "예: 멀면 택시도 괜찮아"),
-                        false)));
+                        "answer", "걷는 쪽으로 생각 중이군요.")));
 
         TripChatResponse followUp = answer(start, BUSAN_ALL.replace("자동차 이용할 거임", "흠 걸어서?"));
         assertThat(followUp.question().kind()).isEqualTo("FOLLOW_UP");
@@ -263,7 +265,8 @@ class TripChatServiceTest {
                 new TripChatAnswerRequest(followUp.question().id(), "turn-x", "unknown", null));
 
         verify(interpreter, times(1)).interpret(anyString(), anyString());
-        assertThat(next.question().slot()).isEqualTo("ANCHORS");
+        assertThat(next.question().slot()).isEqualTo("MOOD");
+        assertThat(next.question().title()).isEqualTo("그 밖에 하고 싶은 게 더 있나요?");
         assertThat(next.question().lead()).isEqualTo(QuestionBank.UNDECIDED_LEAD);
         assertThat(row(next, Slot.TRANSPORT)).isEqualTo("도보를 생각 중 · 확정 전");
     }
@@ -282,7 +285,7 @@ class TripChatServiceTest {
 
         given(interpreter.interpret(anyString(), eq("친구 3명이랑, 나까지 4명"))).willReturn(result(new Interpretation(
                 List.of(upd("COMPANION", "friends", "user", "친구 3명이랑"), upd("PARTY_SIZE", "4", "user", "나까지 4명")),
-                "answered", null, false)));
+                "answered", null, "answer", null)));
         TripChatResponse after = answer(editing, "친구 3명이랑, 나까지 4명");
 
         assertThat(after.status()).isEqualTo("REVIEW");
@@ -310,7 +313,7 @@ class TripChatServiceTest {
         given(interpreter.interpret(anyString(), eq("첫날 오후 3시에 도착해. 해산물은 못 먹어"))).willReturn(result(
                 new Interpretation(List.of(upd("ARRIVAL_TIME", "15:00", "user", "첫날 오후 3시에 도착해"),
                         new Interpretation.Update("FOOD_AVOID", "add", "해산물", "known", "user", "해산물은 못 먹어", "", "")),
-                        "answered", null, false)));
+                        "answered", null, "answer", null)));
 
         TripChatResponse r = service.answer(USER, id(review), new TripChatAnswerRequest(
                 TripChatService.EXTRA_QUESTION_ID, "turn-extra", "text", "첫날 오후 3시에 도착해. 해산물은 못 먹어"));
@@ -325,7 +328,7 @@ class TripChatServiceTest {
         TripChatResponse review = toReview();
         TripChatResponse editing = service.edit(USER, id(review), review.version(), Slot.COMPANY);
         given(interpreter.interpret(anyString(), eq("잠깐만"))).willReturn(result(
-                new Interpretation(List.of(), "unclear", null, false)));
+                new Interpretation(List.of(), "unclear", null, "answer", null)));
 
         TripChatResponse after = answer(editing, "잠깐만");
 
@@ -338,7 +341,7 @@ class TripChatServiceTest {
         TripChatResponse start = service.create(USER, "req-1");
         given(interpreter.interpret(anyString(), eq("부산"))).willAnswer(inv -> {
             failNextSave = true;
-            return result(new Interpretation(List.of(upd("DESTINATION", "부산", "user", "부산")), "answered", null, false));
+            return result(new Interpretation(List.of(upd("DESTINATION", "부산", "user", "부산")), "answered", null, "answer", null));
         });
 
         assertThatThrownBy(() -> answer(start, "부산"))
@@ -364,7 +367,7 @@ class TripChatServiceTest {
 
         given(interpreter.interpret(anyString(), eq("11월 20일부터 2박"))).willReturn(result(new Interpretation(List.of(
                 upd("START_DATE", "2026-11-20", "user", "11월 20일부터"),
-                upd("NIGHTS", "2", "user", "2박")), "answered", null, false)));
+                upd("NIGHTS", "2", "user", "2박")), "answered", null, "answer", null)));
         TripChatResponse fixed = service.answer(USER, id(review), new TripChatAnswerRequest(
                 "fix:dates_missing", "turn-fix", "text", "11월 20일부터 2박"));
 
@@ -485,6 +488,68 @@ class TripChatServiceTest {
                 .extracting("errorCode").isEqualTo(ErrorCode.RESOURCE_NOT_FOUND);
     }
 
+    @Test
+    @DisplayName("욕설은 답을 남기지 않고 모델의 경고를 돌려주며, 기준 횟수에 닿으면 잠근다")
+    void abusiveAnswerWarnsThenLocks() {
+        TripChatResponse start = service.create(USER, "req-1");
+        given(interpreter.interpret(anyString(), eq("이딴 거 왜 물어봐"))).willReturn(result(new Interpretation(
+                List.of(), "unclear", null, "abusive", "이런 표현이 이어지면 대화 이용이 제한될 수 있어요.")));
+        given(generationPolicyService.recordTripChatAbuse(eq(USER), anyString())).willReturn(1, GenerationPolicyService.MAX_TRIP_CHAT_ABUSE);
+
+        assertThatThrownBy(() -> answer(start, "이딴 거 왜 물어봐"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("이런 표현이 이어지면 대화 이용이 제한될 수 있어요.")
+                .extracting("errorCode").isEqualTo(ErrorCode.TRIP_CHAT_INAPPROPRIATE);
+        TripChatResponse after = service.current(USER);
+        assertThat(after.history()).isEmpty();
+        assertThat(after.pending()).isNull();
+
+        assertThatThrownBy(() -> answer(after, "이딴 거 왜 물어봐"))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.TRIP_CHAT_LOCKED);
+    }
+
+    @Test
+    @DisplayName("확인 화면에서 보낸 말이 여행 답이 아니면 반영하지 않고 모델 문장을 돌려준다")
+    void reviewNonsenseIsReturnedAsNotice() {
+        TripChatResponse review = toReview();
+        int stateHaikuCallsAtReview = state(review).get("haikuCalls").asInt();
+        given(interpreter.interpret(anyString(), eq("ㅁㄴㅇㄹ"))).willReturn(result(new Interpretation(
+                List.of(), "unclear", null, "nonsense", "무슨 뜻인지 잘 모르겠어요. 다시 말해주세요.")));
+
+        assertThatThrownBy(() -> service.answer(USER, id(review), new TripChatAnswerRequest(
+                TripChatService.EXTRA_QUESTION_ID, "turn-x", "text", "ㅁㄴㅇㄹ")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessage("무슨 뜻인지 잘 모르겠어요. 다시 말해주세요.")
+                .extracting("errorCode").isEqualTo(ErrorCode.TRIP_CHAT_NOT_UNDERSTOOD);
+        assertThat(service.current(USER).status()).isEqualTo("REVIEW");
+        assertThat(service.current(USER).history()).hasSameSizeAs(review.history());
+        assertThat(state(review).get("haikuCalls").asInt()).isEqualTo(stateHaikuCallsAtReview + 1);
+    }
+
+    @Test
+    @DisplayName("부딪혀 되물어야 하는 답을 질문 한도로 묻지 못하면 답을 메모로 남긴다")
+    void unaskedConflictIsKeptAsNote() throws Exception {
+        TripChatResponse review = toReview();
+        TripChatSession session = db.get(id(review));
+        ObjectMapper om = JsonMapper.builder().findAndAddModules().build();
+        com.fasterxml.jackson.databind.node.ObjectNode st =
+                (com.fasterxml.jackson.databind.node.ObjectNode) om.readTree(session.getState());
+        com.fasterxml.jackson.databind.node.ArrayNode keys = st.putArray("askedKeys");
+        for (int i = 0; i < NextStepPolicy.MAX_QUESTIONS; i++) keys.add("K" + i);
+        ReflectionTestUtils.setField(session, "state", om.writeValueAsString(st));
+        given(interpreter.interpret(anyString(), eq("회도 먹고 싶어"))).willReturn(result(new Interpretation(List.of(),
+                "answered", new Interpretation.FollowUp(true, "conflict", "날것은 계속 빼둘까요?", "", List.of(), ""),
+                "answer", "앞에서 날것은 뺀다고 하셨어요.")));
+
+        TripChatResponse r = service.answer(USER, id(review), new TripChatAnswerRequest(
+                TripChatService.EXTRA_QUESTION_ID, "turn-c", "text", "회도 먹고 싶어"));
+
+        assertThat(r.status()).isEqualTo("REVIEW");
+        assertThat(state(r).get("events").findValuesAsText("value"))
+                .contains(TripChatService.UNRESOLVED_NOTE_PREFIX + "날것은 계속 빼둘까요?");
+    }
+
     // ---- 도우미 ----
 
     private TripChatResponse toReview() {
@@ -494,13 +559,17 @@ class TripChatServiceTest {
                 upd("START_DATE", "2026-11-20", "user", "11월 20일부터 25일까지"),
                 upd("END_DATE", "2026-11-25", "user", "11월 20일부터 25일까지"),
                 upd("COMPANION", "couple", "user", "남자친구랑 둘이"),
-                upd("PRIORITIES", "바다 보면서 느긋하게 쉬기", "user", "바다 보면서 느긋하게 쉬고 싶고"),
+                add("PRIORITIES", "바다 보면서 느긋하게 쉬기", "user", "바다 보면서 느긋하게 쉬고 싶고"),
                 new Interpretation.Update("THEMES", "add", "ocean", "known", "inferred", "", "", ""),
                 upd("PACE", "relaxed", "user", "느긋하게"),
                 upd("TRANSPORT", "car", "user", "자동차 이용할 거임"),
                 new Interpretation.Update("LODGING_STATE", "set", "", "none", "user", "정해둔 건 없어", "", "")),
-                "answered", null, false)));
-        return answer(start, BUSAN_ALL);
+                "answered", null, "answer", null)));
+        TripChatResponse moreWishes = answer(start, BUSAN_ALL);
+        assertThat(moreWishes.question().title()).isEqualTo("그 밖에 하고 싶은 게 더 있나요?");
+        given(interpreter.interpret(anyString(), eq(ENOUGH)))
+                .willReturn(result(new Interpretation(List.of(), "none", null, "answer", null)));
+        return answer(moreWishes, ENOUGH);
     }
 
     private TripChatResponse reviewWithoutDates() {
@@ -513,7 +582,7 @@ class TripChatServiceTest {
                 new Interpretation.Update("PRIORITIES", "set", "", "delegated", "user", "맡길게", "", ""),
                 upd("TRANSPORT", "car", "user", "차"),
                 new Interpretation.Update("LODGING_STATE", "set", "", "none", "user", "정해둔 건 없어", "", "")),
-                "answered", null, false)));
+                "answered", null, "answer", null)));
         return answer(start, text);
     }
 
@@ -526,6 +595,14 @@ class TripChatServiceTest {
         return UUID.fromString(r.id());
     }
 
+    private com.fasterxml.jackson.databind.JsonNode state(TripChatResponse r) {
+        try {
+            return JsonMapper.builder().findAndAddModules().build().readTree(db.get(id(r)).getState());
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private static String row(TripChatResponse r, Slot slot) {
         return r.summary().rows().stream().filter(x -> x.slot().equals(slot.name())).findFirst()
                 .map(TripChatResponse.Row::value).orElse(null);
@@ -533,6 +610,10 @@ class TripChatServiceTest {
 
     private static Interpretation.Update upd(String field, String value, String source, String raw) {
         return new Interpretation.Update(field, "set", value, "known", source, raw, "", "");
+    }
+
+    private static Interpretation.Update add(String field, String value, String source, String raw) {
+        return new Interpretation.Update(field, "add", value, "known", source, raw, "", "");
     }
 
     private static TripChatInterpreter.Result result(Interpretation it) {

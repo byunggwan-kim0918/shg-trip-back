@@ -65,7 +65,9 @@ public class TripChatService {
     private static final String CONFIRM_TURN = "__confirm";
     private static final Duration SESSION_TTL = Duration.ofDays(14);
     /** 해석 호출 상한(요청 10초 × 2회 + 대기)보다 길게 둔다. 이보다 오래된 표시는 서버가 죽어 남은 것으로 본다. */
-    private static final Duration PENDING_STALE = Duration.ofSeconds(30);
+    /** 해석이 가장 오래 걸리는 시간보다 길어야 처리 중인 턴에 같은 답이 겹쳐 들어오지 않는다. */
+    static final String UNRESOLVED_NOTE_PREFIX = "확인 못 한 요청: ";
+    private static final Duration PENDING_STALE = TripChatInterpreter.LONGEST_CALL.plusSeconds(15);
     static final int MAX_HAIKU_PER_SESSION = 20;
     /** 수정·버튼 답을 반복해도 상태 JSON이 끝없이 커지지 않게 막는다. */
     static final int MAX_TURNS = 80;
@@ -144,7 +146,7 @@ public class TripChatService {
         if (free && (text == null || text.isEmpty())) {
             throw new BusinessException(ErrorCode.INVALID_INPUT, "답변을 입력해주세요.");
         }
-        if (free) generationPolicyService.checkTripChatAllowed(userId);
+        int abuseCount = free ? generationPolicyService.checkTripChatAllowed(userId) : 0;
 
         Prepared prepared = inTx(() -> {
             TripChatSession session = loadActive(userId, id);
@@ -162,14 +164,14 @@ public class TripChatService {
             }
             // 생성에 꼭 필요한 정보의 보완 답은 상한에서 뺀다. 막히면 대화를 끝낼 수 없다.
             if (st.getHaikuCalls() >= MAX_HAIKU_PER_SESSION && question.kind() != QuestionKind.FIX) {
-                st.getEvents().add(new DraftEvent(st.nextSeq(), Slot.EXTRAS, DraftField.NOTES, EventOp.ADD,
-                        TextNormalizer.cap(text, 60), FieldStatus.KNOWN, FieldSource.USER, text, null, null));
+                addNote(st, text, text);
                 recordTurn(st, question, text, "text", req.clientTurnId());
                 st.setOpenQuestion(null);
                 save(session, TripChatStatus.REVIEW, st);
                 return Prepared.done(view(session, st));
             }
-            String context = TripChatContext.build(DraftFolder.fold(st.getEvents()), st, question, today());
+            String context = TripChatContext.build(DraftFolder.fold(st.getEvents()), st, question, today(),
+                    abuseCount, GenerationPolicyService.MAX_TRIP_CHAT_ABUSE);
             st.setPending(new PendingTurn(req.clientTurnId(), text, now()));
             save(session, session.getStatus(), st);
             return Prepared.interpret(question, context, session.getState());
@@ -180,11 +182,13 @@ public class TripChatService {
         try {
             result = interpreter.interpret(prepared.context(), text);
         } catch (RuntimeException e) {
-            releasePending(userId, id, req.clientTurnId());
+            releasePending(userId, id, req.clientTurnId(),
+                    e instanceof TripChatInterpreter.InterpretException ie && ie.answeredButTruncated());
             log.warn("대화 턴 실패 session={} q={}:{} 원인={}", id, prepared.question().slot(),
                     prepared.question().kind(), e.getMessage());
             throw new BusinessException(ErrorCode.TRIP_CHAT_UNAVAILABLE);
         }
+        rejectIfNotUsable(userId, id, req.clientTurnId(), prepared.question(), result.interpretation());
         Matches matches = previewMatches(prepared, text, result.interpretation());
 
         try {
@@ -203,16 +207,34 @@ public class TripChatService {
                 TripChatInterpreter.Usage u = result.usage();
                 log.info("대화 턴 session={} q={}:{} haiku=1 in={} out={} cacheRead={} ms={} 결과={}", id,
                         prepared.question().slot(), prepared.question().kind(), u.inputTokens(), u.outputTokens(),
-                        u.cacheReadTokens(), u.millis(), result.interpretation().offTopic() ? "offTopic" : events.size() + "건");
+                        u.cacheReadTokens(), u.millis(), result.interpretation().isAnswer() ? events.size() + "건"
+                                : result.interpretation().kind());
                 return view(session, st);
             });
         } catch (RuntimeException e) {
             // 반영이 실패해도 처리 중 표시는 지워야 같은 답을 다시 보낼 수 있다.
-            releasePending(userId, id, req.clientTurnId());
+            releasePending(userId, id, req.clientTurnId(), true);
             if (e instanceof BusinessException be) throw be;
             log.warn("대화 턴 반영 실패 session={}: {}", id, e.getMessage());
             throw new BusinessException(ErrorCode.TRIP_CHAT_UNAVAILABLE);
         }
+    }
+
+    /** 욕설은 답을 남기지 않고 경고하다 기준 횟수에서 잠근다. 확인 화면의 여행 답 아닌 말은 다시 물을 질문이 없어 모델 문장을 돌려준다. */
+    private void rejectIfNotUsable(Long userId, UUID id, String clientTurnId, OpenQuestion question, Interpretation it) {
+        boolean onReview = question.kind() == QuestionKind.EXTRA || question.kind() == QuestionKind.FIX;
+        if (!it.isAbusive() && (it.isAnswer() || !onReview)) return;
+        releasePending(userId, id, clientTurnId, true);
+        String reply = NextStepPolicy.reply(it);
+        if (!it.isAbusive()) {
+            throw reply != null ? new BusinessException(ErrorCode.TRIP_CHAT_NOT_UNDERSTOOD, reply)
+                    : new BusinessException(ErrorCode.TRIP_CHAT_NOT_UNDERSTOOD);
+        }
+        int strikes = generationPolicyService.recordTripChatAbuse(userId, clientTurnId);
+        log.info("대화 부적절 표현 session={} user={} 누적={}", id, userId, strikes);
+        if (strikes >= GenerationPolicyService.MAX_TRIP_CHAT_ABUSE) throw new BusinessException(ErrorCode.TRIP_CHAT_LOCKED);
+        throw reply != null ? new BusinessException(ErrorCode.TRIP_CHAT_INAPPROPRIATE, reply)
+                : new BusinessException(ErrorCode.TRIP_CHAT_INAPPROPRIATE);
     }
 
     public TripChatResponse edit(Long userId, UUID id, long expectedVersion, Slot slot) {
@@ -296,7 +318,7 @@ public class TripChatService {
             activeUserGuard.requireActive(userId);
             jobId = travelPlannerService.startGeneration(c.request(), userId).jobId();
         } catch (RuntimeException e) {
-            releasePending(userId, id, CONFIRM_TURN);
+            releasePending(userId, id, CONFIRM_TURN, false);
             throw e;
         }
         return inTx(() -> {
@@ -327,7 +349,7 @@ public class TripChatService {
 
     /** 수정·보완 질문은 새 답에 그 항목 정보가 있을 때만 기존 값을 지운다. 무관한 답으로 원래 값이 사라지면 안 된다. */
     private static List<DraftEvent> appendEvents(ChatState st, OpenQuestion q, String text, Interpretation it) {
-        if (it.offTopic()) return List.of();
+        if (!it.isAnswer()) return List.of();
         AtomicLong probeSeq = new AtomicLong();
         List<DraftEvent> probe = UpdateSanitizer.toEvents(it, q.slot(), text, probeSeq::incrementAndGet);
         if (q.kind() == QuestionKind.EDIT && probe.stream().anyMatch(e -> e.slot() == q.slot())) {
@@ -381,6 +403,10 @@ public class TripChatService {
         NextStepPolicy.Decision d = NextStepPolicy.decide(draft, st.getAskedKeys(), answered, it, answerKind,
                 datesTouched, today());
         st.setResume(null);
+        if (NextStepPolicy.conflictUnasked(it, d)) {
+            String answer = st.getTurns().getLast().answer();
+            addNote(st, unresolvedNote(it, answer), answer);
+        }
         if (d.review()) {
             st.setOpenQuestion(null);
             save(session, TripChatStatus.REVIEW, st);
@@ -388,6 +414,17 @@ public class TripChatService {
             open(st, d.question());
             save(session, TripChatStatus.ASKING, st);
         }
+    }
+
+    /** 같은 답의 다른 조건은 이미 기록됐으므로 메모에는 부딪힌 내용만 남긴다. */
+    private static String unresolvedNote(Interpretation it, String answer) {
+        String title = it.followUp().title();
+        return UNRESOLVED_NOTE_PREFIX + (title == null || title.isBlank() ? answer : title.strip());
+    }
+
+    private static void addNote(ChatState st, String value, String raw) {
+        st.getEvents().add(new DraftEvent(st.nextSeq(), Slot.EXTRAS, DraftField.NOTES, EventOp.ADD,
+                TextNormalizer.cap(value, 60), FieldStatus.KNOWN, FieldSource.USER, raw, null, null));
     }
 
     private Optional<String> closedDestination(Draft draft) {
@@ -466,7 +503,8 @@ public class TripChatService {
     private static String back(ChatState st, OpenQuestion q) {
         if (q == null) return null;
         if (q.kind() == QuestionKind.EDIT) return "CANCEL";
-        if (q.kind() == QuestionKind.FOLLOW_UP) return q.slot().name();
+        // 기타 항목을 다시 열면 알레르기·예산 같은 다른 조건까지 함께 지워진다.
+        if (q.kind() == QuestionKind.FOLLOW_UP) return q.slot() == Slot.EXTRAS ? null : q.slot().name();
         for (int i = st.getTurns().size() - 1; i >= 0; i--) {
             Slot slot = st.getTurns().get(i).slot();
             if (slot != Slot.EXTRAS) return slot.name();
@@ -489,8 +527,12 @@ public class TripChatService {
         return session;
     }
 
-    /** best-effort. 남은 표시는 PENDING_STALE이 지나면 무시된다. */
-    private void releasePending(Long userId, UUID id, String clientTurnId) {
+    /**
+     * best-effort. 남은 표시는 PENDING_STALE이 지나면 무시된다.
+     *
+     * @param haikuAnswered 해석 응답을 받았으면 true. 답을 남기지 않는 턴도 세션당 호출 상한에 넣어야 상한이 듣는다.
+     */
+    private void releasePending(Long userId, UUID id, String clientTurnId, boolean haikuAnswered) {
         try {
             inTx(() -> {
                 repository.findByIdAndUserId(id, userId).ifPresent(session -> {
@@ -499,6 +541,7 @@ public class TripChatService {
                         return;
                     }
                     st.setPending(null);
+                    if (haikuAnswered) st.setHaikuCalls(st.getHaikuCalls() + 1);
                     save(session, session.getStatus(), st);
                 });
                 return null;
@@ -540,7 +583,7 @@ public class TripChatService {
     private ChatState read(TripChatSession session) {
         try {
             ChatState st = objectMapper.readValue(session.getState(), ChatState.class);
-            return st.getSchemaVersion() == ChatState.SCHEMA_VERSION ? st : null;
+            return st.migrate() ? st : null;
         } catch (JsonProcessingException e) {
             log.warn("대화 상태 읽기 실패 session={}: {}", session.getId(), e.getMessage());
             return null;
