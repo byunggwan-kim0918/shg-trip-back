@@ -16,8 +16,8 @@ class QualityNoticesTest {
     private static final LocalDate START = LocalDate.of(2026, 11, 20);
 
     @Test
-    @DisplayName("HARD·CORE만 일차를 앞에 둔 안내가 되고, 여행 전체 위반은 날짜별 안내 뒤에 온다")
-    void coreAndHardBecomeDayNotices() {
+    @DisplayName("고칠 수 있는 위반만 일차를 앞에 둔 안내가 되고, 여행 전체 위반은 날짜별 안내 뒤에 온다")
+    void fixableViolationsBecomeDayNotices() {
         Verdict verdict = verdict(
                 new Violation(Rule.MEAL_KIND_REPEATED, 0, "같은 종류 shellfish 4끼(상한 3)",
                         List.of("청해 조개구이", "황금조개구이", "조개마을", "청사포 조개")),
@@ -50,7 +50,7 @@ class QualityNoticesTest {
     void placeNoticesQuoteEvidence() {
         Verdict verdict = verdict(
                 new Violation(Rule.ADDRESS_REGION_MISMATCH, 4, "day4 주소와 지역 불일치(타타스베이글)", List.of("타타스베이글")),
-                new Violation(Rule.REQUIRED_EXPERIENCE_MISSING, 0, "필수 경험 장소 빠짐(광안리해수욕장)",
+                new Violation(Rule.WANT_MISSING, 0, "필수 경험 장소 빠짐(광안리해수욕장)",
                         List.of("광안리해수욕장")),
                 new Violation(Rule.CLOSED_DAY, 1, "day1 휴무일 방문(국립부산과학관)", List.of("국립부산과학관")));
 

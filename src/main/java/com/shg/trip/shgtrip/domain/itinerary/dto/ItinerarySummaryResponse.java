@@ -22,8 +22,6 @@ public record ItinerarySummaryResponse(
         String coverImageSourceUrl,
         List<String> tags,
         String status,
-        /** OK·NEEDS_ADJUSTMENT */
-        String qualityStatus,
         OffsetDateTime createdAt
 ) {
     /**
@@ -45,7 +43,6 @@ public record ItinerarySummaryResponse(
                 hasImage ? cover.getImageSourceUrl() : null,
                 itinerary.getTags(),
                 itinerary.getStatus().name(),
-                itinerary.getQualityStatus().name(),
                 itinerary.getCreatedAt()
         );
     }

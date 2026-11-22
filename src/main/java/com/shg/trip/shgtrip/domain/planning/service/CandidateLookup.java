@@ -35,6 +35,12 @@ final class CandidateLookup {
         return found != null ? found : byName.get(name(step));
     }
 
+    /** 저장 관문은 장소 id가 없는 스텝을 버리므로, 생성 중 판정도 id로만 찾아야 저장 뒤 판정과 같다. */
+    PlaceCandidate byPlaceId(StepData step) {
+        Long placeId = step.place() == null ? null : step.place().placeId();
+        return placeId == null ? null : byId.get(placeId);
+    }
+
     CandidatePolicy.Role role(StepData step) {
         PlaceCandidate c = of(step);
         if (c != null) return CandidatePolicy.roleOf(c);

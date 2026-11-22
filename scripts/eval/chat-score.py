@@ -14,6 +14,8 @@ expect 키
   askOrDrop: 되묻거나, 아니면 이 낱말이 생성 요청에 남지 않아야 한다
   rejected, locked: 거절된 답 수, 대화 잠김 여부
   notRequired, notAvoided: 꼭 갈 곳(꼭 할 것·고른 장소)·피할 장소 이름 목록에 없어야 할 이름
+  askedIncludes: 질문 제목이나 위 한 줄 가운데 어딘가에 있어야 하는 말(추천·되묻기·대신 정하기)
+  cityIn: 생성 요청의 여행지가 이 가운데 하나여야 한다
 정답은 --expect(기본 scripts/eval/chat-conversations.jsonl)에서 읽어, 정답을 고친 뒤 예전 결과도 같은 기준으로 다시 잰다.
 고른 장소 이름은 로컬 trip_prodcopy에서 읽는다.
 """
@@ -83,6 +85,13 @@ def score_behavior(row, exp, out):
     for a in row.get("asked") or []:
         if a.get("lead") and PROMISE.search(a["lead"]):
             out["wrong"].append("약속 문장: " + a["lead"])
+    spoken = " ".join((a.get("title") or "") + " " + (a.get("lead") or "") for a in row.get("asked") or [])
+    for w in exp.get("askedIncludes", []):
+        if w not in spoken:
+            out["wrong"].append("묻지 않음: " + w)
+    req = row.get("request") or {}
+    if exp.get("cityIn") and req.get("destination") not in exp["cityIn"]:
+        out["wrong"].append("여행지 %s∉%s" % (req.get("destination"), "·".join(exp["cityIn"])))
 
 
 def score_request(row, exp):
@@ -195,8 +204,10 @@ def cmd_itinerary(outs, expects):
         print("==", out)
         for r in rows:
             v = r["violations"]
-            wm = [x["message"] for x in v if x["code"] == "WANT_MISSING"]
-            fa = [x["code"] for x in v if x.get("severity") == "FATAL"]
+            # 판정 v6 전 기록은 code·FATAL로 남아 있다.
+            wm = [x["message"] for x in v if x.get("rule", x.get("code"))
+                  in ("WANT_MISSING", "WANT_FOOD_MISSING", "WANT_NOT_IN_DATA")]
+            fa = [x.get("rule", x.get("code")) for x in v if x.get("severity") in ("HARD", "FATAL")]
             names = " ".join(s["name"] for s in r["steps"])
             left = [w for w in expects.get(r["id"], {}).get("withdrawn", []) if norm(w) in norm(names)]
             trace = as_trace(r)
@@ -204,9 +215,9 @@ def cmd_itinerary(outs, expects):
             for c, hits in found.items():
                 defects[c] += len(hits)
             want_missing, fatal, withdrawn_in = want_missing + len(wm), fatal + len(fa), withdrawn_in + len(left)
-            flags = wm + (["치명 " + ",".join(fa)] if fa else []) + (["철회 반영 " + ",".join(left)] if left else [])
+            flags = wm + (["지킬 수 없음 " + ",".join(fa)] if fa else []) + (["철회 반영 " + ",".join(left)] if left else [])
             print(f"  {r['id']:8} {'; '.join(flags) or '-'}")
-        print(f"  {len(rows)}건 · 바란 것 누락 {want_missing} · 치명 {fatal} · 철회 반영 {withdrawn_in}"
+        print(f"  {len(rows)}건 · 바란 것 누락 {want_missing} · 지킬 수 없음 {fatal} · 철회 반영 {withdrawn_in}"
               f" · 여행자 결함 {sum(defects.values())} {dict(defects.most_common(6))}")
 
 

@@ -111,7 +111,7 @@ class GenerationPolicyServiceTest {
     }
 
     @Test
-    @DisplayName("조정 필요 생성은 쿼터를 올리지 않고 24시간 미차감 창을 시드한 뒤 INCR, 실패 횟수는 지운다")
+    @DisplayName("판정 거부로 끝난 생성은 쿼터를 올리지 않고 24시간 미차감 창을 시드한 뒤 INCR, 실패 횟수는 지운다")
     void recordsUnbilledWithoutQuota() {
         when(valueOps.increment(UNBILLED_KEY)).thenReturn(1L);
         assertThat(service.recordUnbilled(USER)).isFalse();

@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.EnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.EnrichmentResult;
@@ -128,13 +129,13 @@ public class TripGenerationExecutor {
 
         List<StepData> steps = PartyCosts.scale(DraftItineraryPlanner.withReasonNotes(result), input.partySize());
         markCandidateAppearance(result.candidates());
-        ItineraryRules.Context rules = ruleContext(base, steps, result.candidates(), request, days);
+        ItineraryRules.Context rules = planned.built().context();
         List<String> fixed = new ArrayList<>(prepared.notices());
         planned.built().tripNotes().forEach(n -> {
             if (!fixed.contains(n)) fixed.add(n);
         });
         QualityGate.PlanContext context = new QualityGate.PlanContext(rules, fixed);
-        ItineraryRules.Verdict preview = previewQuality(steps, result.candidates(), rules);
+        ItineraryRules.Verdict preview = previewQuality(steps, result.candidates(), rules, planned.built().facts());
         if (cancellationRegistry.isCancelled(jobId)) return;
         sendProgress(emitter, "VALIDATING", 80, "일정을 검증하고 있습니다...");
         if (steps.isEmpty()) {
@@ -185,16 +186,11 @@ public class TripGenerationExecutor {
                 null);
 
         resultStore.save(jobId, itinerary.getId(), userId);
-        if (itinerary.getQualityStatus() == Itinerary.QualityStatus.NEEDS_ADJUSTMENT
-                || saved.verdict() != null && saved.verdict().core()) {
-            generationPolicyService.recordUnbilled(userId);
-        } else {
-            generationPolicyService.recordSuccess(userId);
-        }
+        generationPolicyService.recordSuccess(userId);
         sendProgress(emitter, "COMPLETE", 100, "일정 생성이 완료되었습니다.");
         sendCompleteKeepOpen(emitter, itinerary.getId());
-        log.info("일정 생성 완료: jobId={}, itineraryId={}, days={}, quality={}, 편집={}건, sonnet in/out={}/{}, {}ms",
-                jobId, itinerary.getId(), days, itinerary.getQualityStatus(), planned.edits().size(),
+        log.info("일정 생성 완료: jobId={}, itineraryId={}, days={}, 편집={}건, sonnet in/out={}/{}, {}ms",
+                jobId, itinerary.getId(), days, planned.edits().size(),
                 planned.inputTokens(), planned.outputTokens(), elapsedMs(started));
 
         // expectedTitle은 실제로 저장한 임시 제목이어야 한다. 다르면 0행 업데이트가 되어 제목이 임시값으로 남는다.
@@ -214,53 +210,13 @@ public class TripGenerationExecutor {
         }
     }
 
-    /**
-     * 출발 허브 기한은 짓기 단계가 허브 도착을 맞춘 기준과 같아야 한다. 다르면 시각을 지킨 일정이 출발 시각 초과로 거부된다.
-     * 꼭 할 경험은 일정에서 그 경험을 채운 장소로 판정해, 사용자가 편집으로 그 장소를 빼면 다시 알린다.
-     */
-    private static ItineraryRules.Context ruleContext(DraftItineraryPlanner.Request base, List<StepData> steps,
-                                                      List<PlaceCandidate> candidates,
-                                                      ItineraryGenerateRequest request, int days) {
-        VectorEnrichedInput input = base.input();
-        Integer deadline = null;
-        if (base.departure() != null && !steps.isEmpty()) {
-            StepData last = steps.get(steps.size() - 1);
-            PlaceCandidate hub = candidateOf(last, candidates);
-            if (hub != null && CandidatePolicy.roleOf(hub) == CandidatePolicy.Role.TRANSIT) {
-                deadline = base.departure().getHour() * 60 + base.departure().getMinute()
-                        - TripHubs.departureBuffer(hub, base.country());
-            }
-        }
-        Map<Long, String> required = new LinkedHashMap<>();
-        for (ItineraryGenerateRequest.RequiredExperience x : request.requiredExperiences() == null
-                ? List.<ItineraryGenerateRequest.RequiredExperience>of() : request.requiredExperiences()) {
-            String area = DraftPlaceResolver.key(x.areaKeyword());
-            if (area.length() < 2) continue;
-            // 같은 지역 낱말의 식당("광안리 횟집")을 대안으로 바꿨다고 경험을 뺀 것으로 보지 않는다.
-            steps.stream().filter(s -> s.place().placeId() != null)
-                    .filter(s -> {
-                        PlaceCandidate c = candidateOf(s, candidates);
-                        return c != null && CandidatePolicy.roleOf(c).isVisit();
-                    })
-                    .filter(s -> DraftPlaceResolver.key(s.place().name()).contains(area)
-                            || DraftPlaceResolver.key(s.place().nameKo()).contains(area))
-                    .findFirst().ifPresent(s -> required.putIfAbsent(s.place().placeId(), x.text()));
-        }
-        return new ItineraryRules.Context(input.pace(), input.transportPref(), input.startDate(), days, deadline,
-                required);
-    }
-
-    private static PlaceCandidate candidateOf(StepData step, List<PlaceCandidate> candidates) {
-        Long id = step.place() == null ? null : step.place().placeId();
-        return id == null ? null : candidates.stream().filter(c -> id.equals(c.placeId())).findFirst().orElse(null);
-    }
-
     /** 저장 전 안내용 판정. 저장 여부는 저장 관문이 실제 엔티티로 다시 정하므로, 실패해도 생성은 진행한다. */
     private static ItineraryRules.Verdict previewQuality(List<StepData> steps, List<PlaceCandidate> candidates,
-                                                         ItineraryRules.Context ctx) {
+                                                         ItineraryRules.Context ctx,
+                                                         Map<Long, PlaceFactsReader.PlaceFact> facts) {
         try {
-            ItineraryRules.Verdict quality = RULES.evaluate(steps, candidates, ctx);
-            log.info("품질 판정 v{}: hard={} core={} {}", quality.version(), quality.hard(), quality.core(),
+            ItineraryRules.Verdict quality = RULES.evaluate(steps, candidates, ctx, facts);
+            log.info("품질 판정 v{}: hard={} {}", quality.version(), quality.hard(),
                     quality.violations().stream().map(ItineraryRules.Violation::message).toList());
             return quality;
         } catch (RuntimeException e) {

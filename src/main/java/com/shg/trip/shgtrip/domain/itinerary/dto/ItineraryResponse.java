@@ -24,8 +24,6 @@ public record ItineraryResponse(
         String coverImageSourceUrl,
         List<String> tags,
         String status,
-        /** OK·NEEDS_ADJUSTMENT. 핵심 품질 기준에 못 미쳐 편집이 필요하면 NEEDS_ADJUSTMENT다. 공유 응답은 null이다. */
-        String qualityStatus,
         /** 해소하지 못한 품질 문제 안내. 편집하면 현재 일정 기준으로 다시 만든다. 없거나 공유 응답이면 빈 목록이다. */
         List<String> qualityNotices,
         List<ItineraryStepResponse> steps
@@ -49,7 +47,6 @@ public record ItineraryResponse(
                 hasImage ? cover.getImageSourceUrl() : null,
                 itinerary.getTags(),
                 itinerary.getStatus().name(),
-                itinerary.getQualityStatus().name(),
                 itinerary.getQualityNotices() != null ? itinerary.getQualityNotices() : List.of(),
                 // reorder는 stepOrder 필드만 바꾸므로 배열 순서를 실제 순서에 맞춰 다시 정렬한다.
                 itinerary.getSteps().stream()
@@ -60,9 +57,9 @@ public record ItineraryResponse(
         );
     }
 
-    /** 공유 링크는 누구나 열 수 있어 소유자용 품질 상태와 안내(사용자가 적은 장소 이름 포함)를 뺀다. */
+    /** 공유 링크는 누구나 열 수 있어 소유자용 품질 안내(사용자가 적은 장소 이름 포함)를 뺀다. */
     public ItineraryResponse forSharing() {
         return new ItineraryResponse(id, title, destination, startDate, endDate, totalBudget, estimatedCost, coverImage,
-                coverImageCredit, coverImageLicense, coverImageSourceUrl, tags, status, null, List.of(), steps);
+                coverImageCredit, coverImageLicense, coverImageSourceUrl, tags, status, List.of(), steps);
     }
 }

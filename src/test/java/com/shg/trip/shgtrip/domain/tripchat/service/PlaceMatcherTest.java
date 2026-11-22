@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.tripchat.service;
 
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.dto.PlaceResponse;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.place.service.PlaceService;
 import com.shg.trip.shgtrip.domain.tripchat.model.DraftField;
 import com.shg.trip.shgtrip.domain.tripchat.model.PlaceMatch;
@@ -28,17 +29,17 @@ class PlaceMatcherTest {
 
     private static PlaceResponse place(long id, String name, String address, String category) {
         return new PlaceResponse(id, name, address, null, null, category, null, null, null, null, null, null, null, null,
-                null, null, null);
+                null, null, null, false);
     }
 
     private static PlaceResponse inRegion(long id, String name, String address, String region, String category) {
         return new PlaceResponse(id, name, address, null, null, category, null, null, null, null, null, region, null,
-                null, null, null, null);
+                null, null, null, null, false);
     }
 
     private static PlaceResponse overseas(long id, String name, String nameKo, String region, String category) {
         return new PlaceResponse(id, name, "東京都", null, null, category, null, null, null, null, null, region, null,
-                nameKo, null, null, null);
+                nameKo, null, null, null, false);
     }
 
     @Test
@@ -51,7 +52,7 @@ class PlaceMatcherTest {
         when(placeService.searchPlaces(eq("파라다이스 호텔"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
                 place(3, "파라다이스 호텔 부산", "부산광역시 해운대구", "Travel and Transportation > Lodging > Hotel"))));
 
-        Map<String, PlaceMatch> matches = new PlaceMatcher(placeService, Destinations.fromClasspath()).match(Events.of()
+        Map<String, PlaceMatch> matches = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class)).match(Events.of()
                 .user(DraftField.DESTINATION, "부산")
                 .user(DraftField.MUST_VISIT, "블루라인파크")
                 .user(DraftField.LODGING_STATE, "booked")
@@ -74,7 +75,7 @@ class PlaceMatcherTest {
         String before = PlaceMatcher.signature(trip.draft());
 
         Events avoiding = trip.user(DraftField.AVOID_PLACES, "감천문화마을");
-        Map<String, PlaceMatch> matches = new PlaceMatcher(placeService, Destinations.fromClasspath())
+        Map<String, PlaceMatch> matches = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class))
                 .match(avoiding.draft());
 
         assertThat(matches.get(PlaceMatcher.key(DraftField.AVOID_PLACES, "감천문화마을")).placeId()).isEqualTo(4L);
@@ -96,7 +97,7 @@ class PlaceMatcherTest {
                 place(10, "해운대해수욕장", "부산광역시 해운대구 우동", "Landmarks and Outdoors > Beach")));
         when(placeService.searchPlacesInRegions(eq("할매국밥"), eq(Set.of("Busan")), anyInt())).thenReturn(List.of(
                 place(8, "할매국밥", "부산광역시 동구 범일동", "Dining and Drinking > Restaurant")));
-        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class));
 
         assertThat(matcher.find("남포동", "부산", true)).isEmpty();
         assertThat(matcher.find("남포동", "부산", false)).isPresent();
@@ -114,7 +115,7 @@ class PlaceMatcherTest {
                 inRegion(1655991, "용지봉", "대구광역시 수성구 들안로 9", "Daegu",
                         "Dining and Drinking > Restaurant > Korean Restaurant"),
                 inRegion(1705804, "용지봉 (634m)", "수성구 범물동 산362", "Daegu", "Landmarks and Outdoors > Mountain")));
-        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class));
 
         assertThat(matcher.find("용지봉", "대구", true)).get().extracting(PlaceMatch::placeId).isEqualTo(1705804L);
         assertThat(matcher.find("용지봉", "대구", false)).get().extracting(PlaceMatch::placeId).isEqualTo(1655991L);
@@ -124,7 +125,7 @@ class PlaceMatcherTest {
     @Test
     @DisplayName("여행지 region은 여러 도시를 합치고 해외는 묶음 전체를 넣으며, 모르는 여행지면 비어 있다")
     void destinationRegions() {
-        PlaceMatcher matcher = new PlaceMatcher(mock(PlaceService.class), Destinations.fromClasspath());
+        PlaceMatcher matcher = new PlaceMatcher(mock(PlaceService.class), Destinations.fromClasspath(), mock(PlaceFactsReader.class));
 
         assertThat(matcher.destinationRegions("강릉 갔다가 경주")).contains("Gangneung", "Gyeongju");
         assertThat(matcher.destinationRegions("부산, 교토")).contains("Busan", "Osaka", "Kyoto", "Nara");
@@ -141,7 +142,7 @@ class PlaceMatcherTest {
                 overseas(2, "浅草寺", "센소지", "Tokyo", "Spiritual Center > Buddhist Temple"))));
         when(placeService.searchPlaces(eq("도다이지"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
                 overseas(3, "東大寺", "도다이지", "Nara", "Spiritual Center > Buddhist Temple"))));
-        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class));
 
         PlaceMatch sensoji = matcher.find("센소지", "도쿄").orElseThrow();
         assertThat(sensoji.placeId()).isEqualTo(2L);
@@ -166,7 +167,7 @@ class PlaceMatcherTest {
         PlaceService placeService = mock(PlaceService.class);
         when(placeService.searchPlaces(eq("해운대 그랜드호텔"), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
                 place(7, "해운대 그랜드호텔", "부산광역시 해운대구 해운대해변로 217", "Travel and Transportation > Lodging"))));
-        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class));
 
         assertThat(matcher.find("해운대 그랜드호텔", "서울, 부산")).isPresent();
         assertThat(matcher.find("해운대 그랜드호텔", "서울이랑 부산")).isPresent();
@@ -182,7 +183,7 @@ class PlaceMatcherTest {
     @DisplayName("야시장·박물관처럼 일반 명사만 남는 이름은 조회하지 않는다")
     void genericNamesAreNotSearched() {
         PlaceService placeService = mock(PlaceService.class);
-        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class));
 
         assertThat(matcher.find("야시장", "부산")).isEmpty();
         assertThat(matcher.find("박물관", "부산")).isEmpty();
@@ -200,7 +201,7 @@ class PlaceMatcherTest {
                 place(2, "경포해변 중앙광장", "강원특별자치도 강릉시 강문동", "Landmarks and Outdoors > Plaza")));
         when(placeService.searchPlacesInRegions(eq("경포해수욕장"), eq(Set.of("Gangneung")), anyInt())).thenReturn(List.of(
                 place(1, "경포해수욕장", "강원특별자치도 강릉시 강문동", "Landmarks and Outdoors > Beach")));
-        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class));
 
         assertThat(matcher.find("경포해변", "강릉", true)).get().extracting(PlaceMatch::placeId).isEqualTo(1L);
     }
@@ -214,7 +215,7 @@ class PlaceMatcherTest {
                 place(3, "송정해변", "부산광역시 해운대구 송정동", "Dining and Drinking > Cafe")));
         when(placeService.searchPlacesInRegions(eq("송정해수욕장"), eq(Set.of("Busan")), anyInt())).thenReturn(List.of(
                 place(4, "송정해수욕장", "부산광역시 해운대구 송정동", "Landmarks and Outdoors > Beach")));
-        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath());
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class));
 
         assertThat(matcher.find("송정해변", "부산", true)).get().extracting(PlaceMatch::placeId).isEqualTo(4L);
         assertThat(matcher.find("송정해변", "부산", false)).get().extracting(PlaceMatch::placeId).isEqualTo(4L);

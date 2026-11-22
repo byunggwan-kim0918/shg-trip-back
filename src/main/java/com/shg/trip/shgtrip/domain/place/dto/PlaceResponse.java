@@ -23,7 +23,9 @@ public record PlaceResponse(
         /** 사진 작성자·라이선스·원본 페이지. 표시 의무가 없는 사진(TourAPI)은 null이다. */
         String imageCredit,
         String imageLicense,
-        String imageSourceUrl
+        String imageSourceUrl,
+        /** 영업시간이 공식 출처(관광공사)에서 왔는지. 아니면 화면이 미확인으로 보인다. */
+        boolean hoursConfirmed
 ) {
     public static PlaceResponse from(Place place) {
         return new PlaceResponse(
@@ -43,7 +45,8 @@ public record PlaceResponse(
                 place.getNameKo(),
                 place.getImageCredit(),
                 place.getImageLicense(),
-                place.getImageSourceUrl()
+                place.getImageSourceUrl(),
+                "official".equals(place.getOpeningHoursSource()) && place.getOpeningHours() != null
         );
     }
 }

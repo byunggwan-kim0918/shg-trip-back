@@ -18,15 +18,19 @@ public final class OpeningCheck {
         Integer start = ScheduleTimes.toMinutesOrNull(startTime);
         Integer end = ScheduleTimes.toMinutesOrNull(endTime);
         if (!keepsHours(place) || date == null || start == null || end == null
-                || OpeningHoursText.rangesFor(place.getOpeningHours(), date.getDayOfWeek()) == null) {
+                || OpeningHoursText.rangesFor(hoursOf(place), date.getDayOfWeek()) == null) {
             return null;
         }
-        return OpeningHoursText.isOpenDuring(place.getOpeningHours(), date.getDayOfWeek(), start, end);
+        return OpeningHoursText.isOpenDuring(hoursOf(place), date.getDayOfWeek(), start, end);
     }
 
     public static boolean closedOn(Place place, LocalDate date) {
         return keepsHours(place) && date != null
-                && OpeningHoursText.isClosedOnDay(place.getOpeningHours(), date.getDayOfWeek());
+                && OpeningHoursText.isClosedOnDay(hoursOf(place), date.getDayOfWeek());
+    }
+
+    private static String hoursOf(Place place) {
+        return DayTiming.openingHoursOf(place.getName(), place.getCategory(), place.getOpeningHours());
     }
 
     private static boolean keepsHours(Place place) {

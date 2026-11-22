@@ -16,7 +16,6 @@ import java.util.List;
  * @param alreadyOnDay       대안 장소가 이미 다른 스텝으로 들어 있는 날. 없으면 null
  * @param resolvedNotices    바꾸면 사라지는 안내
  * @param newNotices         바꾸면 새로 생기는 안내
- * @param resolvesAdjustment 지금 조정 필요인 일정이 바꾸면 기준을 채우는지
  */
 public record AlternativePreviewResponse(
         LegChange incoming,
@@ -27,8 +26,7 @@ public record AlternativePreviewResponse(
         boolean closedThatDay,
         Integer alreadyOnDay,
         List<String> resolvedNotices,
-        List<String> newNotices,
-        boolean resolvesAdjustment
+        List<String> newNotices
 ) {
     public record Leg(String mode, Integer durationMin, BigDecimal distanceKm, BigDecimal cost) {
 

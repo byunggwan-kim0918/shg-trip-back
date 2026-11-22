@@ -10,6 +10,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.ItineraryData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
+import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.service.ai.DraftCallGenerator;
 import com.shg.trip.shgtrip.domain.planning.service.ai.OptimizedClaudeAIService;
@@ -73,6 +74,7 @@ class TripGenerationExecutorTest {
     private VectorEnrichedInput input;
     private DraftItineraryPlanner.Request base;
     private DraftCallGenerator.Drafted drafted;
+    private TripPlanner.Planned defaultPlanned;
 
     @BeforeEach
     void setUp() {
@@ -105,13 +107,14 @@ class TripGenerationExecutorTest {
         when(requestFactory.prepare(any(), any())).thenReturn(new DraftRequestFactory.Prepared(base, input,
                 List.of("고른 장소 중 1곳은 찾을 수 없어 일정에서 뺐어요.")));
         when(tripPlanner.draft(any(), anyString())).thenReturn(drafted);
-        when(tripPlanner.finish(any(), anyString(), any())).thenReturn(planned(defaultSteps()));
+        defaultPlanned = planned(defaultSteps());
+        when(tripPlanner.finish(any(), anyString(), any())).thenReturn(defaultPlanned);
     }
 
     @Test
     @DisplayName("성공하면 화면이 아는 단계 이름 순서로 진행을 보내고 저장 뒤 complete를 보낸 채 이야기를 이어 간다")
     void success() {
-        Itinerary saved = savedItinerary(Itinerary.QualityStatus.OK);
+        Itinerary saved = savedItinerary();
         when(saveHelper.save(any(), any(), anyLong(), any(), any()))
                 .thenReturn(new ItinerarySaveHelper.Saved(saved, null));
 
@@ -133,9 +136,9 @@ class TripGenerationExecutorTest {
     }
 
     @Test
-    @DisplayName("저장할 일정은 인원수만큼 1인 비용을 곱하고, 출발 허브 기한은 짓기 단계와 같은 허브 여유로 정한다")
-    void savedDataUsesPartyCostsAndHubDeadline() {
-        Itinerary saved = savedItinerary(Itinerary.QualityStatus.OK);
+    @DisplayName("저장할 일정은 인원수만큼 1인 비용을 곱하고, 판정 입력은 짓기 단계가 만든 것을 그대로 쓴다")
+    void savedDataUsesPartyCostsAndPlannerContext() {
+        Itinerary saved = savedItinerary();
         when(saveHelper.save(any(), any(), anyLong(), any(), any()))
                 .thenReturn(new ItinerarySaveHelper.Saved(saved, null));
 
@@ -147,8 +150,7 @@ class TripGenerationExecutorTest {
         StepData meal = data.getValue().steps().get(0);
         assertThat(meal.estimatedCost()).isEqualByComparingTo("30000");
         assertThat(meal.notes()).isEqualTo("바다를 보며 먹을 수 있어요");
-        // 15:00 출발, 역은 20분 전까지 닿는다
-        assertThat(context.getValue().rules().lastDayHubDeadline()).isEqualTo(14 * 60 + 40);
+        assertThat(context.getValue().rules()).isSameAs(defaultPlanned.built().context());
         assertThat(context.getValue().fixedNotices()).contains("고른 장소 중 1곳은 찾을 수 없어 일정에서 뺐어요.",
                 "요청하신 '야경'은(는) 일정에 넣지 못했어요.");
     }
@@ -226,19 +228,6 @@ class TripGenerationExecutorTest {
     }
 
     @Test
-    @DisplayName("조정 필요로 저장된 일정은 생성 횟수를 쓰지 않는다")
-    void needsAdjustmentIsUnbilled() {
-        Itinerary saved = savedItinerary(Itinerary.QualityStatus.NEEDS_ADJUSTMENT);
-        when(saveHelper.save(any(), any(), anyLong(), any(), any()))
-                .thenReturn(new ItinerarySaveHelper.Saved(saved, null));
-
-        executor.execute("job", request, 1L, stream);
-
-        verify(generationPolicyService).recordUnbilled(1L);
-        verify(generationPolicyService, never()).recordSuccess(anyLong());
-    }
-
-    @Test
     @DisplayName("짓기 결과에 스텝이 없으면 빈 일정을 저장하지 않고 장소 부족으로 끝낸다")
     void emptyResult() {
         when(tripPlanner.finish(any(), anyString(), any())).thenReturn(planned(List.of()));
@@ -294,8 +283,10 @@ class TripGenerationExecutorTest {
                 candidate(2, 12L, "부산역", "Travel and Transportation > Rail Station", "TRANSIT"));
         DraftItineraryPlanner.Result result = new DraftItineraryPlanner.Result(steps, candidates, List.of(), List.of(),
                 List.of(), Map.of(11L, "바다를 보며 먹을 수 있어요"));
-        TripPlanner.Built built = new TripPlanner.Built(null, result, List.of(), Map.of(),
-                List.of("요청하신 '야경'은(는) 일정에 넣지 못했어요."));
+        TripSkeletonPlanner.Skeleton skeleton = new TripSkeletonPlanner.Skeleton(base, List.of(), List.of(),
+                new TripConditions(List.of(), Map.of(), List.of(), false, "any", null, LocalTime.of(15, 0), "normal"));
+        TripPlanner.Built built = new TripPlanner.Built(skeleton, result, TripPlanner.ruleContext(skeleton, result),
+                Map.of(), List.of(), Map.of(), List.of("요청하신 '야경'은(는) 일정에 넣지 못했어요."));
         return new TripPlanner.Planned(drafted.plan(), List.of(), List.of(), built, 100, 50);
     }
 
@@ -317,10 +308,9 @@ class TripGenerationExecutorTest {
                 null, null, null, role, null, false, null);
     }
 
-    private static Itinerary savedItinerary(Itinerary.QualityStatus status) {
+    private static Itinerary savedItinerary() {
         Itinerary itinerary = mock(Itinerary.class);
         when(itinerary.getId()).thenReturn(7L);
-        when(itinerary.getQualityStatus()).thenReturn(status);
         return itinerary;
     }
 

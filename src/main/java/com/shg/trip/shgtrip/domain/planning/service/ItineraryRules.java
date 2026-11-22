@@ -1,8 +1,10 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
+import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 
 import java.time.DayOfWeek;
@@ -24,39 +26,49 @@ import static com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning.*;
 
 /**
  * 스텝과 후보 사실만 보고 일정이 지켜야 할 규칙의 위반을 판정한다. 고치지 않는다.
- * 생성 직후 기록·재채점·저장 관문이 같은 판정을 써야 기준이 갈라지지 않는다.
+ * 생성 중 편집 판단·재생 채점·저장 관문·편집 재판정이 같은 판정을 써야 기준이 갈라지지 않는다.
  */
 public final class ItineraryRules {
 
     /** 규칙이나 등급이 바뀌면 올린다. 다른 버전의 판정 기록끼리 비교하지 않기 위해서다. */
-    public static final int VERSION = 5;
+    public static final int VERSION = 6;
 
     public enum Severity {
-        /** 일정을 쓸 수 없다. */
+        /** 지킬 수 없는 일정이다. 저장하지 않는다. */
         HARD,
-        /** 쓸 수는 있지만 핵심 품질 기준에 못 미친다. */
-        CORE,
-        /** 사용자에게 경고로 보이지 않는다. */
+        /** 덜 좋은 일정이다. 저장을 막지 않고 어떤 것을 안내할지는 {@link QualityNotices}가 고른다. */
         SOFT
     }
 
     public enum Rule {
         DAY_MISSING(Severity.HARD),
         CLOSED_DAY(Severity.HARD),
+        OUTSIDE_HOURS(Severity.HARD),
         DEPARTURE_MISSED(Severity.HARD),
-        LUNCH_MISSING(Severity.CORE),
-        DINNER_MISSING(Severity.CORE),
-        NOT_ENDING_AT_LODGING(Severity.CORE),
-        DEPARTURE_LATE(Severity.CORE),
-        OUTSIDE_HOURS(Severity.CORE),
-        SAME_DAY_MEAL_KIND(Severity.CORE),
-        MEAL_KIND_REPEATED(Severity.CORE),
-        CAFE_PER_DAY(Severity.CORE),
-        NO_NON_FOOD_ACTIVITY(Severity.CORE),
-        ADDRESS_REGION_MISMATCH(Severity.CORE),
-        REQUIRED_EXPERIENCE_MISSING(Severity.CORE),
-        TRAVEL_MISSING(Severity.CORE),
-        // 거리는 직선 × 도로 계수 추정이라 편집으로 고칠 수 없어 사용자 경고로 띄우지 않는다
+        WANT_MISSING(Severity.HARD),
+        WANT_TIME(Severity.HARD),
+        CITY_DAYS(Severity.HARD),
+        AVOID(Severity.HARD),
+        UNREACHABLE(Severity.HARD),
+        TRAVEL_MISSING(Severity.HARD),
+        NOT_ENDING_AT_LODGING(Severity.HARD),
+        LUNCH_MISSING(Severity.SOFT),
+        DINNER_MISSING(Severity.SOFT),
+        MEALS_BACK_TO_BACK(Severity.SOFT),
+        DEPARTURE_LATE(Severity.SOFT),
+        SAME_DAY_MEAL_KIND(Severity.SOFT),
+        MEAL_KIND_REPEATED(Severity.SOFT),
+        CAFE_PER_DAY(Severity.SOFT),
+        NO_NON_FOOD_ACTIVITY(Severity.SOFT),
+        ADDRESS_REGION_MISMATCH(Severity.SOFT),
+        WANT_FOOD_MISSING(Severity.SOFT),
+        WANT_NOT_IN_DATA(Severity.SOFT),
+        PACE_SHORT(Severity.SOFT),
+        LONG_GAP(Severity.SOFT),
+        LONG_LEG(Severity.SOFT),
+        DAILY_TRANSIT(Severity.SOFT),
+        STRENUOUS(Severity.SOFT),
+        DUPLICATE(Severity.SOFT),
         LEG_OVER_CAP(Severity.SOFT),
         DAY_DISTANCE_OVER_CAP(Severity.SOFT),
         EARLY_FINISH(Severity.SOFT),
@@ -74,14 +86,19 @@ public final class ItineraryRules {
     /**
      * @param day      0이면 여행 전체에 걸친 위반
      * @param evidence 안내 문구에 넣을 근거(장소 이름·시각·거리). 규칙마다 담는 것이 정해져 있다
+     * @param fix      일정 편집 모델에게 보일 고칠 방향. 없으면 null
      */
-    public record Violation(Rule rule, int day, String message, List<String> evidence) {
+    public record Violation(Rule rule, int day, String message, List<String> evidence, String fix) {
         public Violation {
             evidence = evidence == null ? List.of() : List.copyOf(evidence);
         }
 
         Violation(Rule rule, int day, String message) {
-            this(rule, day, message, List.of());
+            this(rule, day, message, List.of(), null);
+        }
+
+        Violation(Rule rule, int day, String message, List<String> evidence) {
+            this(rule, day, message, evidence, null);
         }
 
         /** 기록(generation_traces.score)만 보고 SQL로 등급을 셀 수 있게 함께 직렬화한다. */
@@ -91,24 +108,41 @@ public final class ItineraryRules {
         }
     }
 
+    /** 여행 도시. 날마다 어느 도시에서 보냈는지 가장 가까운 도시로 센다. */
+    public record City(String nameKo, double lat, double lng) {
+    }
+
     /**
      * 일정의 plan_context에 JSON으로 저장된다. 필드 이름을 바꾸면 저장된 일정에서 그 값이 비어 읽혀 편집 뒤 판정이 달라진다.
      *
      * @param dayCount            여행 일수. 0이면 날짜 누락을 판정하지 않는다
      * @param lastDayHubDeadline  사용자 출발 시각에서 정한 허브 도착 마감(분). 없으면 null
-     * @param requiredExperiences 필수 경험에 맞춘 장소 id와 안내 이름. 맞출 후보가 없던 경험은 안내만 하므로 넣지 않는다.
-     *                            저장 뒤 판정은 스텝 장소만 후보로 보므로 빠진 장소의 이름을 여기서 읽는다
+     * @param requiredExperiences 여행 조건을 기록하기 전에 저장한 일정의 필수 경험 장소 id와 이름. 새 일정은 비어 있다
+     * @param conditions          여행 조건. 기록하기 전에 저장한 일정은 null이고 조건이 필요한 규칙을 보지 않는다
+     * @param country             시간대·공휴일을 볼 나라. 모르면 null
      */
     public record Context(String pace, String transportPref, LocalDate startDate, int dayCount,
-                          Integer lastDayHubDeadline, Map<Long, String> requiredExperiences) {
+                          Integer lastDayHubDeadline, Map<Long, String> requiredExperiences,
+                          TripConditions conditions, String country, List<City> cities) {
         public Context {
             requiredExperiences = requiredExperiences == null ? Map.of()
                     : Collections.unmodifiableMap(new LinkedHashMap<>(requiredExperiences));
+            cities = cities == null ? List.of() : List.copyOf(cities);
+        }
+
+        public Context(String pace, String transportPref, LocalDate startDate, int dayCount,
+                       Integer lastDayHubDeadline, Map<Long, String> requiredExperiences) {
+            this(pace, transportPref, startDate, dayCount, lastDayHubDeadline, requiredExperiences, null, null,
+                    List.of());
         }
 
         public Context(String pace, String transportPref, LocalDate startDate, int dayCount,
                        Integer lastDayHubDeadline) {
             this(pace, transportPref, startDate, dayCount, lastDayHubDeadline, Map.of());
+        }
+
+        boolean departureKnown() {
+            return conditions != null ? conditions.departure() != null : lastDayHubDeadline != null;
         }
     }
 
@@ -123,14 +157,19 @@ public final class ItineraryRules {
             return has(Severity.HARD);
         }
 
-        @JsonProperty("core")
-        public boolean core() {
-            return has(Severity.CORE);
+        public List<Violation> hardViolations() {
+            return violations.stream().filter(v -> v.severity() == Severity.HARD).toList();
         }
-
     }
 
     public Verdict evaluate(List<StepData> steps, List<PlaceCandidate> candidates, Context ctx) {
+        return evaluate(steps, candidates, ctx, Map.of());
+    }
+
+    /** @param facts 스텝 장소의 사실(휴무 요일·출입 여부·상위 장소). 없는 장소는 사실 없이 판정한다 */
+    public Verdict evaluate(List<StepData> steps, List<PlaceCandidate> candidates, Context ctx,
+                            Map<Long, PlaceFactsReader.PlaceFact> facts) {
+        Map<Long, PlaceFactsReader.PlaceFact> known = facts == null ? Map.of() : facts;
         CandidateLookup lookup = new CandidateLookup(candidates);
         String pace = ctx.pace() != null ? ctx.pace() : "normal";
         // 모르면 any(가장 좁은 상한)로 본다
@@ -141,8 +180,10 @@ public final class ItineraryRules {
                 .collect(Collectors.groupingBy(StepData::dayNumber, TreeMap::new, Collectors.toList()));
 
         List<Violation> out = new ArrayList<>();
-        for (int d = 1; d <= ctx.dayCount(); d++) {
-            if (!byDay.containsKey(d)) out.add(new Violation(Rule.DAY_MISSING, d, "day" + d + " 일정 없음"));
+        if (ctx.conditions() == null) {
+            for (int d = 1; d <= ctx.dayCount(); d++) {
+                if (!byDay.containsKey(d)) out.add(new Violation(Rule.DAY_MISSING, d, "day" + d + " 일정 없음"));
+            }
         }
 
         MealTally tally = new MealTally();
@@ -151,17 +192,22 @@ public final class ItineraryRules {
             int day = entry.getKey();
             boolean first = day == byDay.firstKey();
             boolean last = day == byDay.lastKey();
-            checkDay(day, entry.getValue(), first, last, limits, ctx, lookup, tally, out);
-            previousDayEnd = checkTravel(day, entry.getValue(), previousDayEnd, lookup, out);
+            checkDay(day, entry.getValue(), first, last, limits, ctx, lookup, known, tally, out);
+            previousDayEnd = checkTravel(day, entry.getValue(), previousDayEnd, lookup, ctx.conditions() != null, out);
         }
         tally.checkTrip(byDay.size(), out);
         checkAddressRegion(byDay, out);
-        checkRequiredExperiences(steps, candidates, ctx.requiredExperiences(), out);
+        if (ctx.conditions() == null) {
+            checkRequiredExperiences(steps, candidates, ctx.requiredExperiences(), out);
+        } else {
+            TripConditionChecks.check(steps == null ? List.of() : steps, lookup, ctx, known, out);
+        }
         return new Verdict(VERSION, out, tally.meals, tally.unknown);
     }
 
     private void checkDay(int day, List<StepData> daySteps, boolean first, boolean last, double[] limits,
-                          Context ctx, CandidateLookup lookup, MealTally tally, List<Violation> out) {
+                          Context ctx, CandidateLookup lookup, Map<Long, PlaceFactsReader.PlaceFact> facts,
+                          MealTally tally, List<Violation> out) {
         int dayStart = toMinutesOrZero(daySteps.get(0).startTime());
         StepData lastStep = daySteps.get(daySteps.size() - 1);
         // 최적화기는 출발 허브 도착 시각으로 마감·끼니를 맞춘다. 허브 체류가 끝나는 시각으로 보면
@@ -184,7 +230,8 @@ public final class ItineraryRules {
         if (last && dayEnd > DEPARTURE_HUB_LATEST_MINUTES) {
             out.add(new Violation(Rule.DEPARTURE_LATE, day, "day" + day + " 출발 마감 초과"));
         }
-        if (last && ctx.lastDayHubDeadline() != null && endsAtHub && dayEnd > ctx.lastDayHubDeadline()) {
+        if (ctx.conditions() == null && last && ctx.lastDayHubDeadline() != null && endsAtHub
+                && dayEnd > ctx.lastDayHubDeadline()) {
             out.add(new Violation(Rule.DEPARTURE_MISSED, day, "day" + day + " 사용자 출발 시각 초과"));
         }
 
@@ -209,7 +256,7 @@ public final class ItineraryRules {
                     limits[1] * GeoUtils.ROAD_DISTANCE_FACTOR), List.of(shownKm)));
         }
 
-        checkOpeningHours(day, daySteps, ctx.startDate(), lookup, out);
+        checkOpeningHours(day, daySteps, ctx, lookup, facts, out);
         checkComposition(day, daySteps, dayStart, dayEnd, lookup, out);
         tally.addDay(day, daySteps, lookup, out);
 
@@ -224,33 +271,38 @@ public final class ItineraryRules {
     }
 
     /**
-     * 확정 단계는 직선 {@value ScheduleTuning#MAX_REASONABLE_LEG_KM}km(해외 관문 연결은 더 길게)를 넘는 구간의 이동을 비운다.
-     * 그만큼 떨어졌는데 이동 시간이 없는 구간은 다른 도시로 건너뛴 것이다.
+     * 짓는 단계는 하루 안에 오갈 수 없는 구간을 잇지 않는다. 그런데도 이동 시간이 없는 구간은 다른 도시로 건너뛰었거나
+     * 오가는 시간을 모르는 곳이다.
      *
+     * @param everyLeg 그날 첫 스텝 뒤의 모든 구간에 이동 시간이 있어야 하는지. 여행 조건을 기록하기 전에 저장한 일정은
+     *                 이동을 비워 저장한 구간이 있어 먼 구간만 본다
      * @return 그날 좌표가 있는 마지막 스텝. 다음 날 첫 스텝을 이것과 견준다
      */
     private StepData checkTravel(int day, List<StepData> daySteps, StepData previousDayEnd, CandidateLookup lookup,
-                                 List<Violation> out) {
+                                 boolean everyLeg, List<Violation> out) {
         StepData prev = previousDayEnd;
         boolean reported = false;
-        for (StepData s : daySteps) {
+        for (int i = 0; i < daySteps.size(); i++) {
+            StepData s = daySteps.get(i);
             double[] to = CandidateGeo.coordsOf(lookup.of(s));
             // 도시 간 이동 구간은 앞 도시에서 넘어온 이동이라 그 앞 장소와 견주지 않는다.
             if (InvariantChecker.isIntercityLeg(s)) {
                 prev = to != null ? s : null;
                 continue;
             }
-            if (to == null) continue;
             double[] from = prev == null ? null : CandidateGeo.coordsOf(lookup.of(prev));
-            double km = from == null ? 0 : GeoUtils.haversine(from, to);
-            if (!reported && s.transportationDuration() == null && km > MAX_REASONABLE_LEG_KM) {
-                String shownKm = String.format("%.0f", km * GeoUtils.ROAD_DISTANCE_FACTOR);
-                out.add(new Violation(Rule.TRAVEL_MISSING, day, "day" + day + " 이동 없이 " + CandidateLookup.name(prev)
-                        + " → " + CandidateLookup.name(s) + "(" + shownKm + "km)",
-                        List.of(shownName(prev), shownName(s), shownKm)));
+            double km = from == null || to == null ? 0 : GeoUtils.haversine(from, to);
+            boolean noLeg = s.transportationDuration() == null;
+            if (!reported && noLeg && (km > MAX_REASONABLE_LEG_KM || everyLeg && i > 0)) {
+                String shownKm = km > 0 ? String.format("%.0f", km * GeoUtils.ROAD_DISTANCE_FACTOR) : "";
+                StepData origin = prev != null ? prev : daySteps.get(i - 1);
+                out.add(new Violation(Rule.TRAVEL_MISSING, day, "day" + day + " 이동 없이 "
+                        + CandidateLookup.name(origin) + " → " + CandidateLookup.name(s)
+                        + (shownKm.isEmpty() ? "" : "(" + shownKm + "km)"),
+                        List.of(shownName(origin), shownName(s), shownKm)));
                 reported = true;
             }
-            prev = s;
+            if (to != null) prev = s;
         }
         return prev;
     }
@@ -270,8 +322,7 @@ public final class ItineraryRules {
                     .filter(x -> x != null && id.equals(x.placeId())).findFirst().orElse(null);
             String known = entry.getValue() == null || entry.getValue().isBlank() ? "id " + id : entry.getValue();
             String shown = c == null ? known : shownName(c.name(), c.nameKo());
-            out.add(new Violation(Rule.REQUIRED_EXPERIENCE_MISSING, 0, "필수 경험 장소 빠짐(" + shown + ")",
-                    List.of(shown)));
+            out.add(new Violation(Rule.WANT_MISSING, 0, "필수 경험 장소 빠짐(" + shown + ")", List.of(shown)));
         }
     }
 
@@ -290,21 +341,36 @@ public final class ItineraryRules {
         });
     }
 
-    private void checkOpeningHours(int day, List<StepData> daySteps, LocalDate startDate, CandidateLookup lookup,
-                                   List<Violation> out) {
-        if (startDate == null) return;
-        DayOfWeek dow = startDate.plusDays(day - 1L).getDayOfWeek();
+    /** 영업시간에 장소 사실의 휴무 요일을 합쳐 본다. 영업시간이 비어도 휴무 요일만은 아는 장소가 많다. */
+    private void checkOpeningHours(int day, List<StepData> daySteps, Context ctx, CandidateLookup lookup,
+                                   Map<Long, PlaceFactsReader.PlaceFact> facts, List<Violation> out) {
+        if (ctx.startDate() == null) return;
+        LocalDate date = ctx.startDate().plusDays(day - 1L);
+        DayOfWeek dow = date.getDayOfWeek();
         for (StepData s : daySteps) {
             PlaceCandidate c = lookup.of(s);
-            if (c == null || c.openingHours() == null || c.openingHours().isBlank()) continue;
+            if (c == null) continue;
             CandidatePolicy.Role role = CandidatePolicy.roleOf(c);
             if (role == CandidatePolicy.Role.LODGING || role == CandidatePolicy.Role.TRANSIT) continue;
-            if (OpeningHoursText.isClosedOnDay(c.openingHours(), dow)) {
-                out.add(new Violation(Rule.CLOSED_DAY, day, "day" + day + " 휴무일 방문(" + c.name() + ")",
+            PlaceFactsReader.PlaceFact fact = c.placeId() == null ? null : facts.get(c.placeId());
+            boolean chosen = ctx.conditions() != null && ctx.conditions().chosenPlaceIds().contains(c.placeId());
+            if (fact != null && Boolean.FALSE.equals(fact.reachable()) && !chosen) {
+                out.add(new Violation(Rule.UNREACHABLE, day, shownName(s) + "은(는) 일반 관광객이 갈 수 없음",
                         List.of(shownName(s))));
-            } else if (!OpeningHoursText.isOpenDuring(c.openingHours(), dow,
+            }
+            // 나라를 기록하기 전에 저장한 일정은 한국 명절로 보면 해외 박물관도 휴관이 된다.
+            if (ctx.country() != null && TripCalendar.museumsClosed(ctx.country(), date) && DayBuilder.isMuseum(c)) {
+                out.add(new Violation(Rule.CLOSED_DAY, day, shownName(s) + " 명절 휴관", List.of(shownName(s))));
+                continue;
+            }
+            String hours = OpeningHoursText.withClosedDays(DayTiming.openingHoursOf(c),
+                    fact == null ? null : fact.closedDays());
+            if (hours == null || hours.isBlank()) continue;
+            if (OpeningHoursText.isClosedOnDay(hours, dow)) {
+                out.add(new Violation(Rule.CLOSED_DAY, day, shownName(s) + " 휴무일", List.of(shownName(s))));
+            } else if (!OpeningHoursText.isOpenDuring(hours, dow,
                     toMinutesOrZero(s.startTime()), toMinutesOrZero(s.endTime()))) {
-                out.add(new Violation(Rule.OUTSIDE_HOURS, day, "day" + day + " 영업시간 밖(" + c.name() + ")",
+                out.add(new Violation(Rule.OUTSIDE_HOURS, day, shownName(s) + " 영업시간 밖(" + s.startTime() + ")",
                         List.of(shownName(s))));
             }
         }

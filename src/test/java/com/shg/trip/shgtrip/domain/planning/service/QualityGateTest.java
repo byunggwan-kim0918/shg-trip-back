@@ -2,11 +2,13 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.itinerary.entity.AlternativeOption;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
-import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary.QualityStatus;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
+import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 import org.junit.jupiter.api.DisplayName;
@@ -15,12 +17,14 @@ import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 class QualityGateTest {
 
@@ -33,16 +37,15 @@ class QualityGateTest {
     // 운영 ObjectMapper(Spring Boot 기본값)와 같은 설정이다.
     private final ObjectMapper objectMapper = Jackson2ObjectMapperBuilder.json()
             .featuresToDisable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS).build();
-    private final QualityGate gate = new QualityGate(objectMapper);
+    private final QualityGate gate = new QualityGate(objectMapper, mock(PlaceFactsReader.class));
 
     @Test
-    @DisplayName("기준을 채운 일정은 OK로 두고 판정 입력과 고정 안내를 남긴다")
-    void admitsGoodItineraryAsOk() throws Exception {
-        Itinerary itinerary = itinerary(fullDay(), QualityStatus.OK, null);
+    @DisplayName("기준을 채운 일정은 판정 입력과 고정 안내를 남긴다")
+    void admitsGoodItinerary() throws Exception {
+        Itinerary itinerary = itinerary(fullDay(), null);
 
         gate.admit(itinerary, context(1));
 
-        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.OK);
         assertThat(itinerary.getQualityNotices()).containsExactly(LICENSE_NOTICE);
         QualityGate.PlanContext stored = objectMapper.readValue(itinerary.getPlanContext(), QualityGate.PlanContext.class);
         assertThat(stored.rules().dayCount()).isEqualTo(1);
@@ -51,13 +54,12 @@ class QualityGateTest {
     }
 
     @Test
-    @DisplayName("핵심 품질에 못 미치면 조정 필요로 저장하고 일차 안내를 앞에 둔다")
-    void marksCoreViolationNeedsAdjustment() {
-        Itinerary itinerary = itinerary(withoutLunch(), QualityStatus.OK, null);
+    @DisplayName("덜 좋은 일정은 저장하고 고칠 수 있는 일차 안내를 고정 안내 앞에 둔다")
+    void savesSoftViolationWithNotice() {
+        Itinerary itinerary = itinerary(withoutLunch(), null);
 
         gate.admit(itinerary, context(1));
 
-        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.NEEDS_ADJUSTMENT);
         assertThat(itinerary.getQualityNotices()).containsExactly(
                 "1일차에 점심 식사가 없어요.", LICENSE_NOTICE);
     }
@@ -65,7 +67,7 @@ class QualityGateTest {
     @Test
     @DisplayName("쓸 수 없는 일정(날짜 누락)은 판정을 실어 거부한다")
     void rejectsHardViolation() {
-        Itinerary itinerary = itinerary(fullDay(), QualityStatus.OK, null);
+        Itinerary itinerary = itinerary(fullDay(), null);
 
         assertThatThrownBy(() -> gate.admit(itinerary, context(2)))
                 .isInstanceOfSatisfying(QualityGate.Rejected.class, e -> {
@@ -83,46 +85,34 @@ class QualityGateTest {
         QualityGate.PlanContext ctx = new QualityGate.PlanContext(new ItineraryRules.Context("normal", "car",
                 LocalDate.of(2026, 11, 20), 2, 6 * 60), List.of());
 
-        assertThatThrownBy(() -> gate.admit(itinerary(fullDay(), QualityStatus.OK, null), ctx))
+        assertThatThrownBy(() -> gate.admit(itinerary(fullDay(), null), ctx))
                 .isInstanceOfSatisfying(QualityGate.Rejected.class, e -> assertThat(e.userMessage()).isEqualTo(
                         "마지막 날 출발 시각이 일러 그날 일정을 넣지 못해 저장하지 않았어요. 출발 시간을 확인한 뒤 다시 만들어 주세요."
                                 + " 30일 생성 횟수는 차감되지 않았어요."));
     }
 
     @Test
-    @DisplayName("편집으로 기준을 채우면 조정 필요가 풀리고 안내도 지금 일정 기준으로 바뀐다")
-    void editClearsAdjustment() throws Exception {
+    @DisplayName("편집하면 안내를 지금 일정 기준으로 다시 만든다")
+    void editRebuildsNotices() throws Exception {
         String ctx = objectMapper.writeValueAsString(context(1));
-        Itinerary itinerary = itinerary(fullDay(), QualityStatus.NEEDS_ADJUSTMENT, ctx);
+        Itinerary fixed = itinerary(fullDay(), ctx);
+        Itinerary broken = itinerary(withoutLunch(), ctx);
 
-        gate.reflectEdit(itinerary);
+        gate.reflectEdit(fixed);
+        gate.reflectEdit(broken);
 
-        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.OK);
-        assertThat(itinerary.getQualityNotices()).containsExactly(LICENSE_NOTICE);
-    }
-
-    @Test
-    @DisplayName("편집으로 기준이 깨져도 조정 필요를 새로 걸지 않고 안내만 갱신한다")
-    void editNeverSetsAdjustment() throws Exception {
-        String ctx = objectMapper.writeValueAsString(context(1));
-        Itinerary itinerary = itinerary(withoutLunch(), QualityStatus.OK, ctx);
-
-        gate.reflectEdit(itinerary);
-
-        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.OK);
-        assertThat(itinerary.getQualityNotices())
-                .contains("1일차에 점심 식사가 없어요.");
+        assertThat(fixed.getQualityNotices()).containsExactly(LICENSE_NOTICE);
+        assertThat(broken.getQualityNotices()).contains("1일차에 점심 식사가 없어요.");
     }
 
     @Test
     @DisplayName("판정 입력이 없는 기존 일정은 편집 뒤에도 생성 때 안내를 그대로 둔다")
     void legacyItineraryIsNotRejudged() {
-        Itinerary itinerary = itinerary(withoutLunch(), QualityStatus.OK, null);
+        Itinerary itinerary = itinerary(withoutLunch(), null);
 
         gate.reflectEdit(itinerary);
 
         assertThat(itinerary.getQualityNotices()).containsExactly("생성 때 안내");
-        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.OK);
     }
 
     @Test
@@ -134,119 +124,108 @@ class QualityGateTest {
     }
 
     @Test
-    @DisplayName("판정이 예외로 실패하면 생성 때 안내를 그대로 두고 OK로 저장하며, 편집은 판정 없이 그대로 반영한다")
+    @DisplayName("판정이 예외로 실패하면 생성 때 안내를 그대로 두고 저장하며, 편집은 판정 없이 그대로 반영한다")
     void evaluationFailureKeepsGeneratedNotices() throws Exception {
         QualityGate.PlanContext broken = new QualityGate.PlanContext(null, List.of(LICENSE_NOTICE));
-        Itinerary itinerary = itinerary(withoutLunch(), QualityStatus.OK, null);
+        Itinerary itinerary = itinerary(withoutLunch(), null);
 
         assertThat(gate.admit(itinerary, broken)).isNull();
-        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.OK);
         assertThat(itinerary.getQualityNotices()).containsExactly("생성 때 안내");
         assertThat(itinerary.getPlanContext()).isEqualTo(objectMapper.writeValueAsString(broken));
 
-        Itinerary edited = itinerary(withoutLunch(), QualityStatus.NEEDS_ADJUSTMENT, objectMapper.writeValueAsString(broken));
+        Itinerary edited = itinerary(withoutLunch(), objectMapper.writeValueAsString(broken));
         gate.reflectEdit(edited);
-        assertThat(edited.getQualityStatus()).isEqualTo(QualityStatus.NEEDS_ADJUSTMENT);
         assertThat(edited.getQualityNotices()).containsExactly("생성 때 안내");
     }
 
     @Test
-    @DisplayName("이미 저장된 판정 입력 JSON을 지금 형식으로 그대로 읽는다")
+    @DisplayName("이미 저장된 판정 입력 JSON은 없어진 후보 풀 한계를 건너뛰고 지금 형식으로 읽는다")
     void storedPlanContextStaysReadable() throws Exception {
         String stored = """
                 {"rules":{"pace":"normal","transportPref":"car","startDate":"2026-11-20","dayCount":1,
-                "lastDayHubDeadline":null,"requiredExperiences":{"1":"해운대해수욕장"}},"fixedNotices":["운전면허 안내"]}""";
+                "lastDayHubDeadline":null,"requiredExperiences":{"1":"해운대해수욕장"}},"fixedNotices":["운전면허 안내"],
+                "poolLimits":[{"rule":"REQUIRED_EXPERIENCE_MISSING","day":1,"evidence":[]}]}""";
 
         assertThat(objectMapper.readValue(stored, QualityGate.PlanContext.class)).isEqualTo(context(1));
     }
 
     @Test
-    @DisplayName("풀 한계 위반을 담은 판정 입력은 저장 뒤에도 같은 값으로 읽힌다")
-    void poolLimitsRoundTrip() throws Exception {
-        QualityGate.PlanContext ctx = withPoolLimit(context(1), ItineraryRules.Rule.LUNCH_MISSING, 1);
+    @DisplayName("여행 조건을 담은 판정 입력은 저장 뒤 같은 값으로 읽힌다")
+    void conditionsRoundTrip() throws Exception {
+        TripConditions conditions = new TripConditions(
+                List.of(new TripConditions.Want("광안리 야경", "evening", List.of("광안리해수욕장"), null)),
+                Map.of("부산", 2), List.of(PlaceRestriction.SEAFOOD), true, "transit", LocalTime.of(10, 30),
+                LocalTime.of(18, 0), "normal");
+        QualityGate.PlanContext ctx = new QualityGate.PlanContext(new ItineraryRules.Context("normal", "any",
+                LocalDate.of(2026, 11, 20), 2, 17 * 60 + 40, Map.of(), conditions, "KR",
+                List.of(new ItineraryRules.City("부산", 35.18, 129.08))), List.of(LICENSE_NOTICE));
 
         assertThat(objectMapper.readValue(objectMapper.writeValueAsString(ctx), QualityGate.PlanContext.class))
                 .isEqualTo(ctx);
     }
 
     @Test
-    @DisplayName("풀에 바꿔 넣을 곳이 없던 핵심 위반은 조정 필요로 두지 않고 이유를 알린다")
-    void poolLimitedViolationIsNoticeOnly() {
-        Itinerary itinerary = itinerary(withoutLunch(), QualityStatus.OK, null);
-
-        gate.admit(itinerary, withPoolLimit(context(1), ItineraryRules.Rule.LUNCH_MISSING, 1));
-
-        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.OK);
-        assertThat(itinerary.getQualityNotices()).containsExactly(
-                "1일차 동선 근처에 점심때 여는 식당이 없어 점심을 넣지 못했어요.", LICENSE_NOTICE);
-    }
-
-    @Test
-    @DisplayName("다른 날의 같은 위반은 풀 한계로 보지 않는다")
-    void poolLimitIsPerDay() {
-        Itinerary itinerary = itinerary(withoutLunch(), QualityStatus.OK, null);
-
-        gate.admit(itinerary, withPoolLimit(context(1), ItineraryRules.Rule.LUNCH_MISSING, 2));
-
-        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.NEEDS_ADJUSTMENT);
-        assertThat(itinerary.getQualityNotices()).startsWith("1일차에 점심 식사가 없어요.");
-    }
-
-    @Test
-    @DisplayName("일정에서 빠진 필수 경험 장소는 저장·편집 뒤에도 판정 입력의 이름으로 안내한다")
-    void missingRequiredPlaceKeepsItsName() {
-        QualityGate.PlanContext ctx = new QualityGate.PlanContext(new ItineraryRules.Context("normal", "car",
-                LocalDate.of(2026, 11, 20), 1, null, Map.of(1L, "해운대해수욕장", 99L, "광안리해수욕장")), List.of());
-        Itinerary itinerary = itinerary(fullDay(), QualityStatus.OK, null);
-        String expected = "꼭 가고 싶다고 한 '광안리해수욕장'을(를) 일정에 넣지 못했어요.";
-
-        gate.admit(itinerary, ctx);
-        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.NEEDS_ADJUSTMENT);
-        assertThat(itinerary.getQualityNotices()).containsExactly(expected);
+    @DisplayName("판정 입력의 제약 이름을 모르면 그 제약만 빼고 편집 뒤에도 다시 판정한다")
+    void unknownRestrictionKeepsRejudging() throws Exception {
+        String stored = """
+                {"rules":{"pace":"normal","transportPref":"car","startDate":"2026-11-20","dayCount":1,
+                "lastDayHubDeadline":null,"requiredExperiences":{},"conditions":{"wants":[],"cityDays":{},
+                "avoid":["NO_SUCH_RESTRICTION"],"lowMobility":false,"transport":"car","arrival":null,"departure":null,
+                "pace":"normal"},"country":"KR","cities":[]},"fixedNotices":["운전면허 안내"]}""";
+        Itinerary itinerary = itinerary(withoutLunch(), stored);
 
         gate.reflectEdit(itinerary);
-        assertThat(itinerary.getQualityNotices()).containsExactly(expected);
+
+        assertThat(itinerary.getQualityNotices()).contains("1일차에 점심 식사가 없어요.", LICENSE_NOTICE);
     }
 
     @Test
-    @DisplayName("교체 미리보기의 안내와 기준 충족은 실제로 바꾼 뒤 편집 재판정과 같다")
+    @DisplayName("옛 판정 입력의 필수 경험 장소가 편집으로 빠지면 판정 입력의 이름으로 안내한다")
+    void missingRequiredPlaceKeepsItsName() throws Exception {
+        QualityGate.PlanContext ctx = new QualityGate.PlanContext(new ItineraryRules.Context("normal", "car",
+                LocalDate.of(2026, 11, 20), 1, null, Map.of(1L, "해운대해수욕장", 99L, "광안리해수욕장")), List.of());
+        Itinerary itinerary = itinerary(fullDay(), objectMapper.writeValueAsString(ctx));
+
+        gate.reflectEdit(itinerary);
+
+        assertThat(itinerary.getQualityNotices())
+                .containsExactly("꼭 가고 싶다고 한 '광안리해수욕장'을(를) 일정에 넣지 못했어요.");
+    }
+
+    @Test
+    @DisplayName("교체 미리보기의 안내는 실제로 바꾼 뒤 편집 재판정과 같다")
     void swapPreviewMatchesEdit() throws Exception {
         String ctx = objectMapper.writeValueAsString(context(1));
         List<ItineraryStep> steps = fullDay();
         steps.set(3, step(4, "18:00", "19:00", place(4, "초당순두부", KOREAN, "MEAL")));
-        Itinerary itinerary = itinerary(steps, QualityStatus.NEEDS_ADJUSTMENT, ctx);
+        Itinerary itinerary = itinerary(steps, ctx);
         ItineraryStep dinner = steps.get(3);
         Place noodle = place(9, "짬뽕지존", CHINESE, "MEAL");
 
-        QualityGate.SwapPreview sameKind = gate.previewSwap(itinerary, dinner, place(8, "할매순두부", KOREAN, "MEAL"),
-                null, null, null);
         QualityGate.SwapPreview preview = gate.previewSwap(itinerary, dinner, noodle, null, null, null);
         dinner.addAlternative(AlternativeOption.builder().id(5L).place(noodle).optionOrder(1).build());
         dinner.selectAlternative(dinner.getAlternatives().get(0));
         gate.reflectEdit(itinerary);
 
-        assertThat(sameKind.meetsCoreQuality()).isFalse();
         assertThat(preview.notices()).isEqualTo(itinerary.getQualityNotices());
-        assertThat(preview.meetsCoreQuality()).isTrue();
-        assertThat(itinerary.getQualityStatus()).isEqualTo(QualityStatus.OK);
     }
 
     @Test
     @DisplayName("교체 판정은 바뀐 스텝으로 오는 구간과 다음 스텝으로 가는 구간을 넘긴 값으로 본다")
     void swapVerdictUsesGivenLegs() {
         List<ItineraryStep> steps = fullDay();
-        Itinerary itinerary = itinerary(steps, QualityStatus.OK, null);
+        Itinerary itinerary = itinerary(steps, null);
         ItineraryRules.Context ctx = context(1).rules();
         Place other = place(9, "범어사", TEMPLE, "SIGHT");
         GeoUtils.TransportLeg near = new GeoUtils.TransportLeg("CAR", 10, BigDecimal.valueOf(5), BigDecimal.valueOf(1500));
         GeoUtils.TransportLeg far = new GeoUtils.TransportLeg("CAR", 90, BigDecimal.valueOf(80), BigDecimal.valueOf(24000));
 
         assertThat(legOverCap(SavedItineraryFacts.evaluateSwap(itinerary, steps.get(2), other, far, steps.get(3), near,
-                ctx))).isTrue();
+                ctx, Map.of()))).isTrue();
         assertThat(legOverCap(SavedItineraryFacts.evaluateSwap(itinerary, steps.get(2), other, near, steps.get(3), far,
-                ctx))).isTrue();
+                ctx, Map.of()))).isTrue();
         assertThat(legOverCap(SavedItineraryFacts.evaluateSwap(itinerary, steps.get(2), other, near, steps.get(3), near,
-                ctx))).isFalse();
+                ctx, Map.of()))).isFalse();
     }
 
     private static boolean legOverCap(ItineraryRules.Verdict verdict) {
@@ -256,7 +235,7 @@ class QualityGateTest {
     @Test
     @DisplayName("판정 입력이 없는 일정은 교체 미리보기 판정을 하지 않는다")
     void swapPreviewNeedsPlanContext() {
-        Itinerary itinerary = itinerary(fullDay(), QualityStatus.OK, null);
+        Itinerary itinerary = itinerary(fullDay(), null);
 
         assertThat(gate.previewSwap(itinerary, itinerary.getSteps().get(0), place(9, "다른 해변", BEACH, "SIGHT"),
                 null, null, null)).isNull();
@@ -265,12 +244,6 @@ class QualityGateTest {
     private static QualityGate.PlanContext context(int days) {
         return new QualityGate.PlanContext(new ItineraryRules.Context("normal", "car", LocalDate.of(2026, 11, 20),
                 days, null, Map.of(1L, "해운대해수욕장")), List.of(LICENSE_NOTICE));
-    }
-
-    private static QualityGate.PlanContext withPoolLimit(QualityGate.PlanContext ctx, ItineraryRules.Rule rule,
-                                                         int day) {
-        return new QualityGate.PlanContext(ctx.rules(), ctx.fixedNotices(),
-                List.of(new QualityGate.PoolLimit(rule, day, List.of())));
     }
 
     private static List<ItineraryStep> fullDay() {
@@ -287,10 +260,10 @@ class QualityGateTest {
         return steps;
     }
 
-    private static Itinerary itinerary(List<ItineraryStep> steps, QualityStatus status, String planContext) {
+    private static Itinerary itinerary(List<ItineraryStep> steps, String planContext) {
         return Itinerary.builder().id(10L).userId(1L).title("부산 당일").destination("부산")
                 .startDate(LocalDate.of(2026, 11, 20)).endDate(LocalDate.of(2026, 11, 20))
-                .qualityStatus(status).planContext(planContext).qualityNotices(List.of("생성 때 안내"))
+                .planContext(planContext).qualityNotices(List.of("생성 때 안내"))
                 .steps(steps).build();
     }
 

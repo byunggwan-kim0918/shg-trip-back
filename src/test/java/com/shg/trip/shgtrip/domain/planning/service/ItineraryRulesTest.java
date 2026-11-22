@@ -51,7 +51,7 @@ class ItineraryRulesTest {
                 .containsExactly("브리앙", "베어케이커리", "베이커리카페 네모", "카페 Ccd. 부산송도점");
         assertThat(verdict.violations()).filteredOn(v -> v.rule() == Rule.SAME_DAY_MEAL_KIND).singleElement()
                 .extracting(ItineraryRules.Violation::evidence).asList().containsExactly("자갈치해물짬뽕", "짬뽕지존");
-        assertThat(verdict.has(Severity.CORE)).isTrue();
+        assertThat(verdict.has(Severity.SOFT)).isTrue();
         assertThat(verdict.has(Severity.HARD)).isFalse();
     }
 
@@ -129,7 +129,7 @@ class ItineraryRulesTest {
     }
 
     @Test
-    @DisplayName("횟집 점심과 요리를 모르는 해산물집 저녁은 같은 날 같은 종류(CORE)다")
+    @DisplayName("횟집 점심과 요리를 모르는 해산물집 저녁은 같은 날 같은 종류다")
     void unknownDishSeafoodOverlapsRawFishSameDay() {
         List<StepData> day = List.of(
                 step(1, 1, "09:00", "10:00", "해운대해수욕장", BEACH, 4.9),
@@ -254,7 +254,7 @@ class ItineraryRulesTest {
     }
 
     @Test
-    @DisplayName("필수 경험에 맞춘 장소가 일정에 없을 때만 핵심 위반이다")
+    @DisplayName("여행 조건이 없는 옛 판정 입력은 필수 경험에 맞춘 장소가 일정에 없을 때만 요구 누락이다")
     void requiredExperienceMissingOnlyWhenMatchedPlaceDropped() {
         StepData beach = new StepData(1, 1, "19:00", "20:00",
                 new PlaceData("광안리해수욕장", null, BEACH, "Busan", "KR", null, null, 501L, null),
@@ -264,16 +264,16 @@ class ItineraryRulesTest {
 
         assertThat(rulesOf(rules.evaluate(List.of(beach), List.of(tower),
                 new ItineraryRules.Context("normal", "car", START, 1, null, Map.of(501L, "광안리해수욕장")))))
-                .doesNotContain(Rule.REQUIRED_EXPERIENCE_MISSING);
+                .doesNotContain(Rule.WANT_MISSING);
         Verdict missing = rules.evaluate(List.of(beach), List.of(tower),
                 new ItineraryRules.Context("normal", "car", START, 1, null, Map.of(501L, "광안리해수욕장", 502L, "부산타워")));
-        assertThat(missing.violations()).filteredOn(v -> v.rule() == Rule.REQUIRED_EXPERIENCE_MISSING)
+        assertThat(missing.violations()).filteredOn(v -> v.rule() == Rule.WANT_MISSING)
                 .extracting(ItineraryRules.Violation::message).containsExactly("필수 경험 장소 빠짐(부산타워)");
-        assertThat(missing.core()).isTrue();
+        assertThat(missing.hard()).isTrue();
     }
 
     @Test
-    @DisplayName("기록에 남는 판정 JSON에 등급과 HARD·CORE 여부가 들어간다")
+    @DisplayName("기록에 남는 판정 JSON에 등급과 HARD 여부가 들어간다")
     void verdictJsonCarriesSeverity() throws Exception {
         List<StepData> steps = List.of(step(1, 1, "09:00", "10:00", "해변", BEACH, null));
         Verdict verdict = rules.evaluate(steps, List.of(), context("normal", 2));
@@ -282,11 +282,11 @@ class ItineraryRulesTest {
                 .writeValueAsString(verdict);
 
         assertThat(json).contains("\"rule\":\"DAY_MISSING\"", "\"severity\":\"HARD\"",
-                "\"hard\":true", "\"core\":false", "\"version\":" + ItineraryRules.VERSION);
+                "\"hard\":true", "\"version\":" + ItineraryRules.VERSION);
     }
 
     @Test
-    @DisplayName("이동 정보 없이 200km 넘게 떨어진 장소로 이어지면 이동 누락(CORE), 도시 간 이동 구간은 아니다")
+    @DisplayName("이동 정보 없이 200km 넘게 떨어진 장소로 이어지면 이동 누락(HARD), 도시 간 이동 구간은 아니다")
     void travelMissingBetweenFarPlaces() {
         PlaceCandidate seoul = at(1, "경복궁", TEMPLE, 37.5796, 126.9770);
         PlaceCandidate busanMeal = at(2, "부산국밥", KOREAN, 35.1580, 129.0590);
@@ -306,7 +306,7 @@ class ItineraryRulesTest {
                 .extracting(ItineraryRules.Violation::day, ItineraryRules.Violation::evidence)
                 .containsExactly(org.assertj.core.groups.Tuple.tuple(1, List.of("경복궁", "부산국밥", "426")),
                         org.assertj.core.groups.Tuple.tuple(2, List.of("서울호텔", "해운대해수욕장", "431")));
-        assertThat(verdict.core()).isTrue();
+        assertThat(verdict.hard()).isTrue();
 
         StepData byTrain = new StepData(4, 2, "13:00", "15:00", new PlaceData("해운대해수욕장", null, BEACH, "Busan", "KR"),
                 List.of(), "TRAIN", 200, BigDecimal.valueOf(420), BigDecimal.valueOf(58_000), null, null);

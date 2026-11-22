@@ -4,6 +4,7 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.place.destination.KrwRates;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
@@ -13,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -49,6 +51,24 @@ public final class SavedItineraryFacts {
                                     s.getEstimatedCost());
                 })
                 .toList();
+    }
+
+    /**
+     * 저장된 두 장소 사이 이동 추정. 편집과 저장 변환이 같은 식을 써야 같은 구간이 화면마다 다르게 보이지 않는다.
+     *
+     * @return 좌표가 없거나(0,0 포함) 하루 안에 오갈 거리가 아니면 null
+     */
+    public static GeoUtils.TransportLeg legBetween(Place from, Place to) {
+        if (from == null || to == null) return null;
+        if (from.getLatitude() == null || to.getLatitude() == null) return null;
+        if (GeoUtils.isZeroCoord(from.getLatitude(), from.getLongitude())
+                || GeoUtils.isZeroCoord(to.getLatitude(), to.getLongitude())) return null;
+        boolean hubTransfer = PlaceCategoryConstants.isOverseasHub(from.getCountry(), from.getCategory())
+                || PlaceCategoryConstants.isOverseasHub(to.getCountry(), to.getCategory());
+        return GeoUtils.estimateLeg(
+                new double[]{from.getLatitude().doubleValue(), from.getLongitude().doubleValue()},
+                new double[]{to.getLatitude().doubleValue(), to.getLongitude().doubleValue()},
+                "any", ScheduleTuning.maxLegKm(hubTransfer), hubTransfer);
     }
 
     /** 스텝 장소의 현재 DB 사실. 생성 때 후보도 같은 DB 값이라 스텝 판정은 생성 직후와 같다. */
@@ -94,8 +114,10 @@ public final class SavedItineraryFacts {
                 p.getNameKo(), p.getTravelerFame());
     }
 
-    public static ItineraryRules.Verdict evaluate(Itinerary itinerary, ItineraryRules.Context ctx) {
-        return new ItineraryRules().evaluate(steps(itinerary), candidates(itinerary), ctx);
+    /** @param facts 스텝 장소의 사실. 저장 관문과 생성 중 판정이 같은 사실을 봐야 판정이 갈리지 않는다 */
+    public static ItineraryRules.Verdict evaluate(Itinerary itinerary, ItineraryRules.Context ctx,
+                                                  Map<Long, PlaceFactsReader.PlaceFact> facts) {
+        return new ItineraryRules().evaluate(steps(itinerary), candidates(itinerary), ctx, facts);
     }
 
     /**
@@ -107,8 +129,9 @@ public final class SavedItineraryFacts {
      */
     public static ItineraryRules.Verdict evaluateSwap(Itinerary itinerary, ItineraryStep target, Place replacement,
                                                       GeoUtils.TransportLeg incoming, ItineraryStep next,
-                                                      GeoUtils.TransportLeg outgoing, ItineraryRules.Context ctx) {
+                                                      GeoUtils.TransportLeg outgoing, ItineraryRules.Context ctx,
+                                                      Map<Long, PlaceFactsReader.PlaceFact> facts) {
         return new ItineraryRules().evaluate(steps(itinerary, target, replacement, incoming, next, outgoing),
-                candidates(itinerary, replacement), ctx);
+                candidates(itinerary, replacement), ctx, facts);
     }
 }

@@ -201,4 +201,56 @@ class DayBuilderTest {
 
         assertThat(names(built)).containsExactly("부산박물관", "쌍둥이돼지국밥");
     }
+
+    @Test
+    @DisplayName("위치를 모르는 곳은 오가는 시간을 알 수 없어 넣지 않고 뺀 이유를 남긴다")
+    void placeWithoutCoordsIsDropped() {
+        PlaceCandidate museum = sight("부산박물관", 35.1290, 129.0930);
+        PlaceCandidate unknown = sight("어딘지 모를 전시관", 0, 0);
+        PlaceCandidate lunch = restaurant("쌍둥이돼지국밥", 35.1295, 129.0935);
+
+        DayBuilder.Built built = DayBuilder.build(frame(WEDNESDAY, 9 * 60, 21 * 60, false, List.of(), List.of()),
+                List.of(stop(museum, "sight", "morning"), stop(unknown, "sight", "morning"),
+                        stop(lunch, "meal", "lunch")));
+
+        assertThat(names(built)).containsExactly("부산박물관", "쌍둥이돼지국밥");
+        assertThat(built.dropped()).contains("어딘지 모를 전시관(위치 모름)");
+        assertThat(built.steps().get(1).transportationDuration()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("하루 안에 오갈 거리가 아니면 이동을 만들지 않고, 위치를 모르는 곳은 같은 자리로 보지 않는다")
+    void unreachableLegIsNotZeroMinutes() {
+        PlaceCandidate seoul = sight("경복궁", 37.5796, 126.9770);
+        PlaceCandidate busan = sight("해운대해수욕장", 35.1587, 129.1604);
+        PlaceCandidate unknown = sight("어딘지 모를 전시관", 0, 0);
+
+        assertThat(DayBuilder.legOf(seoul, busan, "car", false)).isNull();
+        assertThat(DayBuilder.legOf(seoul, unknown, "car", false)).isNull();
+        assertThat(DayBuilder.sameSpotAsAny(unknown, List.of(seoul))).isFalse();
+    }
+
+    @Test
+    @DisplayName("배치안 감점은 끼니를 거른 안을 관광지 하나를 뺀 안보다 나쁘게 본다")
+    void scorePrefersKeepingMeals() {
+        PlaceCandidate museum = sight("부산박물관", 35.1290, 129.0930);
+        PlaceCandidate lunch = restaurant("쌍둥이돼지국밥", 35.1295, 129.0935);
+        DayBuilder.Frame f = frame(WEDNESDAY, 9 * 60, 15 * 60, true, List.of(), List.of());
+        DayBuilder.Stop museumStop = stop(museum, "sight", "morning");
+        DayBuilder.Stop lunchStop = stop(lunch, "meal", "lunch");
+        StepData museumStep = new StepData(1, 1, "10:00", "11:30", new com.shg.trip.shgtrip.domain.planning.dto.PlaceData(
+                museum.name(), null, museum.category(), "Busan", "KR", null, null, museum.placeId(), null), List.of(),
+                null, null, null, null, null, null);
+        StepData lunchStep = new StepData(2, 1, "12:00", "13:00", new com.shg.trip.shgtrip.domain.planning.dto.PlaceData(
+                lunch.name(), null, lunch.category(), "Busan", "KR", null, null, lunch.placeId(), null), List.of(),
+                "WALK", 5, null, null, null, null);
+        List<DayBuilder.Stop> planned = List.of(museumStop, lunchStop);
+
+        double withoutLunch = DayScore.penalty(f, planned,
+                new DayBuilder.Built(List.of(museumStep), List.of(), List.of(museum), List.of(museumStop)));
+        double withoutMuseum = DayScore.penalty(f, planned,
+                new DayBuilder.Built(List.of(lunchStep), List.of(), List.of(lunch), List.of(lunchStop)));
+
+        assertThat(withoutLunch).isGreaterThan(withoutMuseum);
+    }
 }

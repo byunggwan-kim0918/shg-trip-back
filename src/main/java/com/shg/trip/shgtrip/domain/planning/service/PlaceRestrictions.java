@@ -119,6 +119,11 @@ final class PlaceRestrictions {
                 c.recommendedDurationMinutes(), true);
     }
 
+    /** 요청한 음식 이름("흑돼지")이 피할 조건에 걸리는지. 그런 식당 이름과 같은 기준으로 본다. */
+    PlaceRestriction violatedByDish(String dish) {
+        return dish == null ? null : violatedBy(dish, null, null, List.of(), null, "MEAL", null, null, false);
+    }
+
     /** 검색 결과에는 체류 시간이 없어 보강 난이도가 없는 등산은 후보 단계에서 DB 체류 시간으로 본다. */
     PlaceRestriction violatedBy(VectorSearchResult r) {
         return violatedBy(r.name(), r.nameKo(), r.category(), r.tags(), r.cuisine(), r.placeRole(), r.attributes(),

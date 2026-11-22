@@ -1,7 +1,10 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.planning.dto.DraftEdit;
 import com.shg.trip.shgtrip.domain.planning.dto.DraftPlan;
+import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
+import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 import com.shg.trip.shgtrip.domain.planning.service.ai.DraftCallGenerator;
 import lombok.RequiredArgsConstructor;
@@ -11,7 +14,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
+import java.util.Objects;
 
 /**
  * 여행 한 건을 짓는다. Sonnet이 여행 전체의 흐름과 사용자 요구를 초안으로 쓰고, 코드가 실제 장소·끼니·동선을 맞추고,
@@ -22,22 +25,24 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class TripPlanner {
 
-    /** 고칠 곳을 모델에게 보일 검사 항목. 사실 위반과 페이스·빈 시간처럼 하루의 취지가 깨진 것이다. */
-    private static final Set<String> INTENT_BROKEN = Set.of("PACE_SHORT", "LONG_GAP");
+    private static final ItineraryRules RULES = new ItineraryRules();
 
     private final DraftCallGenerator draftCallGenerator;
     private final TripSkeletonPlanner skeletonPlanner;
     private final DraftItineraryPlanner planner;
-    private final ItineraryVerifier verifier;
+    private final PlaceFactsReader factsReader;
 
     /**
+     * @param context    판정 입력. 저장 관문과 편집 재판정이 같은 입력으로 다시 판정한다
+     * @param facts      판정에 쓴 후보 장소의 사실
      * @param violations 최종 일정이 사용자 요구·사실을 어긴 것
      * @param dayNotes   날마다 여행자에게 보일 이유 문장
      * @param tripNotes  여행 전체에 대해 여행자에게 알릴 것(지킬 수 없는 요구와 바꿀 방향)
      */
     public record Built(TripSkeletonPlanner.Skeleton skeleton, DraftItineraryPlanner.Result result,
-                        List<ItineraryVerifier.Violation> violations, Map<Integer, List<String>> dayNotes,
-                        List<String> tripNotes) {
+                        ItineraryRules.Context context, Map<Long, PlaceFactsReader.PlaceFact> facts,
+                        List<ItineraryRules.Violation> violations,
+                        Map<Integer, List<String>> dayNotes, List<String> tripNotes) {
     }
 
     /**
@@ -79,35 +84,109 @@ public class TripPlanner {
             return new Planned(drafted.plan(), problems, List.of(), built, drafted.inputTokens(),
                     drafted.outputTokens());
         }
-        // 고칠 곳이 없다는 답이면 다시 짓지 않는다. 기록을 다시 짓는 build()도 편집이 없으면 첫 일정을 쓴다.
         Built finalBuilt = edited.edits().isEmpty() ? built
-                : assemble(skeleton, planner.applyEdits(skeleton.request(), first, edited.edits()));
+                : better(built, assemble(skeleton, planner.applyEdits(skeleton.request(), first, edited.edits())));
         return new Planned(drafted.plan(), problems, edited.edits(), finalBuilt,
                 drafted.inputTokens() + edited.inputTokens(), drafted.outputTokens() + edited.outputTokens());
     }
 
-    /** 모델을 부르지 않고 기록된 초안과 편집으로 일정을 다시 짓고 검사한다. */
+    /**
+     * 모델을 부르지 않고 기록된 초안과 편집으로 일정을 다시 짓고 검사한다. 운영과 같이 첫 일정에 지킬 수 없는 위반이
+     * 있을 때만 편집을 반영하고, 반영한 일정이 나을 때만 쓴다.
+     */
     public Built build(DraftItineraryPlanner.Request base, DraftPlan draft, List<DraftEdit> edits) {
         TripSkeletonPlanner.Skeleton skeleton = skeletonPlanner.build(base.withDraft(draft));
-        DraftItineraryPlanner.Result result = planner.plan(skeleton.request());
-        if (edits != null && !edits.isEmpty()) result = planner.applyEdits(skeleton.request(), result, edits);
-        return assemble(skeleton, result);
+        DraftItineraryPlanner.Result first = planner.plan(skeleton.request());
+        Built built = assemble(skeleton, first);
+        if (edits == null || edits.isEmpty() || editProblems(built).isEmpty()) return built;
+        return better(built, assemble(skeleton, planner.applyEdits(skeleton.request(), first, edits)));
+    }
+
+    /**
+     * 편집 모델은 고칠 곳만 보고 다른 날의 요구를 옮기기도 한다. 지킬 수 없는 위반이 줄고 채운 요구가 줄지 않을 때만
+     * 편집한 일정을 쓴다.
+     */
+    static Built better(Built first, Built edited) {
+        Intent before = intentOf(first);
+        Intent after = intentOf(edited);
+        boolean better = after.hard() < before.hard() && after.wantsMet() >= before.wantsMet();
+        log.info("편집안 비교: 지킬 수 없음 {} → {}, 채운 요구 {}/{} → {}/{}, 첫 일정 장소 유지 {}, {}", before.hard(),
+                after.hard(), before.wantsMet(), before.wants(), after.wantsMet(), after.wants(),
+                String.format("%.2f", keptShare(first, edited)), better ? "편집안" : "첫 일정");
+        return better ? edited : first;
+    }
+
+    /**
+     * 일정이 사용자 의도를 얼마나 지켰는지. 편집 전후를 이 값으로 견준다.
+     *
+     * @param wants    요구 수
+     * @param wantsMet 일정이 채운 요구 수
+     * @param hard     지킬 수 없는 위반 수
+     */
+    public record Intent(int wants, int wantsMet, int hard) {
+    }
+
+    public static Intent intentOf(Built built) {
+        int wants = built.context() == null || built.context().conditions() == null ? 0
+                : built.context().conditions().wants().size();
+        long missed = built.violations().stream().filter(v -> v.rule() == ItineraryRules.Rule.WANT_MISSING
+                || v.rule() == ItineraryRules.Rule.WANT_FOOD_MISSING || v.rule() == ItineraryRules.Rule.WANT_NOT_IN_DATA)
+                .count();
+        int hard = (int) built.violations().stream().filter(v -> v.severity() == ItineraryRules.Severity.HARD).count();
+        return new Intent(wants, (int) Math.max(0, wants - missed), hard);
+    }
+
+    /** 첫 일정의 장소 가운데 편집한 일정에도 남은 비율. 편집이 고칠 곳 밖까지 일정을 갈아엎었는지 본다. */
+    private static double keptShare(Built first, Built edited) {
+        java.util.Set<Long> after = new java.util.HashSet<>();
+        edited.result().steps().forEach(s -> {
+            if (s.place() != null && s.place().placeId() != null) after.add(s.place().placeId());
+        });
+        List<Long> before = first.result().steps().stream().filter(s -> s.place() != null && s.place().placeId() != null)
+                .map(s -> s.place().placeId()).distinct().toList();
+        return before.isEmpty() ? 1.0 : before.stream().filter(after::contains).count() / (double) before.size();
     }
 
     private Built assemble(TripSkeletonPlanner.Skeleton skeleton, DraftItineraryPlanner.Result result) {
-        DraftItineraryPlanner.Request request = skeleton.request();
-        List<ItineraryVerifier.Violation> violations = verifier.verify(skeleton.conditions(),
-                request.input().startDate(), result.frames().size(), result.steps(), result.candidates(),
-                request.cities());
-        return new Built(skeleton, result, violations, DraftItineraryPlanner.travelerNotes(result),
+        ItineraryRules.Context context = ruleContext(skeleton, result);
+        Map<Long, PlaceFactsReader.PlaceFact> facts = factsReader.find(placeIds(result.candidates()));
+        List<ItineraryRules.Violation> violations = RULES.evaluate(result.steps(), result.candidates(), context,
+                facts).violations();
+        return new Built(skeleton, result, context, facts, violations, DraftItineraryPlanner.travelerNotes(result),
                 tripNotes(skeleton, result, violations));
     }
 
-    /** 편집을 부를 이유. 지킬 수 없는 요구(조건 충돌)는 모델이 고칠 수 없으니 넣지 않는다. */
+    /** 출발 허브 기한은 허브로 끝나는 여행에만 둔다. 이른 종료 판정이 그 기한으로 출발 때문에 일찍 끝난 날을 가린다. */
+    static ItineraryRules.Context ruleContext(TripSkeletonPlanner.Skeleton skeleton,
+                                              DraftItineraryPlanner.Result result) {
+        DraftItineraryPlanner.Request request = skeleton.request();
+        Integer deadline = null;
+        List<StepData> steps = result.steps();
+        if (request.departure() != null && !steps.isEmpty()) {
+            Long id = steps.get(steps.size() - 1).place() == null ? null
+                    : steps.get(steps.size() - 1).place().placeId();
+            PlaceCandidate hub = id == null ? null : result.candidates().stream()
+                    .filter(c -> id.equals(c.placeId())).findFirst().orElse(null);
+            if (hub != null && CandidatePolicy.roleOf(hub) == CandidatePolicy.Role.TRANSIT) {
+                deadline = TripHubs.departureDeadline(request.departure(), hub, false, request.country());
+            }
+        }
+        List<ItineraryRules.City> cities = request.cities().stream()
+                .map(c -> new ItineraryRules.City(c.nameKo(), c.lat(), c.lng())).toList();
+        return new ItineraryRules.Context(request.input().pace(), request.input().transportPref(),
+                request.input().startDate(), result.frames().size(), deadline, Map.of(), skeleton.conditions(),
+                request.country(), cities);
+    }
+
+    private static List<Long> placeIds(List<PlaceCandidate> candidates) {
+        return candidates.stream().map(PlaceCandidate::placeId).filter(Objects::nonNull).distinct().toList();
+    }
+
+    /** 편집은 한 번뿐이라 지킬 수 없는 위반만 넘긴다. 덜 좋은 것까지 넘기면 모델이 그것을 고치느라 요구를 옮긴다. */
     static List<String> editProblems(Built built) {
         List<String> out = new ArrayList<>();
-        for (ItineraryVerifier.Violation v : built.violations()) {
-            if (v.severity() == ItineraryVerifier.Severity.FATAL || INTENT_BROKEN.contains(v.code())) {
+        for (ItineraryRules.Violation v : built.violations()) {
+            if (v.severity() == ItineraryRules.Severity.HARD) {
                 out.add(v.message() + (v.fix() == null ? "" : " (고칠 방향: " + v.fix() + ")"));
             }
         }
@@ -120,15 +199,22 @@ public class TripPlanner {
 
     /** 사용자가 요구했지만 일정에 없는 것과 그 이유. 요구를 조용히 빼지 않고 무엇을 바꾸면 되는지 알린다. */
     private static List<String> tripNotes(TripSkeletonPlanner.Skeleton skeleton, DraftItineraryPlanner.Result result,
-                                          List<ItineraryVerifier.Violation> violations) {
+                                          List<ItineraryRules.Violation> violations) {
         List<String> out = new ArrayList<>(skeleton.conflicts());
-        for (ItineraryVerifier.Violation v : violations) {
-            if ("DAILY_TRANSIT".equals(v.code())) {
+        for (ItineraryRules.Violation v : violations) {
+            if (v.rule() == ItineraryRules.Rule.DAILY_TRANSIT) {
                 out.add(v.day() + "일차는 이동 시간이 길어요(" + v.message().replaceAll("^.* (\\d+)분$", "$1")
                         + "분). 들르는 곳들이 서로 멀어 줄이지 못했어요.");
                 continue;
             }
-            if (!"WANT_MISSING".equals(v.code())) continue;
+            if (v.rule() != ItineraryRules.Rule.WANT_MISSING && v.rule() != ItineraryRules.Rule.WANT_FOOD_MISSING
+                    && v.rule() != ItineraryRules.Rule.WANT_NOT_IN_DATA) {
+                continue;
+            }
+            if (v.rule() == ItineraryRules.Rule.WANT_NOT_IN_DATA) {
+                out.add("요청하신 '" + v.evidence().get(0) + "'은(는) 아직 업데이트가 되지 않아 일정에 넣지 못했어요.");
+                continue;
+            }
             TripConditions.Want want = skeleton.conditions().wants().stream()
                     .filter(w -> v.message().contains("'" + w.text() + "'")).findFirst().orElse(null);
             if (want == null) continue;
