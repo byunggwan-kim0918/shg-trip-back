@@ -1,11 +1,9 @@
 # ── NAT 인스턴스 ──────────────────────────────────────────────────────────────
-# AZ마다 한 대씩 두고 같은 AZ 프라이빗 서브넷의 외부 출구로 쓴다. 한 대가 멈춰도 다른 AZ의 앱·웹은
-# ECR pull·Secrets Manager·외부 API 호출을 계속한다.
+# 2a 한 대가 두 AZ 프라이빗 서브넷의 외부 출구다. 이 인스턴스가 멈추면 ECR pull·Secrets Manager·외부 API 호출이 모두 끊긴다.
 
 locals {
   nat_public_subnets = {
     "2a" = aws_subnet.public_2a.id
-    "2c" = aws_subnet.public_2c.id
   }
 }
 
