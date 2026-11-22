@@ -102,7 +102,7 @@ resource "aws_route_table" "public" {
 }
 
 # NAT 게이트웨이 대신 NAT 인스턴스 — 월 $40대 고정비 회피
-# 프라이빗 서브넷은 같은 AZ의 NAT로 나간다. 다른 AZ NAT를 거치면 그 AZ 장애에 같이 끊긴다.
+# NAT를 AZ마다 다시 두면 private_2c 연결을 private["2c"]로 바꾼다.
 resource "aws_route_table" "private" {
   for_each = aws_instance.nat
   vpc_id   = aws_vpc.main.id
@@ -142,5 +142,5 @@ resource "aws_route_table_association" "private_2a" {
 
 resource "aws_route_table_association" "private_2c" {
   subnet_id      = aws_subnet.private_2c.id
-  route_table_id = aws_route_table.private["2c"].id
+  route_table_id = aws_route_table.private["2a"].id
 }

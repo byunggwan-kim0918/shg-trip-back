@@ -9,9 +9,10 @@ locals {
 resource "aws_ecs_cluster" "main" {
   name = "${var.project}-cluster"
 
+  # 알람은 기본 AWS/ECS 지표만 본다. 켜면 태스크별 지표가 따로 과금된다.
   setting {
     name  = "containerInsights"
-    value = "enabled"
+    value = "disabled"
   }
 
   tags = {
