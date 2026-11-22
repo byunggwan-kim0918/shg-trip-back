@@ -47,12 +47,25 @@ final class DayTiming {
      * 하루 확정과 검사가 보는 영업시간. 백화점·쇼핑몰·아울렛은 영업시간이 거의 비어 있어 이 업종의 흔한 시간으로 본다.
      */
     static String openingHoursOf(PlaceCandidate c) {
-        if (c.openingHours() != null && !c.openingHours().isBlank()) return c.openingHours();
-        String lower = c.category() == null ? "" : c.category().toLowerCase(java.util.Locale.ROOT);
-        return RETAIL_COMPLEX.stream().anyMatch(lower::contains) ? ScheduleTuning.RETAIL_COMPLEX_HOURS : c.openingHours();
+        return openingHoursOf(c.name(), c.category(), c.openingHours());
+    }
+
+    /** 짓기·검사·대안 미리보기·대화가 같은 영업시간을 봐야 한 곳만 영업 밖으로 판정하지 않는다. */
+    static String openingHoursOf(String name, String category, String hours) {
+        if (isOpenBeach(name, category)) return null;
+        if (hours != null && !hours.isBlank()) return hours;
+        String lower = category == null ? "" : category.toLowerCase(java.util.Locale.ROOT);
+        return RETAIL_COMPLEX.stream().anyMatch(lower::contains) ? ScheduleTuning.RETAIL_COMPLEX_HOURS : hours;
     }
 
     private static final List<String> RETAIL_COMPLEX = List.of("department store", "shopping mall", "outlet");
+
+    /** 해수욕장의 공식 이용시간은 입수 개장 시간이라 해변에 드나드는 시간이 아니다. */
+    private static boolean isOpenBeach(String placeName, String placeCategory) {
+        String name = java.util.Objects.toString(placeName, "");
+        String category = placeCategory == null ? "" : placeCategory.toLowerCase(java.util.Locale.ROOT);
+        return category.contains("beach") || name.endsWith("해수욕장") || name.endsWith("해변");
+    }
 
     static StepData buildStep(DayState day, PlaceCandidate cand, int startMin, int endMin,
                               TransportLeg leg, List<AlternativeData> alternatives) {
@@ -70,26 +83,6 @@ final class DayTiming {
                 null, // notes(story)는 비동기 Haiku 단계에서 채움
                 estimateCost(cand)
         );
-    }
-
-    /**
-     * 두 장소 사이 이동 추정. 대안 선택 재계산 경로(ItineraryService)와 표시가 어긋나지 않게 {@link GeoUtils#estimateLeg} 공식을 공유한다.
-     * 비현실 구간({@link ScheduleTuning#maxLegKm} 초과)은 로그만 남기고 null을 반환한다.
-     */
-    static TransportLeg computeLeg(PlaceCandidate prev, PlaceCandidate cand, String transportPref, int dayNumber) {
-        if (prev == null || cand == null) return null;
-        double[] a = coordsOf(prev);
-        double[] b = coordsOf(cand);
-        if (a == null || b == null) return null;
-        boolean hubTransfer = PlaceCategoryConstants.isOverseasHub(prev.country(), prev.category())
-                || PlaceCategoryConstants.isOverseasHub(cand.country(), cand.category());
-        GeoUtils.TransportLeg leg = GeoUtils.estimateLeg(a, b, transportPref, maxLegKm(hubTransfer), hubTransfer);
-        if (leg == null) {
-            log.warn("비현실적 구간거리 {}km (day={}, {} → {}) — 교통정보 생략",
-                    String.format("%.1f", GeoUtils.haversine(a, b)), dayNumber, prev.name(), cand.name());
-            return null;
-        }
-        return new TransportLeg(leg.mode(), leg.durationMin(), leg.distanceKm(), leg.cost());
     }
 
     /**

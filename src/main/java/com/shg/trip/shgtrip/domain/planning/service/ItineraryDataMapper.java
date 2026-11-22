@@ -73,6 +73,7 @@ public class ItineraryDataMapper {
             int dropped = 0;
             boolean precededByDrop = false;
             StepData pendingTransfer = null;
+            ItineraryStep lastKept = null;
             for (StepData stepData : steps) {
                 if (lookupPlace(stepData.place(), placeCache) == null) {
                     dropped++;
@@ -88,7 +89,13 @@ public class ItineraryDataMapper {
                 pendingTransfer = null;
                 // 도시 간 이동은 앞 도시에서 온 구간이라 앞 장소(전날 숙소 등)가 빠져도 그대로다.
                 if (InvariantChecker.isIntercityLeg(stepData)) precededByDrop = false;
-                itinerary.addStep(toStepEntity(stepData, placeCache, precededByDrop, totalDays));
+                ItineraryStep step = toStepEntity(stepData, placeCache, precededByDrop, totalDays);
+                if (precededByDrop && lastKept != null && lastKept.getDayNumber() == step.getDayNumber()) {
+                    GeoUtils.TransportLeg leg = SavedItineraryFacts.legBetween(lastKept.getPlace(), step.getPlace());
+                    if (leg != null) step.updateTransportation(leg.mode(), leg.durationMin(), leg.distanceKm(), leg.cost());
+                }
+                itinerary.addStep(step);
+                lastKept = step;
                 precededByDrop = false;
             }
             if (dropped > 0) {
@@ -239,8 +246,8 @@ public class ItineraryDataMapper {
     }
 
     /**
-     * @param precededByDrop 바로 앞 스텝이 버려졌으면 true. 교통 정보가 사라진 출발지에서 온
-     *                       구간이라 비워서 UI가 구간을 그리지 않게 한다.
+     * @param precededByDrop 바로 앞 스텝이 버려졌으면 true. 버려진 출발지에서 온 구간이라 비우고, 같은 날 남은 앞 장소가
+     *                       있으면 호출부가 그 장소에서 다시 잰다
      * @param totalDays      여행 전체 일수. 모르면 0
      */
     private ItineraryStep toStepEntity(StepData stepData, Map<String, Place> placeCache,

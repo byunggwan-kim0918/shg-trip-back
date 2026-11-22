@@ -38,6 +38,12 @@ public class PlanningCountries {
         return subject + " 아직 준비 중이에요. 지금은 " + names + " 여행지로 일정을 만들 수 있어요.";
     }
 
+    /** 여행지 이름의 나라. 해외 목록에 없으면 국내로 보고, 이름이 없으면 null이다. */
+    public String countryOf(String destination) {
+        if (destination == null || destination.isBlank()) return null;
+        return destinations.resolve(destination).map(Destination::country).orElse("KR");
+    }
+
     /**
      * 사용자가 말한 여행지가 열지 않은 나라의 목록 여행지면 안내 문구. 목록에 없는 이름은 나라를 알 수 없어
      * 생성 단계의 국가 확인이 막는다.

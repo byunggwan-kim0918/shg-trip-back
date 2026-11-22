@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit;
  *   <li><b>실패 rate-limit</b>: enrich valid:false(비현실 입력)만 세고 5회면 24h 차단한다.
  *       서버 오류·AI 출력 문제는 사용자 책임이 아니라 세지 않는다.</li>
  *   <li><b>생성 쿼터</b>: 30일 창 성공 5회. 서버 실패로 소모되지 않게 성공 시에만 센다.</li>
- *   <li><b>미차감 한도</b>: 쿼터를 쓰지 않고 끝난 생성(조정 필요 저장, 판정 거부)을 24h 창에서 3회까지만 허용한다.
+ *   <li><b>미차감 한도</b>: 쿼터를 쓰지 않고 끝난 생성(판정 거부)을 24h 창에서 3회까지만 허용한다.
  *       같은 조건의 재시도가 LLM 비용만 쓰며 끝없이 반복되지 않게 한다.</li>
  * </ul>
  *
@@ -128,7 +128,7 @@ public class GenerationPolicyService {
     }
 
     /**
-     * 조정 필요 저장이나 판정 거부로 끝난 생성. 쿼터 대신 24h 창 카운터를 올린다. best-effort라 Redis 오류가 critical path를 깨지 않는다.
+     * 판정 거부로 끝난 생성. 쿼터 대신 24h 창 카운터를 올린다. best-effort라 Redis 오류가 critical path를 깨지 않는다.
      *
      * @return 이번 생성으로 한도에 닿았으면 true. Redis 오류면 false
      */

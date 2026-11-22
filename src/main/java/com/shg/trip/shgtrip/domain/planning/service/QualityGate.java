@@ -1,10 +1,12 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
-import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary.QualityStatus;
 import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules.Verdict;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
@@ -15,9 +17,11 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 /**
- * 저장 관문. 저장할 일정 엔티티를 판정해 HARD면 막고 CORE면 조정 필요로 표시한다. 편집 뒤에도 같은 기준으로 다시 판정한다.
+ * 저장 관문. 저장할 일정 엔티티를 판정해 HARD면 막는다. 편집 뒤에도 같은 기준으로 다시 판정해 안내를 바꾼다.
  * 판정 대상은 매퍼가 장소를 찾지 못한 스텝을 버린 뒤의 실제 저장 객체다.
  */
 @Slf4j
@@ -28,32 +32,11 @@ public class QualityGate {
     /**
      * @param rules        판정 입력
      * @param fixedNotices 판정으로 다시 만들 수 없는 안내(운전면허·못 찾은 장소). 편집 뒤에도 그대로 둔다
-     * @param poolLimits   후보 풀에 바꿔 넣을 곳이 없던 핵심 위반. '조정 필요'로 세지 않고 알림으로 보인다.
-     *                     편집으로 풀이 늘지 않아 편집 뒤에도 그대로 둔다
      */
-    public record PlanContext(ItineraryRules.Context rules, List<String> fixedNotices, List<PoolLimit> poolLimits) {
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record PlanContext(ItineraryRules.Context rules, List<String> fixedNotices) {
         public PlanContext {
             fixedNotices = fixedNotices == null ? List.of() : List.copyOf(fixedNotices);
-            poolLimits = poolLimits == null ? List.of() : List.copyOf(poolLimits);
-        }
-
-        public PlanContext(ItineraryRules.Context rules, List<String> fixedNotices) {
-            this(rules, fixedNotices, List.of());
-        }
-    }
-
-    /**
-     * plan_context에 저장된다. 필드 이름을 바꾸면 저장된 일정에서 비어 읽혀 알림이던 위반이 '조정 필요'로 돌아간다.
-     *
-     * @param evidence 위반 근거(장소 이름). 편집으로 다른 장소가 같은 규칙을 어기면 사용자가 고칠 수 있는 위반이라 따로 본다
-     */
-    public record PoolLimit(ItineraryRules.Rule rule, int day, List<String> evidence) {
-        public PoolLimit {
-            evidence = evidence == null ? List.of() : List.copyOf(evidence);
-        }
-
-        static PoolLimit of(ItineraryRules.Violation v) {
-            return new PoolLimit(v.rule(), v.day(), v.evidence());
         }
     }
 
@@ -98,18 +81,19 @@ public class QualityGate {
     }
 
     private final ObjectMapper objectMapper;
+    private final PlaceFactsReader factsReader;
 
     /** @return 판정. 판정 자체가 실패하면 null이고, 일정은 생성 때 안내를 그대로 두고 OK로 저장된다 */
     public Verdict admit(Itinerary itinerary, PlanContext ctx) {
         Verdict verdict;
         List<String> notices;
         try {
-            verdict = SavedItineraryFacts.evaluate(itinerary, ctx.rules());
+            verdict = SavedItineraryFacts.evaluate(itinerary, ctx.rules(), facts(itinerary));
             notices = mergedNotices(verdict, ctx);
         } catch (RuntimeException e) {
             // 판정 버그 하나로 이미 비용을 쓴 생성 결과를 버리지 않는다.
             log.error("저장 관문 판정 실패, 판정 없이 저장", e);
-            itinerary.applyQuality(QualityStatus.OK, itinerary.getQualityNotices(), write(ctx));
+            itinerary.applyQuality(itinerary.getQualityNotices(), write(ctx));
             return null;
         }
         List<String> messages = verdict.violations().stream().map(ItineraryRules.Violation::message).toList();
@@ -117,10 +101,8 @@ public class QualityGate {
             log.warn("저장 관문 v{} 거부: {}", verdict.version(), messages);
             throw new Rejected(verdict, ctx.rules());
         }
-        QualityStatus status = PoolLimits.needsAdjustment(verdict, ctx.poolLimits())
-                ? QualityStatus.NEEDS_ADJUSTMENT : QualityStatus.OK;
-        itinerary.applyQuality(status, notices, write(ctx));
-        log.info("저장 관문 v{}: {} {}", verdict.version(), status, messages);
+        itinerary.applyQuality(notices, write(ctx));
+        log.info("저장 관문 v{}: {}", verdict.version(), messages);
         return verdict;
     }
 
@@ -132,20 +114,15 @@ public class QualityGate {
         PlanContext ctx = read(itinerary);
         if (ctx == null) return;
         try {
-            Verdict verdict = SavedItineraryFacts.evaluate(itinerary, ctx.rules());
-            itinerary.reflectEdit(mergedNotices(verdict, ctx), meetsCoreQuality(verdict, ctx));
+            Verdict verdict = SavedItineraryFacts.evaluate(itinerary, ctx.rules(), facts(itinerary));
+            itinerary.reflectEdit(mergedNotices(verdict, ctx));
         } catch (RuntimeException e) {
             log.error("편집 뒤 판정 실패 itineraryId={}", itinerary.getId(), e);
         }
     }
 
-    /**
-     * 교체했을 때 편집 재판정이 남길 안내와 핵심 기준 충족 여부.
-     *
-     * @param notices          교체 뒤 안내(고정 안내 포함)
-     * @param meetsCoreQuality 교체 뒤 일정이 HARD·CORE 위반 없이 기준을 채우는지
-     */
-    public record SwapPreview(List<String> notices, boolean meetsCoreQuality) {}
+    /** @param notices 교체 뒤 편집 재판정이 남길 안내(고정 안내 포함) */
+    public record SwapPreview(List<String> notices) {}
 
     /**
      * 교체 뒤 편집 재판정이 남길 안내를 미리 만든다. 일정 엔티티는 바꾸지 않는다.
@@ -158,9 +135,11 @@ public class QualityGate {
         PlanContext ctx = read(itinerary);
         if (ctx == null) return null;
         try {
+            List<Long> ids = new ArrayList<>(placeIds(itinerary));
+            if (replacement != null && replacement.getId() != null) ids.add(replacement.getId());
             Verdict verdict = SavedItineraryFacts.evaluateSwap(itinerary, target, replacement, incoming, next,
-                    outgoing, ctx.rules());
-            return new SwapPreview(mergedNotices(verdict, ctx), meetsCoreQuality(verdict, ctx));
+                    outgoing, ctx.rules(), factsReader.find(ids));
+            return new SwapPreview(mergedNotices(verdict, ctx));
         } catch (RuntimeException e) {
             log.error("교체 미리보기 판정 실패 itineraryId={}", itinerary.getId(), e);
             return null;
@@ -169,15 +148,20 @@ public class QualityGate {
 
     /** 판정 안내 뒤에 고정 안내를 붙인다. 생성 중 미리보기도 같은 순서를 써야 화면 안내가 저장 뒤와 같다. */
     static List<String> mergedNotices(Verdict verdict, PlanContext ctx) {
-        List<String> out = new ArrayList<>(QualityNotices.of(verdict, ctx.rules(), ctx.poolLimits()));
+        List<String> out = new ArrayList<>(QualityNotices.of(verdict, ctx.rules()));
         for (String n : ctx.fixedNotices()) {
             if (!out.contains(n)) out.add(n);
         }
         return out;
     }
 
-    private static boolean meetsCoreQuality(Verdict verdict, PlanContext ctx) {
-        return !verdict.hard() && !PoolLimits.needsAdjustment(verdict, ctx.poolLimits());
+    private Map<Long, PlaceFactsReader.PlaceFact> facts(Itinerary itinerary) {
+        return factsReader.find(placeIds(itinerary));
+    }
+
+    private static List<Long> placeIds(Itinerary itinerary) {
+        return itinerary.getSteps().stream().map(ItineraryStep::getPlace).filter(Objects::nonNull)
+                .map(Place::getId).filter(Objects::nonNull).distinct().toList();
     }
 
     private String write(PlanContext ctx) {
@@ -192,7 +176,10 @@ public class QualityGate {
     private PlanContext read(Itinerary itinerary) {
         if (itinerary.getPlanContext() == null) return null;
         try {
-            return objectMapper.readValue(itinerary.getPlanContext(), PlanContext.class);
+            // 여행 조건의 제약 이름이 바뀌어도 저장된 일정의 편집 재판정이 꺼지지 않게 한다.
+            return objectMapper.readerFor(PlanContext.class)
+                    .with(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_AS_NULL)
+                    .readValue(itinerary.getPlanContext());
         } catch (Exception e) {
             log.warn("판정 입력 읽기 실패 itineraryId={}: {}", itinerary.getId(), e.getMessage());
             return null;

@@ -13,6 +13,7 @@ import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.service.OpeningCheck;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.domain.planning.service.QualityGate;
+import com.shg.trip.shgtrip.domain.planning.service.SavedItineraryFacts;
 import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
@@ -232,9 +233,7 @@ public class ItineraryService {
                 OpeningCheck.closedOn(to, date),
                 alreadyOnDay,
                 now.stream().filter(n -> !after.contains(n)).toList(),
-                after.stream().filter(n -> !now.contains(n)).toList(),
-                itinerary.getQualityStatus() == Itinerary.QualityStatus.NEEDS_ADJUSTMENT
-                        && quality != null && quality.meetsCoreQuality());
+                after.stream().filter(n -> !now.contains(n)).toList());
     }
 
     private static AlternativePreviewResponse.LegChange legChange(ItineraryStep arriving,
@@ -438,17 +437,7 @@ public class ItineraryService {
     }
 
     private static GeoUtils.TransportLeg computeLeg(Place fromPlace, Place toPlace) {
-        if (fromPlace == null || toPlace == null) return null;
-        if (fromPlace.getLatitude() == null || toPlace.getLatitude() == null) return null;
-        if (GeoUtils.isZeroCoord(fromPlace.getLatitude(), fromPlace.getLongitude())
-                || GeoUtils.isZeroCoord(toPlace.getLatitude(), toPlace.getLongitude())) return null;
-
-        boolean hubTransfer = PlaceCategoryConstants.isOverseasHub(fromPlace.getCountry(), fromPlace.getCategory())
-                || PlaceCategoryConstants.isOverseasHub(toPlace.getCountry(), toPlace.getCategory());
-        return GeoUtils.estimateLeg(
-                new double[]{fromPlace.getLatitude().doubleValue(), fromPlace.getLongitude().doubleValue()},
-                new double[]{toPlace.getLatitude().doubleValue(), toPlace.getLongitude().doubleValue()},
-                "any", ScheduleTuning.maxLegKm(hubTransfer), hubTransfer);
+        return SavedItineraryFacts.legBetween(fromPlace, toPlace);
     }
 
     /**

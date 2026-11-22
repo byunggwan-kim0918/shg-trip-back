@@ -58,17 +58,13 @@ class GenerationTraceRepositoryIntegrationTest {
     }
 
     @Test
-    @DisplayName("새 일정은 품질 상태 OK로 저장되고 판정 입력 JSON을 그대로 읽는다")
+    @DisplayName("판정 안내와 판정 입력 JSON을 저장하고 그대로 읽는다")
     void itineraryQualityColumns() {
-        Itinerary loaded = itineraryRepository.findById(itineraryId).orElseThrow();
-        assertThat(loaded.getQualityStatus()).isEqualTo(Itinerary.QualityStatus.OK);
-
         tx.executeWithoutResult(s -> itineraryRepository.findById(itineraryId).orElseThrow()
-                .applyQuality(Itinerary.QualityStatus.NEEDS_ADJUSTMENT, java.util.List.of("1일차 안내"),
-                        "{\"rules\":{\"dayCount\":3},\"fixedNotices\":[]}"));
+                .applyQuality(java.util.List.of("1일차 안내"), "{\"rules\":{\"dayCount\":3},\"fixedNotices\":[]}"));
 
         Itinerary updated = itineraryRepository.findById(itineraryId).orElseThrow();
-        assertThat(updated.getQualityStatus()).isEqualTo(Itinerary.QualityStatus.NEEDS_ADJUSTMENT);
+        assertThat(updated.getQualityNotices()).containsExactly("1일차 안내");
         assertThat(updated.getPlanContext()).contains("\"dayCount\"");
     }
 

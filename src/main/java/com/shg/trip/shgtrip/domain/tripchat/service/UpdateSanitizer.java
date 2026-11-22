@@ -1,6 +1,8 @@
 package com.shg.trip.shgtrip.domain.tripchat.service;
 
+import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.itinerary.dto.WizardOptionIds;
+import com.shg.trip.shgtrip.domain.planning.service.TripFeasibility;
 import com.shg.trip.shgtrip.domain.tripchat.model.DraftEvent;
 import com.shg.trip.shgtrip.domain.tripchat.model.DraftField;
 import com.shg.trip.shgtrip.domain.tripchat.model.EventOp;
@@ -92,7 +94,24 @@ public final class UpdateSanitizer {
         if (outcome != null && currentSlot != Slot.EXTRAS) {
             events.add(DraftEvent.slotOutcome(seq.getAsLong(), currentSlot, outcome, TextNormalizer.cap(answer, MAX_RAW)));
         }
-        return events;
+        return keepConflictedWishes(events);
+    }
+
+    /**
+     * 같은 답에서 피할 음식을 새로 더하며 그와 부딪히는 바람을 지운 모델 출력은 지우기를 받지 않는다. 어느 쪽을
+     * 따를지는 여행자가 고르기 전이라 {@link TripFeasibilityQuestions}가 되묻는다. 되묻기에 답해 바람만 지우는 것은 그대로 받는다.
+     */
+    private static List<DraftEvent> keepConflictedWishes(List<DraftEvent> events) {
+        List<PlaceRestriction> avoid = new ArrayList<>();
+        for (DraftEvent e : events) {
+            if (e.field() == DraftField.FOOD_AVOID && e.op() != EventOp.REMOVE && e.op() != EventOp.CLEAR) {
+                avoid.addAll(GeneratorSupport.restrictionsOf(e.value()));
+            }
+        }
+        if (avoid.isEmpty()) return events;
+        return events.stream().filter(e -> !(e.op() == EventOp.REMOVE
+                && (e.field() == DraftField.FOOD_LIKES || e.field() == DraftField.PRIORITIES)
+                && TripFeasibility.dishConflict(e.value(), avoid) != null)).toList();
     }
 
     /** 원문 조각이 실제 답에 없으면 사용자 발언이 아니라 모델 추론으로 본다. 테마·카테고리는 분류어라 늘 추론이다. */

@@ -70,6 +70,8 @@ class TripChatServiceTest {
     @Mock private GenerationPolicyService generationPolicyService;
     @Mock private TravelPlannerService travelPlannerService;
     @Mock private ActiveUserGuard activeUserGuard;
+    @Mock private DestinationCandidates destinationCandidates;
+    @Mock private DestinationRecommender recommender;
 
     private final Map<UUID, TripChatSession> db = new HashMap<>();
     private TripChatService service;
@@ -84,7 +86,8 @@ class TripChatServiceTest {
                 travelPlannerService, activeUserGuard, Validation.byDefaultProvider().configure().clockProvider(() -> clock)
                         .buildValidatorFactory().getValidator(), om,
                 new TransactionTemplate(new NoResourceTransactionManager()), clock,
-                new PlanningCountries(List.of("KR", "JP"), Destinations.fromClasspath()));
+                new PlanningCountries(List.of("KR", "JP"), Destinations.fromClasspath()), destinationCandidates,
+                recommender);
 
         lenient().when(repository.saveAndFlush(any())).thenAnswer(inv -> {
             if (failNextSave) {
@@ -548,6 +551,100 @@ class TripChatServiceTest {
         assertThat(r.status()).isEqualTo("REVIEW");
         assertThat(state(r).get("events").findValuesAsText("value"))
                 .contains(TripChatService.UNRESOLVED_NOTE_PREFIX + "날것은 계속 빼둘까요?");
+    }
+
+    @Test
+    @DisplayName("여행지를 모르면 취향부터 묻고 그 답으로 추천하며, 세 번째로 모른다고 하면 첫 추천지로 정한다")
+    void undecidedCityIsRecommendedThenPicked() {
+        given(destinationCandidates.list()).willReturn(List.of(new DestinationCandidates.Candidate("부산", 900),
+                new DestinationCandidates.Candidate("강릉", 400)));
+        given(recommender.recommend(any(), any())).willReturn(new DestinationRecommender.Recommendation(
+                List.of("부산", "강릉"), "바다랑 맛집이면 부산이나 강릉이 잘 맞아요.", true));
+        TripChatResponse start = service.create(USER, "req-1");
+
+        given(interpreter.interpret(anyString(), eq("몰라"))).willReturn(result(new Interpretation(List.of(),
+                "undecided", null, "answer", null)));
+        TripChatResponse mood = answer(start, "몰라");
+        assertThat(mood.question().slot()).isEqualTo("MOOD");
+        assertThat(mood.question().lead()).isEqualTo("그럼 어떤 여행을 좋아하는지 먼저 볼게요.");
+
+        given(interpreter.interpret(anyString(), eq("바다랑 맛집"))).willReturn(result(new Interpretation(List.of(
+                add("PRIORITIES", "바다랑 맛집", "user", "바다랑 맛집")), "answered", null, "answer", null)));
+        TripChatResponse first = answer(mood, "바다랑 맛집");
+        assertThat(first.question().slot()).isEqualTo("CITY");
+        assertThat(first.question().title()).isEqualTo("부산, 강릉 어때요?");
+        assertThat(first.question().examples()).containsExactly("부산", "강릉");
+        assertThat(first.question().lead()).isEqualTo("바다랑 맛집이면 부산이나 강릉이 잘 맞아요.");
+
+        TripChatResponse second = service.answer(USER, id(start),
+                new TripChatAnswerRequest(first.question().id(), "btn-1", "unknown", null));
+        assertThat(second.question().title()).isEqualTo("부산, 강릉 어때요?");
+        TripChatResponse picked = service.answer(USER, id(start),
+                new TripChatAnswerRequest(second.question().id(), "btn-2", "unknown", null));
+
+        assertThat(picked.question().slot()).isNotEqualTo("CITY");
+        assertThat(picked.question().lead()).isEqualTo("부산(으)로 정할게요. 확인 화면에서 바꿀 수 있어요.");
+        assertThat(state(picked).toString()).contains("\"DESTINATION\"", "부산");
+    }
+
+    @Test
+    @DisplayName("날짜를 모르면 가까운 날짜를 제안하고, 세 번째로 모른다고 하면 그 날짜로 정한다")
+    void undecidedDatesAreSuggestedThenPicked() {
+        TripChatResponse start = service.create(USER, "req-1");
+        given(interpreter.interpret(anyString(), eq("부산"))).willReturn(result(new Interpretation(List.of(
+                upd("DESTINATION", "부산", "user", "부산")), "answered", null, "answer", null)));
+        TripChatResponse dates = answer(start, "부산");
+        assertThat(dates.question().slot()).isEqualTo("DATES");
+
+        given(interpreter.interpret(anyString(), eq("몰라"))).willReturn(result(new Interpretation(List.of(),
+                "undecided", null, "answer", null)));
+        TripChatResponse first = answer(dates, "몰라");
+        assertThat(first.question().title()).isEqualTo("이 날짜는 어때요?");
+        assertThat(first.question().examples()).isNotEmpty();
+        TripChatResponse second = service.answer(USER, id(start),
+                new TripChatAnswerRequest(first.question().id(), "btn-1", "unknown", null));
+        TripChatResponse picked = service.answer(USER, id(start),
+                new TripChatAnswerRequest(second.question().id(), "btn-2", "unknown", null));
+
+        assertThat(picked.question().slot()).isNotEqualTo("DATES");
+        assertThat(picked.question().lead()).endsWith("(으)로 정할게요. 확인 화면에서 바꿀 수 있어요.");
+        verify(recommender, never()).recommend(any(), any());
+    }
+
+    @Test
+    @DisplayName("피할 음식을 더하며 그와 부딪히는 바람을 지운 모델 출력은 지우기를 받지 않고 어느 쪽인지 묻는다")
+    void conflictingWithdrawalIsAsked() {
+        TripChatResponse start = service.create(USER, "req-1");
+        given(interpreter.interpret(anyString(), eq("제주, 흑돼지 먹고 싶어"))).willReturn(result(new Interpretation(
+                List.of(upd("DESTINATION", "제주", "user", "제주"),
+                        add("FOOD_LIKES", "흑돼지", "user", "흑돼지 먹고 싶어")), "answered", null, "answer", null)));
+        TripChatResponse next = answer(start, "제주, 흑돼지 먹고 싶어");
+        String text = "근데 돼지고기는 못 먹어요";
+        given(interpreter.interpret(anyString(), eq(text))).willReturn(result(new Interpretation(List.of(
+                add("FOOD_AVOID", "돼지고기", "user", "돼지고기는 못 먹어요"),
+                new Interpretation.Update("FOOD_LIKES", "remove", "흑돼지", "known", "user", "돼지고기는 못 먹어요", "", "")),
+                "answered", null, "answer", null)));
+
+        TripChatResponse asked = answer(next, text);
+
+        assertThat(asked.question().title()).isEqualTo("'흑돼지'은(는) 어떻게 할까요?");
+    }
+
+    @Test
+    @DisplayName("꼭 가고 싶은 곳이 데이터에 없으면 아직 업데이트되지 않았다고 하고 비슷한 곳을 권한다")
+    void missingMustVisitIsAskedWithSuggestion() {
+        given(placeMatcher.suggestions(any(), any())).willReturn(Map.of("MUST_VISIT|오타루운하", "오타루 오르골당"));
+        TripChatResponse start = service.create(USER, "req-1");
+        String text = "삿포로, 오타루 운하는 꼭 가고 싶어";
+        given(interpreter.interpret(anyString(), eq(text))).willReturn(result(new Interpretation(List.of(
+                upd("DESTINATION", "삿포로", "user", "삿포로"),
+                add("MUST_VISIT", "오타루 운하", "user", "오타루 운하는 꼭 가고 싶어")), "answered", null, "answer",
+                null)));
+
+        TripChatResponse next = answer(start, text);
+
+        assertThat(next.question().lead()).isEqualTo("'오타루 운하'은(는) 아직 업데이트가 되지 않았어요.");
+        assertThat(next.question().title()).isEqualTo("'오타루 오르골당'은(는) 어때요? 혹은 다른 곳으로 갈까요?");
     }
 
     // ---- 도우미 ----

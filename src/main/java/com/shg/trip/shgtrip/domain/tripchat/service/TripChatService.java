@@ -83,6 +83,8 @@ public class TripChatService {
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
     private final PlanningCountries planningCountries;
+    private final DestinationCandidates destinationCandidates;
+    private final DestinationRecommender recommender;
 
     public TripChatResponse current(Long userId) {
         return inTx(() -> repository.findActive(userId).map(session -> {
@@ -176,7 +178,7 @@ public class TripChatService {
             save(session, session.getStatus(), st);
             return Prepared.interpret(question, context, session.getState());
         });
-        if (prepared.view() != null) return prepared.view();
+        if (prepared.view() != null) return fillRecommendation(userId, id, prepared.view());
 
         TripChatInterpreter.Result result;
         try {
@@ -191,8 +193,9 @@ public class TripChatService {
         rejectIfNotUsable(userId, id, req.clientTurnId(), prepared.question(), result.interpretation());
         Matches matches = previewMatches(prepared, text, result.interpretation());
 
+        TripChatResponse applied;
         try {
-            return inTx(() -> {
+            applied = inTx(() -> {
                 TripChatSession session = loadActive(userId, id);
                 ChatState st = readOrConflict(session);
                 PendingTurn pending = st.getPending();
@@ -218,6 +221,7 @@ public class TripChatService {
             log.warn("대화 턴 반영 실패 session={}: {}", id, e.getMessage());
             throw new BusinessException(ErrorCode.TRIP_CHAT_UNAVAILABLE);
         }
+        return fillRecommendation(userId, id, applied);
     }
 
     /** 욕설은 답을 남기지 않고 경고하다 기준 횟수에서 잠근다. 확인 화면의 여행 답 아닌 말은 다시 물을 질문이 없어 모델 문장을 돌려준다. */
@@ -377,7 +381,8 @@ public class TripChatService {
             Draft draft = DraftFolder.fold(preview.getEvents());
             String signature = PlaceMatcher.signature(draft);
             if (signature.equals(preview.getMatchSignature())) return null;
-            return new Matches(signature, placeMatcher.match(draft));
+            Map<String, PlaceMatch> matched = placeMatcher.match(draft);
+            return new Matches(signature, matched, placeMatcher.suggestions(draft, matched));
         } catch (JsonProcessingException | RuntimeException e) {
             log.warn("대화 장소 매칭 건너뜀: {}", e.getMessage());
             return null;
@@ -400,8 +405,32 @@ public class TripChatService {
             st.setMatches(new LinkedHashMap<>(matches.byKey()));
             st.setMatchSignature(matches.signature());
         }
-        NextStepPolicy.Decision d = NextStepPolicy.decide(draft, st.getAskedKeys(), answered, it, answerKind,
-                datesTouched, today());
+        boolean freshMatches = matches != null && matches.signature().equals(PlaceMatcher.signature(draft));
+        // 모델이 부딪힘을 되묻자고 했으면 그것을 먼저 묻는다(여행지를 바꾸자 앞 도시의 꼭 갈 곳이 남은 경우).
+        boolean modelFirst = NextStepPolicy.modelAsksCritical(it);
+        OpenQuestion infeasible = modelFirst ? null : TripFeasibilityQuestions.next(draft,
+                freshMatches ? st.getMatches() : null, freshMatches ? matches.suggestions() : null,
+                st.getAskedKeys(), planningCountries.countryOf(draft.value(DraftField.DESTINATION)));
+        if (infeasible != null) {
+            st.setResume(null);
+            open(st, infeasible);
+            save(session, TripChatStatus.ASKING, st);
+            return;
+        }
+        OpenQuestion undecided = modelFirst ? null : UndecidedSlots.followUp(st, draft, answered, today());
+        if (undecided != null) {
+            st.setResume(null);
+            open(st, undecided);
+            save(session, TripChatStatus.ASKING, st);
+            return;
+        }
+        String picked = UndecidedSlots.pick(st, draft, answered, today(), () -> destinationCandidates.list().stream()
+                .map(DestinationCandidates.Candidate::nameKo).toList());
+        if (picked != null) draft = DraftFolder.fold(st.getEvents());
+        // 대신 정했으면 방금 답이 여행 이야기가 아니었어도 같은 질문을 다시 열지 않는다.
+        NextStepPolicy.Decision d = NextStepPolicy.decide(draft, st.getAskedKeys(), answered,
+                picked != null ? null : it, answerKind, datesTouched, today());
+        if (picked != null && d.question() != null) d = new NextStepPolicy.Decision(d.question().withLead(picked));
         st.setResume(null);
         if (NextStepPolicy.conflictUnasked(it, d)) {
             String answer = st.getTurns().getLast().answer();
@@ -414,6 +443,42 @@ public class TripChatService {
             open(st, d.question());
             save(session, TripChatStatus.ASKING, st);
         }
+    }
+
+    private record RecommendTarget(String questionId, Map<String, String> traveler) {}
+
+    /**
+     * 반영 뒤 열린 여행지 추천 질문({@link UndecidedSlots#followUp})에 추천지를 채운다. 모델 호출을 반영 트랜잭션 밖에서 해야 호출을 기다리는 동안 DB
+     * 연결을 붙잡지 않는다. 그 사이 질문이 바뀌었으면 채우지 않는다.
+     */
+    private TripChatResponse fillRecommendation(Long userId, UUID id, TripChatResponse current) {
+        RecommendTarget target = inTx(() -> {
+            ChatState st = readOrConflict(loadActive(userId, id));
+            OpenQuestion q = st.getOpenQuestion();
+            if (!UndecidedSlots.awaitsRecommendation(q)) return null;
+            return new RecommendTarget(q.id(), UndecidedSlots.travelerOf(DraftFolder.fold(st.getEvents())));
+        });
+        if (target == null) return current;
+        DestinationRecommender.Recommendation rec;
+        try {
+            List<String> names = destinationCandidates.list().stream().map(DestinationCandidates.Candidate::nameKo)
+                    .toList();
+            rec = recommender.recommend(target.traveler(), names);
+        } catch (RuntimeException e) {
+            // 답은 이미 반영됐다. 추천을 못 채워도 여행자는 비어 있는 추천 질문에 직접 답할 수 있다.
+            log.warn("여행지 추천 채우기 실패 session={}: {}", id, e.getMessage());
+            return current;
+        }
+        return inTx(() -> {
+            TripChatSession session = loadActive(userId, id);
+            ChatState st = readOrConflict(session);
+            OpenQuestion q = st.getOpenQuestion();
+            if (q == null || !q.id().equals(target.questionId())) return view(session, st);
+            if (rec.asked()) st.setHaikuCalls(st.getHaikuCalls() + 1);
+            st.setOpenQuestion(UndecidedSlots.withRecommendation(q, rec));
+            save(session, TripChatStatus.ASKING, st);
+            return view(session, st);
+        });
     }
 
     /** 같은 답의 다른 조건은 이미 기록됐으므로 메모에는 부딪힌 내용만 남긴다. */
@@ -623,7 +688,8 @@ public class TripChatService {
         return LocalDate.now(clock);
     }
 
-    private record Matches(String signature, Map<String, PlaceMatch> byKey) {}
+    /** @param suggestions 데이터에서 찾지 못한 꼭 갈 곳마다 비슷한 관광지 */
+    private record Matches(String signature, Map<String, PlaceMatch> byKey, Map<String, String> suggestions) {}
 
     private record Prepared(TripChatResponse view, OpenQuestion question, String context, String state) {
         static Prepared done(TripChatResponse view) {

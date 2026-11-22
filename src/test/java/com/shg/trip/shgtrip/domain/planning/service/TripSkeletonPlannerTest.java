@@ -86,4 +86,27 @@ class TripSkeletonPlannerTest {
                 .isEqualTo(Map.of("서울", 1, "전주", 3));
         assertThat(TripSkeletonPlanner.cityDaysOf("부산과 경주를 둘러보고 싶어요", List.of("부산", "경주"))).isEmpty();
     }
+
+    @Test
+    @DisplayName("출발 시각 없는 마지막 날에 둔 저녁 요구는 저녁이 있는 앞날로 옮긴다")
+    void eveningWantLeavesDayWithoutEvening() {
+        DraftPlan.Want night = new DraftPlan.Want("w1", "place", "반포한강공원 야경", "반포한강공원", null, "evening",
+                List.of("반포한강공원"));
+        DraftPlan.Item item = new DraftPlan.Item("evening", "night", "반포한강공원", "반포", true, "w1", null, null);
+        DraftPlan draft = new DraftPlan("서울", List.of(night), List.of(
+                new DraftPlan.Day(1, "종로", "종로", List.of(), List.of()),
+                new DraftPlan.Day(2, "반포", null, List.of(item), List.of())));
+        List<String> notes = new ArrayList<>();
+
+        DraftPlan out = TripSkeletonPlanner.withEveningWantsOnEveningDays(draft,
+                TripPlannerTest.request(java.time.LocalTime.of(13, 0), null), 2, notes, new ArrayList<>(),
+                new java.util.HashSet<>());
+
+        assertThat(out.days().get(0).items()).singleElement().satisfies(i -> {
+            assertThat(i.want()).isEqualTo("w1");
+            assertThat(i.slot()).isEqualTo("evening");
+        });
+        assertThat(out.days().get(1).items()).isEmpty();
+        assertThat(notes).hasSize(1);
+    }
 }

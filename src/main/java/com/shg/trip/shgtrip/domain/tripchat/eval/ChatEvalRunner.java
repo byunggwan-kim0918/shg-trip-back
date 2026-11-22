@@ -143,6 +143,7 @@ class ChatEvalRunner implements CommandLineRunner {
                     a.put("slot", q.slot());
                     a.put("title", q.title());
                     a.put("lead", q.lead());
+                    a.put("examples", String.join(",", q.examples() == null ? List.of() : q.examples()));
                     asked.add(a);
                 }
                 boolean base = q.kind().equals("BASE") || q.kind().equals("EDIT");

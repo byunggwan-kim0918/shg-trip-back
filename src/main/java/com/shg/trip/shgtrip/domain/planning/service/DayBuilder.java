@@ -153,20 +153,61 @@ final class DayBuilder {
     /** 요청 장소를 살리려고 다른 장소를 빼며 다시 짓는 횟수 상한. */
     private static final int MAX_REBUILDS = 8;
 
+    /**
+     * 도는 순서와 덜 좋은 배치를 빼는 기준을 바꿔 하루를 여러 번 짓고, 요청 장소를 가장 덜 잃고 숙소에 늦지 않는 안 가운데
+     * {@link DayScore} 감점이 가장 작은 안을 고른다.
+     */
     static Built build(Frame f, List<Stop> stops) {
-        return build(f, stops, false);
+        List<Stop> meals = lunchAsDinner(f, stops);
+        List<List<Stop>> orders = new ArrayList<>();
+        orders.add(ordered(meals, f.startAt() != null ? f.startAt() : f.arrivalHub()));
+        orders.add(bySlot(meals));
+        if (f.endAt() != null) orders.add(ordered(meals, f.endAt()));
+        Variant best = null;
+        for (List<Stop> order : orders) {
+            for (boolean strictSoft : new boolean[]{true, false}) {
+                Variant v = buildOrder(f, order, true, strictSoft);
+                v = new Variant(v.built(), v.lostProtected(), v.late(), DayScore.penalty(f, meals, v.built()));
+                if (best == null || v.betterThan(best, f.endIsHub())) best = v;
+            }
+        }
+        return best.built();
     }
 
     /** @param keepOrder 주어진 순서대로 돈다. 다 지은 일정을 고친 뒤 시각만 다시 맞출 때 쓴다 */
     static Built build(Frame f, List<Stop> stops, boolean keepOrder) {
-        stops = lunchAsDinner(f, stops);
+        return buildOrder(f, lunchAsDinner(f, stops), keepOrder, true).built();
+    }
+
+    /** @param penalty 덜 좋은 정도. 지을 때만 매긴다 */
+    private record Variant(Built built, int lostProtected, boolean late, double penalty) {
+        /** @param toHub 출발 허브로 끝나는 날. 늦으면 떠나지 못해 요청 장소보다 먼저 본다 */
+        boolean betterThan(Variant o, boolean toHub) {
+            if (toHub && late != o.late) return !late;
+            if (lostProtected != o.lostProtected) return lostProtected < o.lostProtected;
+            if (late != o.late) return !late;
+            return penalty < o.penalty;
+        }
+    }
+
+    /** 끼니 칸 순서만 지키고 같은 칸 안에서는 초안이 적은 순서대로 돈다. */
+    private static List<Stop> bySlot(List<Stop> stops) {
+        List<Stop> sorted = new ArrayList<>(stops);
+        sorted.sort(Comparator.comparingInt(DayBuilder::slotRank));
+        return sorted;
+    }
+
+    /**
+     * @param strictSoft 끼니 시간을 밀어내거나 개점을 오래 기다리는 장소를 바로 뺀다. 끄면 넣어 두고 점수로 견준다
+     */
+    private static Variant buildOrder(Frame f, List<Stop> stops, boolean keepOrder, boolean strictSoft) {
         Set<Long> excluded = new HashSet<>();
         List<String> finalDropped = new ArrayList<>();
         Attempt best = null;
         List<String> bestDropped = null;
         for (int round = 0; ; round++) {
             List<String> dropped = new ArrayList<>(finalDropped);
-            Attempt a = attempt(f, stops, excluded, dropped, keepOrder);
+            Attempt a = attempt(f, stops, excluded, dropped, keepOrder, strictSoft);
             // 자리를 양보해도 요청 장소가 들어가지 않으면(마지막 날 저녁에 둔 야경) 양보 전 일정을 쓴다.
             if (a.lateBy <= 0 && (best == null || a.lostProtected.size() < best.lostProtected.size())) {
                 best = a;
@@ -187,7 +228,8 @@ final class DayBuilder {
                     a = best;
                     dropped = bestDropped;
                 }
-                return new Built(a.steps, dropped, a.placed.stream().map(Stop::place).toList(), a.placed);
+                return new Variant(new Built(a.steps, dropped, a.placed.stream().map(Stop::place).toList(), a.placed),
+                        a.lostProtected.size(), a.lateBy > 0, 0);
             }
             excluded.add(victim.place().placeId());
             finalDropped.add(victim.place().name() + "(" + reason + ")");
@@ -226,7 +268,7 @@ final class DayBuilder {
     }
 
     private static Attempt attempt(Frame f, List<Stop> stops, Set<Long> excluded, List<String> dropped,
-                                   boolean keepOrder) {
+                                   boolean keepOrder, boolean strictSoft) {
         DayState day = new DayState(new SelectionOutput.DayPlan(f.dayNumber(), null, List.of(), null, null));
         DayOfWeek dow = f.date().getDayOfWeek();
         LinkedList<Stop> spares = new LinkedList<>(f.spares() == null ? List.of() : f.spares());
@@ -234,6 +276,10 @@ final class DayBuilder {
         List<Stop> queue = keepOrder ? new ArrayList<>(stops)
                 : ordered(stops, f.startAt() != null ? f.startAt() : f.arrivalHub());
         queue.removeIf(s -> excluded.contains(s.place().placeId()));
+        // 좌표가 없는 곳은 오가는 시간을 알 수 없어, 넣으면 그 앞뒤 구간이 모두 이동 없이 이어진다.
+        for (Stop s : queue) if (coordsOf(s.place()) == null) dropped.add(s.place().name() + "(위치 모름)");
+        queue.removeIf(s -> coordsOf(s.place()) == null);
+        spares.removeIf(s -> coordsOf(s.place()) == null);
         List<PlaceCandidate> seen = new ArrayList<>(f.earlier() == null ? List.of() : f.earlier());
         Set<Long> used = new HashSet<>();
         seen.forEach(c -> used.add(c.placeId()));
@@ -273,7 +319,7 @@ final class DayBuilder {
                 dropped.add(stop.place().name() + "(이미 간 곳)");
                 continue;
             }
-            Slot slot = fit(f, dow, prev, stop, t, override);
+            Slot slot = fit(f, dow, prev, stop, t, override, strictSoft);
             if (slot != null && (stop.meal() || stop.evening()) && slot.start() - slot.arrive() > GAP_TO_FILL
                     && sights(placed) + sights(queue.subList(i, queue.size())) < f.maxSights()) {
                 Stop filler = pickSpare(f, dow, prev, t, spares, used, seen, slot.start(), override);
@@ -302,7 +348,7 @@ final class DayBuilder {
                 }
                 continue;
             }
-            if (!stop.meal() && !stop.protect() && pushesMealOut(queue, i, slot)) {
+            if (strictSoft && !stop.meal() && !stop.protect() && pushesMealOut(queue, i, slot)) {
                 dropped.add(stop.place().name() + "(끼니 시간 침범)");
                 continue;
             }
@@ -379,15 +425,29 @@ final class DayBuilder {
         return false;
     }
 
-    /** 그 시각에 갈 수 있으면 도착·시작·끝 시각, 아니면 null. */
     private static Slot fit(Frame f, DayOfWeek dow, PlaceCandidate prev, Stop stop, int t, TransportLeg override) {
+        return fit(f, dow, prev, stop, t, override, true);
+    }
+
+    /**
+     * 그 시각에 갈 수 있으면 도착·시작·끝 시각, 아니면 null.
+     *
+     * @param strictSoft 개점을 오래 기다려야 하는 장소를 넣지 않는다
+     */
+    private static Slot fit(Frame f, DayOfWeek dow, PlaceCandidate prev, Stop stop, int t, TransportLeg override,
+                            boolean strictSoft) {
         PlaceCandidate c = stop.place();
         TransportLeg leg = override != null ? override : legOf(prev, c, f.transportPref(), f.slowWalk());
+        if (leg == null && prev != null) return null;
         int arrive = t + (leg == null ? 0 : leg.durationMin());
         int start = arrive;
         if (stop.sunrise()) {
             int s = Math.max(arrive, f.sunrise() - SUNRISE_LEAD);
-            return s > f.sunrise() + SUNRISE_LEAD ? null : new Slot(arrive, s, s + SUNRISE_MINUTES, leg);
+            if (s > f.sunrise() + SUNRISE_LEAD) return null;
+            // 이름에 '일출'이 든 시설(일출랜드)은 일출 전에 문을 열지 않는다.
+            List<int[]> open = OpeningHoursText.rangesFor(DayTiming.openingHoursOf(c), dow);
+            if (open != null && open.stream().noneMatch(r -> r[0] <= s && s + SUNRISE_MINUTES <= r[1])) return null;
+            return new Slot(arrive, s, s + SUNRISE_MINUTES, leg);
         }
         if (!stop.evening() && !stop.protect() && isBridge(c)) return null;
         if ("lunch".equals(stop.slot()) && stop.meal()) start = Math.max(start, LUNCH_EARLIEST);
@@ -411,7 +471,7 @@ final class DayBuilder {
                     .min(Comparator.comparingInt(r -> r[0])).orElse(null);
             if (open == null) return null;
             int s = Math.max(start, open[0]);
-            if (s - start > MAX_OPENING_WAIT && !stop.meal()) return null;
+            if (strictSoft && s - start > MAX_OPENING_WAIT && !stop.meal()) return null;
             int e = Math.min(s + duration, open[1]);
             if (e - s < Math.min(duration, MIN_VISIT)) return null;
             return daylight(f, stop, new Slot(arrive, s, e, leg));
@@ -432,13 +492,16 @@ final class DayBuilder {
 
     private static String whyNot(Frame f, DayOfWeek dow, PlaceCandidate prev, Stop stop, int t) {
         PlaceCandidate c = stop.place();
+        if (prev != null && legOf(prev, c, f.transportPref(), f.slowWalk()) == null) return "갈 수 없는 구간";
         if (stop.sunrise()) return "일출 시각 지남";
         if (stop.meal() && "lunch".equals(stop.slot())) return "점심 시간 지남";
+        if (!stop.evening() && !stop.protect() && isBridge(c)) return "낮에는 다리를 넣지 않음";
         if (TripCalendar.museumsClosed(f.country(), f.date()) && isMuseum(c)) {
             return "명절 휴관";
         }
         List<int[]> ranges = OpeningHoursText.rangesFor(DayTiming.openingHoursOf(c), dow);
         if (ranges != null && ranges.isEmpty()) return "휴무일";
+        if (ranges != null && ranges.stream().anyMatch(r -> r[0] > t + MAX_OPENING_WAIT)) return "개점까지 오래 기다림";
         if (ranges != null) return "영업시간 밖";
         return "해 진 뒤 야외";
     }
@@ -464,7 +527,7 @@ final class DayBuilder {
             Slot slot = fit(f, dow, prev, s, t, override);
             if (slot == null || slot.end() > mustEndBy || slot.start() - slot.arrive() > MAX_OPENING_WAIT) continue;
             double km = distanceKm(prev, s.place());
-            if (km < bestKm) {
+            if (best == null || km < bestKm) {
                 bestKm = km;
                 best = s;
             }
@@ -530,12 +593,17 @@ final class DayBuilder {
 
     /**
      * 이동수단마다 걷는 한계를 따로 둔다. 도보 여행자의 먼 구간을 차 속도로 잡으면 하루 도보가 비현실적으로 길어진다.
+     *
+     * @return 좌표가 없거나 하루 안에 오갈 거리가 아니면 null. 도시를 옮기는 구간은 {@link IntercityLegs}가 잰다
      */
     static TransportLeg legOf(PlaceCandidate from, PlaceCandidate to, String transportPref, boolean slowWalk) {
         if (from == null || to == null) return null;
         double[] a = coordsOf(from);
         double[] b = coordsOf(to);
         if (a == null || b == null) return null;
+        boolean hubTransfer = PlaceCategoryConstants.isOverseasHub(from.country(), from.category())
+                || PlaceCategoryConstants.isOverseasHub(to.country(), to.category());
+        if (GeoUtils.haversine(a, b) > ScheduleTuning.maxLegKm(hubTransfer)) return null;
         double km = GeoUtils.haversine(a, b) * GeoUtils.ROAD_DISTANCE_FACTOR;
         String pref = transportPref == null ? "any" : transportPref;
         double walkLimit = switch (pref) {
@@ -605,9 +673,10 @@ final class DayBuilder {
                 || name.contains("박물관") || name.contains("미술관") || name.contains("과학관") || name.contains("기념관");
     }
 
+    /** 좌표를 모르면 아주 먼 곳으로 본다. 0으로 보면 좌표 없는 곳이 아무 곳과 같은 자리가 된다. */
     static double distanceKm(PlaceCandidate a, PlaceCandidate b) {
         double[] x = coordsOf(a);
         double[] y = coordsOf(b);
-        return x == null || y == null ? 0 : GeoUtils.haversine(x, y);
+        return x == null || y == null ? Double.MAX_VALUE : GeoUtils.haversine(x, y);
     }
 }

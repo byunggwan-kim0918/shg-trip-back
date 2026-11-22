@@ -8,6 +8,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
@@ -93,6 +94,17 @@ class TripHubs {
     /** 출발 허브에 닿아야 하는 시각이 출발보다 앞서는 분. 허브를 모르면 공항으로 본다. */
     static int departureBuffer(PlaceCandidate hub, String country) {
         return departureBuffer(hub == null || isAirport(hub), country);
+    }
+
+    /**
+     * 출발 허브에 닿아야 하는 시각(분). 차로 돌아가면 출발 시각이다. 짓는 쪽과 검사가 함께 써야 시각을 지킨 일정이
+     * 출발 초과로 판정되지 않는다.
+     *
+     * @param hub 출발 허브. 모르면 null이고 공항으로 본다
+     */
+    static int departureDeadline(LocalTime departure, PlaceCandidate hub, boolean drivesHome, String country) {
+        int at = departure.getHour() * 60 + departure.getMinute();
+        return drivesHome ? at : at - departureBuffer(hub, country);
     }
 
     /** 국제선은 출국 수속에 국내선보다 오래 걸린다. */

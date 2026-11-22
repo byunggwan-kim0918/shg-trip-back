@@ -3,8 +3,6 @@ package com.shg.trip.shgtrip.domain.planning.curate;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
-import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
-import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationResultStore;
 import com.shg.trip.shgtrip.domain.planning.service.GenerationStream;
 import com.shg.trip.shgtrip.domain.planning.service.TripGenerationExecutor;
@@ -48,7 +46,6 @@ public class CurationRunner implements CommandLineRunner {
 
     private final TripGenerationExecutor executor;
     private final GenerationResultStore resultStore;
-    private final ItineraryRepository itineraryRepository;
     private final ObjectMapper objectMapper;
     private final ApplicationContext context;
 
@@ -71,18 +68,14 @@ public class CurationRunner implements CommandLineRunner {
         log.info("CURATE 시작 - {}건, userId={}", items.size(), userId);
 
         int failed = 0;
-        int needsAdjustment = 0;
         for (Item item : items) {
             Long itineraryId = generate(item);
             if (itineraryId == null) failed++;
-            Itinerary.QualityStatus quality = itineraryId == null ? null : itineraryRepository.findById(itineraryId)
-                    .map(Itinerary::getQualityStatus).orElse(null);
-            if (quality == Itinerary.QualityStatus.NEEDS_ADJUSTMENT) needsAdjustment++;
-            log.info("CURATE key={} itineraryId={} status={} quality={}", item.key(), itineraryId,
-                    itineraryId == null ? "FAIL" : "OK", quality);
+            log.info("CURATE key={} itineraryId={} status={}", item.key(), itineraryId,
+                    itineraryId == null ? "FAIL" : "OK");
         }
 
-        log.info("CURATE 완료 - 성공 {}건(조정 필요 {}건), 실패 {}건", items.size() - failed, needsAdjustment, failed);
+        log.info("CURATE 완료 - 성공 {}건, 실패 {}건", items.size() - failed, failed);
         int exitCode = failed == 0 ? 0 : 1;
         System.exit(SpringApplication.exit(context, () -> exitCode));
     }

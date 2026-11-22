@@ -40,8 +40,6 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class DraftRequestFactory {
 
-    /** 한국 운전면허(국제운전면허 포함)로 운전할 수 없는 나라. 자동차 요청은 택시·차량 호출로 본다. */
-    private static final Set<String> NO_KOREAN_LICENSE_COUNTRIES = Set.of("CN", "VN");
     /** 직접 적은 장소 이름이 여행 도시에서 이보다 멀면 다른 지역의 같은 이름이다. */
     private static final double CUSTOM_PLACE_MAX_KM = 100.0;
     private static final int CUSTOM_PLACE_SEARCH_LIMIT = 10;
@@ -109,6 +107,15 @@ public class DraftRequestFactory {
         TransportationHub hub = input.transportationHub();
         Place arrivalHub = hub == null ? null : hubs.named(hub.arrivalHub(), cities, input.regions());
         Place departureHub = hub == null ? null : hubs.named(hub.departureHub(), cities, input.regions());
+        // 짓는 쪽은 도착 시각이 있어야 도착 허브를, 출발 시각이 있고 차로 돌아가지 않아야 출발 허브를 쓴다.
+        Destination lastCity = cities.get(cities.size() - 1);
+        boolean drivesHome = "car".equals(input.transportPref()) && !hubs.flies(lastCity);
+        if (request.arrivalTime() != null) {
+            noticeUnusedHub(hub == null ? null : hub.arrivalHub(), arrivalHub, cities.get(0), cities, "도착", notices);
+        }
+        if (request.departureTime() != null && !drivesHome) {
+            noticeUnusedHub(hub == null ? null : hub.departureHub(), departureHub, lastCity, cities, "출발", notices);
+        }
         TripExclusions exclusions = new TripExclusions(PlaceRestrictions.of(input.restrictions()),
                 AvoidedPlaces.load(placeRepository, request.avoidPlaceIds()),
                 FerryAreaFilter.activeTokens(input.ferryOnlyAreas(), input.description(), request.customPlaceNames(),
@@ -123,6 +130,18 @@ public class DraftRequestFactory {
         return new Prepared(draftRequest, input, notices);
     }
 
+    /**
+     * 말한 공항·역을 찾지 못했거나 그 도시의 허브가 아니면 짓는 단계가 대표 허브로 바꾼다. 바꾼 사실을 알리지 않으면 여행자는
+     * 말한 곳에서 출발하는 일정으로 안다.
+     */
+    private static void noticeUnusedHub(String named, Place found, Destination city, List<Destination> cities,
+                                        String which, List<String> notices) {
+        if (named == null || named.isBlank()) return;
+        if (found != null && DraftItineraryPlanner.servesCity(PlaceCandidates.of(found, 0), city, cities)) return;
+        notices.add("말씀하신 " + which + " '" + named + "'을(를) " + city.nameKo()
+                + "에서 찾지 못해 여행지 대표 공항·역 기준으로 짰어요.");
+    }
+
     /** 동행·인원·피할 조건은 화면에서 고른 값을 쓴다. 인원을 안 줬으면 동행에서 정해지는 인원만 쓴다. */
     private static VectorEnrichedInput withUserChoices(ItineraryGenerateRequest request, VectorEnrichedInput enriched,
                                                        List<String> notices) {
@@ -131,7 +150,7 @@ public class DraftRequestFactory {
                 request.partySize() != null ? request.partySize() : VectorEnrichedInput.defaultPartySize(chosen));
         if (!"car".equals(input.transportPref()) || input.country() == null) return input;
         String country = input.country().trim().toUpperCase(Locale.ROOT);
-        if (!NO_KOREAN_LICENSE_COUNTRIES.contains(country)) return input;
+        if (!TripFeasibility.drivingNotAllowed(country)) return input;
         notices.add(Destinations.countryNameKo(country) + "은 한국 운전면허로 운전할 수 없어 택시·차량 호출로 다니는 기준으로 짰어요.");
         return input.withTransportPref("any");
     }
@@ -172,10 +191,7 @@ public class DraftRequestFactory {
             roles.put(String.valueOf(row[0]), ((Number) row[1]).longValue());
         }
         long days = ChronoUnit.DAYS.between(input.startDate(), input.endDate()) + 1;
-        long sights = roles.getOrDefault("SIGHT", 0L) + roles.getOrDefault("ACTIVITY", 0L);
-        boolean enough = sights >= days && roles.getOrDefault("MEAL", 0L) >= 2 * days
-                && roles.getOrDefault("LODGING", 0L) >= 1;
-        if (enough) return;
+        if (TripFeasibility.enoughPlaceData(roles, days)) return;
         log.info("여행지 장소 부족: regions={}, 역할별={}", input.regions(), roles);
         throw new BusinessException(ErrorCode.INSUFFICIENT_PLACE_DATA, sparseMessage(input));
     }

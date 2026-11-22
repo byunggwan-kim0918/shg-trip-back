@@ -9,6 +9,8 @@ import java.util.List;
 /**
  * @param notes     스텝 이야기. 대안을 고르면 그 대안에 실려 있던 글로 바뀌고, 없으면 null이다
  * @param placeNote 스텝 장소의 한 줄 설명(종류·알려진 정도). 숙소·교통 거점은 null
+ * @param travelEstimated 이동 시간이 노선·시간표가 아닌 거리로 추정한 값인지. 지금은 모든 구간이 추정이고, 이동이
+ *                        없으면 false
  */
 public record ItineraryStepResponse(
         Long id,
@@ -25,7 +27,8 @@ public record ItineraryStepResponse(
         String placeNote,
         String userNotes,
         BigDecimal estimatedCost,
-        List<AlternativeOptionResponse> alternatives
+        List<AlternativeOptionResponse> alternatives,
+        boolean travelEstimated
 ) {
     public static ItineraryStepResponse from(ItineraryStep step) {
         return new ItineraryStepResponse(
@@ -45,7 +48,8 @@ public record ItineraryStepResponse(
                 step.getEstimatedCost(),
                 step.getAlternatives().stream()
                         .map(alt -> AlternativeOptionResponse.from(alt, step.getPlace()))
-                        .toList()
+                        .toList(),
+                step.getTransportationDuration() != null
         );
     }
 }

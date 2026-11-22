@@ -4,6 +4,7 @@ import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
 import com.shg.trip.shgtrip.domain.place.dto.PlaceResponse;
+import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.place.service.PlaceService;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceIdentity;
@@ -40,6 +41,10 @@ public class PlaceMatcher {
 
     private final PlaceService placeService;
     private final Destinations destinations;
+    private final PlaceFactsReader factsReader;
+
+    /** {@link #suggestions}에서 여행지 밖에는 있는 장소의 표시. */
+    public static final String ELSEWHERE = "";
 
     public static String key(DraftField field, String text) {
         return field.name() + "|" + TextNormalizer.key(text);
@@ -71,6 +76,40 @@ public class PlaceMatcher {
                         .ifPresent(m -> out.put(key(field, item.text()), m));
             }
         }
+        Map<Long, PlaceFactsReader.PlaceFact> facts = factsReader.find(out.values().stream()
+                .map(PlaceMatch::placeId).filter(java.util.Objects::nonNull).distinct().toList());
+        out.replaceAll((k, m) -> new PlaceMatch(m.placeId(), m.name(), m.major(), m.openingHours(),
+                facts.containsKey(m.placeId()) ? facts.get(m.placeId()).closedDays() : null));
+        return out;
+    }
+
+    /**
+     * 꼭 가고 싶다고 했는데 데이터에서 찾지 못한 곳마다 여행지 안에서 이름이 가장 비슷한 관광지. 다른 도시에서는
+     * 찾아지는 곳은 데이터에 없는 것이 아니라 여행지와 맞지 않는 것이라 {@link #ELSEWHERE}로 표시한다.
+     *
+     * @param matched {@link #match} 결과
+     */
+    public Map<String, String> suggestions(Draft draft, Map<String, PlaceMatch> matched) {
+        Map<String, String> out = new LinkedHashMap<>();
+        String destination = draft.value(DraftField.DESTINATION);
+        Set<String> regions = destination == null ? Set.of() : destinationRegions(destination);
+        if (regions.isEmpty()) return out;
+        for (Item item : TripRequestMapper.userItems(draft, DraftField.MUST_VISIT)) {
+            String k = key(DraftField.MUST_VISIT, item.text());
+            if (matched.containsKey(k)) continue;
+            if (find(item.text(), null).isPresent()) {
+                out.put(k, ELSEWHERE);
+                continue;
+            }
+            try {
+                placeService.searchPlacesInRegions(item.text().strip(), regions, SEARCH_SIZE).stream()
+                        .filter(p -> "ATTRACTION".equals(PlaceCategoryConstants.majorCategory(p.category())))
+                        .findFirst()
+                        .ifPresent(p -> out.put(k, p.nameKo() != null && !p.nameKo().isBlank() ? p.nameKo() : p.name()));
+            } catch (Exception e) {
+                log.warn("비슷한 장소 찾기 실패: {}", e.getMessage());
+            }
+        }
         return out;
     }
 
@@ -95,22 +134,24 @@ public class PlaceMatcher {
         return java.util.Optional.ofNullable(nonSight);
     }
 
+    /** 이름이 짧거나 총칭어("카페")면 찾지 않는다. 찾지 않은 이름을 데이터에 없다고 말하면 안 된다. */
+    static boolean searchable(String name) {
+        String query = TextNormalizer.key(name);
+        return query.length() >= 2 && !isGeneric(query);
+    }
+
+    /** 조회가 실패하면 예외를 그대로 낸다. 빈 결과로 바꾸면 일시 장애를 데이터에 없다고 판정한다. */
     private java.util.Optional<PlaceMatch> findExactly(String name, String destination, boolean avoiding) {
         String query = TextNormalizer.key(name);
-        if (query.length() < 2 || isGeneric(query)) return java.util.Optional.empty();
-        try {
-            Set<String> regions = destination == null ? Set.of() : destinationRegions(destination);
-            if (!regions.isEmpty()) {
-                java.util.Optional<PlaceMatch> inRegion = pick(
-                        placeService.searchPlacesInRegions(name.strip(), regions, SEARCH_SIZE), query, null, avoiding);
-                if (inRegion.isPresent()) return inRegion;
-            }
-            return pick(placeService.searchPlaces(name.strip(), PageRequest.of(0, SEARCH_SIZE)).getContent(),
-                    query, destination, avoiding);
-        } catch (Exception e) {
-            log.warn("대화 장소 매칭 조회 실패: {}", e.getMessage());
-            return java.util.Optional.empty();
+        if (!searchable(name)) return java.util.Optional.empty();
+        Set<String> regions = destination == null ? Set.of() : destinationRegions(destination);
+        if (!regions.isEmpty()) {
+            java.util.Optional<PlaceMatch> inRegion = pick(
+                    placeService.searchPlacesInRegions(name.strip(), regions, SEARCH_SIZE), query, null, avoiding);
+            if (inRegion.isPresent()) return inRegion;
         }
+        return pick(placeService.searchPlaces(name.strip(), PageRequest.of(0, SEARCH_SIZE)).getContent(),
+                query, destination, avoiding);
     }
 
     private java.util.Optional<PlaceMatch> pick(List<PlaceResponse> results, String query, String destination,
@@ -127,7 +168,7 @@ public class PlaceMatcher {
             if (avoiding && !exact && !kindSuffix) continue;
             if (destination != null && !matchesDestination(p, destination)) continue;
             String shown = p.nameKo() != null && !p.nameKo().isBlank() ? p.nameKo() : p.name();
-            PlaceMatch match = new PlaceMatch(p.id(), shown, major);
+            PlaceMatch match = new PlaceMatch(p.id(), shown, major, p.openingHours(), null);
             if (avoiding && !"ATTRACTION".equals(major)) {
                 if (nonSightMatch == null) nonSightMatch = match;
                 continue;

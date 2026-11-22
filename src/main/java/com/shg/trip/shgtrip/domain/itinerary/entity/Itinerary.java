@@ -69,11 +69,6 @@ public class Itinerary extends BaseTimeEntity {
     @Builder.Default
     private ItineraryStatus status = ItineraryStatus.DRAFT;
 
-    @Column(name = "quality_status", nullable = false, length = 20)
-    @Enumerated(EnumType.STRING)
-    @Builder.Default
-    private QualityStatus qualityStatus = QualityStatus.OK;
-
     /** 편집 뒤 같은 기준으로 다시 판정할 입력(JSON). 관문 이전에 만든 일정은 null이라 다시 판정하지 않는다. */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "plan_context", columnDefinition = "JSONB")
@@ -167,16 +162,13 @@ public class Itinerary extends BaseTimeEntity {
         this.status = ItineraryStatus.FINALIZED;
     }
 
-    public void applyQuality(QualityStatus qualityStatus, List<String> qualityNotices, String planContext) {
-        this.qualityStatus = qualityStatus;
+    public void applyQuality(List<String> qualityNotices, String planContext) {
         this.qualityNotices = qualityNotices;
         this.planContext = planContext;
     }
 
-    /** 편집은 조정 필요를 풀 수만 있다. 사용자가 고른 대안 때문에 상태가 나빠지지 않게 새로 걸지 않는다. */
-    public void reflectEdit(List<String> qualityNotices, boolean meetsCoreQuality) {
+    public void reflectEdit(List<String> qualityNotices) {
         this.qualityNotices = qualityNotices;
-        if (meetsCoreQuality) this.qualityStatus = QualityStatus.OK;
     }
 
     public void generateShareToken(String token, OffsetDateTime expiresAt) {
@@ -186,9 +178,5 @@ public class Itinerary extends BaseTimeEntity {
 
     public enum ItineraryStatus {
         DRAFT, FINALIZED, ARCHIVED
-    }
-
-    public enum QualityStatus {
-        OK, NEEDS_ADJUSTMENT
     }
 }

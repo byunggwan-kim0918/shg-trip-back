@@ -10,7 +10,7 @@ import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
 import com.shg.trip.shgtrip.domain.planning.dto.EnrichmentResult;
 import com.shg.trip.shgtrip.domain.planning.dto.DraftEdit;
 import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
-import com.shg.trip.shgtrip.domain.planning.service.ItineraryVerifier;
+import com.shg.trip.shgtrip.domain.planning.service.ItineraryRules;
 import com.shg.trip.shgtrip.domain.planning.service.TripPlanner;
 import com.shg.trip.shgtrip.domain.planning.dto.DraftPlan;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
@@ -79,7 +79,6 @@ class DraftEvalRunner implements CommandLineRunner {
     private boolean enrich;
 
     private final ObjectMapper objectMapper;
-    private final ItineraryVerifier verifier;
     private final TripPlanner tripPlanner;
     private final DraftRequestFactory requestFactory;
     private final Destinations destinations;
@@ -194,9 +193,13 @@ class DraftEvalRunner implements CommandLineRunner {
                 TripPlanner.Built trip = tripPlanner.build(base, plan, edits);
                 DraftItineraryPlanner.Result result = trip.result();
                 int days = result.frames().size();
-                List<ItineraryVerifier.Violation> violations = verifier.verify(
+                ItineraryRules.Context ran = trip.context();
+                ItineraryRules.Context expected = new ItineraryRules.Context(ran.pace(), ran.transportPref(),
+                        ran.startDate(), days, ran.lastDayHubDeadline(), Map.of(),
                         withSatisfy(conditionsOf(root.path("expect"), req), trip.skeleton().conditions()),
-                        base.input().startDate(), days, result.steps(), result.candidates(), base.cities());
+                        ran.country(), ran.cities());
+                List<ItineraryRules.Violation> violations = new ItineraryRules().evaluate(result.steps(),
+                        result.candidates(), expected, trip.facts()).violations();
                 StringBuilder md = new StringBuilder(render(id, req, result));
                 if (!root.path("finished").asBoolean(true)) md.append("편집 단계 미완료 기록\n");
                 if (!trip.dayNotes().isEmpty() || !trip.tripNotes().isEmpty()) {
@@ -208,7 +211,7 @@ class DraftEvalRunner implements CommandLineRunner {
                 md.append('\n');
                 built.put(file, new String[]{md.toString(), objectMapper.writeValueAsString(Map.of(
                         "id", id, "request", req, "steps", stepRows(result), "notes", result.notes(),
-                        "violations", violations, "problems", root.path("problems"),
+                        "violations", violations, "intent", TripPlanner.intentOf(trip), "problems", root.path("problems"),
                         "edits", edits.size(), "finished", root.path("finished").asBoolean(true)))});
             } catch (RuntimeException e) {
                 log.warn("여행 재구성 실패 {}: {}", id, e.toString());
@@ -230,7 +233,7 @@ class DraftEvalRunner implements CommandLineRunner {
     }
 
     /**
-     * 정답 조건마다 초안이 같은 요구로 적은 장소 이름과 음식을 붙인다. 음식 요구는 메뉴로 확인하고, 메뉴 정보가 없는
+     * 정답 조건마다 초안이 같은 요구로 적은 장소 이름·음식·데이터에 없음 표시를 붙인다. 음식 요구는 메뉴로 확인하고, 메뉴 정보가 없는
      * 식당만 이름으로 본다.
      */
     private static TripConditions withSatisfy(TripConditions expect, TripConditions designed) {
@@ -238,17 +241,23 @@ class DraftEvalRunner implements CommandLineRunner {
         for (TripConditions.Want w : expect.wants()) {
             List<String> satisfy = new ArrayList<>(w.satisfy());
             String food = w.food();
+            boolean matched = false;
+            boolean notInData = true;
+            boolean infeasible = false;
             String k = w.text().replaceAll("\\s", "");
             for (TripConditions.Want d : designed.wants()) {
                 String dk = d.text().replaceAll("\\s", "");
                 if (!dk.contains(k) && !k.contains(dk)) continue;
                 satisfy.addAll(d.satisfy());
                 if (food == null && d.food() != null) food = d.food();
+                matched = true;
+                notInData &= d.notInData();
+                infeasible |= d.infeasible();
             }
-            wants.add(new TripConditions.Want(w.text(), w.timing(), satisfy, food));
+            wants.add(new TripConditions.Want(w.text(), w.timing(), satisfy, food, matched && notInData, infeasible));
         }
         return new TripConditions(wants, expect.cityDays(), expect.avoid(), expect.lowMobility(), expect.transport(),
-                expect.arrival(), expect.departure(), designed.pace());
+                expect.arrival(), expect.departure(), designed.pace(), designed.chosenPlaceIds());
     }
 
     @FunctionalInterface

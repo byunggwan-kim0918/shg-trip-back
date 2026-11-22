@@ -480,7 +480,7 @@ class ItineraryServiceTest {
                 .id(5L).place(other).optionOrder(1).estimatedCost(BigDecimal.valueOf(7000)).build());
         when(qualityGate.previewSwap(eq(itinerary), eq(stepById(11L)), eq(other), any(), eq(stepById(12L)), any()))
                 .thenReturn(new com.shg.trip.shgtrip.domain.planning.service.QualityGate.SwapPreview(
-                        List.of("1일차에 점심 식사가 없어요."), false));
+                        List.of("1일차에 점심 식사가 없어요.")));
 
         AlternativePreviewResponse preview = itineraryService.previewAlternative(ITINERARY_ID, 11L, 5L, USER_ID);
         itineraryService.selectAlternative(ITINERARY_ID, 11L, 5L, USER_ID);
@@ -491,7 +491,6 @@ class ItineraryServiceTest {
         assertThat(preview.costAfter()).isEqualByComparingTo("7000");
         assertThat(preview.newNotices()).containsExactly("1일차에 점심 식사가 없어요.");
         assertThat(preview.resolvedNotices()).isEmpty();
-        assertThat(preview.resolvesAdjustment()).isFalse();
         assertThat(preview.alreadyOnDay()).isNull();
     }
 
@@ -545,16 +544,14 @@ class ItineraryServiceTest {
     }
 
     @Test
-    @DisplayName("공유 링크 응답에는 소유자용 품질 상태와 안내가 없다")
+    @DisplayName("공유 링크 응답에는 소유자용 품질 안내가 없다")
     void sharedResponseHidesQuality() {
-        itinerary.applyQuality(Itinerary.QualityStatus.NEEDS_ADJUSTMENT,
-                List.of("꼭 가고 싶다고 한 '우리 동네 국밥'을(를) 일정에 넣지 못했어요."), "{}");
+        itinerary.applyQuality(List.of("꼭 가고 싶다고 한 '우리 동네 국밥'을(를) 일정에 넣지 못했어요."), "{}");
         itinerary.generateShareToken("token", null);
         when(itineraryRepository.findByShareToken("token")).thenReturn(Optional.of(itinerary));
 
         ItineraryResponse shared = itineraryService.getSharedItinerary("token");
 
-        assertThat(shared.qualityStatus()).isNull();
         assertThat(shared.qualityNotices()).isEmpty();
         assertThat(shared.steps()).hasSize(6);
     }

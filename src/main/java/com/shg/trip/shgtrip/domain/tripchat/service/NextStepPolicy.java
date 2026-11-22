@@ -50,7 +50,7 @@ public final class NextStepPolicy {
             return new Decision(answered.withLead(reply != null ? reply : QuestionBank.OFF_TOPIC_LEAD));
         }
         boolean text = "text".equals(answerKind);
-        boolean budgetLeft = askedKeys.size() < MAX_QUESTIONS;
+        boolean budgetLeft = counted(askedKeys) < MAX_QUESTIONS;
         // 확인 화면에서 덧붙인 말도 앞의 말과 부딪히면 되묻는다. 조용히 한쪽을 고르면 여행자가 알아챌 길이 없다.
         if (onReview) {
             OpenQuestion critical = text && budgetLeft ? modelFollowUp(draft, askedKeys, answered, it, today) : null;
@@ -79,6 +79,13 @@ public final class NextStepPolicy {
             return new Decision(QuestionBank.base(slot, draft, today, lead));
         }
         return new Decision(null);
+    }
+
+    /** 모른다는 답과 지킬 수 없는 조건의 되묻기는 빼고 센다. 그 되묻기가 상한을 채우면 뒤쪽 기본 질문을 묻지 못한다. */
+    static int counted(Set<String> askedKeys) {
+        return (int) askedKeys.stream().filter(k -> !k.startsWith(UndecidedSlots.CITY_RECOMMEND_KEY)
+                && !k.startsWith(UndecidedSlots.DATES_SUGGEST_KEY)
+                && !k.startsWith(TripFeasibilityQuestions.PREFIX)).count();
     }
 
     // 여행자가 바람을 모두 취소해도 이미 물은 항목을 처음 문구로 다시 묻지 않는다.
@@ -182,6 +189,12 @@ public final class NextStepPolicy {
     }
 
     /** 모델이 부딪힌다고 본 답을 이번 결정이 되묻지 못했는지. 그런 답은 기록된 것이 없어 메모로라도 남겨야 한다. */
+    /** 모델이 이번 답에서 부딪힘이나 예약 시각을 되묻자고 했는지. 이 되묻기가 코드의 다른 되묻기보다 먼저다. */
+    static boolean modelAsksCritical(Interpretation it) {
+        return it != null && it.isAnswer() && it.followUp() != null && it.followUp().needed()
+                && CRITICAL_REASONS.contains(it.followUp().reason());
+    }
+
     static boolean conflictUnasked(Interpretation it, Decision d) {
         if (it == null || !it.isAnswer()) return false;
         Interpretation.FollowUp f = it.followUp();
@@ -201,7 +214,7 @@ public final class NextStepPolicy {
                 fit(f.desc(), 80), placeholder != null ? placeholder : "편하게 답해주세요", examples);
     }
 
-    private static String fit(String text, int max) {
+    static String fit(String text, int max) {
         if (text == null) return null;
         String t = text.strip().replaceAll("\\s+", " ");
         return t.isEmpty() || t.length() > max ? null : t;
