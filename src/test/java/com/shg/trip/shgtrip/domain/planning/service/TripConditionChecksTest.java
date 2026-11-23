@@ -105,6 +105,62 @@ class TripConditionChecksTest {
                 .satisfies(v -> assertThat(v.severity()).isEqualTo(Severity.HARD));
     }
 
+    @Test
+    @DisplayName("출발 허브까지 추정한 이동에는 여유를 더해, 여유 없이는 빠듯한 도착을 지킬 수 있다고 보지 않는다")
+    void departureAddsSlackToEstimatedLeg() {
+        TripConditions conditions = conditions(List.of(), null, LocalTime.of(15, 0), List.of());
+        StepData station = new StepData(3, 1, "14:35", "14:35",
+                new PlaceData(BUSAN_STATION.name(), null, STATION, "Busan", "KR", null, null, 5L, null), List.of(),
+                "TAXI", 40, null, null, null, null);
+        List<StepData> day = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "12:00", "13:00", LUNCH),
+                station);
+
+        assertThat(evaluate(day, 1, conditions)).filteredOn(v -> v.rule() == Rule.DEPARTURE_MISSED).singleElement()
+                .satisfies(v -> assertThat(v.message()).contains("추정 이동 여유 10분"));
+    }
+
+    @Test
+    @DisplayName("일정에 없는 요구는 넣을 수 있었는지·사용자가 직접 정했는지·알고 두기로 했는지로 판정한다")
+    void unmetWantRuleFollowsReachAndConsent() {
+        List<StepData> day = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "12:00", "13:00", LUNCH));
+        TripConditions conditions = conditions(List.of(
+                new TripConditions.Want("나카스 야타이", null, List.of(), null, TripConditions.Reach.NOT_FOUND, true,
+                        false),
+                new TripConditions.Want("캐널시티 하카타", null, List.of(), null, TripConditions.Reach.NOT_FOUND, true,
+                        true),
+                new TripConditions.Want("광안리 야경", "evening", List.of(), null, TripConditions.Reach.NO_SLOT, true,
+                        false)), null, null, List.of());
+
+        List<Violation> out = evaluate(day, 1, conditions);
+
+        assertThat(out).filteredOn(v -> v.rule() == Rule.REQUIRED_NOT_FOUND).singleElement().satisfies(v -> {
+            assertThat(v.severity()).isEqualTo(Severity.HARD);
+            assertThat(v.rule().fromRequest).isTrue();
+            assertThat(v.evidence()).containsExactly("나카스 야타이");
+        });
+        assertThat(out).filteredOn(v -> v.rule() == Rule.WANT_ACCEPTED_UNMET).singleElement()
+                .satisfies(v -> assertThat(v.severity()).isEqualTo(Severity.SOFT))
+                .extracting(Violation::evidence).asList().containsExactly("캐널시티 하카타");
+        assertThat(out).filteredOn(v -> v.rule() == Rule.REQUIRED_NO_SLOT).singleElement()
+                .satisfies(v -> assertThat(v.severity()).isEqualTo(Severity.HARD));
+        assertThat(out).extracting(Violation::rule).doesNotContain(Rule.WANT_MISSING);
+    }
+
+    @Test
+    @DisplayName("요구로 넣은 곳의 영업시간을 모르면 지켰다고 보지 않고 미확인으로 남긴다. 문을 여닫지 않는 야외는 빼고 본다")
+    void unknownHoursOfWantedPlaceAreUnknown() {
+        List<StepData> day = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "12:00", "13:00", LUNCH));
+        TripConditions conditions = conditions(List.of(
+                new TripConditions.Want("해운대해수욕장", null, List.of(), null),
+                new TripConditions.Want("할매국밥", null, List.of(), null)), null, null, List.of());
+
+        assertThat(evaluate(day, 1, conditions)).filteredOn(v -> v.rule() == Rule.HOURS_UNKNOWN).singleElement()
+                .satisfies(v -> {
+                    assertThat(v.severity()).isEqualTo(Severity.UNKNOWN);
+                    assertThat(v.evidence()).containsExactly("할매국밥", "할매국밥");
+                });
+    }
+
     private List<StepData> lastDayAt(String stationStart) {
         return List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "12:00", "13:00", LUNCH),
                 step(3, 1, stationStart, stationStart, BUSAN_STATION));
@@ -152,13 +208,14 @@ class TripConditionChecksTest {
     void wantsOutsideGeneratorReach() {
         List<StepData> day = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "12:00", "13:00", LUNCH));
         TripConditions conditions = conditions(List.of(
-                new TripConditions.Want("오타루 운하", null, List.of(), null, true),
+                new TripConditions.Want("오타루 운하", null, List.of(), null, TripConditions.Reach.NOT_FOUND, false,
+                        false),
                 new TripConditions.Want("흑돼지", null, List.of(), "흑돼지")), null, null,
                 List.of(PlaceRestriction.PORK));
 
         List<Violation> out = evaluate(day, 1, conditions);
 
-        assertThat(out).filteredOn(v -> v.rule() == Rule.WANT_NOT_IN_DATA).singleElement()
+        assertThat(out).filteredOn(v -> v.rule() == Rule.WANT_NOT_FOUND).singleElement()
                 .satisfies(v -> assertThat(v.severity()).isEqualTo(Severity.SOFT));
         assertThat(out).extracting(Violation::rule).doesNotContain(Rule.WANT_MISSING, Rule.WANT_FOOD_MISSING);
     }
@@ -185,10 +242,11 @@ class TripConditionChecksTest {
     void chosenPlaceAndInfeasibleWantAreNotHard() {
         List<StepData> day = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "12:00", "13:00", SASHIMI));
         TripConditions conditions = new TripConditions(
-                List.of(new TripConditions.Want("반포 야경", "evening", List.of(), null, false, true)), Map.of(),
+                List.of(new TripConditions.Want("반포 야경", "evening", List.of(), null, TripConditions.Reach.NO_SLOT,
+                        false, false)), Map.of(),
                 List.of(PlaceRestriction.SEAFOOD), false, "transit", null, null, "normal", java.util.Set.of(3L));
 
         assertThat(evaluate(day, 1, conditions)).extracting(Violation::rule)
-                .doesNotContain(Rule.AVOID, Rule.WANT_MISSING, Rule.WANT_TIME);
+                .contains(Rule.WANT_NO_SLOT).doesNotContain(Rule.AVOID, Rule.WANT_MISSING, Rule.WANT_TIME);
     }
 }

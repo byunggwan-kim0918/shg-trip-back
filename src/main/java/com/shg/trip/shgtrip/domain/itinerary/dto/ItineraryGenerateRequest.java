@@ -84,8 +84,25 @@ public record ItineraryGenerateRequest(
         // 피하고 싶다는 장소 이름. 요청 문장에 넣으면 이름 언급을 원하는 곳으로 읽는 단계가 있어 따로 받는다
         @Size(max = 10, message = "피할 장소는 최대 10개까지 가능합니다.")
         List<@NotBlank(message = "피할 장소 이름이 비어 있습니다.")
-             @Size(max = 50, message = "피할 장소 이름은 50자 이내여야 합니다.") String> avoidPlaceNames
+             @Size(max = 50, message = "피할 장소 이름은 50자 이내여야 합니다.") String> avoidPlaceNames,
+
+        // 대화에서 넣지 못한다는 안내를 듣고도 그대로 두기로 한 꼭 갈 곳·바람. 일정에 없어도 동의 없이 뺀 것으로 보지 않는다
+        @Size(max = 10, message = "그대로 둘 요청은 최대 10개까지 가능합니다.")
+        List<@NotBlank(message = "그대로 둘 요청이 비어 있습니다.")
+             @Size(max = 100, message = "그대로 둘 요청은 100자 이내여야 합니다.") String> acceptedUnmet
 ) {
+    public ItineraryGenerateRequest(PlanningMode mode, String destination, List<String> themes, List<String> categories,
+                                    String pace, String transportPref, BigDecimal budget, LocalDate startDate,
+                                    LocalDate endDate, String description, List<Long> selectedPlaceIds,
+                                    List<String> customPlaceNames, String companion, Integer partySize,
+                                    String arrivalTime, String departureTime,
+                                    List<RequiredExperience> requiredExperiences, List<Long> avoidPlaceIds,
+                                    List<PlaceRestriction> restrictions, List<String> avoidPlaceNames) {
+        this(mode, destination, themes, categories, pace, transportPref, budget, startDate, endDate, description,
+                selectedPlaceIds, customPlaceNames, companion, partySize, arrivalTime, departureTime,
+                requiredExperiences, avoidPlaceIds, restrictions, avoidPlaceNames, null);
+    }
+
     public ItineraryGenerateRequest(PlanningMode mode, String destination, List<String> themes, List<String> categories,
                                     String pace, String transportPref, BigDecimal budget, LocalDate startDate,
                                     LocalDate endDate, String description, List<Long> selectedPlaceIds,

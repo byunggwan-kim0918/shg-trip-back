@@ -90,6 +90,19 @@ class DayBuilderTest {
     }
 
     @Test
+    @DisplayName("끼니 칸 순서로 돌면 그날 끝을 넘기는 요청 장소는 끼니보다 먼저 돌아 살린다")
+    void protectedStopGoesBeforeMealWhenDayIsShort() {
+        PlaceCandidate museum = sight("부산박물관", 35.1290, 129.0930);
+        PlaceCandidate lunch = restaurant("쌍둥이돼지국밥", 35.1295, 129.0935);
+
+        DayBuilder.Built built = DayBuilder.build(frame(WEDNESDAY, 9 * 60 + 30, 13 * 60, true, List.of(), List.of()),
+                List.of(stop(lunch, "meal", "lunch"),
+                        new DayBuilder.Stop(museum, "sight", "afternoon", List.of(), true)));
+
+        assertThat(names(built)).containsExactly("부산박물관", "쌍둥이돼지국밥");
+    }
+
+    @Test
     @DisplayName("해 진 뒤에는 낮 야외 장소를 시작하지 않는다")
     void daytimeOutdoorNotAfterDark() {
         PlaceCandidate beach = place("송정해수욕장", "Landmarks and Outdoors > Beach", "SIGHT", 35.1786, 129.1999,

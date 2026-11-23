@@ -37,7 +37,9 @@ public final class ItineraryRules {
         /** 지킬 수 없는 일정이다. 저장하지 않는다. */
         HARD,
         /** 덜 좋은 일정이다. 저장을 막지 않고 어떤 것을 안내할지는 {@link QualityNotices}가 고른다. */
-        SOFT
+        SOFT,
+        /** 지킬 수 있는지 데이터로 확인하지 못했다. 지켰다고 보지 않고 저장 뒤 안내로 남긴다. */
+        UNKNOWN
     }
 
     public enum Rule {
@@ -52,6 +54,8 @@ public final class ItineraryRules {
         UNREACHABLE(Severity.HARD),
         TRAVEL_MISSING(Severity.HARD),
         NOT_ENDING_AT_LODGING(Severity.HARD),
+        REQUIRED_NOT_FOUND(Severity.HARD, true),
+        REQUIRED_NO_SLOT(Severity.HARD, true),
         LUNCH_MISSING(Severity.SOFT),
         DINNER_MISSING(Severity.SOFT),
         MEALS_BACK_TO_BACK(Severity.SOFT),
@@ -62,7 +66,9 @@ public final class ItineraryRules {
         NO_NON_FOOD_ACTIVITY(Severity.SOFT),
         ADDRESS_REGION_MISMATCH(Severity.SOFT),
         WANT_FOOD_MISSING(Severity.SOFT),
-        WANT_NOT_IN_DATA(Severity.SOFT),
+        WANT_NOT_FOUND(Severity.SOFT),
+        WANT_NO_SLOT(Severity.SOFT),
+        WANT_ACCEPTED_UNMET(Severity.SOFT),
         PACE_SHORT(Severity.SOFT),
         LONG_GAP(Severity.SOFT),
         LONG_LEG(Severity.SOFT),
@@ -74,12 +80,20 @@ public final class ItineraryRules {
         EARLY_FINISH(Severity.SOFT),
         CONSECUTIVE_MEAL_KIND(Severity.SOFT),
         SAME_DAY_MEAL_GROUP(Severity.SOFT),
-        MEAL_GROUP_REPEATED(Severity.SOFT);
+        MEAL_GROUP_REPEATED(Severity.SOFT),
+        HOURS_UNKNOWN(Severity.UNKNOWN);
 
         public final Severity severity;
+        /** 요청 자체로 생긴 위반이라 일정 편집으로 고칠 수 없다. 대화에서 요청을 바꿔야 한다. */
+        public final boolean fromRequest;
 
         Rule(Severity severity) {
+            this(severity, false);
+        }
+
+        Rule(Severity severity, boolean fromRequest) {
             this.severity = severity;
+            this.fromRequest = fromRequest;
         }
     }
 

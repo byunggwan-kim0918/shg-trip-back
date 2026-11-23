@@ -126,12 +126,16 @@ public class TripPlanner {
     public record Intent(int wants, int wantsMet, int hard) {
     }
 
+    /** 요구 하나가 일정에 없을 때 나는 규칙. 요구마다 이 가운데 하나만 난다. */
+    static final java.util.Set<ItineraryRules.Rule> UNMET_WANT_RULES = java.util.EnumSet.of(
+            ItineraryRules.Rule.WANT_MISSING, ItineraryRules.Rule.WANT_FOOD_MISSING, ItineraryRules.Rule.WANT_NOT_FOUND,
+            ItineraryRules.Rule.WANT_NO_SLOT, ItineraryRules.Rule.WANT_ACCEPTED_UNMET,
+            ItineraryRules.Rule.REQUIRED_NOT_FOUND, ItineraryRules.Rule.REQUIRED_NO_SLOT);
+
     public static Intent intentOf(Built built) {
         int wants = built.context() == null || built.context().conditions() == null ? 0
                 : built.context().conditions().wants().size();
-        long missed = built.violations().stream().filter(v -> v.rule() == ItineraryRules.Rule.WANT_MISSING
-                || v.rule() == ItineraryRules.Rule.WANT_FOOD_MISSING || v.rule() == ItineraryRules.Rule.WANT_NOT_IN_DATA)
-                .count();
+        long missed = built.violations().stream().filter(v -> UNMET_WANT_RULES.contains(v.rule())).count();
         int hard = (int) built.violations().stream().filter(v -> v.severity() == ItineraryRules.Severity.HARD).count();
         return new Intent(wants, (int) Math.max(0, wants - missed), hard);
     }
@@ -182,11 +186,14 @@ public class TripPlanner {
         return candidates.stream().map(PlaceCandidate::placeId).filter(Objects::nonNull).distinct().toList();
     }
 
-    /** 편집은 한 번뿐이라 지킬 수 없는 위반만 넘긴다. 덜 좋은 것까지 넘기면 모델이 그것을 고치느라 요구를 옮긴다. */
+    /**
+     * 편집은 한 번뿐이라 지킬 수 없는 위반만 넘긴다. 덜 좋은 것까지 넘기면 모델이 그것을 고치느라 요구를 옮긴다. 요청
+     * 자체로 생긴 위반은 편집으로 고칠 수 없어 넘기지 않는다.
+     */
     static List<String> editProblems(Built built) {
         List<String> out = new ArrayList<>();
         for (ItineraryRules.Violation v : built.violations()) {
-            if (v.severity() == ItineraryRules.Severity.HARD) {
+            if (v.severity() == ItineraryRules.Severity.HARD && !v.rule().fromRequest) {
                 out.add(v.message() + (v.fix() == null ? "" : " (고칠 방향: " + v.fix() + ")"));
             }
         }
@@ -207,13 +214,20 @@ public class TripPlanner {
                         + "분). 들르는 곳들이 서로 멀어 줄이지 못했어요.");
                 continue;
             }
-            if (v.rule() != ItineraryRules.Rule.WANT_MISSING && v.rule() != ItineraryRules.Rule.WANT_FOOD_MISSING
-                    && v.rule() != ItineraryRules.Rule.WANT_NOT_IN_DATA) {
-                continue;
-            }
-            if (v.rule() == ItineraryRules.Rule.WANT_NOT_IN_DATA) {
-                out.add("요청하신 '" + v.evidence().get(0) + "'은(는) 아직 업데이트가 되지 않아 일정에 넣지 못했어요.");
-                continue;
+            switch (v.rule()) {
+                case WANT_NOT_FOUND -> {
+                    out.add("요청하신 '" + v.evidence().get(0) + "'은(는) 아직 업데이트가 되지 않아 일정에 넣지 못했어요.");
+                    continue;
+                }
+                case WANT_ACCEPTED_UNMET -> {
+                    out.add("그대로 두기로 하신 '" + v.evidence().get(0) + "'은(는) 일정에 넣지 못했어요.");
+                    continue;
+                }
+                case WANT_MISSING, WANT_FOOD_MISSING -> {
+                }
+                default -> {
+                    continue;
+                }
             }
             TripConditions.Want want = skeleton.conditions().wants().stream()
                     .filter(w -> v.message().contains("'" + w.text() + "'")).findFirst().orElse(null);

@@ -647,6 +647,42 @@ class TripChatServiceTest {
         assertThat(next.question().title()).isEqualTo("'오타루 오르골당'은(는) 어때요? 혹은 다른 곳으로 갈까요?");
     }
 
+    @Test
+    @DisplayName("찾지 못한 꼭 갈 곳을 그대로 두겠다고 답하면 다시 묻지 않고 생성 요청에 그대로 둘 요청으로 넘긴다")
+    void keptMissingPlaceReachesGenerationRequest() {
+        TripChatResponse start = service.create(USER, "req-1");
+        String text = "부산 11월 20일부터 25일까지 둘이, 차로 가고 나카스 야타이는 꼭 가고 싶어. 정해둔 건 없어";
+        given(interpreter.interpret(anyString(), eq(text))).willReturn(result(new Interpretation(List.of(
+                upd("DESTINATION", "부산", "user", "부산"),
+                upd("START_DATE", "2026-11-20", "user", "11월 20일부터 25일까지"),
+                upd("END_DATE", "2026-11-25", "user", "11월 20일부터 25일까지"),
+                upd("COMPANION", "couple", "user", "둘이"),
+                add("PRIORITIES", "맛집 다니기", "user", "맛집"),
+                upd("TRANSPORT", "car", "user", "차로 가고"),
+                add("MUST_VISIT", "나카스 야타이", "user", "나카스 야타이는 꼭 가고 싶어"),
+                new Interpretation.Update("LODGING_STATE", "set", "", "none", "user", "정해둔 건 없어", "", "")),
+                "answered", null, "answer", null)));
+        TripChatResponse asked = answer(start, text);
+        assertThat(asked.question().title()).isEqualTo("다른 곳으로 갈까요?");
+        assertThat(asked.question().examples()).contains("그대로 둘게");
+
+        given(interpreter.interpret(anyString(), eq("그대로 둘게")))
+                .willReturn(result(new Interpretation(List.of(), "answered", null, "answer", null)));
+        TripChatResponse next = answer(asked, "그대로 둘게");
+        while ("ASKING".equals(next.status())) {
+            assertThat(next.question().title()).doesNotContain("다른 곳으로 갈까요");
+            given(interpreter.interpret(anyString(), eq(ENOUGH)))
+                    .willReturn(result(new Interpretation(List.of(), "none", null, "answer", null)));
+            next = answer(next, ENOUGH);
+        }
+        given(travelPlannerService.startGeneration(any(), eq(USER))).willReturn(new GenerateJobResponse("job-1"));
+        service.confirm(USER, id(next), next.version());
+
+        ArgumentCaptor<ItineraryGenerateRequest> captor = ArgumentCaptor.forClass(ItineraryGenerateRequest.class);
+        verify(travelPlannerService).startGeneration(captor.capture(), eq(USER));
+        assertThat(captor.getValue().acceptedUnmet()).containsExactly("나카스 야타이");
+    }
+
     // ---- 도우미 ----
 
     private TripChatResponse toReview() {

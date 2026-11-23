@@ -45,8 +45,10 @@ class TripSkeletonPlannerTest {
         Map<String, PlaceCandidate> pinned = new HashMap<>();
         List<String> notes = new ArrayList<>();
 
-        DraftPlan out = TripSkeletonPlanner.withUserWants(draft,
-                List.of(new DraftItineraryPlanner.UserWant("광안리 야경", "광안리", "evening", null)), pinned, notes);
+        Map<String, DraftItineraryPlanner.UserWant> userById = new HashMap<>();
+        DraftItineraryPlanner.UserWant asked = new DraftItineraryPlanner.UserWant("광안리 야경", "광안리", "evening", null);
+
+        DraftPlan out = TripSkeletonPlanner.withUserWants(draft, List.of(asked), pinned, userById, notes);
 
         assertThat(out.wants()).singleElement().satisfies(w -> {
             assertThat(w.id()).isEqualTo("user1");
@@ -55,6 +57,7 @@ class TripSkeletonPlannerTest {
             assertThat(w.satisfy()).containsExactly("광안리");
         });
         assertThat(pinned).isEmpty();
+        assertThat(userById).containsEntry("user1", asked);
         assertThat(notes).hasSize(1);
     }
 
@@ -68,15 +71,18 @@ class TripSkeletonPlannerTest {
                 null, null, null, null, "SIGHT", null, false, null);
         Map<String, PlaceCandidate> pinned = new HashMap<>();
 
+        Map<String, DraftItineraryPlanner.UserWant> userById = new HashMap<>();
+
         DraftPlan out = TripSkeletonPlanner.withUserWants(draft,
                 List.of(new DraftItineraryPlanner.UserWant("해동용궁사", "해동용궁사", "sunrise", temple)), pinned,
-                new ArrayList<>());
+                userById, new ArrayList<>());
 
         assertThat(out.wants()).singleElement().satisfies(x -> {
             assertThat(x.id()).isEqualTo("w1");
             assertThat(x.time()).isEqualTo("sunrise");
         });
         assertThat(pinned).containsEntry("w1", temple);
+        assertThat(userById).containsKey("w1");
     }
 
     @Test
@@ -98,7 +104,7 @@ class TripSkeletonPlannerTest {
                 new DraftPlan.Day(2, "반포", null, List.of(item), List.of())));
         List<String> notes = new ArrayList<>();
 
-        DraftPlan out = TripSkeletonPlanner.withEveningWantsOnEveningDays(draft,
+        DraftPlan out = TripSkeletonPlanner.withTimedWantsOnFeasibleDays(draft,
                 TripPlannerTest.request(java.time.LocalTime.of(13, 0), null), 2, notes, new ArrayList<>(),
                 new java.util.HashSet<>());
 
@@ -108,5 +114,35 @@ class TripSkeletonPlannerTest {
         });
         assertThat(out.days().get(1).items()).isEmpty();
         assertThat(notes).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("첫날 도착이 일출 뒤면 첫날에 둔 일출 요구를 다음 날로 옮기고, 하루 여행이면 넣을 날이 없다고 알린다")
+    void sunriseWantLeavesLateArrivalDay() {
+        DraftPlan.Want sunrise = new DraftPlan.Want("w1", "place", "해운대 일출", "해운대해수욕장", null, "sunrise",
+                List.of("해운대해수욕장"));
+        DraftPlan.Item item = new DraftPlan.Item("morning", "sight", "해운대해수욕장", "해운대", true, "w1", null, null);
+        DraftPlan twoDays = new DraftPlan("부산", List.of(sunrise), List.of(
+                new DraftPlan.Day(1, "해운대", "해운대", List.of(item), List.of()),
+                new DraftPlan.Day(2, "해운대", null, List.of(), List.of())));
+        java.util.Set<String> infeasible = new java.util.HashSet<>();
+
+        DraftPlan moved = TripSkeletonPlanner.withTimedWantsOnFeasibleDays(twoDays,
+                TripPlannerTest.request(java.time.LocalTime.of(13, 0), null), 2, new ArrayList<>(), new ArrayList<>(),
+                infeasible);
+
+        assertThat(moved.days().get(0).items()).isEmpty();
+        assertThat(moved.days().get(1).items()).singleElement().satisfies(i -> assertThat(i.slot()).isEqualTo("morning"));
+        assertThat(infeasible).isEmpty();
+
+        DraftPlan oneDay = new DraftPlan("부산", List.of(sunrise), List.of(
+                new DraftPlan.Day(1, "해운대", null, List.of(item), List.of())));
+        List<String> conflicts = new ArrayList<>();
+        TripSkeletonPlanner.withTimedWantsOnFeasibleDays(oneDay,
+                TripPlannerTest.request(java.time.LocalTime.of(13, 0), null), 1, new ArrayList<>(), conflicts,
+                infeasible);
+
+        assertThat(infeasible).containsExactly("w1");
+        assertThat(conflicts).singleElement().asString().contains("일출 전에 닿을 수 있는 날이 없어");
     }
 }

@@ -98,10 +98,17 @@ public class DraftRequestFactory {
             notices.add(quoted(extraLodgings) + "은(는) 숙소를 하나만 고정할 수 있어 '" + booked.displayName()
                     + "'에 묵는 일정으로 짰어요.");
         }
+        Map<String, String> accepted = new LinkedHashMap<>();
+        for (String name : nz(request.acceptedUnmet())) accepted.putIfAbsent(DraftPlaceResolver.key(name), name);
         for (ItineraryGenerateRequest.RequiredExperience x : nz(request.requiredExperiences())) {
             String time = timeOf(x.timing(), x.text());
             mustDo.add(x.text() + ("morning".equals(x.timing()) ? " (아침)" : "evening".equals(x.timing()) ? " (저녁)" : ""));
-            wants.add(new DraftItineraryPlanner.UserWant(x.text(), x.areaKeyword(), time, null));
+            wants.add(new DraftItineraryPlanner.UserWant(x.text(), x.areaKeyword(), time, null,
+                    accepted.remove(DraftPlaceResolver.key(x.text())) != null));
+        }
+        // 그대로 두기로 한 요구도 조건에 남겨야 일정에 없는 것이 동의 없이 뺀 것과 구별된다.
+        for (String name : accepted.values()) {
+            wants.add(new DraftItineraryPlanner.UserWant(name, name, timeOf(null, name), null, true));
         }
 
         TransportationHub hub = input.transportationHub();

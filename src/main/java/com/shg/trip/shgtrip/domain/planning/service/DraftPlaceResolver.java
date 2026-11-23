@@ -8,9 +8,11 @@ import org.springframework.stereotype.Component;
 
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -80,14 +82,29 @@ class DraftPlaceResolver {
                        double[] anchor) {
         Resolution last = Resolution.miss("too_short");
         List<String> variants = queryVariants(name, cityNames);
+        List<String> aliases = PlaceIdentity.nameVariants(name);
+        Set<String> lastWords = new HashSet<>();
+        for (String alias : aliases) {
+            String w = lastWord(alias);
+            if (w != null) lastWords.add(w);
+        }
         List<String> roles = kind == null ? ROLES.get("sight") : ROLES.getOrDefault(kind, ROLES.get("sight"));
+        Map<String, List<Place>> fetched = new java.util.HashMap<>();
+        // 별칭이 있으면 같은 이름을 먼저 쓴다. 앞부분만 맞는 딸린 시설("경포해변 중앙광장")이 별칭 이름의 본래 장소를 가린다.
+        // 별칭이 없으면 질의 순서가 이미 긴 이름부터라 이 조회를 더하지 않는다.
+        for (String query : aliases.size() > 1 ? variants : List.<String>of()) {
+            last = resolveKey(query, roles, regions, anchor, 0, fetched, p -> true);
+            if (last.place() != null) return last;
+        }
+        java.util.function.Predicate<Place> keepsRest = keepsRestOf(aliases, cityNames);
         for (String query : variants) {
-            last = resolveKey(query, roles, regions, anchor, 3);
+            last = resolveKey(query, roles, regions, anchor, 3, fetched, lastWords.contains(query) ? keepsRest : p -> true);
             if (last.place() != null) return last;
         }
         // 모델이 명소로 적은 카페·빵집(테라로사 커피공장, 성심당)은 이름이 거의 같을 때만 잇는다.
         for (String query : variants) {
-            last = resolveKey(query, ANY_VISIT, regions, anchor, 2);
+            last = resolveKey(query, ANY_VISIT, regions, anchor, 2, fetched,
+                    lastWords.contains(query) ? keepsRest : p -> true);
             if (last.place() != null) return last;
         }
         for (String query : variants.subList(0, Math.min(2, variants.size()))) {
@@ -125,24 +142,69 @@ class DraftPlaceResolver {
      * "화서문")이다. 마지막 낱말은 3자 이상일 때만 쓴다. 첫 낱말은 쓰지 않는다.
      */
     static List<String> queryVariants(String name, Collection<String> cityNames) {
-        String trimmed = BRANCH_SUFFIX.matcher(name == null ? "" : name.trim()).replaceAll("");
-        List<String> tokens = new java.util.ArrayList<>(List.of(trimmed.split("\\s+")));
         java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
-        addWithCity(out, String.join(" ", tokens), cityNames);
-        while (tokens.size() > 1 && DESCRIPTORS.contains(tokens.get(tokens.size() - 1))) {
-            tokens.remove(tokens.size() - 1);
+        List<String> aliases = PlaceIdentity.nameVariants(name);
+        for (String alias : aliases) {
+            List<String> tokens = new java.util.ArrayList<>(List.of(trimmed(alias).split("\\s+")));
             addWithCity(out, String.join(" ", tokens), cityNames);
+            while (tokens.size() > 1 && DESCRIPTORS.contains(tokens.get(tokens.size() - 1))) {
+                tokens.remove(tokens.size() - 1);
+                addWithCity(out, String.join(" ", tokens), cityNames);
+            }
+            String lastToken = tokens.get(tokens.size() - 1);
+            if (lastToken.endsWith("야시장") && lastToken.length() > 3) {
+                addWithCity(out, String.join(" ", tokens.subList(0, tokens.size() - 1)) + " "
+                        + lastToken.substring(0, lastToken.length() - 3) + "시장", cityNames);
+            }
         }
-        String lastToken = tokens.get(tokens.size() - 1);
-        if (lastToken.endsWith("야시장") && lastToken.length() > 3) {
-            addWithCity(out, String.join(" ", tokens.subList(0, tokens.size() - 1)) + " "
-                    + lastToken.substring(0, lastToken.length() - 3) + "시장", cityNames);
-        }
-        if (tokens.size() >= 2 && key(lastToken).length() >= MIN_CONTAINED_NAME && !DESCRIPTORS.contains(lastToken)) {
-            out.add(key(lastToken));
+        for (String alias : aliases) {
+            String w = lastWord(alias);
+            if (w != null) out.add(w);
         }
         out.removeIf(q -> q.length() < 2);
         return List.copyOf(out);
+    }
+
+    /**
+     * 마지막 낱말로 찾은 곳이 요청한 곳인지. 이름이 그 낱말과 같거나, 도시 이름을 뺀 앞 낱말 하나가 이름에 있어야 한다.
+     * 앞 낱말이 동네 이름뿐이면 장소 이름에 없을 수 있다("고소동 벽화마을"과 "여수천사벽화마을"). 이 확인이 없으면
+     * "하카타"로 찾은 "하카타 기온 야마카사"가 "캐널시티 하카타" 자리에 들어간다.
+     */
+    private static java.util.function.Predicate<Place> keepsRestOf(List<String> aliases, Collection<String> cityNames) {
+        Set<String> cities = new HashSet<>();
+        cityNames.forEach(c -> cities.add(key(c)));
+        List<String> rest = new java.util.ArrayList<>();
+        Set<String> lasts = new HashSet<>();
+        for (String alias : aliases) {
+            List<String> tokens = new java.util.ArrayList<>(List.of(trimmed(alias).split("\\s+")));
+            while (tokens.size() > 1 && DESCRIPTORS.contains(tokens.get(tokens.size() - 1))) {
+                tokens.remove(tokens.size() - 1);
+            }
+            lasts.add(key(tokens.get(tokens.size() - 1)));
+            for (String t : tokens.subList(0, tokens.size() - 1)) {
+                String k = key(t);
+                if (k.length() >= 2 && !cities.contains(k) && !DESCRIPTORS.contains(t)) rest.add(k);
+            }
+        }
+        boolean onlyLocalities = !rest.isEmpty() && rest.stream().allMatch(k -> WantMatcher.LOCALITY.matcher(k).matches());
+        return p -> {
+            String name = key(p.getName()) + "|" + key(p.getNameKo());
+            if (lasts.contains(bareKey(p.getName())) || lasts.contains(bareKey(p.getNameKo()))) return true;
+            return rest.isEmpty() || onlyLocalities || rest.stream().anyMatch(name::contains);
+        };
+    }
+
+    /** 꾸밈말을 뗀 뒤 마지막 낱말. 낱말이 하나뿐이거나 3자보다 짧으면 null이다. */
+    private static String lastWord(String name) {
+        List<String> tokens = new java.util.ArrayList<>(List.of(trimmed(name).split("\\s+")));
+        while (tokens.size() > 1 && DESCRIPTORS.contains(tokens.get(tokens.size() - 1))) tokens.remove(tokens.size() - 1);
+        String last = tokens.get(tokens.size() - 1);
+        return tokens.size() >= 2 && key(last).length() >= MIN_CONTAINED_NAME && !DESCRIPTORS.contains(last)
+                ? key(last) : null;
+    }
+
+    private static String trimmed(String name) {
+        return BRANCH_SUFFIX.matcher(name == null ? "" : name.trim()).replaceAll("");
     }
 
     private static void addWithCity(java.util.Set<String> out, String text, Collection<String> cityNames) {
@@ -154,9 +216,15 @@ class DraftPlaceResolver {
     private static final java.util.Set<String> DESCRIPTORS = java.util.Set.of(
             "야경", "산책", "야경산책", "투어", "체험", "일대", "관람", "구경", "야간", "나들이", "방문", "드라이브", "야시장");
 
+    /**
+     * @param fetched 한 이름을 잇는 동안 같은 질의를 다시 조회하지 않게 결과를 담아 둔다
+     * @param accepts 순위를 매기기 전에 걸러 낼 조건
+     */
     private Resolution resolveKey(String query, List<String> roles, Collection<String> regions, double[] anchor,
-                                  int maxTier) {
-        List<Place> rows = placeRepository.findActiveByCompactName(query, MIN_CONTAINED_NAME, regions, roles);
+                                  int maxTier, Map<String, List<Place>> fetched,
+                                  java.util.function.Predicate<Place> accepts) {
+        List<Place> rows = fetched.computeIfAbsent(roles + "|" + query,
+                k -> placeRepository.findActiveByCompactName(query, MIN_CONTAINED_NAME, regions, roles));
         if (rows.isEmpty()) return Resolution.miss("none");
 
         // 같은 순위면 이름난 곳이 먼저다. "창덕궁"이 글자 수가 가까운 부속 건물("창덕궁 약방")로 잡히지 않게 한다.
@@ -172,6 +240,7 @@ class DraftPlaceResolver {
         List<Place> ranked = rows.stream()
                 .filter(p -> tier(bareKey(matchedName(p, query)), query) <= maxTier)
                 .filter(DraftPlaceResolver::readableName)
+                .filter(accepts)
                 .filter(p -> !NOT_A_PLACE.matcher(p.getName()).find() || NOT_A_PLACE.matcher(query).find())
                 .filter(p -> roles.contains("TRANSIT") || p.getCategory() == null
                         || !TRANSIT_CATEGORY.matcher(p.getCategory()).find())

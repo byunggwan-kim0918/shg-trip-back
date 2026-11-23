@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -63,6 +64,26 @@ class DraftRequestFactoryTest {
         assertThat(prepared.request().departure()).isEqualTo(LocalTime.of(15, 0));
         assertThat(prepared.input().restrictions()).containsExactly(PlaceRestriction.PORK);
         assertThat(prepared.input().partySize()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("대화에서 그대로 두기로 한 요구는 꼭 할 경험에 표시하고, 꼭 할 경험이 아니면 따로 요구로 넣는다")
+    void acceptedUnmetBecomesAcceptedWants() {
+        ItineraryGenerateRequest base = request("car", List.of(
+                new ItineraryGenerateRequest.RequiredExperience("나카스 야타이", "나카스", "evening"),
+                new ItineraryGenerateRequest.RequiredExperience("광안리 야경", "광안리", "evening")));
+        ItineraryGenerateRequest request = new ItineraryGenerateRequest(base.mode(), base.destination(), base.themes(),
+                base.categories(), base.pace(), base.transportPref(), base.budget(), base.startDate(), base.endDate(),
+                base.description(), null, null, base.companion(), base.partySize(), base.arrivalTime(),
+                base.departureTime(), base.requiredExperiences(), null, base.restrictions(), null,
+                List.of("나카스 야타이", "캐널시티 하카타"));
+
+        DraftRequestFactory.Prepared prepared = factory.prepare(request, enriched("KR", "car", "Busan"));
+
+        assertThat(prepared.request().userWants()).extracting(DraftItineraryPlanner.UserWant::text,
+                        DraftItineraryPlanner.UserWant::accepted)
+                .containsExactly(tuple("나카스 야타이", true), tuple("광안리 야경", false), tuple("캐널시티 하카타", true));
+        assertThat(prepared.request().mustDo()).doesNotContain("캐널시티 하카타");
     }
 
     @Test

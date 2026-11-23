@@ -88,6 +88,7 @@ public final class GeneratorSupport {
     public static final String LODGING_NOT_LODGING = "숙소로 등록된 곳이 아니라 참고만 해요.";
     public static final String PLACE_INCLUDED = "일정에 꼭 넣어요.";
     public static final String PLACE_REFERENCE = "이름으로 장소를 찾지 못해 참고만 해요.";
+    public static final String KEPT_UNMET = "넣지 못한다는 걸 알고 그대로 뒀어요. 일정에 없으면 따로 알려줘요.";
     public static final String PLACE_BY_AREA = "이 이름이 들어간 명소를 찾아 넣어요. 못 찾으면 일정을 만든 뒤 알려줘요.";
     public static final String PLACE_IS_LODGING = "숙소는 정해둔 숙소로 알려주면 고정할 수 있어요.";
     public static final String PLACES_FULL = "꼭 넣을 장소는 10곳까지라 참고만 해요.";
