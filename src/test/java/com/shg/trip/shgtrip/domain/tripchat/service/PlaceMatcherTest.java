@@ -22,6 +22,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -83,7 +84,7 @@ class PlaceMatcherTest {
     }
 
     @Test
-    @DisplayName("피할 장소는 이름이 같거나 남는 부분이 종류 이름인 관광지만 받고, 같은 이름 가게보다 관광지를 먼저 받는다")
+    @DisplayName("이름이 같거나 남는 부분이 종류 이름인 관광지를 같은 이름 가게보다 먼저 받고, 피할 장소는 그것만 받는다")
     void avoidPlacePartialNameOnlyForKindSuffix() {
         PlaceService placeService = mock(PlaceService.class);
         when(placeService.searchPlaces(any(), any(Pageable.class))).thenReturn(Page.empty());
@@ -104,7 +105,8 @@ class PlaceMatcherTest {
         assertThat(matcher.find("광안리", "부산", true)).get().extracting(PlaceMatch::placeId).isEqualTo(6L);
         assertThat(matcher.find("할매국밥", "부산", true)).get().extracting(PlaceMatch::placeId).isEqualTo(8L);
         assertThat(matcher.find("해운대", "부산", true)).get().extracting(PlaceMatch::placeId).isEqualTo(10L);
-        assertThat(matcher.find("해운대", "부산", false)).get().extracting(PlaceMatch::placeId).isEqualTo(9L);
+        assertThat(matcher.find("해운대", "부산", false)).get().extracting(PlaceMatch::placeId).isEqualTo(10L);
+        assertThat(matcher.find("할매국밥", "부산", false)).get().extracting(PlaceMatch::placeId).isEqualTo(8L);
     }
 
     @Test
@@ -118,8 +120,25 @@ class PlaceMatcherTest {
         PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class));
 
         assertThat(matcher.find("용지봉", "대구", true)).get().extracting(PlaceMatch::placeId).isEqualTo(1705804L);
-        assertThat(matcher.find("용지봉", "대구", false)).get().extracting(PlaceMatch::placeId).isEqualTo(1655991L);
+        assertThat(matcher.find("용지봉", "대구", false)).get().extracting(PlaceMatch::placeId).isEqualTo(1705804L);
         verify(placeService, never()).searchPlaces(eq("용지봉"), any(Pageable.class));
+    }
+
+    @Test
+    @DisplayName("경포해변은 이름을 담기만 한 딸린 광장보다 별칭 이름의 해수욕장에 맞춘다")
+    void beachAliasBeatsAttachedPlaza() {
+        PlaceService placeService = mock(PlaceService.class);
+        when(placeService.searchPlaces(any(), any(Pageable.class))).thenReturn(Page.empty());
+        when(placeService.searchPlacesInRegions(eq("경포해변"), eq(Set.of("Gangneung")), anyInt())).thenReturn(List.of(
+                inRegion(1, "경포해변 중앙광장", "강원특별자치도 강릉시 강문동", "Gangneung",
+                        "Landmarks and Outdoors > Plaza")));
+        when(placeService.searchPlacesInRegions(eq("경포해수욕장"), eq(Set.of("Gangneung")), anyInt())).thenReturn(
+                List.of(inRegion(2, "경포해수욕장", "강원특별자치도 강릉시 창해로", "Gangneung",
+                        "Landmarks and Outdoors > Beach")));
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class));
+
+        assertThat(matcher.find("경포해변", "강릉", false)).get().extracting(PlaceMatch::placeId).isEqualTo(2L);
+        verify(placeService, times(1)).searchPlacesInRegions(eq("경포해변"), eq(Set.of("Gangneung")), anyInt());
     }
 
     @Test

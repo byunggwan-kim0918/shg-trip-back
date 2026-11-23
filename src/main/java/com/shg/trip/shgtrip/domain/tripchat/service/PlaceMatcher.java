@@ -124,12 +124,17 @@ public class PlaceMatcher {
      */
     java.util.Optional<PlaceMatch> find(String name, String destination, boolean avoiding) {
         PlaceMatch nonSight = null;
-        for (String variant : PlaceIdentity.nameVariants(name)) {
-            java.util.Optional<PlaceMatch> found = findExactly(variant, destination, avoiding);
-            if (found.isEmpty()) continue;
-            // "송정해변"이라고 하면 같은 이름 카페보다 별칭 이름의 해수욕장 행이 맞다.
-            if ("ATTRACTION".equals(found.get().major())) return found;
-            if (nonSight == null) nonSight = found.get();
+        Map<String, List<PlaceResponse>> searched = new java.util.HashMap<>();
+        // 같은 이름을 먼저 본다. 이름을 담기만 한 딸린 시설("경포해변 중앙광장")이 별칭 이름의 본래 장소를 가린다.
+        for (boolean exactOnly : new boolean[]{true, false}) {
+            for (String variant : PlaceIdentity.nameVariants(name)) {
+                java.util.Optional<PlaceMatch> found = findExactly(variant, destination, avoiding || exactOnly,
+                        searched);
+                if (found.isEmpty()) continue;
+                // "송정해변"이라고 하면 같은 이름 카페보다 별칭 이름의 해수욕장 행이 맞다.
+                if ("ATTRACTION".equals(found.get().major())) return found;
+                if (nonSight == null) nonSight = found.get();
+            }
         }
         return java.util.Optional.ofNullable(nonSight);
     }
@@ -140,22 +145,29 @@ public class PlaceMatcher {
         return query.length() >= 2 && !isGeneric(query);
     }
 
-    /** 조회가 실패하면 예외를 그대로 낸다. 빈 결과로 바꾸면 일시 장애를 데이터에 없다고 판정한다. */
-    private java.util.Optional<PlaceMatch> findExactly(String name, String destination, boolean avoiding) {
+    /**
+     * 조회가 실패하면 예외를 그대로 낸다. 빈 결과로 바꾸면 일시 장애를 데이터에 없다고 판정한다.
+     *
+     * @param strict   같은 이름이나 이름 뒤에 종류만 붙은 관광지("광안리해수욕장")만 맞춘다
+     * @param searched 같은 질의를 다시 조회하지 않게 결과를 담아 둔다
+     */
+    private java.util.Optional<PlaceMatch> findExactly(String name, String destination, boolean strict,
+                                                       Map<String, List<PlaceResponse>> searched) {
         String query = TextNormalizer.key(name);
         if (!searchable(name)) return java.util.Optional.empty();
         Set<String> regions = destination == null ? Set.of() : destinationRegions(destination);
         if (!regions.isEmpty()) {
-            java.util.Optional<PlaceMatch> inRegion = pick(
-                    placeService.searchPlacesInRegions(name.strip(), regions, SEARCH_SIZE), query, null, avoiding);
+            java.util.Optional<PlaceMatch> inRegion = pick(searched.computeIfAbsent("r|" + name,
+                    k -> placeService.searchPlacesInRegions(name.strip(), regions, SEARCH_SIZE)), query, null, strict);
             if (inRegion.isPresent()) return inRegion;
         }
-        return pick(placeService.searchPlaces(name.strip(), PageRequest.of(0, SEARCH_SIZE)).getContent(),
-                query, destination, avoiding);
+        return pick(searched.computeIfAbsent("n|" + name,
+                        k -> placeService.searchPlaces(name.strip(), PageRequest.of(0, SEARCH_SIZE)).getContent()),
+                query, destination, strict);
     }
 
     private java.util.Optional<PlaceMatch> pick(List<PlaceResponse> results, String query, String destination,
-                                                boolean avoiding) {
+                                                boolean strict) {
         PlaceMatch nonSightMatch = null;
         for (PlaceResponse p : results) {
             String placeName = TextNormalizer.key(p.name());
@@ -165,11 +177,11 @@ public class PlaceMatcher {
             boolean exact = isExact(p.name(), p.region(), query) || isExact(p.nameKo(), p.region(), query);
             boolean kindSuffix = "ATTRACTION".equals(major)
                     && (endsWithKind(placeName, query) || endsWithKind(placeNameKo, query));
-            if (avoiding && !exact && !kindSuffix) continue;
+            if (strict && !exact && !kindSuffix) continue;
             if (destination != null && !matchesDestination(p, destination)) continue;
             String shown = p.nameKo() != null && !p.nameKo().isBlank() ? p.nameKo() : p.name();
             PlaceMatch match = new PlaceMatch(p.id(), shown, major, p.openingHours(), null);
-            if (avoiding && !"ATTRACTION".equals(major)) {
+            if (strict && !"ATTRACTION".equals(major)) {
                 if (nonSightMatch == null) nonSightMatch = match;
                 continue;
             }
@@ -222,6 +234,14 @@ public class PlaceMatcher {
                     });
                 });
         return regions;
+    }
+
+    /** 여행지의 첫 도시. 해 뜨고 지는 시각을 이 도시로 본다. 모르는 이름이면 비어 있다. */
+    public java.util.Optional<Destination> cityOf(String destination) {
+        if (destination == null || destination.isBlank()) return java.util.Optional.empty();
+        return java.util.stream.Stream.concat(java.util.stream.Stream.of(destination), destinationParts(destination))
+                .map(d -> destinations.resolve(d).or(() -> DomesticCities.find(destinationKey(d))))
+                .flatMap(java.util.Optional::stream).findFirst();
     }
 
     private static java.util.stream.Stream<String> destinationParts(String destination) {

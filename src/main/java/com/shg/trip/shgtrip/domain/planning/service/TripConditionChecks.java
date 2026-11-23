@@ -118,7 +118,7 @@ final class TripConditionChecks {
         boolean drivesHome = drivesHome(hub, conditions);
         // 허브까지 실제 이동을 알면 그 시간을 뺀다. 시내에서 먼 공항은 기본값보다 오래 걸려 그날 쓸 시간이 없다.
         Integer leg = hub == null ? null : end.step().transportationDuration();
-        int lead = drivesHome ? 0 : leg != null ? leg : TripHubs.HUB_TRAVEL_MINUTES;
+        int lead = drivesHome ? 0 : (leg != null ? leg : TripHubs.HUB_TRAVEL_MINUTES) + TripHubs.estimatedLegSlack(leg);
         return TripHubs.departureDeadline(conditions.departure(), hub, drivesHome, country) - lead - DAY_START_MINUTES;
     }
 
@@ -138,8 +138,6 @@ final class TripConditionChecks {
                               String country, Map<Long, PlaceFactsReader.PlaceFact> facts, List<Violation> out) {
         PlaceRestrictions restrictions = PlaceRestrictions.of(conditions.avoid());
         for (TripConditions.Want want : conditions.wants()) {
-            // 짓는 쪽이 넣을 날이 없다고 판단한 요구는 생성 때 이유를 알렸다.
-            if (want.infeasible()) continue;
             // 피할 조건과 부딪치는 요구는 대화에서 되물어 정리할 입력이라 짓는 쪽의 위반으로 세지 않는다.
             if (restrictions.violatedByDish(want.food() != null ? want.food() : want.text()) != null) continue;
             List<Visit> hits = new ArrayList<>();
@@ -153,12 +151,13 @@ final class TripConditionChecks {
             Visit hit = hits.stream().filter(v -> timingMet(want, v, startDate, country)).findFirst()
                     .orElse(hits.isEmpty() ? null : hits.get(0));
             if (hit == null) {
-                // 음식 요구는 메뉴 데이터로만 확인되고, 데이터에 없는 곳은 짓는 쪽이 넣을 수 없어 저장을 막지 않는다.
-                Rule rule = want.food() != null ? Rule.WANT_FOOD_MISSING
-                        : want.notInData() ? Rule.WANT_NOT_IN_DATA : Rule.WANT_MISSING;
-                out.add(new Violation(rule, 0, "요청한 '" + want.text() + "'이(가) 없음", List.of(want.text()),
-                        "'" + want.text() + "'을(를) 넣을 날짜와 시간대를 정한다"));
+                out.add(new Violation(missingRule(want), 0, "요청한 '" + want.text() + "'이(가) 없음",
+                        List.of(want.text()), "'" + want.text() + "'을(를) 넣을 날짜와 시간대를 정한다"));
                 continue;
+            }
+            if (DayTiming.hoursUnknown(hit.place(), facts.get(hit.place().placeId()))) {
+                out.add(new Violation(Rule.HOURS_UNKNOWN, hit.step().dayNumber(), hit.name() + " 영업시간 미확인",
+                        List.of(want.text(), hit.name())));
             }
             String timing = want.timing();
             if (timing == null) continue;
@@ -179,6 +178,21 @@ final class TripConditionChecks {
                         List.of(want.text()), "해 진 뒤로 옮긴다"));
             }
         }
+    }
+
+    /**
+     * 일정에 없는 요구의 규칙. 넣을 수 있었던 요구는 짓는 쪽의 잘못이다. 넣을 수 없던 요구는 여행자가 대화에서 알고도
+     * 두기로 했으면 안내만 하고, 꼭 갈 곳으로 직접 정했는데 동의를 받지 않았으면 저장하지 않는다. 음식 요구는 메뉴
+     * 데이터로만 확인되어 저장을 막지 않는다.
+     */
+    private static Rule missingRule(TripConditions.Want want) {
+        if (want.accepted()) return Rule.WANT_ACCEPTED_UNMET;
+        if (want.food() != null) return Rule.WANT_FOOD_MISSING;
+        return switch (want.reach()) {
+            case PLACEABLE -> Rule.WANT_MISSING;
+            case NOT_FOUND -> want.required() ? Rule.REQUIRED_NOT_FOUND : Rule.WANT_NOT_FOUND;
+            case NO_SLOT -> want.required() ? Rule.REQUIRED_NO_SLOT : Rule.WANT_NO_SLOT;
+        };
     }
 
     private static boolean timingMet(TripConditions.Want want, Visit v, LocalDate startDate, String country) {
@@ -288,9 +302,11 @@ final class TripConditionChecks {
         Visit end = day.get(day.size() - 1);
         PlaceCandidate hub = hubOrNull(end.place());
         int deadline = TripHubs.departureDeadline(conditions.departure(), hub, drivesHome(hub, conditions), country);
-        if (end.start() > deadline) {
+        // 허브까지의 이동은 추정이라 여유를 더한 도착으로 본다. 빠듯한 일정을 지킬 수 있다고 확정하지 않는다.
+        int slack = hub == null ? 0 : TripHubs.estimatedLegSlack(end.step().transportationDuration());
+        if (end.start() + slack > deadline) {
             out.add(new Violation(Rule.DEPARTURE_MISSED, d, "출발 " + conditions.departure() + "인데 " + end.name()
-                    + " " + end.step().startTime() + " 도착", List.of(end.name())));
+                    + " " + end.step().startTime() + " 도착(추정 이동 여유 " + slack + "분)", List.of(end.name())));
         }
     }
 

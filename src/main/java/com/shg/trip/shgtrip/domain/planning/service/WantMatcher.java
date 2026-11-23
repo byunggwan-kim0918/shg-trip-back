@@ -16,7 +16,7 @@ import java.util.stream.Collectors;
 public final class WantMatcher {
 
     private static final Set<String> TIME_WORDS = Set.of("일출", "일몰", "야경", "야간", "산책", "구경", "투어", "밤바다");
-    private static final Pattern LOCALITY = Pattern.compile(".+[동읍면리]");
+    static final Pattern LOCALITY = Pattern.compile(".+[동읍면리]");
     static final Pattern BRACKETS = Pattern.compile("[(\\[（【].*?[)\\]）】]");
     /** 같은 식당으로 보는 이름 뒤 덧붙은 글자 수("진로집본점"). */
     private static final int BRANCH_SUFFIX_CHARS = 3;
@@ -54,6 +54,13 @@ public final class WantMatcher {
         // "성산일출봉 일출"의 뒤쪽 '일출'만 시각 말이다. 이름 속 '일출'(일출봉)은 남긴다.
         String cleaned = Arrays.stream(wantText.trim().split("\\s+"))
                 .filter(w -> !TIME_WORDS.contains(w)).collect(Collectors.joining(" "));
+        for (String alias : PlaceIdentity.nameVariants(cleaned)) {
+            if (matchesName(alias, place)) return true;
+        }
+        return false;
+    }
+
+    private static boolean matchesName(String cleaned, PlaceCandidate place) {
         String want = key(cleaned);
         if (want.isEmpty()) return false;
         String name = key(BRACKETS.matcher(Objects.toString(place.displayName(), "")).replaceAll(""));

@@ -190,7 +190,9 @@ class DraftEvalRunner implements CommandLineRunner {
                 DraftPlan plan = objectMapper.treeToValue(root.get("plan"), DraftPlan.class);
                 List<DraftEdit> edits = root.hasNonNull("edits")
                         ? List.of(objectMapper.treeToValue(root.get("edits"), DraftEdit[].class)) : List.of();
+                long started = System.currentTimeMillis();
                 TripPlanner.Built trip = tripPlanner.build(base, plan, edits);
+                long buildMs = System.currentTimeMillis() - started;
                 DraftItineraryPlanner.Result result = trip.result();
                 int days = result.frames().size();
                 ItineraryRules.Context ran = trip.context();
@@ -209,10 +211,12 @@ class DraftEvalRunner implements CommandLineRunner {
                     trip.tripNotes().forEach(n -> md.append("- ").append(n).append('\n'));
                 }
                 md.append('\n');
-                built.put(file, new String[]{md.toString(), objectMapper.writeValueAsString(Map.of(
-                        "id", id, "request", req, "steps", stepRows(result), "notes", result.notes(),
-                        "violations", violations, "intent", TripPlanner.intentOf(trip), "problems", root.path("problems"),
-                        "edits", edits.size(), "finished", root.path("finished").asBoolean(true)))});
+                built.put(file, new String[]{md.toString(), objectMapper.writeValueAsString(Map.ofEntries(
+                        Map.entry("id", id), Map.entry("request", req), Map.entry("steps", stepRows(result)),
+                        Map.entry("notes", result.notes()), Map.entry("violations", violations),
+                        Map.entry("intent", TripPlanner.intentOf(trip)), Map.entry("problems", root.path("problems")),
+                        Map.entry("edits", edits.size()), Map.entry("finished", root.path("finished").asBoolean(true)),
+                        Map.entry("ms", buildMs)))});
             } catch (RuntimeException e) {
                 log.warn("여행 재구성 실패 {}: {}", id, e.toString());
                 built.put(file, new String[]{"## 일정 " + id + "\n실패: " + e + "\n\n", null});
@@ -242,8 +246,10 @@ class DraftEvalRunner implements CommandLineRunner {
             List<String> satisfy = new ArrayList<>(w.satisfy());
             String food = w.food();
             boolean matched = false;
-            boolean notInData = true;
-            boolean infeasible = false;
+            boolean notFound = true;
+            boolean noSlot = false;
+            boolean required = w.required();
+            boolean accepted = false;
             String k = w.text().replaceAll("\\s", "");
             for (TripConditions.Want d : designed.wants()) {
                 String dk = d.text().replaceAll("\\s", "");
@@ -251,10 +257,14 @@ class DraftEvalRunner implements CommandLineRunner {
                 satisfy.addAll(d.satisfy());
                 if (food == null && d.food() != null) food = d.food();
                 matched = true;
-                notInData &= d.notInData();
-                infeasible |= d.infeasible();
+                notFound &= d.reach() == TripConditions.Reach.NOT_FOUND;
+                noSlot |= d.reach() == TripConditions.Reach.NO_SLOT;
+                required |= d.required();
+                accepted |= d.accepted();
             }
-            wants.add(new TripConditions.Want(w.text(), w.timing(), satisfy, food, matched && notInData, infeasible));
+            TripConditions.Reach reach = noSlot ? TripConditions.Reach.NO_SLOT
+                    : matched && notFound ? TripConditions.Reach.NOT_FOUND : TripConditions.Reach.PLACEABLE;
+            wants.add(new TripConditions.Want(w.text(), w.timing(), satisfy, food, reach, required, accepted));
         }
         return new TripConditions(wants, expect.cityDays(), expect.avoid(), expect.lowMobility(), expect.transport(),
                 expect.arrival(), expect.departure(), designed.pace(), designed.chosenPlaceIds());
@@ -274,7 +284,8 @@ class DraftEvalRunner implements CommandLineRunner {
             String text = required.get("text").asText();
             String timing = required.path("timing").asText(null);
             if ("morning".equals(timing) && text.contains("일출")) timing = "sunrise";
-            wants.add(new TripConditions.Want(text, timing, List.of(), null));
+            wants.add(new TripConditions.Want(text, timing, List.of(), null, TripConditions.Reach.PLACEABLE, true,
+                    false));
         }
         Map<String, Integer> cityDays = new LinkedHashMap<>();
         expect.path("cityDays").fields().forEachRemaining(e -> cityDays.put(e.getKey(), e.getValue().asInt()));

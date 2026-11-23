@@ -33,6 +33,7 @@ public final class TripRequestMapper {
     static final int MAX_PRIORITIES_TEXT = 200;
     static final int MAX_DESCRIPTION = 500;         // ItineraryGenerateRequest description @Size
     static final int MAX_DESTINATION = 50;
+    static final int MAX_ACCEPTED_TEXT = 100;       // ItineraryGenerateRequest acceptedUnmet 항목 @Size
     static final long MAX_BUDGET = 100_000_000L;
     private static final int MAX_SELECTED_PLACES = 10;
     private static final int MAX_REQUIRED_EXPERIENCES = 5;  // ItineraryGenerateRequest requiredExperiences @Size
@@ -64,7 +65,8 @@ public final class TripRequestMapper {
         }
     }
 
-    public static Result map(Draft draft, Map<String, PlaceMatch> matches, LocalDate today) {
+    /** @param asked 대화에서 이미 물은 질문 키. 넣을 수 없다는 되묻기에 답하고도 남긴 바람을 그대로 둘 요청으로 넘긴다 */
+    public static Result map(Draft draft, Map<String, PlaceMatch> matches, LocalDate today, Set<String> asked) {
         Map<Slot, List<String>> notes = new EnumMap<>(Slot.class);
         List<Blocker> blockers = new ArrayList<>();
         List<String> fragments = new ArrayList<>();
@@ -128,6 +130,9 @@ public final class TripRequestMapper {
         List<String> avoidPlaceNames = new ArrayList<>();
         List<Long> avoidPlaceIds = avoidPlaces(draft, matches, placeIds, notes, avoidPlaceNames);
 
+        List<String> acceptedUnmet = TripFeasibilityQuestions.acknowledged(draft, asked);
+        acceptedUnmet.forEach(text -> addNote(notes, Slot.ANCHORS, text + " · " + GeneratorSupport.KEPT_UNMET));
+
         String description = fragments.isEmpty() ? null : String.join(SEPARATOR, fragments);
         if (description != null && description.length() > MAX_DESCRIPTION) {
             blockers.add(new Blocker("description_too_long", Slot.EXTRAS, "더 알려준 내용을 조금 줄여줄래요?",
@@ -145,7 +150,8 @@ public final class TripRequestMapper {
                 themes.stream().limit(10).toList(), categories.stream().limit(10).toList(), pace, transportPref,
                 budget, start, end, description, selected, List.of(), companion, partySize, arrival, departure,
                 required.isEmpty() ? null : required, avoidPlaceIds.isEmpty() ? null : avoidPlaceIds,
-                restrictions.isEmpty() ? null : List.copyOf(restrictions), avoidPlaceNames.isEmpty() ? null : avoidPlaceNames);
+                restrictions.isEmpty() ? null : List.copyOf(restrictions), avoidPlaceNames.isEmpty() ? null : avoidPlaceNames,
+                acceptedUnmet.isEmpty() ? null : acceptedUnmet);
         return new Result(request, blockers, notes, description, days);
     }
 
@@ -499,6 +505,12 @@ public final class TripRequestMapper {
 
     private static String time(String value) {
         return value != null && value.matches("([01]\\d|2[0-3]):[0-5]\\d") ? value : null;
+    }
+
+    /** 생성 요청에 넘기는 도착·출발 시각. 형식이 맞지 않으면 null이다. */
+    static java.time.LocalTime clock(Draft draft, DraftField field) {
+        String t = time(draft.value(field));
+        return t == null ? null : java.time.LocalTime.parse(t);
     }
 
     static Integer parseInt(String value, int min, int max) {

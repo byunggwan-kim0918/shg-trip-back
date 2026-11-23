@@ -45,8 +45,6 @@ public class TripSkeletonPlanner {
     static final int MIN_CITY_MINUTES = 150;
     private static final int DAY_START = 9 * 60 + 30;
     private static final int DAY_END = 21 * 60;
-    /** 야경·야시장 한 곳을 보는 최소 시간. */
-    private static final int MIN_EVENING_MINUTES = 60;
     /** 출발일에 쓸 시간이 이보다 짧으면 전날 밤을 출발 허브 가까이에 둔다. */
     private static final int SHORT_LAST_DAY = 240;
     private static final double DEPARTURE_LODGING_KM = 8;
@@ -74,8 +72,10 @@ public class TripSkeletonPlanner {
         List<String> notes = new ArrayList<>();
         Map<String, PlaceCandidate> pinned = new HashMap<>(base.pinned());
         Set<String> infeasible = new HashSet<>();
-        DraftPlan draft = withEveningWantsOnEveningDays(withAllWants(withUserWants(base.draft(), base.userWants(),
-                pinned, notes), dayCount, base.cityNames(), notes), base, dayCount, notes, conflicts, infeasible);
+        Map<String, DraftItineraryPlanner.UserWant> userById = new HashMap<>();
+        DraftPlan draft = withTimedWantsOnFeasibleDays(withAllWants(withUserWants(base.draft(), base.userWants(),
+                pinned, userById, notes), dayCount, base.cityNames(), notes), base, dayCount, notes, conflicts,
+                infeasible);
 
         Map<Integer, DraftItineraryPlanner.LodgingNeed> needs = new HashMap<>();
         Map<String, DraftPlan.Want> wants = new LinkedHashMap<>();
@@ -89,7 +89,7 @@ public class TripSkeletonPlanner {
         Set<Integer> transfers = eveningTransfers(base, draft, dayCount, conflicts);
         departureNeed(base, draft, dayCount, needs);
         return new Skeleton(base.with(draft, pinned, needs, transfers), conflicts, notes,
-                conditions(base, wants.values(), base.cityNames(), pinned, infeasible));
+                conditions(base, wants.values(), base.cityNames(), pinned, userById, infeasible));
     }
 
     /**
@@ -97,9 +97,11 @@ public class TripSkeletonPlanner {
      * 적지 않았으면 새 요구로 넣는다. 초안의 요구만 따르면 모델이 빠뜨린 요구는 일정에도 검사에도 없다.
      *
      * @param pinned 요구 id마다 사용자가 고른 장소를 채운다
+     * @param userById 요구 id마다 그 요구가 된 사용자 요구를 채운다
      */
     static DraftPlan withUserWants(DraftPlan draft, List<DraftItineraryPlanner.UserWant> userWants,
-                                   Map<String, PlaceCandidate> pinned, List<String> notes) {
+                                   Map<String, PlaceCandidate> pinned,
+                                   Map<String, DraftItineraryPlanner.UserWant> userById, List<String> notes) {
         if (userWants.isEmpty()) return draft;
         List<DraftPlan.Want> wants = new ArrayList<>(nz(draft.wants()));
         Set<String> ids = new HashSet<>();
@@ -114,6 +116,7 @@ public class TripSkeletonPlanner {
                             w.satisfy()));
                 }
                 if (u.pinned() != null) pinned.put(w.id(), u.pinned());
+                userById.put(w.id(), u);
                 continue;
             }
             String id;
@@ -124,6 +127,7 @@ public class TripSkeletonPlanner {
             wants.add(new DraftPlan.Want(id, kind, u.text(), u.place(), null, u.time(),
                     u.place() == null ? List.of() : List.of(u.place())));
             if (u.pinned() != null) pinned.put(id, u.pinned());
+            userById.put(id, u);
             notes.add("초안이 빠뜨린 요청 조건을 요구로 넣음: " + u.text());
         }
         return new DraftPlan(draft.concept(), wants, draft.days());
@@ -179,65 +183,61 @@ public class TripSkeletonPlanner {
     }
 
     /**
-     * 해 진 뒤 시간이 없는 날(출발일·저녁 출발)에 둔 저녁 요구는 짓는 단계가 그날 끝 시각에 걸려 뺀다. 저녁이 남는 가장
-     * 가까운 날로, 같은 거리면 앞날로 옮긴다.
-     */
-    /**
-     * @param conflicts  저녁이 있는 날이 하나도 없으면 여행자에게 알릴 말을 더한다
+     * 해 진 뒤 시간이 없는 날(출발일·저녁 출발)에 둔 저녁 요구와 일출 전에 닿을 수 없는 첫날에 둔 일출 요구는 짓는 단계가
+     * 그날 시각에 걸려 뺀다. 그 시각이 되는 가장 가까운 날로, 같은 거리면 앞날로 옮긴다.
+     *
+     * @param conflicts  그런 날이 하나도 없으면 여행자에게 알릴 말을 더한다
      * @param infeasible 넣을 날이 없는 요구 id를 더한다
      */
-    static DraftPlan withEveningWantsOnEveningDays(DraftPlan draft, DraftItineraryPlanner.Request base, int dayCount,
-                                                   List<String> notes, List<String> conflicts, Set<String> infeasible) {
-        Set<String> evening = new HashSet<>();
+    static DraftPlan withTimedWantsOnFeasibleDays(DraftPlan draft, DraftItineraryPlanner.Request base, int dayCount,
+                                                  List<String> notes, List<String> conflicts, Set<String> infeasible) {
+        Map<String, String> timed = new HashMap<>();
         for (DraftPlan.Want w : nz(draft.wants())) {
-            if (w.id() != null && !"food".equals(w.kind()) && "evening".equals(timing(w.time()))) evening.add(w.id());
+            String t = timing(w.time());
+            if (w.id() != null && !"food".equals(w.kind()) && t != null) timed.put(w.id(), t);
         }
-        if (evening.isEmpty()) return draft;
+        if (timed.isEmpty()) return draft;
         List<DraftPlan.Day> days = new ArrayList<>(nz(draft.days()));
         for (int i = 0; i < days.size(); i++) {
             DraftPlan.Day day = days.get(i);
-            if (hasEvening(base, day.day(), dayCount)) continue;
             for (DraftPlan.Item item : List.copyOf(nz(day.items()))) {
-                if (item.want() == null || !evening.contains(item.want())) continue;
+                String t = item.want() == null ? null : timed.get(item.want());
+                if (t == null || fitsTiming(base, t, day.day(), dayCount)) continue;
                 int from = day.day();
-                Integer to = days.stream().map(DraftPlan.Day::day).filter(d -> hasEvening(base, d, dayCount))
+                Integer to = days.stream().map(DraftPlan.Day::day).filter(d -> fitsTiming(base, t, d, dayCount))
                         .min(Comparator.comparingInt((Integer d) -> Math.abs(d - from)).thenComparingInt(d -> d))
                         .orElse(null);
                 if (to == null) {
                     infeasible.add(item.want());
-                    conflicts.add("'" + item.name() + "'은(는) 해 진 뒤 시간이 남는 날이 없어 넣지 못했어요. "
-                            + "출발 시각을 늦추거나 날짜를 늘려 다시 만들어 주세요.");
+                    conflicts.add("evening".equals(t)
+                            ? "'" + item.name() + "'은(는) 해 진 뒤 시간이 남는 날이 없어 넣지 못했어요. "
+                                    + "출발 시각을 늦추거나 날짜를 늘려 다시 만들어 주세요."
+                            : "'" + item.name() + "'은(는) 일출 전에 닿을 수 있는 날이 없어 넣지 못했어요. "
+                                    + "하루 더 묵거나 도착 시각을 앞당겨 다시 만들어 주세요.");
                     continue;
                 }
                 int at = indexOfDay(days, to);
                 days.set(i, withItems(days.get(i), nz(days.get(i).items()).stream().filter(x -> x != item).toList()));
                 List<DraftPlan.Item> moved = new ArrayList<>(nz(days.get(at).items()));
-                moved.add(new DraftPlan.Item("evening", item.kind(), item.name(), days.get(at).area(),
-                        item.placeNamed(), item.want(), item.experience(), item.reason()));
+                moved.add(new DraftPlan.Item("evening".equals(t) ? "evening" : "morning", item.kind(), item.name(),
+                        days.get(at).area(), item.placeNamed(), item.want(), item.experience(), item.reason()));
                 days.set(at, withItems(days.get(at), moved));
-                notes.add(from + "일차 저녁이 없어 저녁 요구를 " + to + "일차로 옮김: " + item.name());
+                notes.add(from + "일차에 시각이 맞지 않아 요구를 " + to + "일차로 옮김: " + item.name());
             }
         }
         return new DraftPlan(draft.concept(), draft.wants(), days);
     }
 
-    /** 저녁 요구 하나를 해 진 뒤에 둘 시간이 그날 남는지. 첫 도시의 해 지는 시각으로 본다. */
-    private static boolean hasEvening(DraftItineraryPlanner.Request base, int d, int dayCount) {
+    /** 첫 도시의 해 뜨고 지는 시각으로 본다. 둘째 날부터의 일출은 전날 밤 숙소를 근처에 두면 닿는다. */
+    private static boolean fitsTiming(DraftItineraryPlanner.Request base, String timing, int d, int dayCount) {
         Destination city = base.cities().get(0);
         LocalDate date = base.input().startDate().plusDays(d - 1L);
-        int sunset = SolarClock.sunset(date, city.lat(), city.lng(), base.country());
-        int start = d == 1 && base.arrival() != null ? base.arrival().getHour() * 60 + base.arrival().getMinute()
-                : DAY_START;
-        int end;
-        if (d < dayCount) {
-            end = DAY_END;
-        } else if (base.departure() == null) {
-            end = DraftItineraryPlanner.LAST_DAY_END.getHour() * 60 + DraftItineraryPlanner.LAST_DAY_END.getMinute();
-        } else {
-            end = TripHubs.departureDeadline(base.departure(), null, false, base.country())
-                    - TripHubs.HUB_TRAVEL_MINUTES;
+        if ("sunrise".equals(timing)) {
+            return d > 1 || TripFeasibility.sunriseOnFirstDay(date, city.lat(), city.lng(), base.country(),
+                    base.arrival());
         }
-        return end - Math.max(start, sunset + DayBuilder.NIGHT_AFTER_SUNSET) >= MIN_EVENING_MINUTES;
+        return TripFeasibility.hasEvening(date, city.lat(), city.lng(), base.country(), d == 1, d == dayCount,
+                base.arrival(), base.departure());
     }
 
     private static int indexOfDay(List<DraftPlan.Day> days, int day) {
@@ -403,7 +403,7 @@ public class TripSkeletonPlanner {
     /** 운영의 최종 검사가 쓰는 조건. 사용자가 직접 요구한 것만 담는다. */
     private TripConditions conditions(DraftItineraryPlanner.Request base, java.util.Collection<DraftPlan.Want> wants,
                                       List<String> cityNames, Map<String, PlaceCandidate> pinned,
-                                      Set<String> infeasible) {
+                                      Map<String, DraftItineraryPlanner.UserWant> userById, Set<String> infeasible) {
         List<TripConditions.Want> out = new ArrayList<>();
         Map<String, Integer> cityDays = new LinkedHashMap<>();
         for (DraftPlan.Want w : wants) {
@@ -414,9 +414,12 @@ public class TripSkeletonPlanner {
             List<String> satisfy = new ArrayList<>(nz(w.satisfy()));
             if (w.place() != null) satisfy.add(w.place());
             String food = "food".equals(w.kind()) ? (w.food() != null ? w.food() : w.text()) : null;
-            boolean notInData = food == null && !pinned.containsKey(w.id()) && !inData(w.text(), satisfy, base);
-            out.add(new TripConditions.Want(w.text(), timing(w.time()), satisfy, food, notInData,
-                    infeasible.contains(w.id())));
+            TripConditions.Reach reach = infeasible.contains(w.id()) ? TripConditions.Reach.NO_SLOT
+                    : food == null && !pinned.containsKey(w.id()) && !inData(w.text(), satisfy, base)
+                    ? TripConditions.Reach.NOT_FOUND : TripConditions.Reach.PLACEABLE;
+            DraftItineraryPlanner.UserWant user = userById.get(w.id());
+            out.add(new TripConditions.Want(w.text(), timing(w.time()), satisfy, food, reach, user != null,
+                    user != null && user.accepted()));
         }
         VectorEnrichedInput input = base.input();
         boolean low = input.companionType() == VectorEnrichedInput.CompanionType.SENIOR

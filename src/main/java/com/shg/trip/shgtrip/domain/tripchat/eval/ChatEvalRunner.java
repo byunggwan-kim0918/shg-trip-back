@@ -191,7 +191,7 @@ class ChatEvalRunner implements CommandLineRunner {
         TripChatSession session = repository.findByIdAndUserId(UUID.fromString(view.id()), userId).orElseThrow();
         ChatState st = objectMapper.readValue(session.getState(), ChatState.class);
         TripRequestMapper.Result mapping = TripRequestMapper.map(DraftFolder.fold(st.getEvents()), st.getMatches(),
-                LocalDate.now(clock));
+                LocalDate.now(clock), st.getAskedKeys());
         chat.archive(userId, session.getId());
 
         Map<String, Object> row = new LinkedHashMap<>();

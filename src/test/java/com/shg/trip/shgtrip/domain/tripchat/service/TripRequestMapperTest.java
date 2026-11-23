@@ -37,7 +37,7 @@ class TripRequestMapperTest {
             .buildValidatorFactory().getValidator();
 
     private static TripRequestMapper.Result map(Events e) {
-        return TripRequestMapper.map(e.draft(), Map.of(), TODAY);
+        return TripRequestMapper.map(e.draft(), Map.of(), TODAY, Set.of());
     }
 
     @Test
@@ -91,7 +91,7 @@ class TripRequestMapperTest {
         Map<String, PlaceMatch> matches = Map.of(PlaceMatcher.key(DraftField.LODGING, "파라다이스 호텔"),
                 new PlaceMatch(77L, "파라다이스 호텔 부산", "LODGING"));
 
-        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY, Set.of());
 
         assertThat(r.request().selectedPlaceIds()).containsExactly(77L);
         assertThat(r.request().mode()).isEqualTo(ItineraryGenerateRequest.PlanningMode.MANUAL);
@@ -257,7 +257,7 @@ class TripRequestMapperTest {
                 PlaceMatcher.key(DraftField.AVOID_PLACES, "부산역"), new PlaceMatch(3L, "부산역", "TRANSIT_HUB"),
                 PlaceMatcher.key(DraftField.AVOID_PLACES, "할매국밥"), new PlaceMatch(8L, "할매국밥", "DINING"));
 
-        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY, Set.of());
 
         assertThat(r.request().avoidPlaceIds()).containsExactly(9L, 8L);
         assertThat(r.request().selectedPlaceIds()).containsExactly(5L, 6L);
@@ -283,7 +283,7 @@ class TripRequestMapperTest {
         matches.put(PlaceMatcher.key(DraftField.AVOID_PLACES, "장소1 다시"), new PlaceMatch(1L, "장소1", "ATTRACTION"));
         matches.put(PlaceMatcher.key(DraftField.AVOID_PLACES, "열한번째"), new PlaceMatch(11L, "열한번째", "ATTRACTION"));
 
-        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY, Set.of());
 
         assertThat(r.request().avoidPlaceIds()).hasSize(10).doesNotContain(11L);
         assertThat(r.notes().get(Slot.EXTRAS)).contains("열한번째 · " + GeneratorSupport.AVOID_PLACES_FULL)
@@ -401,7 +401,7 @@ class TripRequestMapperTest {
                 PlaceMatcher.key(DraftField.LODGING, "파라다이스 호텔"), new PlaceMatch(77L, "파라다이스 호텔 부산", "LODGING"),
                 PlaceMatcher.key(DraftField.MUST_VISIT, "해운대"), new PlaceMatch(5L, "해운대해수욕장", "SIGHT"));
 
-        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY, Set.of());
 
         assertThat(r.request().selectedPlaceIds()).isEmpty();
         assertThat(r.request().mode()).isEqualTo(ItineraryGenerateRequest.PlanningMode.AUTO);
@@ -417,7 +417,7 @@ class TripRequestMapperTest {
             matches.put(PlaceMatcher.key(DraftField.MUST_VISIT, "장소" + i), new PlaceMatch((long) i, "장소" + i, "SIGHT"));
         }
 
-        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY, Set.of());
 
         assertThat(r.request().selectedPlaceIds()).hasSize(10);
         assertThat(r.notes().get(Slot.ANCHORS)).contains("장소11 · " + GeneratorSupport.PLACES_FULL);
@@ -436,7 +436,7 @@ class TripRequestMapperTest {
         Map<String, PlaceMatch> matches = Map.of(PlaceMatcher.key(DraftField.MUST_VISIT, "블루라인파크"),
                 new PlaceMatch(9L, "해운대블루라인파크", "SIGHT"));
 
-        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY, Set.of());
 
         assertThat(r.request().requiredExperiences()).containsExactly(
                 new ItineraryGenerateRequest.RequiredExperience("광안리 야경", "광안리", "evening"),
@@ -496,7 +496,7 @@ class TripRequestMapperTest {
                 PlaceMatcher.key(DraftField.MUST_VISIT, "해운대해수욕장"), new PlaceMatch(5L, "해운대해수욕장", "ATTRACTION"),
                 PlaceMatcher.key(DraftField.AVOID_PLACES, "해운대"), new PlaceMatch(5L, "해운대해수욕장", "ATTRACTION"));
 
-        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY);
+        TripRequestMapper.Result r = TripRequestMapper.map(e.draft(), matches, TODAY, Set.of());
 
         assertThat(r.request().avoidPlaceNames()).isNull();
         assertThat(r.request().selectedPlaceIds()).containsExactly(5L);

@@ -163,7 +163,12 @@ public class DraftItineraryPlanner {
      * @param time   sunrise·morning·evening. 시각이 상관없으면 null
      * @param pinned 사용자가 고른 장소. 이름으로 찾을 때는 null
      */
-    public record UserWant(String text, String place, String time, PlaceCandidate pinned) {
+    /** @param accepted 넣지 못한다는 것을 대화에서 듣고도 그대로 진행하기로 한 요구 */
+    public record UserWant(String text, String place, String time, PlaceCandidate pinned, boolean accepted) {
+
+        public UserWant(String text, String place, String time, PlaceCandidate pinned) {
+            this(text, place, time, pinned, false);
+        }
     }
 
     /**
@@ -409,14 +414,19 @@ public class DraftItineraryPlanner {
                 : hubOf(cityByDay.get(dayCount - 1), input, registry);
         moveOffShortDepartureDay(stopsByDay, cityByDay, lodgingByNight.get(dayCount - 1), departureHubOf, drivesHome,
                 req, input, notes);
-        // 출발일은 출발지 근처에서 마친다. 그날 권역 예비 장소만 두면 출발 허브에서 먼 곳으로 오전을 채운다.
+        // 출발일은 출발지 근처에서 마친다. 그날 권역 예비 장소만 두면 출발 허브에서 먼 곳으로 오전을 채운다. 전날 밤을
+        // 허브 가까이 묵으면 그날 권역이 멀어 숙소 근처 명소가 아니면 오전에 들를 곳이 없다.
         if (departureHubOf != null && coordsOf(departureHubOf) != null) {
             Set<String> seen = new HashSet<>(tripSights);
             sparesByDay.get(dayCount - 1).forEach(x -> seen.add(registry.canonical(x.place())));
-            for (DayBuilder.Stop near : knownSightsNear(input, coordsOf(departureHubOf), registry, exclusions,
-                    input.startDate().plusDays(dayCount - 1), req.country())) {
-                if (registry.whyNotVisit(near.place(), seen) == null && seen.add(registry.canonical(near.place()))) {
-                    sparesByDay.get(dayCount - 1).add(near);
+            PlaceCandidate lastNight = dayCount > 1 ? lodgingByNight.get(dayCount - 1) : null;
+            for (PlaceCandidate from : lastNight == null ? List.of(departureHubOf) : List.of(departureHubOf, lastNight)) {
+                if (coordsOf(from) == null) continue;
+                for (DayBuilder.Stop near : knownSightsNear(input, coordsOf(from), registry, exclusions,
+                        input.startDate().plusDays(dayCount - 1), req.country(), MIN_DEPARTURE_FILL_VALUE)) {
+                    if (registry.whyNotVisit(near.place(), seen) == null && seen.add(registry.canonical(near.place()))) {
+                        sparesByDay.get(dayCount - 1).add(near);
+                    }
                 }
             }
         }
@@ -470,7 +480,8 @@ public class DraftItineraryPlanner {
             if (last) {
                 if (req.departure() != null) {
                     end = TripHubs.departureDeadline(req.departure(), departureHubOf, drivesHome, req.country())
-                            - (drivesHome ? 0 : TripHubs.HUB_TRAVEL_MINUTES);
+                            - (drivesHome ? 0 : TripHubs.HUB_TRAVEL_MINUTES
+                            + TripHubs.estimatedLegSlack(TripHubs.HUB_TRAVEL_MINUTES));
                     endAt = departureHubOf;
                     endIsHub = endAt != null;
                 } else {
@@ -1021,7 +1032,8 @@ public class DraftItineraryPlanner {
         if (dayCount < 2 || req.departure() == null) return;
         int last = dayCount - 1;
         TransportLeg toHub = drivesHome ? null : DayBuilder.legOf(lastLodging, hub, input.transportPref(), false);
-        int lead = drivesHome ? 0 : toHub != null ? toHub.durationMin() : TripHubs.HUB_TRAVEL_MINUTES;
+        int lead = drivesHome ? 0 : (toHub != null ? toHub.durationMin() : TripHubs.HUB_TRAVEL_MINUTES)
+                + TripHubs.estimatedLegSlack(toHub == null ? null : toHub.durationMin());
         int window = TripHubs.departureDeadline(req.departure(), hub, drivesHome, req.country()) - lead
                 - minutes(DEFAULT_START);
         for (DayBuilder.Stop stop : List.copyOf(stopsByDay.get(last))) {
@@ -1292,6 +1304,8 @@ public class DraftItineraryPlanner {
 
     /** 코드가 빈 시간을 채울 때 쓰는 최소 방문 가치. 근처에 있으면 들를 만한 곳(1)으로 채우면 채우기용 장소가 된다. */
     private static final int MIN_FILL_VALUE = 2;
+    /** 출발일 오전은 숙소·출발 허브 근처에서만 보낼 수 있어 근처에 있으면 들를 만한 곳(1)도 채운다. */
+    private static final int MIN_DEPARTURE_FILL_VALUE = 1;
     /** 빈 시간 후보 수. 일정에 이미 든 곳과 겹치는 것을 빼고도 오후를 채울 만큼 둔다. */
     private static final int KNOWN_SIGHTS_LIMIT = 8;
 
@@ -1301,6 +1315,12 @@ public class DraftItineraryPlanner {
      */
     private List<DayBuilder.Stop> knownSightsNear(VectorEnrichedInput input, double[] anchor, Registry registry,
                                                   TripExclusions exclusions, LocalDate date, String country) {
+        return knownSightsNear(input, anchor, registry, exclusions, date, country, MIN_FILL_VALUE);
+    }
+
+    private List<DayBuilder.Stop> knownSightsNear(VectorEnrichedInput input, double[] anchor, Registry registry,
+                                                  TripExclusions exclusions, LocalDate date, String country,
+                                                  int minValue) {
         if (anchor == null) return List.of();
         double radius = "car".equals(input.transportPref()) ? CAR_SEARCH_KM : TRANSIT_SEARCH_KM;
         return registry.withClosures(candidateSupplement.enrichFromDb(registry.near.search(SearchRole.ATTRACTION,
@@ -1309,7 +1329,7 @@ public class DraftItineraryPlanner {
                 .filter(c -> !DraftPlaceResolver.notAVisit(c.name(), c.category()))
                 .filter(c -> {
                     PlaceFactsReader.PlaceFact f = registry.fact(c);
-                    if (f != null && f.value() != null) return f.value() >= MIN_FILL_VALUE;
+                    if (f != null && f.value() != null) return f.value() >= minValue;
                     return c.wikidataSitelinks() != null && c.wikidataSitelinks() >= 1;
                 })
                 .filter(c -> !CandidatePolicy.isEventOnlySight(c.name(), c.category()))

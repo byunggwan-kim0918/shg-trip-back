@@ -301,7 +301,7 @@ public class TripChatService {
             Draft draft = DraftFolder.fold(st.getEvents());
             Optional<String> closed = closedDestination(draft);
             if (closed.isPresent()) throw new BusinessException(ErrorCode.VALIDATION_FAILED, closed.get());
-            TripRequestMapper.Result mapping = TripRequestMapper.map(draft, st.getMatches(), today());
+            TripRequestMapper.Result mapping = TripRequestMapper.map(draft, st.getMatches(), today(), st.getAskedKeys());
             if (!mapping.ready()) {
                 throw new BusinessException(ErrorCode.VALIDATION_FAILED, mapping.blockers().get(0).description());
             }
@@ -410,7 +410,8 @@ public class TripChatService {
         boolean modelFirst = NextStepPolicy.modelAsksCritical(it);
         OpenQuestion infeasible = modelFirst ? null : TripFeasibilityQuestions.next(draft,
                 freshMatches ? st.getMatches() : null, freshMatches ? matches.suggestions() : null,
-                st.getAskedKeys(), planningCountries.countryOf(draft.value(DraftField.DESTINATION)));
+                st.getAskedKeys(), planningCountries.countryOf(draft.value(DraftField.DESTINATION)),
+                placeMatcher.cityOf(draft.value(DraftField.DESTINATION)).orElse(null));
         if (infeasible != null) {
             st.setResume(null);
             open(st, infeasible);
@@ -526,7 +527,7 @@ public class TripChatService {
         if (questionId.startsWith(FIX_PREFIX)) {
             String key = questionId.substring(FIX_PREFIX.length());
             TripRequestMapper.Result mapping = TripRequestMapper.map(DraftFolder.fold(st.getEvents()),
-                    st.getMatches(), today());
+                    st.getMatches(), today(), st.getAskedKeys());
             return mapping.blockers().stream().filter(b -> b.key().equals(key)).findFirst()
                     .map(b -> new OpenQuestion(questionId, b.slot(), QuestionKind.FIX, null, b.title(),
                             b.description(), b.placeholder(), b.examples(), true, null, FIX_PREFIX + b.key(),
@@ -539,7 +540,7 @@ public class TripChatService {
     TripChatResponse view(TripChatSession session, ChatState st) {
         LocalDate today = today();
         Draft draft = DraftFolder.fold(st.getEvents());
-        TripRequestMapper.Result mapping = TripRequestMapper.map(draft, st.getMatches(), today);
+        TripRequestMapper.Result mapping = TripRequestMapper.map(draft, st.getMatches(), today, st.getAskedKeys());
         TripChatStatus status = session.getStatus();
         OpenQuestion q = status == TripChatStatus.ASKING ? st.getOpenQuestion() : null;
 

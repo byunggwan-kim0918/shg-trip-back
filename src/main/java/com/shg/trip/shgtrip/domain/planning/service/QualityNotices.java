@@ -8,7 +8,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 판정 결과를 일정 화면 안내 문구로 바꾼다. HARD는 경고로 보이고, SOFT는 사용자가 대안으로 고칠 수 있는 것만 남긴다.
+ * 판정 결과를 일정 화면 안내 문구로 바꾼다. HARD는 경고로 보이고, SOFT는 사용자가 대안으로 고칠 수 있는 것만,
+ * UNKNOWN은 여행자가 직접 확인해야 하는 것만 남긴다.
  * 화면은 "N일차 본문. 원인." 형식을 날짜별로 나눠 보여 주므로 문장 앞에 일차를 둔다.
  */
 public final class QualityNotices {
@@ -48,7 +49,9 @@ public final class QualityNotices {
             case CAFE_PER_DAY -> d + "일차에 카페·디저트가 " + v.evidence().size() + "곳이에요. 한 곳을 대안으로 바꿔 보세요.";
             case NO_NON_FOOD_ACTIVITY -> d + "일차에 식사·카페 말고 둘러볼 곳이 없어요.";
             case ADDRESS_REGION_MISMATCH -> d + "일차 " + quoted(v, 0) + "의 주소가 여행지와 달라요. 대안으로 바꾸거나 빼 주세요.";
-            case WANT_MISSING -> "꼭 가고 싶다고 한 " + quoted(v, 0) + "을(를) 일정에 넣지 못했어요.";
+            case WANT_MISSING, REQUIRED_NOT_FOUND, REQUIRED_NO_SLOT ->
+                    "꼭 가고 싶다고 한 " + quoted(v, 0) + "을(를) 일정에 넣지 못했어요.";
+            case HOURS_UNKNOWN -> d + "일차 " + quoted(v, 1) + "은(는) 영업시간을 확인하지 못했어요. 가기 전에 확인해 주세요.";
             case WANT_TIME -> d + "일차 " + quoted(v, 0) + "을(를) 원한 시간대에 가지 않아요. 순서를 바꿔 주세요.";
             case CITY_DAYS -> quoted(v, 0) + "에서 " + (v.evidence().size() > 1 ? v.evidence().get(1) : "")
                     + "일을 보내기로 했는데 " + (v.evidence().size() > 2 ? v.evidence().get(2) : "") + "일이에요.";
@@ -67,7 +70,7 @@ public final class QualityNotices {
             // 근거가 이름·분류 추정이라 경고로 띄우면 잘못 본 것까지 사용자에게 보인다.
             case CONSECUTIVE_MEAL_KIND, SAME_DAY_MEAL_GROUP, MEAL_GROUP_REPEATED, STRENUOUS, DUPLICATE -> null;
             // 생성 때 이유를 붙인 고정 안내(TripPlanner.tripNotes)로 남는다.
-            case DAILY_TRANSIT, WANT_FOOD_MISSING, WANT_NOT_IN_DATA -> null;
+            case DAILY_TRANSIT, WANT_FOOD_MISSING, WANT_NOT_FOUND, WANT_NO_SLOT, WANT_ACCEPTED_UNMET -> null;
         };
     }
 
@@ -125,9 +128,13 @@ public final class QualityNotices {
                     retry);
             case TRAVEL_MISSING -> new Rejection(v.day() + "일차에 이동 시간을 계산할 수 없는 구간이 있어 저장하지 않았어요.", retry);
             case NOT_ENDING_AT_LODGING -> new Rejection(v.day() + "일차 밤에 묵을 숙소를 찾지 못해 저장하지 않았어요.", retry);
+            case REQUIRED_NOT_FOUND -> new Rejection("꼭 가고 싶다고 한 " + quoted(v, 0)
+                    + "을(를) 장소 데이터에서 찾지 못해 저장하지 않았어요.", "다른 곳으로 바꾸거나 빼고 다시 만들어 주세요.");
+            case REQUIRED_NO_SLOT -> new Rejection("꼭 하고 싶다고 한 " + quoted(v, 0)
+                    + "을(를) 넣을 시간이 있는 날이 없어 저장하지 않았어요.", changeRequest);
             case LUNCH_MISSING, DINNER_MISSING, MEALS_BACK_TO_BACK, DEPARTURE_LATE, SAME_DAY_MEAL_KIND,
                  MEAL_KIND_REPEATED, CAFE_PER_DAY, NO_NON_FOOD_ACTIVITY, ADDRESS_REGION_MISMATCH, WANT_FOOD_MISSING,
-                 WANT_NOT_IN_DATA,
+                 WANT_NOT_FOUND, WANT_NO_SLOT, WANT_ACCEPTED_UNMET, HOURS_UNKNOWN,
                  PACE_SHORT, LONG_GAP, LONG_LEG, DAILY_TRANSIT, STRENUOUS, DUPLICATE, EARLY_FINISH, LEG_OVER_CAP,
                  DAY_DISTANCE_OVER_CAP, CONSECUTIVE_MEAL_KIND, SAME_DAY_MEAL_GROUP, MEAL_GROUP_REPEATED -> null;
         };

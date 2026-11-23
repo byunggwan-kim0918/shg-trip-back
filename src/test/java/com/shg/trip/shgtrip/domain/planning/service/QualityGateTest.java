@@ -165,6 +165,30 @@ class QualityGateTest {
     }
 
     @Test
+    @DisplayName("대화에서 그대로 두기로 한 요구는 저장하고 편집 뒤에도 같은 상태로 다시 판정하며, 동의 없이 못 넣은 꼭 갈 곳은 저장하지 않는다")
+    void requirementStateSurvivesSaveAndEdit() throws Exception {
+        TripConditions.Want kept = new TripConditions.Want("캐널시티 하카타", null, List.of(), null,
+                TripConditions.Reach.NOT_FOUND, true, true);
+        QualityGate.PlanContext accepted = conditionsContext(kept);
+        Itinerary saved = itinerary(legged(fullDay()), null);
+
+        gate.admit(saved, accepted);
+
+        QualityGate.PlanContext stored = objectMapper.readValue(saved.getPlanContext(), QualityGate.PlanContext.class);
+        assertThat(stored.rules().conditions().wants()).containsExactly(kept);
+        Itinerary edited = itinerary(legged(withoutLunch()), saved.getPlanContext());
+        gate.reflectEdit(edited);
+        assertThat(edited.getQualityNotices()).contains(LICENSE_NOTICE)
+                .noneMatch(n -> n.contains("캐널시티 하카타"));
+
+        TripConditions.Want unasked = new TripConditions.Want("나카스 야타이", null, List.of(), null,
+                TripConditions.Reach.NOT_FOUND, true, false);
+        assertThatThrownBy(() -> gate.admit(itinerary(legged(fullDay()), null), conditionsContext(unasked)))
+                .isInstanceOfSatisfying(QualityGate.Rejected.class, e -> assertThat(e.userMessage()).startsWith(
+                        "꼭 가고 싶다고 한 '나카스 야타이'을(를) 장소 데이터에서 찾지 못해 저장하지 않았어요."));
+    }
+
+    @Test
     @DisplayName("판정 입력의 제약 이름을 모르면 그 제약만 빼고 편집 뒤에도 다시 판정한다")
     void unknownRestrictionKeepsRejudging() throws Exception {
         String stored = """
@@ -244,6 +268,25 @@ class QualityGateTest {
     private static QualityGate.PlanContext context(int days) {
         return new QualityGate.PlanContext(new ItineraryRules.Context("normal", "car", LocalDate.of(2026, 11, 20),
                 days, null, Map.of(1L, "해운대해수욕장")), List.of(LICENSE_NOTICE));
+    }
+
+    private static QualityGate.PlanContext conditionsContext(TripConditions.Want want) {
+        TripConditions conditions = new TripConditions(List.of(want), Map.of(), List.of(), false, "car", null, null,
+                "normal");
+        return new QualityGate.PlanContext(new ItineraryRules.Context("normal", "car", LocalDate.of(2026, 11, 20), 1,
+                null, Map.of(), conditions, "KR", List.of()), List.of(LICENSE_NOTICE));
+    }
+
+    /** 여행 조건이 있는 판정은 첫 스텝 뒤 모든 구간에 이동 시간을 요구한다. */
+    private static List<ItineraryStep> legged(List<ItineraryStep> steps) {
+        List<ItineraryStep> out = new ArrayList<>();
+        for (int i = 0; i < steps.size(); i++) {
+            ItineraryStep s = steps.get(i);
+            out.add(ItineraryStep.builder().id(s.getId()).dayNumber(1).stepOrder(s.getStepOrder())
+                    .startTime(s.getStartTime()).endTime(s.getEndTime()).place(s.getPlace())
+                    .transportationMode(i == 0 ? null : "CAR").transportationDuration(i == 0 ? null : 15).build());
+        }
+        return out;
     }
 
     private static List<ItineraryStep> fullDay() {

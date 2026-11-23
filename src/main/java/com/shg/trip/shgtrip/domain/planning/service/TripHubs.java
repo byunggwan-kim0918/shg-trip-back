@@ -35,6 +35,9 @@ class TripHubs {
     static final int STATION_BUFFER = 20;
     /** 마지막 장소에서 출발 허브까지 가는 몫. 짓는 쪽과 검사 쪽이 같은 값으로 그날 끝을 잡아야 한다. */
     static final int HUB_TRAVEL_MINUTES = 30;
+    /** 직선거리로 추정한 이동은 막힘·환승 대기로 늘어난다. 놓치면 안 되는 출발편 앞 구간에만 이 비율만큼 더 남긴다. */
+    private static final double ESTIMATED_LEG_SLACK_SHARE = 0.25;
+    private static final int MIN_ESTIMATED_LEG_SLACK = 10;
 
     private final DraftPlaceResolver resolver;
     private final PlaceRepository placeRepository;
@@ -105,6 +108,17 @@ class TripHubs {
     static int departureDeadline(LocalTime departure, PlaceCandidate hub, boolean drivesHome, String country) {
         int at = departure.getHour() * 60 + departure.getMinute();
         return drivesHome ? at : at - departureBuffer(hub, country);
+    }
+
+    /**
+     * 추정한 이동 뒤에 출발 허브 기한이 있으면 더 남길 분. 짓는 쪽과 검사가 같은 값을 써야 여유를 둔 일정이 출발 초과로
+     * 판정되지 않는다. TODO: 실제 경로 시간을 쓰는 구간은 여유를 두지 않는다.
+     *
+     * @param legMinutes 추정한 이동 분. 모르면 null
+     */
+    static int estimatedLegSlack(Integer legMinutes) {
+        int leg = legMinutes == null ? HUB_TRAVEL_MINUTES : legMinutes;
+        return Math.max(MIN_ESTIMATED_LEG_SLACK, (int) Math.ceil(leg * ESTIMATED_LEG_SLACK_SHARE));
     }
 
     /** 국제선은 출국 수속에 국내선보다 오래 걸린다. */

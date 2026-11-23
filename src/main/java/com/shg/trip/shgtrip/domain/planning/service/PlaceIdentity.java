@@ -79,12 +79,25 @@ public final class PlaceIdentity {
         return region + "|" + PlaceCategoryConstants.majorCategory(category) + "|" + compact;
     }
 
-    /** 해변과 해수욕장은 같은 곳을 부르는 이름이다. 여행자가 "경포해변"이라 해도 장소 이름은 "경포해수욕장"일 수 있다. */
+    /** 일본 지명의 한국어 표기 차이. 모델과 여행자는 "츠키지·큐슈"로, 장소 데이터는 "쓰키지·규슈"로 적기도 한다. */
+    private static final List<String[]> JAPANESE_SPELLINGS = List.of(
+            new String[]{"츠", "쓰"}, new String[]{"큐", "규"}, new String[]{"덴", "텐"}, new String[]{"텐", "덴"});
+
+    /**
+     * 같은 곳을 부르는 이름들. 첫 이름은 받은 그대로다. 해변과 해수욕장은 같은 곳이라 "경포해변"의 장소 이름이
+     * "경포해수욕장"일 수 있고, 일본 지명은 표기가 갈린다.
+     */
     public static List<String> nameVariants(String name) {
         String n = name == null ? "" : name.strip();
-        if (n.endsWith("해수욕장")) return List.of(n, n.substring(0, n.length() - 4) + "해변");
-        if (n.endsWith("해변")) return List.of(n, n.substring(0, n.length() - 2) + "해수욕장");
-        return List.of(n);
+        List<String> beach = n.endsWith("해수욕장") ? List.of(n, n.substring(0, n.length() - 4) + "해변")
+                : n.endsWith("해변") ? List.of(n, n.substring(0, n.length() - 2) + "해수욕장") : List.of(n);
+        Set<String> out = new java.util.LinkedHashSet<>(beach);
+        for (String b : beach) {
+            for (String[] pair : JAPANESE_SPELLINGS) {
+                if (b.contains(pair[0])) out.add(b.replace(pair[0], pair[1]));
+            }
+        }
+        return List.copyOf(out);
     }
 
     /** 피할 명소를 빼도 딸린 행("경포해변 중앙광장")이 남으면 같은 곳에 간다. */

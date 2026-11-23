@@ -163,6 +163,7 @@ final class DayBuilder {
         orders.add(ordered(meals, f.startAt() != null ? f.startAt() : f.arrivalHub()));
         orders.add(bySlot(meals));
         if (f.endAt() != null) orders.add(ordered(meals, f.endAt()));
+        orders.add(protectedFirst(meals));
         Variant best = null;
         for (List<Stop> order : orders) {
             for (boolean strictSoft : new boolean[]{true, false}) {
@@ -174,9 +175,16 @@ final class DayBuilder {
         return best.built();
     }
 
-    /** @param keepOrder 주어진 순서대로 돈다. 다 지은 일정을 고친 뒤 시각만 다시 맞출 때 쓴다 */
+    /**
+     * @param keepOrder 주어진 순서대로 돈다. 다 지은 일정을 고친 뒤 시각만 다시 맞출 때 쓴다. 그 순서로는 요청 장소가
+     *                  빠지면 요청 장소를 앞으로 옮긴 안과 견준다
+     */
     static Built build(Frame f, List<Stop> stops, boolean keepOrder) {
-        return buildOrder(f, lunchAsDinner(f, stops), keepOrder, true).built();
+        List<Stop> meals = lunchAsDinner(f, stops);
+        Variant kept = buildOrder(f, meals, keepOrder, true);
+        if (!keepOrder || kept.lostProtected() == 0) return kept.built();
+        Variant moved = buildOrder(f, protectedFirst(meals), true, true);
+        return moved.betterThan(kept, f.endIsHub()) ? moved.built() : kept.built();
     }
 
     /** @param penalty 덜 좋은 정도. 지을 때만 매긴다 */
@@ -188,6 +196,15 @@ final class DayBuilder {
             if (late != o.late) return !late;
             return penalty < o.penalty;
         }
+    }
+
+    /**
+     * 요청 장소를 끼니보다 먼저 돈다. 끼니 칸 순서를 따르면 출발이 이른 날 점심 뒤에 둔 요청 장소가 그날 끝을 넘겨 빠진다.
+     */
+    private static List<Stop> protectedFirst(List<Stop> stops) {
+        List<Stop> out = new ArrayList<>(stops.stream().filter(s -> s.protect() && !s.meal()).toList());
+        stops.stream().filter(s -> !(s.protect() && !s.meal())).forEach(out::add);
+        return out;
     }
 
     /** 끼니 칸 순서만 지키고 같은 칸 안에서는 초안이 적은 순서대로 돈다. */
@@ -394,7 +411,10 @@ final class DayBuilder {
                     : placed.isEmpty() && f.arrivalHub() == null && f.firstLeg() != null ? f.firstLeg()
                     : legOf(prev, f.endAt(), f.transportPref(), f.slowWalk());
             int arrive = t + (leg == null ? 0 : leg.durationMin());
-            int limit = f.endIsHub() ? f.endMin() + TripHubs.HUB_TRAVEL_MINUTES : f.lodgingBy();
+            // 그날 끝(endMin)은 허브까지 기본 이동과 그 여유를 뺀 시각이라 실제 구간과 여유로 다시 맞춘다.
+            int limit = f.endIsHub() ? f.endMin() + TripHubs.HUB_TRAVEL_MINUTES
+                    + TripHubs.estimatedLegSlack(TripHubs.HUB_TRAVEL_MINUTES)
+                    - TripHubs.estimatedLegSlack(leg == null ? null : leg.durationMin()) : f.lodgingBy();
             lateBy = arrive - limit;
             int stay = f.endIsHub() ? HUB_MINUTES : LODGING_MINUTES;
             steps.add(DayTiming.buildStep(day, f.endAt(), arrive, arrive + stay, leg, List.of()));

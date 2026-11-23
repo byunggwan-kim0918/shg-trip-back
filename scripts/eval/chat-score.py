@@ -32,6 +32,9 @@ DB = ["docker", "exec", "-i", "shg-trip-postgres", "psql", "-U", "weShg", "-d", 
 TIME_WORDS = {"야경", "일출", "해돋이"}
 DEFAULT_EXPECT = Path(__file__).with_name("chat-conversations.jsonl")
 NEGATIVE_FRAGMENTS = ("못 먹거나 피할 음식", "피하고 싶은 활동")
+# 판정 v6 이전 이름(WANT_NOT_IN_DATA)도 함께 센다. 요구 하나가 일정에 없으면 이 가운데 하나만 난다.
+UNMET_WANT_RULES = ("WANT_MISSING", "WANT_FOOD_MISSING", "WANT_NOT_IN_DATA", "WANT_NOT_FOUND", "WANT_NO_SLOT",
+                    "WANT_ACCEPTED_UNMET", "REQUIRED_NOT_FOUND", "REQUIRED_NO_SLOT")
 
 
 def load_expects(path):
@@ -205,8 +208,7 @@ def cmd_itinerary(outs, expects):
         for r in rows:
             v = r["violations"]
             # 판정 v6 전 기록은 code·FATAL로 남아 있다.
-            wm = [x["message"] for x in v if x.get("rule", x.get("code"))
-                  in ("WANT_MISSING", "WANT_FOOD_MISSING", "WANT_NOT_IN_DATA")]
+            wm = [x["message"] for x in v if x.get("rule", x.get("code")) in UNMET_WANT_RULES]
             fa = [x.get("rule", x.get("code")) for x in v if x.get("severity") in ("HARD", "FATAL")]
             names = " ".join(s["name"] for s in r["steps"])
             left = [w for w in expects.get(r["id"], {}).get("withdrawn", []) if norm(w) in norm(names)]

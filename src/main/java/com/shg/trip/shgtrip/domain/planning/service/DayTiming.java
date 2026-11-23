@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
@@ -59,6 +60,19 @@ final class DayTiming {
     }
 
     private static final List<String> RETAIL_COMPLEX = List.of("department store", "shopping mall", "outlet");
+    /** 문을 여닫지 않는 야외 장소. 영업시간이 없는 것이 확인하지 못한 것이 아니다. */
+    private static final List<String> OPEN_SPACES = List.of("beach", "park", "plaza", "street", "bridge",
+            "scenic lookout", "mountain", "trail", "lake", "river", "island", "neighborhood", "harbor", "canal");
+
+    /** 영업시간도 휴무 요일도 모르는 곳. 열려 있다고 보고 지었지만 확인한 것이 아니다. */
+    static boolean hoursUnknown(PlaceCandidate c, PlaceFactsReader.PlaceFact fact) {
+        if (c == null) return false;
+        if (fact != null && fact.closedDays() != null && !fact.closedDays().isEmpty()) return false;
+        String hours = openingHoursOf(c);
+        if (hours != null && !hours.isBlank()) return false;
+        String lower = c.category() == null ? "" : c.category().toLowerCase(java.util.Locale.ROOT);
+        return !isOpenBeach(c.name(), c.category()) && OPEN_SPACES.stream().noneMatch(lower::contains);
+    }
 
     /** 해수욕장의 공식 이용시간은 입수 개장 시간이라 해변에 드나드는 시간이 아니다. */
     private static boolean isOpenBeach(String placeName, String placeCategory) {
