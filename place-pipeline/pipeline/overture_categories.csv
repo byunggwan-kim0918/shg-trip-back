@@ -1,0 +1,211 @@
+# Overture taxonomy 항목 → Foursquare 카테고리 라벨. 빈 라벨은 여행 장소가 아니다.
+# taxonomy.hierarchy를 가장 구체적인 항목부터 거슬러 올라가 처음 맞는 줄을 쓴다.
+# 라벨을 FSQ 체계로 맞추면 역할 판정(CandidatePolicy)·식당 보강·공용 게이트를 그대로 쓴다.
+overture_key,fsq_label
+# 여행 장소가 아닌 대분류
+services_and_business,
+health_care,
+education,
+lifestyle_services,
+community_and_government,
+# 식음료
+food_and_drink,Dining and Drinking > Restaurant
+restaurant,Dining and Drinking > Restaurant
+japanese_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Japanese Restaurant
+sushi_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Japanese Restaurant > Sushi Restaurant
+ramen_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Japanese Restaurant > Ramen Restaurant
+udon_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Japanese Restaurant > Udon Restaurant
+soba_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Japanese Restaurant > Soba Restaurant
+izakaya,Dining and Drinking > Bar > Sake Bar
+chinese_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Chinese Restaurant
+cantonese_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Chinese Restaurant > Cantonese Restaurant
+dim_sum_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Chinese Restaurant > Dim Sum Restaurant
+szechuan_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Chinese Restaurant > Szechuan Restaurant
+taiwanese_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Chinese Restaurant > Taiwanese Restaurant
+korean_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant
+vietnamese_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Vietnamese Restaurant
+thai_restaurant,Dining and Drinking > Restaurant > Asian Restaurant > Thai Restaurant
+asian_restaurant,Dining and Drinking > Restaurant > Asian Restaurant
+indian_restaurant,Dining and Drinking > Restaurant > Indian Restaurant
+italian_restaurant,Dining and Drinking > Restaurant > Italian Restaurant
+pizza_restaurant,Dining and Drinking > Restaurant > Pizzeria
+french_restaurant,Dining and Drinking > Restaurant > French Restaurant
+spanish_restaurant,Dining and Drinking > Restaurant > Spanish Restaurant
+tapas_bar,Dining and Drinking > Restaurant > Spanish Restaurant > Tapas Restaurant
+mexican_restaurant,Dining and Drinking > Restaurant > Mexican Restaurant
+taco_restaurant,Dining and Drinking > Restaurant > Mexican Restaurant > Taco Restaurant
+latin_american_restaurant,Dining and Drinking > Restaurant > Latin American Restaurant
+american_restaurant,Dining and Drinking > Restaurant > American Restaurant
+diner,Dining and Drinking > Restaurant > American Restaurant
+seafood_restaurant,Dining and Drinking > Restaurant > Seafood Restaurant
+steakhouse,Dining and Drinking > Restaurant > Steakhouse
+barbecue_restaurant,Dining and Drinking > Restaurant > BBQ Joint
+burger_restaurant,Dining and Drinking > Restaurant > Burger Joint
+fast_food_restaurant,Dining and Drinking > Restaurant > Fast Food Restaurant
+cafe,"Dining and Drinking > Cafe, Coffee, and Tea House"
+coffee_shop,"Dining and Drinking > Cafe, Coffee, and Tea House"
+tea_room,"Dining and Drinking > Cafe, Coffee, and Tea House > Tea Room"
+bubble_tea_shop,"Dining and Drinking > Cafe, Coffee, and Tea House > Bubble Tea Shop"
+internet_cafe,
+bakery,Dining and Drinking > Bakery
+dessert_shop,Dining and Drinking > Dessert Shop
+ice_cream_shop,Dining and Drinking > Dessert Shop > Ice Cream Parlor
+donut_shop,Dining and Drinking > Donut Shop
+bagel_shop,Dining and Drinking > Bagel Shop
+smoothie_juice_bar,Dining and Drinking > Juice Bar
+food_truck_stand,Dining and Drinking > Food Truck
+food_court,Dining and Drinking > Food Court
+bar,Dining and Drinking > Bar
+pub,Dining and Drinking > Bar > Pub
+irish_pub,Dining and Drinking > Bar > Irish Pub
+cocktail_bar,Dining and Drinking > Bar > Cocktail Bar
+wine_bar,Dining and Drinking > Bar > Wine Bar
+beer_bar,Dining and Drinking > Bar > Beer Bar
+sake_bar,Dining and Drinking > Bar > Sake Bar
+brewery,Dining and Drinking > Brewery
+hookah_bar,
+lounge,Dining and Drinking > Bar
+# 숙소
+lodging,Travel and Transportation > Lodging
+hotel,Travel and Transportation > Lodging > Hotel
+resort,Travel and Transportation > Lodging > Resort
+hostel,Travel and Transportation > Lodging > Hostel
+inn,Travel and Transportation > Lodging > Inn
+lodge,Travel and Transportation > Lodging > Lodge
+motel,Travel and Transportation > Lodging > Motel
+bed_and_breakfast,Travel and Transportation > Lodging > Bed and Breakfast
+holiday_rental_home,Travel and Transportation > Lodging > Vacation Rental
+campground,Landmarks and Outdoors > Campground
+private_lodging,
+service_apartment,
+# 교통
+travel_and_transportation,
+airport,Travel and Transportation > Transport Hub > Airport
+airport_terminal,Travel and Transportation > Transport Hub > Airport > Airport Terminal
+train_station,Travel and Transportation > Transport Hub > Rail Station
+metro_station,Travel and Transportation > Transport Hub > Metro Station
+bus_station,Travel and Transportation > Transport Hub > Bus Station
+ferry_terminal,Travel and Transportation > Boat or Ferry
+visitor_center,Travel and Transportation > Tourist Information and Service
+tour_operator,Travel and Transportation > Tourist Information and Service > Tour Provider
+sightseeing_tour_agency,Travel and Transportation > Tourist Information and Service > Tour Provider
+boat_tour,Travel and Transportation > Tourist Information and Service > Tour Provider
+walking_tour,Travel and Transportation > Tourist Information and Service > Tour Provider
+food_tour,Travel and Transportation > Tourist Information and Service > Tour Provider
+cable_car_service,Travel and Transportation > Cable Car
+bike_rental,Travel and Transportation > Bike Rental
+# 문화·역사
+cultural_and_historic,Landmarks and Outdoors > Historic and Protected Site
+historic_site,Landmarks and Outdoors > Historic and Protected Site
+monument,Landmarks and Outdoors > Monument
+memorial_site,Landmarks and Outdoors > Memorial Site
+castle,Landmarks and Outdoors > Castle
+palace,Landmarks and Outdoors > Palace
+lighthouse,Landmarks and Outdoors > Lighthouse
+cultural_center,Community and Government > Cultural Center
+place_of_worship,Community and Government > Spiritual Center
+buddhist_place_of_worship,Community and Government > Spiritual Center > Buddhist Temple
+shinto_shrine,Community and Government > Spiritual Center > Shrine
+christian_place_of_worship,Community and Government > Spiritual Center > Church
+roman_catholic_place_of_worship,Community and Government > Spiritual Center > Church
+religious_organization,Community and Government > Spiritual Center
+seminary,
+# 예술·오락
+library,Community and Government > Library
+arts_and_entertainment,Arts and Entertainment
+museum,Arts and Entertainment > Museum
+art_museum,Arts and Entertainment > Museum > Art Museum
+history_museum,Arts and Entertainment > Museum > History Museum
+science_museum,Arts and Entertainment > Museum > Science Museum
+art_gallery,Arts and Entertainment > Art Gallery
+theatre_venue,Arts and Entertainment > Performing Arts Venue > Theater
+performing_arts_venue,Arts and Entertainment > Performing Arts Venue
+music_venue,Arts and Entertainment > Performing Arts Venue > Music Venue
+jazz_and_blues_venue,Arts and Entertainment > Performing Arts Venue > Music Venue > Jazz and Blues Venue
+stadium_arena,Arts and Entertainment > Stadium
+amusement_park,Arts and Entertainment > Amusement Park
+theme_park,Arts and Entertainment > Theme Park
+water_park,Arts and Entertainment > Water Park
+aquarium,Arts and Entertainment > Aquarium
+zoo,Arts and Entertainment > Zoo
+observatory,Community and Government > Observatory
+planetarium,Arts and Entertainment > Planetarium
+sculpture_statue,Arts and Entertainment > Public Art > Outdoor Sculpture
+street_art,Arts and Entertainment > Public Art > Street Art
+arcade,Arts and Entertainment > Arcade
+escape_room,Arts and Entertainment > Escape Room
+karaoke_venue,
+movie_theater,
+casino,Arts and Entertainment > Casino
+adult_entertainment_venue,
+strip_club,
+betting_center,
+lottery_vendor,
+psychic_advising,
+astrological_advising,
+fortune_telling,
+social_club,
+dance_club,Arts and Entertainment > Night Club
+nightlife_venue,Arts and Entertainment > Night Club
+ticket_office_or_booth,
+event_venue,
+exhibition_and_trade_fair_venue,Arts and Entertainment > Exhibit
+festival_venue,Arts and Entertainment
+# 자연·야외
+geographic_entities,Landmarks and Outdoors
+beach,Landmarks and Outdoors > Beach
+lake,Landmarks and Outdoors > Lake
+river,Landmarks and Outdoors > River
+waterfall,Landmarks and Outdoors > Waterfall
+mountain,Landmarks and Outdoors > Mountain
+hot_springs,Landmarks and Outdoors > Hot Spring
+canal,Landmarks and Outdoors > Waterfront
+quay,Landmarks and Outdoors > Waterfront
+pier,Travel and Transportation > Pier
+marina,Landmarks and Outdoors > Harbor or Marina
+bridge,Landmarks and Outdoors > Bridge
+cave,Landmarks and Outdoors > Cave
+island,Landmarks and Outdoors > Island
+forest,Landmarks and Outdoors > Forest
+nature_reserve,Landmarks and Outdoors > Nature Preserve
+botanical_garden,Landmarks and Outdoors > Botanical Garden
+garden,Landmarks and Outdoors > Garden
+community_garden,
+building,
+park,Landmarks and Outdoors > Park
+national_park,Landmarks and Outdoors > National Park
+hiking_trail,Landmarks and Outdoors > Hiking Trail
+mountain_bike_trail,Landmarks and Outdoors > Bike Trail
+scenic_viewpoint,Landmarks and Outdoors > Scenic Lookout
+public_plaza,Landmarks and Outdoors > Plaza
+public_fountain,Landmarks and Outdoors > Fountain
+wildlife_sanctuary,Landmarks and Outdoors > Nature Preserve
+# 스포츠·체험
+sports_and_recreation,
+ski_resort,Sports and Recreation > Snow Sports > Ski Resort and Area
+golf_course,Sports and Recreation > Golf
+scuba_diving_center,Sports and Recreation > Water Sports
+canoe_and_kayak_hire_service,Sports and Recreation > Water Sports
+rafting_kayaking_area,Sports and Recreation > Water Sports
+boat_rental_and_training,Sports and Recreation > Water Sports
+sky_diving,Sports and Recreation
+hot_air_balloons_tour,Travel and Transportation > Tourist Information and Service > Tour Provider
+public_bath,Sports and Recreation > Sauna
+onsen,Landmarks and Outdoors > Hot Spring
+# 쇼핑
+shopping,
+shopping_mall,Retail > Shopping Mall
+department_store,Retail > Department Store
+souvenir_store,Retail > Souvenir Store
+gift_shop,Retail > Gift Store
+antique_store,Retail > Antique Store
+bookstore,Retail > Bookstore
+arts_crafts_and_hobby_store,Retail > Arts and Crafts Store
+farmers_market,Retail > Food and Beverage Retail > Farmers Market
+fish_market,Retail > Food and Beverage Retail > Fish Market
+flea_market,Retail > Flea Market
+market,Retail > Market
+public_market,Retail > Market
+night_market,Dining and Drinking > Night Market
+outlet_store,Retail > Outlet Store
+duty_free_shop,Retail > Duty-free Store

@@ -78,6 +78,22 @@ jobs:
           .venv/bin/pip install -q -r requirements.txt pytest
           .venv/bin/python -m pytest -q test_extract.py
 
+  # 장소 공급처 파이프라인 규칙 테스트 (합성 테이블, 외부 호출 없음). 이름 키 계약 파일을 Java 테스트와 같이 읽는다.
+  place-pipeline-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Run place-pipeline tests
+        working-directory: place-pipeline
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt pytest
+          .venv/bin/python -m pytest -q tests
+
   # Job 2: 통합 테스트 (DB/Redis service container)
   integration-test:
     needs: unit-test
