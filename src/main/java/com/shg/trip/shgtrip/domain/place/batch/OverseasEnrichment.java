@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 
 import java.util.List;
 import java.util.Map;
@@ -59,12 +60,12 @@ final class OverseasEnrichment {
         java.util.Set<String> names = new java.util.HashSet<>();
         Country country = COUNTRIES.get(place.getCountry());
         if (country != null) {
-            names.add(country.nameKo());
-            names.add(country.nameEn());
+            names.add(PlaceNames.exactKey(country.nameKo()));
+            names.add(PlaceNames.exactKey(country.nameEn()));
         }
         DestinationsHolder.INSTANCE.find(place.getRegion()).ifPresent(d -> {
-            names.add(d.nameKo().replaceAll("\\s+", ""));
-            names.add(d.name().replaceAll("\\s+", "").toLowerCase(java.util.Locale.ROOT));
+            names.add(PlaceNames.exactKey(d.nameKo()));
+            names.add(PlaceNames.exactKey(d.name()));
         });
         return names;
     }
@@ -123,7 +124,7 @@ final class OverseasEnrichment {
 
     /** 모델이 이름 대신 돌려주는 말. 한 번 저장되면 다시 묻지 않아 그대로 남는다. */
     private static final java.util.Set<String> NON_NAMES = java.util.Set.of(
-            "한국어이름", "한국어표시이름", "없음", "미상", "알수없음", "모름", "해당없음", "이름없음", "null", "n/a");
+            "한국어이름", "한국어표시이름", "없음", "미상", "알수없음", "모름", "해당없음", "이름없음", "null", "na");
 
     private static final java.util.regex.Pattern BRACKETED = java.util.regex.Pattern.compile("\\s*[(（\\[【][^)）\\]】]*[)）\\]】]");
 
@@ -137,7 +138,7 @@ final class OverseasEnrichment {
         if (v.length() >= 2 && (v.startsWith("\"") && v.endsWith("\""))) v = v.substring(1, v.length() - 1).strip();
         v = BRACKETED.matcher(v).replaceAll("").strip();
         if (v.isEmpty() || v.length() > MAX_NAME_KO_LENGTH) return null;
-        if (NON_NAMES.contains(v.replaceAll("\\s+", "").toLowerCase(java.util.Locale.ROOT))) return null;
+        if (NON_NAMES.contains(PlaceNames.exactKey(v))) return null;
         boolean hasHangul = v.codePoints().anyMatch(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HANGUL);
         return hasHangul && !OverseasNameKeys.hasCjk(v) ? v : null;
     }

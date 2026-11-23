@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 
@@ -39,10 +40,6 @@ public final class PlaceIdentity {
     /** 명소 이름 뒤에 붙으면 그 명소의 부속 시설인 낱말. "롯데월드타워"처럼 다른 명소가 되는 꼬리는 넣지 않는다. */
     private static final List<String> PART_SUFFIXES = List.of("중앙광장", "광장", "입구", "주차장", "물놀이장", "산책로",
             "인증센터", "안내소", "매표소", "전망대", "중부", "동부", "서부", "남부", "북부");
-    private static final Pattern NAME_SEPARATORS = Pattern.compile("[\\s\\p{Punct}\\p{IsPunctuation}]+");
-    private static final Pattern TRAILING_NOTE = Pattern.compile("\\s*[(（\\[][^()（）\\[\\]]*[)）\\]]\\s*$");
-    /** 영어 이름 꼬리. 괄호로 감싼 병기("東京ドームシティ (Tokyo Dome City)")도 받는다. */
-    private static final Pattern LATIN_TAIL = Pattern.compile("[\\s(（]+[A-Za-z0-9][A-Za-z0-9 .,'’&()（）/-]*");
     /** 구역 명소 이름으로 시작하는 FSQ 행은 그 구역 안 가게("アメリカ村 Club DROP")다. */
     private static final Set<String> AREA_LEAVES = Set.of("pedestrian plaza", "plaza");
     /** 장소 항목과 그곳의 박물관 기관 항목(故宫·故宫博物院)은 Wikidata 항목이 달라도 같은 곳이다. */
@@ -74,30 +71,9 @@ public final class PlaceIdentity {
      * ("에버랜드 (주토피아)")과 다른 가게("Café …")까지 묶이고, 보강 한국어 이름은 다른 장소에도 같게 붙어 쓰지 않는다.
      */
     static String nameKey(String name, String region, String category) {
-        String compact = name == null ? "" : compact(name);
+        String compact = name == null ? "" : PlaceNames.exactKey(name);
         if (compact.length() < MIN_BARE_NAME) return null;
         return region + "|" + PlaceCategoryConstants.majorCategory(category) + "|" + compact;
-    }
-
-    /** 일본 지명의 한국어 표기 차이. 모델과 여행자는 "츠키지·큐슈"로, 장소 데이터는 "쓰키지·규슈"로 적기도 한다. */
-    private static final List<String[]> JAPANESE_SPELLINGS = List.of(
-            new String[]{"츠", "쓰"}, new String[]{"큐", "규"}, new String[]{"덴", "텐"}, new String[]{"텐", "덴"});
-
-    /**
-     * 같은 곳을 부르는 이름들. 첫 이름은 받은 그대로다. 해변과 해수욕장은 같은 곳이라 "경포해변"의 장소 이름이
-     * "경포해수욕장"일 수 있고, 일본 지명은 표기가 갈린다.
-     */
-    public static List<String> nameVariants(String name) {
-        String n = name == null ? "" : name.strip();
-        List<String> beach = n.endsWith("해수욕장") ? List.of(n, n.substring(0, n.length() - 4) + "해변")
-                : n.endsWith("해변") ? List.of(n, n.substring(0, n.length() - 2) + "해수욕장") : List.of(n);
-        Set<String> out = new java.util.LinkedHashSet<>(beach);
-        for (String b : beach) {
-            for (String[] pair : JAPANESE_SPELLINGS) {
-                if (b.contains(pair[0])) out.add(b.replace(pair[0], pair[1]));
-            }
-        }
-        return List.copyOf(out);
     }
 
     /** 피할 명소를 빼도 딸린 행("경포해변 중앙광장")이 남으면 같은 곳에 간다. */
@@ -109,8 +85,8 @@ public final class PlaceIdentity {
         names.addAll(bareNames(c));
         for (String sightName : new String[]{sight.name(), sight.nameKo()}) {
             if (sightName == null || sightName.isBlank()) continue;
-            for (String variant : nameVariants(bareName(sightName, sight.region()))) {
-                String key = compact(variant);
+            for (String variant : PlaceNames.variants(bareName(sightName, sight.region()))) {
+                String key = PlaceNames.exactKey(variant);
                 if (key.length() >= MIN_PART_PREFIX && names.stream().anyMatch(n -> n.startsWith(key)
                         && PART_SUFFIXES.contains(n.substring(key.length())))) return true;
             }
@@ -121,7 +97,7 @@ public final class PlaceIdentity {
     /** 이름 끝 괄호 설명("용지봉 (634m)")과 앞에 붙은 그 지역 도시 이름("강릉 경포대")을 뗀 이름. null이면 빈 문자열이다. */
     public static String bareName(String name, String region) {
         if (name == null) return "";
-        String bare = TRAILING_NOTE.matcher(name.strip()).replaceFirst("");
+        String bare = PlaceNames.withoutTrailingNote(name);
         String city = DomesticCities.find(region).map(Destination::nameKo).orElse(null);
         if (city != null && bare.length() > city.length() && bare.startsWith(city)
                 && Character.isWhitespace(bare.charAt(city.length()))) {
@@ -145,7 +121,7 @@ public final class PlaceIdentity {
     private static Set<String> names(PlaceCandidate c) {
         Set<String> forms = new HashSet<>(2);
         for (String n : new String[]{c.name(), c.nameKo()}) {
-            if (n != null && !n.isBlank()) forms.add(compact(n));
+            if (n != null && !n.isBlank()) forms.add(PlaceNames.exactKey(n));
         }
         return forms;
     }
@@ -159,13 +135,9 @@ public final class PlaceIdentity {
     }
 
     private static void addForms(Set<String> forms, String name, String region) {
-        forms.add(compact(name));
-        String bare = compact(bareName(name, region));
+        forms.add(PlaceNames.exactKey(name));
+        String bare = PlaceNames.exactKey(bareName(name, region));
         if (bare.length() >= MIN_BARE_NAME) forms.add(bare);
-    }
-
-    private static String compact(String name) {
-        return NAME_SEPARATORS.matcher(name.toLowerCase(Locale.ROOT)).replaceAll("");
     }
 
     private static boolean isBilingualTwin(String name, PlaceCandidate base) {
@@ -175,18 +147,12 @@ public final class PlaceIdentity {
 
     // 숫자로 시작하는 꼬리("명동교자 2")는 같은 가게의 다른 지점이다.
     private static boolean isBilingualName(String name, String base) {
-        return isBilingualOf(name, base)
+        return PlaceNames.isBilingualOf(name, base)
                 && name.substring(base.length()).replaceAll("^[\\s(（]+", "").matches("^[A-Za-z].*");
     }
 
     private static boolean isOutdoor(PlaceCandidate c) {
         return c.category() != null && c.category().toLowerCase(Locale.ROOT).startsWith("landmarks and outdoors");
-    }
-
-    /** 한글·한자 이름 뒤에 영문·숫자 꼬리만 붙었는가("해동용궁사 Haedong Yonggungsa Temple"). */
-    private static boolean isBilingualOf(String name, String base) {
-        return base.chars().anyMatch(ch -> ch >= 0x80) && name.startsWith(base)
-                && LATIN_TAIL.matcher(name.substring(base.length())).matches();
     }
 
     private static boolean overlaps(Set<String> a, Set<String> b) {
@@ -211,7 +177,7 @@ public final class PlaceIdentity {
         String base = item.name().strip();
         String name = twin.name().strip();
         boolean sameName = name.equalsIgnoreCase(base);
-        boolean bilingual = !sameName && isBilingualOf(name, base);
+        boolean bilingual = !sameName && PlaceNames.isBilingualOf(name, base);
         if (!sameName && !bilingual) return false;
         if ((bilingual && isAreaLeaf(item.category())) || !PlaceCategoryConstants.majorCategory(item.category())
                 .equals(PlaceCategoryConstants.majorCategory(twin.category()))) {

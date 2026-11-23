@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
@@ -670,13 +671,13 @@ final class DayBuilder {
 
     /** 이름만 다른 같은 장소(첨성대/경주 첨성대, 경포호/경포호(철새도래지)). */
     static boolean sameSpotAsAny(PlaceCandidate c, List<PlaceCandidate> seen) {
-        String k = DraftPlaceResolver.key(c.displayName());
+        String k = PlaceNames.exactKey(c.displayName());
         for (PlaceCandidate s : seen) {
             if (c.placeId() != null && c.placeId().equals(s.placeId())) return true;
             if (distanceKm(c, s) > SAME_SPOT_KM) continue;
             if (CandidatePolicy.roleOf(s) == CandidatePolicy.Role.MEAL) continue;
             if (distanceKm(c, s) <= SAME_GROUNDS_KM) return true;
-            String o = DraftPlaceResolver.key(s.displayName());
+            String o = PlaceNames.exactKey(s.displayName());
             if (k.isEmpty() || o.isEmpty()) continue;
             if (k.contains(o) || o.contains(k) || (k.length() >= 2 && o.length() >= 2 && k.substring(0, 2).equals(o.substring(0, 2)))) {
                 return true;

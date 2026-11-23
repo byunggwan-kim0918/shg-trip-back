@@ -40,9 +40,17 @@ public class FoursquareSeeder {
     @Value("${batch.foursquare.deactivate-stale.enabled:false}")
     private boolean deactivateStale;
 
-    /** 지역의 활성 행 중 이 비율보다 많이 빠지면 추출 이상으로 보고 그 지역은 끄지 않는다. */
+    /** 지역의 활성 행 중 이 비율보다 많이 빠지면 추출 이상으로 보고 그 지역은 끄지 않는다(경고만 남긴다). */
     @Value("${batch.foursquare.deactivate-stale.max-ratio:0.3}")
     private double maxStaleRatio;
+
+    /** 이번 추출 전체에서 끌 행이 활성 행의 이 비율보다 많으면 아무것도 끄지 않고 실패한다. 지역 상한은 지역마다 따로라 넓은 추출 이상을 놓친다. */
+    @Value("${batch.foursquare.deactivate-stale.max-total-ratio:0.05}")
+    private double maxTotalStaleRatio;
+
+    /** 공급처에서 한 번 빠진 것만으로 폐업으로 보지 않는다. 연속으로 이만큼 빠져야 끈다. */
+    @Value("${batch.foursquare.deactivate-stale.min-missing-runs:2}")
+    private int minMissingRuns;
 
     /**
      * 이번 실행 시작보다 이만큼 앞선 saved_at만 "이번에 안 나온 행"으로 본다.
@@ -126,7 +134,8 @@ public class FoursquareSeeder {
 
         Set<RegionKey> seenRegions = new HashSet<>();
         Set<RegionKey> failedRegions = new HashSet<>();
-        try (InputStream is = csvSource.open();
+        java.security.MessageDigest digest = sha256();
+        try (InputStream is = new java.security.DigestInputStream(csvSource.open(), digest);
              BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
 
             String headerLine = reader.readLine();
@@ -183,7 +192,7 @@ public class FoursquareSeeder {
             }
 
             boolean tooManyFailedRows = failedRows > (totalProcessed + failedRows) * MAX_FAILED_ROW_RATIO;
-            int deactivated = 0;
+            StaleResult stale = StaleResult.NONE;
             if (failedChunks > 0 || tooManyFailedRows) {
                 log.warn("[FoursquareSeeder] 적재 실패(청크 {}개, 행 {}건)가 있어 빠진 장소 비활성화를 건너뜀",
                         failedChunks, failedRows);
@@ -191,7 +200,8 @@ public class FoursquareSeeder {
                 // 실패 행이 있는 지역은 그 행의 saved_at이 옛 값이라 멀쩡한 장소를 끌 수 있다.
                 seenRegions.removeAll(failedRegions);
                 try {
-                    deactivated = deactivateStalePlaces(seenRegions, history.getStartedAt().minus(STALE_CLOCK_MARGIN));
+                    stale = deactivateStalePlaces(seenRegions, history.getStartedAt().minus(STALE_CLOCK_MARGIN),
+                            "sha256:" + java.util.HexFormat.of().formatHex(digest.digest()).substring(0, 16));
                 } catch (RuntimeException e) {
                     history.fail("빠진 장소 비활성화 실패: " + e.getMessage());
                     historyRepository.save(history);
@@ -202,16 +212,19 @@ public class FoursquareSeeder {
             // upsert 반환값은 insert/update를 구분하지 않아 DB에서 직접 센다
             int inserted = placeRepository.countInsertedSince(history.getStartedAt());
             int updated = placeRepository.countUpdatedSince(history.getStartedAt());
-            history.complete(totalProcessed, inserted, updated, deactivated, failedRows, failedChunks);
+            history.complete(totalProcessed, inserted, updated, stale.deactivated(), failedRows, failedChunks);
             historyRepository.save(history);
 
             log.info("[FoursquareSeeder] 완료: processed={}, deactivated={}, failedChunks={}, failedRows={}",
-                    totalProcessed, deactivated, failedChunks, failedRows);
+                    totalProcessed, stale.deactivated(), failedChunks, failedRows);
             if (failedChunks > 0) {
                 throw new BatchStageFailed("Foursquare 청크 " + failedChunks + "개(" + failedRows + "건) 실패");
             }
             if (tooManyFailedRows) {
                 throw new BatchStageFailed("Foursquare 실패 행 " + failedRows + "건(처리 " + totalProcessed + "건)");
+            }
+            if (stale.blocked() != null) {
+                throw new BatchStageFailed("Foursquare 빠진 장소 비활성화 중단: " + stale.blocked());
             }
 
         } catch (IOException e) {
@@ -296,42 +309,72 @@ public class FoursquareSeeder {
     }
 
     /**
-     * 이번 적재에 나온 (국가, 지역)에서, 이번에 다시 나오지 않은 활성 Foursquare 행을 끈다.
-     * 폐업 표시·신고·오래된 행·상한 밖 행이 추출에서 빠져도 upsert만으로는 꺼지지 않기 때문이다.
-     * 이번 추출에 없는 국가·지역(단계 적재 중인 나라, 추출 대상이 아닌 옛 지역)은 건드리지 않는다.
-     *
-     * @return 끈 행 수(dry-run이면 0)
+     * @param deactivated 끈 행 수(dry-run이면 0)
+     * @param blocked     임계값을 넘어 끄지 않은 이유. 없으면 null
      */
-    int deactivateStalePlaces(Set<RegionKey> regions, OffsetDateTime seenSince) {
-        int deactivated = 0, skipped = 0;
+    record StaleResult(int deactivated, String blocked) {
+        static final StaleResult NONE = new StaleResult(0, null);
+    }
+
+    /**
+     * 이번 적재에 나온 (국가, 지역)에서, 이번에 다시 나오지 않은 활성 Foursquare 행의 누락 횟수를 올리고
+     * 연속 {@code minMissingRuns}번 빠진 행을 끈다. 폐업 표시·신고·오래된 행·상한 밖 행이 추출에서 빠져도
+     * upsert만으로는 꺼지지 않기 때문이다. 이번 추출에 없는 국가·지역(단계 적재 중인 나라, 추출 대상이 아닌 옛 지역)은
+     * 건드리지 않는다. 지역 비율을 넘은 지역은 끄지 않고, 전체 비율을 넘으면 아무것도 끄지 않고 실패로 알린다.
+     *
+     * @param extraction 이번 추출의 식별자(CSV 내용 해시). 같은 추출로 다시 돌린 실행은 누락 횟수를 올리지 않는다
+     */
+    StaleResult deactivateStalePlaces(Set<RegionKey> regions, OffsetDateTime seenSince, String extraction) {
         List<RegionKey> sorted = regions.stream()
                 .sorted(Comparator.comparing(RegionKey::country).thenComparing(RegionKey::region))
                 .toList();
+        Map<RegionKey, Integer> targets = new java.util.LinkedHashMap<>();
+        List<String> overRatio = new ArrayList<>();
+        int existingTotal = 0, targetTotal = 0;
         for (RegionKey key : sorted) {
-            int stale = placeRepository.countStaleFoursquare(key.country(), key.region(), seenSince);
-            if (stale == 0) continue;
+            placeRepository.markMissingFoursquare(key.country(), key.region(), seenSince, extraction);
             int existing = placeRepository.countExistingFoursquare(key.country(), key.region(), seenSince);
-            double ratio = (double) stale / existing;
+            existingTotal += existing;
+            int stale = placeRepository.countStaleFoursquare(key.country(), key.region(), seenSince, minMissingRuns);
+            if (stale == 0) continue;
+            double ratio = existing == 0 ? 1 : (double) stale / existing;
             if (!deactivateStale) {
                 log.info("[FoursquareSeeder] 빠진 장소(미적용) {} {}: {}/{}건 ({}%)",
                         key.country(), key.region(), stale, existing, Math.round(ratio * 100));
             } else if (ratio > maxStaleRatio) {
-                skipped++;
-                log.warn("[FoursquareSeeder] 빠진 장소 비율 초과로 건너뜀 {} {}: {}/{}건",
-                        key.country(), key.region(), stale, existing);
+                overRatio.add(key.country() + " " + key.region() + " " + stale + "/" + existing);
             } else {
-                int n;
-                do {
-                    n = placeRepository.deactivateStaleFoursquare(
-                            key.country(), key.region(), seenSince, DEACTIVATE_BATCH_SIZE);
-                    deactivated += n;
-                } while (n == DEACTIVATE_BATCH_SIZE);
+                targets.put(key, stale);
+                targetTotal += stale;
             }
         }
-        if (deactivateStale) {
-            log.info("[FoursquareSeeder] 빠진 장소 비활성화 {}건, 비율 초과로 건너뛴 지역 {}곳", deactivated, skipped);
+        if (!deactivateStale) return StaleResult.NONE;
+        if (existingTotal > 0 && targetTotal > existingTotal * maxTotalStaleRatio) {
+            String reason = "전체 " + targetTotal + "/" + existingTotal + "건이 상한 " + maxTotalStaleRatio + " 초과";
+            log.error("[FoursquareSeeder] 빠진 장소 비활성화 전부 건너뜀: {}", reason);
+            return new StaleResult(0, reason);
         }
-        return deactivated;
+        int deactivated = 0;
+        for (Map.Entry<RegionKey, Integer> e : targets.entrySet()) {
+            int n;
+            do {
+                n = placeRepository.deactivateStaleFoursquare(e.getKey().country(), e.getKey().region(), seenSince,
+                        minMissingRuns, DEACTIVATE_BATCH_SIZE);
+                deactivated += n;
+            } while (n == DEACTIVATE_BATCH_SIZE);
+        }
+        log.info("[FoursquareSeeder] 빠진 장소 비활성화 {}건, 비율 초과로 건너뛴 지역 {}곳", deactivated, overRatio.size());
+        // 지역 상한 초과는 추출 범위를 바꾼 지역에서 매달 반복될 수 있어 단계 실패로 올리지 않는다.
+        if (!overRatio.isEmpty()) log.warn("[FoursquareSeeder] 빠진 장소 비율 초과로 건너뛴 지역: {}", overRatio);
+        return new StaleResult(deactivated, null);
+    }
+
+    private static java.security.MessageDigest sha256() {
+        try {
+            return java.security.MessageDigest.getInstance("SHA-256");
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /**
@@ -444,27 +487,7 @@ public class FoursquareSeeder {
     }
 
     public String[] parseCsvLine(String line) {
-        if (line == null || line.isBlank()) return null;
-
-        List<String> fields = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        boolean inQuotes = false;
-
-        for (int i = 0; i < line.length(); i++) {
-            char c = line.charAt(i);
-            if (inQuotes) {
-                if (c == '"') {
-                    if (i + 1 < line.length() && line.charAt(i + 1) == '"') { current.append('"'); i++; }
-                    else inQuotes = false;
-                } else current.append(c);
-            } else {
-                if (c == '"') inQuotes = true;
-                else if (c == ',') { fields.add(current.toString()); current.setLength(0); }
-                else current.append(c);
-            }
-        }
-        fields.add(current.toString());
-        return fields.toArray(new String[0]);
+        return CsvLines.parse(line);
     }
 
     public boolean validateRequiredColumns(Map<String, Integer> columnIndex) {

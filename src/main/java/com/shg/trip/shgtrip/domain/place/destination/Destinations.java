@@ -1,5 +1,7 @@
 package com.shg.trip.shgtrip.domain.place.destination;
 
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -123,7 +125,7 @@ public class Destinations {
     }
 
     private static String key(String text) {
-        return text == null ? "" : text.replaceAll("[\\s'’-]+", "").toLowerCase(java.util.Locale.ROOT);
+        return PlaceNames.exactKey(text);
     }
 
     /** 반경 안 같은 국가 여행지 중 거리/반경이 가장 작은 곳. 같으면 이름순(추출기와 같은 규칙). */

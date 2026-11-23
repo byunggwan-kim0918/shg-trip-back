@@ -1,17 +1,14 @@
 package com.shg.trip.shgtrip.domain.tripchat.service;
 
-import java.text.Normalizer;
-import java.util.Locale;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 
 final class TextNormalizer {
 
     private TextNormalizer() {}
 
-    /** 공백·문장부호를 빼고 비교한다. "블루라인 파크"와 "블루라인파크"가 같은 말이다. */
+    /** 글자·숫자만 남겨 비교한다. "블루라인 파크"와 "블루라인파크"가 같은 말이다. */
     static String key(String text) {
-        if (text == null) return "";
-        String nfc = Normalizer.normalize(text, Normalizer.Form.NFC).toLowerCase(Locale.ROOT);
-        return nfc.replaceAll("[\\s\\p{Punct}·~…“”‘’「」『』()（）＜＞]", "");
+        return PlaceNames.exactKey(text);
     }
 
     /** 해석 맥락에 넣는 여행자 글. 꺾쇠를 전각으로 바꿔 글 안에 맥락 태그를 흉내 내도 태그로 읽히지 않게 한다. */

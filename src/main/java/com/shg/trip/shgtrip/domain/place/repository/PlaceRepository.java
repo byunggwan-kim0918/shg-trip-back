@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.place.repository;
 
+import com.shg.trip.shgtrip.domain.place.integrity.PlaceFingerprints;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -53,7 +54,9 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
               AND NOT (p.latitude = 0 AND p.longitude = 0)
               AND (LOWER(p.name) LIKE LOWER(CONCAT('%', :name, '%'))
-                OR LOWER(p.nameKo) LIKE LOWER(CONCAT('%', :name, '%')))
+                OR LOWER(p.nameKo) LIKE LOWER(CONCAT('%', :name, '%'))
+                OR (:compact <> '' AND (CAST(function('place_name_key', p.name) AS String) LIKE CONCAT('%', :compact, '%')
+                    OR CAST(function('place_name_key', p.nameKo) AS String) LIKE CONCAT('%', :compact, '%'))))
             ORDER BY (6371 * acos(
                 cos(radians(:lat)) * cos(radians(p.latitude)) *
                 cos(radians(p.longitude) - radians(:lng)) +
@@ -61,21 +64,10 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             )), LENGTH(p.name), p.id
             """)
     List<Place> findActiveByNameLikeNearest(@Param("name") String name,
+                                            @Param("compact") String compact,
                                             @Param("lat") double lat,
                                             @Param("lng") double lng,
                                             Pageable pageable);
-
-    /** 여행지 기준 좌표를 모를 때 쓴다. 이름이 짧은(= 가장 타이트한) 순. */
-    @Query("""
-            SELECT p FROM Place p
-            WHERE p.active = true
-              AND p.latitude IS NOT NULL AND p.longitude IS NOT NULL
-              AND NOT (p.latitude = 0 AND p.longitude = 0)
-              AND (LOWER(p.name) LIKE LOWER(CONCAT('%', :name, '%'))
-                OR LOWER(p.nameKo) LIKE LOWER(CONCAT('%', :name, '%')))
-            ORDER BY LENGTH(p.name), p.id
-            """)
-    List<Place> findActiveByNameLike(@Param("name") String name, Pageable pageable);
 
     String KEYWORD_MATCH = """
             p.active = true
@@ -83,12 +75,16 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND (LOWER(p.name) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
                 OR LOWER(p.nameKo) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
                 OR LOWER(p.address) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
-                OR LOWER(p.description) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\')
+                OR LOWER(p.description) LIKE CONCAT('%', :keyword, '%') ESCAPE '\\'
+                OR (:compact <> '' AND (CAST(function('place_name_key', p.name) AS String) LIKE CONCAT('%', :compact, '%')
+                    OR CAST(function('place_name_key', p.nameKo) AS String) LIKE CONCAT('%', :compact, '%'))))
             """;
 
     String KEYWORD_RANK = """
             ORDER BY CASE
                        WHEN LOWER(p.name) = :exact OR LOWER(p.nameKo) = :exact THEN 0
+                       WHEN :compact <> '' AND (CAST(function('place_name_key', p.name) AS String) = :compact
+                         OR CAST(function('place_name_key', p.nameKo) AS String) = :compact) THEN 0
                        WHEN LOWER(p.name) LIKE CONCAT(:keyword, ' (%') ESCAPE '\\' THEN 0
                        WHEN LOWER(p.name) LIKE CONCAT(:keyword, '%') ESCAPE '\\'
                          OR LOWER(p.nameKo) LIKE CONCAT(:keyword, '%') ESCAPE '\\' THEN 1
@@ -107,6 +103,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * 순서를 쿼리가 정하므로 Pageable에 정렬을 넣으면 안 된다.
      *
      * @param keyword  소문자로 바꾸고 LIKE 와일드카드(\\, %, _)를 이스케이프한 값
+     * @param compact  {@code PlaceNames.exactKey}로 만든 값. 띄어쓰기만 다른 이름("후쿠오카타워")을 잇는다
      * @param category null이면 전체
      */
     @Query(value = "SELECT p FROM Place p WHERE " + KEYWORD_MATCH
@@ -115,27 +112,26 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             + " AND (:category IS NULL OR p.category = :category)")
     Page<Place> searchByKeyword(@Param("keyword") String keyword,
                                 @Param("exact") String exact,
+                                @Param("compact") String compact,
                                 @Param("category") String category,
                                 Pageable pageable);
 
     /**
-     * 공백·문장부호를 뺀 이름으로 찾는다. 이름이 질의를 담거나, 질의가 이름(최소 {@code minLength}자)을 담는 행이다.
+     * 이름 키({@code place_name_key})로 찾는다. 이름이 질의를 담거나, 질의가 이름(최소 {@code minLength}자)을 담는 행이다.
      * 모델이 쓴 "수원 통닭거리"와 DB의 "수원통닭거리"처럼 띄어쓰기만 다른 이름을 잇는다. 해외 장소는 원어 이름 대신
-     * 한국어 이름(name_ko)으로도 찾는다.
+     * 한국어 이름(name_ko)으로도 찾는다. 역할이 아직 없는 행과 같은 곳으로 합쳐진 행도 돌려준다(호출부가 역할 짐작·대표 행으로 바꾼다).
      *
-     * @param compact 소문자·공백·문장부호를 뺀 질의
+     * @param compact {@code PlaceNames.exactKey}로 만든 질의
      */
     @Query(value = """
             SELECT * FROM places
-            WHERE active AND merged_into_id IS NULL AND region IN (:regions) AND place_role IN (:roles)
+            WHERE active AND region IN (:regions) AND (place_role IN (:roles) OR place_role IS NULL)
               AND latitude IS NOT NULL AND longitude IS NOT NULL
-              AND (regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g') LIKE '%' || :compact || '%'
-                   OR (length(regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g')) >= :minLength
-                       AND position(regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g') IN :compact) > 0)
-                   OR regexp_replace(lower(name_ko), '[[:space:][:punct:]]', '', 'g') LIKE '%' || :compact || '%'
-                   OR (length(regexp_replace(lower(name_ko), '[[:space:][:punct:]]', '', 'g')) >= :minLength
-                       AND position(regexp_replace(lower(name_ko), '[[:space:][:punct:]]', '', 'g') IN :compact) > 0))
-            ORDER BY length(name), id
+              AND (place_name_key(name) LIKE '%' || :compact || '%'
+                   OR (length(place_name_key(name)) >= :minLength AND position(place_name_key(name) IN :compact) > 0)
+                   OR place_name_key(name_ko) LIKE '%' || :compact || '%'
+                   OR (length(place_name_key(name_ko)) >= :minLength AND position(place_name_key(name_ko) IN :compact) > 0))
+            ORDER BY merged_into_id IS NOT NULL, length(name), id
             LIMIT 200
             """, nativeQuery = true)
     List<Place> findActiveByCompactName(@Param("compact") String compact,
@@ -143,14 +139,13 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                                         @Param("regions") Collection<String> regions,
                                         @Param("roles") Collection<String> roles);
 
-    /** 공백·문장부호를 뺀 이름(또는 한국어 이름)이 {@code head}로 시작하고 {@code tail}로 끝나는 행. */
+    /** 이름 키(또는 한국어 이름 키)가 {@code head}로 시작하고 {@code tail}로 끝나는 행. 역할 없는 행·합쳐진 행 포함은 위와 같다. */
     @Query(value = """
             SELECT * FROM places
-            WHERE active AND merged_into_id IS NULL AND region IN (:regions) AND place_role IN (:roles)
+            WHERE active AND region IN (:regions) AND (place_role IN (:roles) OR place_role IS NULL)
               AND latitude IS NOT NULL AND longitude IS NOT NULL
-              AND (regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g') LIKE :head || '%' || :tail
-                   OR regexp_replace(lower(name_ko), '[[:space:][:punct:]]', '', 'g') LIKE :head || '%' || :tail)
-            ORDER BY length(name), id
+              AND (place_name_key(name) LIKE :head || '%' || :tail OR place_name_key(name_ko) LIKE :head || '%' || :tail)
+            ORDER BY merged_into_id IS NOT NULL, length(name), id
             LIMIT 50
             """, nativeQuery = true)
     List<Place> findActiveByNameEdges(@Param("head") String head,
@@ -160,14 +155,14 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /**
      * 이름이나 관광공사 공식 메뉴(대표·취급 메뉴)·태그에 음식 이름이 든 식당·카페를 기준 좌표에서 가까운 순으로 찾는다.
-     * 큰 도시는 "칼국수"만 수백 곳이라 거리 순서 없이 자르면 동선 근처 식당이 빠진다.
+     * 큰 도시는 "칼국수"만 수백 곳이라 거리 순서 없이 자르면 동선 근처 식당이 빠진다. 낱말 경계 확인은 호출부가 한다.
      */
     @Query(value = """
             SELECT * FROM places
             WHERE active AND merged_into_id IS NULL AND region IN (:regions) AND place_role IN ('MEAL', 'CAFE')
               AND latitude IS NOT NULL AND longitude IS NOT NULL
-              AND (regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g') LIKE '%' || :word || '%'
-                   OR regexp_replace(lower(name_ko), '[[:space:][:punct:]]', '', 'g') LIKE '%' || :word || '%'
+              AND (place_name_key(name) LIKE '%' || :word || '%'
+                   OR place_name_key(name_ko) LIKE '%' || :word || '%'
                    OR coalesce(attributes -> 'official' ->> 'firstmenu', '') LIKE '%' || :word || '%'
                    OR coalesce(attributes -> 'official' ->> 'treatmenu', '') LIKE '%' || :word || '%'
                    OR array_to_string(tags, ' ') LIKE '%' || :word || '%')
@@ -181,6 +176,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     @Query("SELECT p FROM Place p WHERE " + KEYWORD_MATCH + " AND p.region IN :regions " + KEYWORD_RANK)
     List<Place> searchByKeywordInRegions(@Param("keyword") String keyword,
                                          @Param("exact") String exact,
+                                         @Param("compact") String compact,
                                          @Param("regions") Collection<String> regions,
                                          Pageable pageable);
 
@@ -448,6 +444,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 name_ko = COALESCE(name_ko, CAST(:nameKo AS varchar)),
                 traveler_fame = COALESCE(CAST(:fame AS smallint), traveler_fame),
                 enriched_at = CAST(:enrichedAt AS timestamptz),
+                enrich_input_fp = CAST(:inputFp AS varchar),
                 attributes = attributes - 'ingredients',
                 description_rewrite_attempts = 0,
                 updated_at = now()
@@ -459,16 +456,30 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                                @Param("feeLocal") Integer feeLocal, @Param("currency") String currency,
                                @Param("role") String role, @Param("cuisine") String cuisine,
                                @Param("nameKo") String nameKo, @Param("fame") Short fame,
-                               @Param("enrichedAt") OffsetDateTime enrichedAt);
+                               @Param("enrichedAt") OffsetDateTime enrichedAt, @Param("inputFp") String inputFp);
 
     String ARRAY_SEPARATOR = "\u001f";
 
+    /** 보강 입력 지문도 함께 남겨 이름·카테고리가 바뀌면 PlaceInvalidationJob이 다시 묻게 한다. */
     default int writeEnrichment(Place p) {
         return writeEnrichmentColumns(p.getId(), joinArray(p.getTags()), p.getDescription(),
                 joinArray(p.getRecommendedTimeSlots()), p.getRecommendedDurationMinutes(), p.getAdmissionFee(),
                 p.getAdmissionFeeLocal(), p.getAdmissionCurrency(), p.getPlaceRole(), p.getCuisine(), p.getNameKo(),
-                p.getTravelerFame(), p.getEnrichedAt());
+                p.getTravelerFame(), p.getEnrichedAt(),
+                PlaceFingerprints.enrichInput(p.getName(), p.getCategory(), p.getRegion(), p.getCountry()));
     }
+
+    /**
+     * 임베딩을 만든 텍스트의 지문. ids와 fingerprints는 같은 순서로 쉼표로 이은 값이다(지문은 16진수라 쉼표가 없다).
+     */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE places p SET embedding_text_fp = v.fp
+            FROM unnest(CAST(string_to_array(:ids, ',') AS bigint[]), string_to_array(:fingerprints, ',')) AS v(id, fp)
+            WHERE p.id = v.id
+            """, nativeQuery = true)
+    int stampEmbeddingTextFingerprints(@Param("ids") String ids, @Param("fingerprints") String fingerprints);
 
     private static String joinArray(List<String> values) {
         return values == null ? null : String.join(ARRAY_SEPARATOR, values);
@@ -944,16 +955,37 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                                 @Param("seenSince") OffsetDateTime seenSince);
 
     /**
-     * 이번 적재(seenSince 이후 upsert)에서 다시 나오지 않은 활성 Foursquare 행 수.
-     * Wikidata·TourAPI와 연결된 행은 다른 시더가 중복 판정에 써서 끄면 대표 명소가 다시 들어오지 않으므로 뺀다.
+     * 이번 적재(seenSince 이후 upsert)에서 다시 나오지 않은 활성 Foursquare 행의 연속 누락 횟수를 올린다.
+     * 추출 파일마다 한 번만 센다. 실패한 배치를 같은 추출로 다시 돌려도 한 번 빠진 행이 두 번 빠진 행이 되지 않는다.
      */
+    @Modifying
+    @Transactional
     @Query(value = """
-            SELECT count(*) FROM places
+            UPDATE places
+            SET missing_runs = LEAST(missing_runs + 1, 32767), missing_since = COALESCE(missing_since, now()),
+                missing_source = :source
             WHERE source = 'foursquare' AND active AND country = :country AND region = :region
-              AND saved_at < :seenSince AND wikidata_id IS NULL AND tourapi_content_id IS NULL
+              AND saved_at < :seenSince AND missing_source IS DISTINCT FROM :source
             """, nativeQuery = true)
+    int markMissingFoursquare(@Param("country") String country, @Param("region") String region,
+                              @Param("seenSince") OffsetDateTime seenSince, @Param("source") String source);
+
+    String STALE_FOURSQUARE = """
+            source = 'foursquare' AND active AND country = :country AND region = :region
+              AND saved_at < :seenSince AND missing_runs >= :minMissingRuns
+              AND wikidata_id IS NULL AND tourapi_content_id IS NULL
+              AND NOT EXISTS (SELECT 1 FROM places m WHERE m.merged_into_id = places.id AND m.active)
+            """;
+
+    /**
+     * 연속 {@code minMissingRuns}번 적재에서 빠진 활성 Foursquare 행 수. 공급처에서 한 번 빠진 것만으로는 폐업으로 보지 않는다.
+     * Wikidata·TourAPI와 연결된 행은 다른 시더가 중복 판정에 써서 끄면 대표 명소가 다시 들어오지 않고,
+     * 같은 곳으로 합쳐진 활성 행이 가리키는 대표 행을 끄면 묶인 행까지 검색에서 사라져 뺀다.
+     */
+    @Query(value = "SELECT count(*) FROM places WHERE " + STALE_FOURSQUARE, nativeQuery = true)
     int countStaleFoursquare(@Param("country") String country, @Param("region") String region,
-                             @Param("seenSince") OffsetDateTime seenSince);
+                             @Param("seenSince") OffsetDateTime seenSince,
+                             @Param("minMissingRuns") int minMissingRuns);
 
     /**
      * 위 행을 최대 limit건 deactivated_reason = 'stale'로 끈다. 다음 적재에 다시 나오면 upsert가 되살린다.
@@ -963,29 +995,23 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      */
     @Modifying
     @Transactional
-    @Query(value = """
-            UPDATE places
-            SET active = false, deactivated_at = now(), deactivated_reason = 'stale', updated_at = now()
-            WHERE id IN (
-                SELECT id FROM places
-                WHERE source = 'foursquare' AND active AND country = :country AND region = :region
-                  AND saved_at < :seenSince AND wikidata_id IS NULL AND tourapi_content_id IS NULL
-                LIMIT :limit)
-            """, nativeQuery = true)
+    @Query(value = "UPDATE places SET active = false, deactivated_at = now(), deactivated_reason = 'stale', "
+            + "updated_at = now() WHERE id IN (SELECT id FROM places WHERE " + STALE_FOURSQUARE + " LIMIT :limit)",
+            nativeQuery = true)
     int deactivateStaleFoursquare(@Param("country") String country, @Param("region") String region,
-                                  @Param("seenSince") OffsetDateTime seenSince, @Param("limit") int limit);
+                                  @Param("seenSince") OffsetDateTime seenSince,
+                                  @Param("minMissingRuns") int minMissingRuns, @Param("limit") int limit);
 
     /**
-     * Foursquare 시딩용 네이티브 upsert. fsq_place_id(FSQ 전역 고유 ID) 충돌 시 메타데이터만 갱신하고 핵심 필드는 보존한다.
-     * 주소가 없는 체인점도 지점별 fsq_place_id로 구분되며, 청크 간·동시 실행 중복을 DB가 처리한다.
+     * Foursquare 시딩용 네이티브 upsert. fsq_place_id(FSQ 전역 고유 ID) 충돌 시 원문 필드만 갱신한다.
+     * 이름·카테고리가 바뀐 행의 보강·임베딩·장소 사실은 이 쿼리가 아니라 PlaceInvalidationJob이 입력 지문으로 비운다.
      *
      * <p>enriched_at IS NOT NULL이면 tags/description을 덮어쓰지 않는다. CSV의 tags는 카테고리 복사·파편이라
-     * LLM 보강 결과보다 항상 저품질이다. name도 CSV 영문명이 기존 한글명을 되돌리지 않도록 CASE 가드를 둔다.
+     * LLM 보강 결과보다 항상 저품질이다. 한글 이름이 한글 없는 이름으로만 바뀌면 같은 곳의 언어 표기 차이라 이름을 두고,
+     * 이름이 바뀌면 옛 이름을 보고 받은 한국어 이름을 비운다. 보강 실패 횟수는 그 입력에 대한 것이라 이름·카테고리가 바뀌면 0이다.
+     * 역할은 보강 전에도 카테고리로 정해지므로(역할 기록 배치) 카테고리가 바뀌면 비워 다시 정하게 한다.
      *
-     * <p>카테고리가 바뀌면 임베딩·역할·음식 종류·주재료·보강 시각을 비운다. 전부 옛 카테고리 기준이라
-     * 남겨 두면 다음 배치가 다시 만들지 않는다. 이름이 바뀌면 임베딩·음식 종류·주재료·보강 시각·한국어 이름을 비운다.
-     *
-     * <p>월간 추출에서 빠져 꺼진 행(deactivated_reason = 'stale')이 다시 나오면 되살린다.
+     * <p>월간 추출에서 빠져 꺼진 행(deactivated_reason = 'stale')이 다시 나오면 되살리고 연속 누락 횟수를 지운다.
      * 정책으로 끈 행('policy')은 그대로 둔다.
      */
     @Modifying
@@ -998,33 +1024,23 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 (:fsqPlaceId, :name, :address, :latitude, :longitude, :country, :region, :category,
                  CAST(:tags AS TEXT[]), :description, :sourceUrl, 'foursquare', true, now(), now(), now())
             ON CONFLICT (fsq_place_id) DO UPDATE SET
-                name = CASE WHEN places.name ~ '[가-힣]' THEN places.name
+                name = CASE WHEN places.name ~ '[가-힣]' AND EXCLUDED.name !~ '[가-힣]' THEN places.name
                             ELSE EXCLUDED.name END,
+                name_ko = CASE WHEN (places.name !~ '[가-힣]' OR EXCLUDED.name ~ '[가-힣]')
+                                    AND places.name IS DISTINCT FROM EXCLUDED.name
+                               THEN NULL ELSE places.name_ko END,
+                place_role = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                                  THEN NULL ELSE places.place_role END,
+                enrich_attempts = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
+                                            OR ((places.name !~ '[가-힣]' OR EXCLUDED.name ~ '[가-힣]')
+                                                AND places.name IS DISTINCT FROM EXCLUDED.name)
+                                       THEN 0 ELSE places.enrich_attempts END,
                 address = EXCLUDED.address,
                 latitude = EXCLUDED.latitude,
                 longitude = EXCLUDED.longitude,
                 country = EXCLUDED.country,
                 region = EXCLUDED.region,
                 category = EXCLUDED.category,
-                embedding = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
-                                      OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
-                                 THEN NULL ELSE places.embedding END,
-                place_role = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
-                                  THEN NULL ELSE places.place_role END,
-                cuisine = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
-                                    OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
-                               THEN NULL ELSE places.cuisine END,
-                attributes = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
-                                       OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
-                                  THEN places.attributes - 'ingredients' ELSE places.attributes END,
-                enriched_at = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
-                                        OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
-                                   THEN NULL ELSE places.enriched_at END,
-                enrich_attempts = CASE WHEN places.category IS DISTINCT FROM EXCLUDED.category
-                                            OR (places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name)
-                                       THEN 0 ELSE places.enrich_attempts END,
-                name_ko = CASE WHEN places.name !~ '[가-힣]' AND places.name IS DISTINCT FROM EXCLUDED.name
-                               THEN NULL ELSE places.name_ko END,
                 active = CASE WHEN places.deactivated_reason = 'stale' THEN true ELSE places.active END,
                 deactivated_at = CASE WHEN places.deactivated_reason = 'stale' THEN NULL
                                       ELSE places.deactivated_at END,
@@ -1036,6 +1052,9 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                                    ELSE COALESCE(NULLIF(EXCLUDED.description, ''), places.description) END,
                 source_url = COALESCE(EXCLUDED.source_url, places.source_url),
                 source = 'foursquare',
+                missing_runs = 0,
+                missing_since = NULL,
+                missing_source = NULL,
                 saved_at = now(),
                 updated_at = now()
             """, nativeQuery = true)

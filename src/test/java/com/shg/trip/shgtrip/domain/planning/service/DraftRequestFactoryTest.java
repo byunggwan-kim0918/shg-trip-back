@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
+import com.shg.trip.shgtrip.domain.place.destination.DestinationCatalog;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
@@ -30,8 +31,9 @@ import static org.mockito.Mockito.when;
 class DraftRequestFactoryTest {
 
     private final PlaceRepository placeRepository = mock(PlaceRepository.class);
+    private final DestinationCatalog catalog = mock(DestinationCatalog.class);
     private final DraftRequestFactory factory = new DraftRequestFactory(Destinations.fromClasspath(), placeRepository,
-            mock(PlaceRegionValidator.class), mock(TripHubs.class));
+            mock(PlaceRegionValidator.class), mock(TripHubs.class), catalog);
 
     @BeforeEach
     void enoughPlaces() {
@@ -114,7 +116,24 @@ class DraftRequestFactoryTest {
     @DisplayName("여행 도시를 알 수 없으면 장소 부족으로 끝낸다")
     void unknownRegion() {
         assertThatThrownBy(() -> factory.prepare(request("any", List.of()), enriched("KR", "any", "Atlantis")))
-                .isInstanceOf(BusinessException.class);
+                .isInstanceOf(BusinessException.class)
+                .hasMessage(ErrorCode.INSUFFICIENT_PLACE_DATA.getMessage());
+    }
+
+    @Test
+    @DisplayName("사전에 있는 준비 전 여행지는 상태대로 알리고 요청을 남긴다")
+    void catalogedDestinationExplainsStatus() {
+        when(catalog.lookup("Moab", "US")).thenReturn(java.util.Optional.of(new DestinationCatalog.Entry(
+                "US:gn:5543307", "US", "town", "Moab", "모압", DestinationCatalog.Status.CANDIDATE)));
+        when(catalog.lookup("Otaru2", "JP")).thenReturn(java.util.Optional.of(new DestinationCatalog.Entry(
+                "JP:gn:1", "JP", "town", "Otaru2", null, DestinationCatalog.Status.PREPARING)));
+
+        assertThatThrownBy(() -> factory.prepare(request("any", List.of()), enriched("US", "any", "Moab")))
+                .hasMessageContaining("'모압'은(는) 아직 일정을 만들 수 없는 여행지예요");
+        assertThatThrownBy(() -> factory.prepare(request("any", List.of()), enriched("JP", "any", "Otaru2")))
+                .hasMessageContaining("모으는 중");
+        org.mockito.Mockito.verify(catalog).recordRequest("US:gn:5543307");
+        org.mockito.Mockito.verify(catalog).recordRequest("JP:gn:1");
     }
 
     @Test

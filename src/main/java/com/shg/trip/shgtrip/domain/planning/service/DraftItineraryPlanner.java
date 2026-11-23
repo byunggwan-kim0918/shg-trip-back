@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
@@ -625,10 +626,10 @@ public class DraftItineraryPlanner {
                                           Set<DraftPlan.Item> usedSpares, VectorEnrichedInput input, Request req,
                                           double[] anchor, TripExclusions exclusions, Registry registry,
                                           Set<String> tripSights, List<String> notes, int day) {
-        String experience = DraftPlaceResolver.key(item.experience());
+        String experience = PlaceNames.exactKey(item.experience());
         if (experience.isEmpty()) return null;
         for (DraftPlan.Item spare : spares) {
-            if (usedSpares.contains(spare) || !experience.equals(DraftPlaceResolver.key(spare.experience()))) continue;
+            if (usedSpares.contains(spare) || !experience.equals(PlaceNames.exactKey(spare.experience()))) continue;
             usedSpares.add(spare);
             PlaceCandidate place = resolveOne(spare, input, req, anchor, registry, notes, day);
             if (place != null && whyNotSight(place, false, exclusions, registry, tripSights) == null) return place;
@@ -637,9 +638,9 @@ public class DraftItineraryPlanner {
     }
 
     private static String reasonOfExperience(List<DraftPlan.Item> items, DraftPlan.Item spare) {
-        String experience = DraftPlaceResolver.key(spare.experience());
+        String experience = PlaceNames.exactKey(spare.experience());
         if (experience.isEmpty()) return null;
-        return items.stream().filter(i -> i.reason() != null && experience.equals(DraftPlaceResolver.key(i.experience())))
+        return items.stream().filter(i -> i.reason() != null && experience.equals(PlaceNames.exactKey(i.experience())))
                 .map(DraftPlan.Item::reason).findFirst().orElse(null);
     }
 
@@ -920,14 +921,14 @@ public class DraftItineraryPlanner {
 
     private static boolean exactName(String name, String target, Request req) {
         return DraftPlaceResolver.queryKey(name, req.cityNames()).equals(DraftPlaceResolver.queryKey(target,
-                req.cityNames())) || DraftPlaceResolver.bareKey(name).equals(DraftPlaceResolver.bareKey(target));
+                req.cityNames())) || PlaceNames.bareKey(name).equals(PlaceNames.bareKey(target));
     }
 
     private static boolean sameName(String name, String target, Request req) {
         if (name == null || target == null || target.isBlank()) return false;
         if (exactName(name, target, req)) return true;
         String want = DraftPlaceResolver.queryKey(target, req.cityNames());
-        String bare = DraftPlaceResolver.bareKey(name);
+        String bare = PlaceNames.bareKey(name);
         return !want.isEmpty() && !bare.isEmpty() && (bare.contains(want) || want.contains(bare));
     }
 
@@ -983,7 +984,7 @@ public class DraftItineraryPlanner {
      * 요청 문장이나 꼭 할 것에 나온 장소인지. 이름 앞 세 글자 이상이 요청에 있으면 요청한 것으로 본다.
      */
     private static boolean requested(Request req, String itemName, String placeName) {
-        String wanted = DraftPlaceResolver.key(Objects.toString(req.input().description(), "")
+        String wanted = PlaceNames.exactKey(Objects.toString(req.input().description(), "")
                 + String.join(" ", req.mustDo() == null ? List.of() : req.mustDo()));
         if (wanted.isEmpty()) return false;
         for (String name : List.of(Objects.toString(itemName, ""), Objects.toString(placeName, ""))) {
@@ -1211,7 +1212,7 @@ public class DraftItineraryPlanner {
     private static void noteLooseLink(String asked, String linked, Request req, List<String> notes, int day) {
         String a = DraftPlaceResolver.queryKey(asked, req.cityNames());
         String b = DraftPlaceResolver.queryKey(linked, req.cityNames());
-        String bare = DraftPlaceResolver.bareKey(linked);
+        String bare = PlaceNames.bareKey(linked);
         if (a.equals(b) || a.equals(bare) || bare.startsWith(a) && bare.length() - a.length() <= 2) return;
         notes.add(day + "일차 '" + asked + "'을(를) '" + linked + "'(으)로 연결함");
     }
@@ -1275,7 +1276,7 @@ public class DraftItineraryPlanner {
                         || dish.required() && CandidatePolicy.roleOf(c) == CandidatePolicy.Role.CAFE)
                 .filter(c -> !DraftPlaceResolver.notAVisit(c.name(), c.category()))
                 .filter(c -> !namesOtherCity(c.name(), req))
-                .filter(c -> !GENERIC_NAMES.contains(DraftPlaceResolver.key(c.name())))
+                .filter(c -> !GENERIC_NAMES.contains(PlaceNames.exactKey(c.name())))
                 .filter(c -> !dish.required() || WantMatcher.serves(dish.text(), dish.named(), c))
                 .filter(c -> cafe || dish.required() || !SNACK_SHOP.matcher(Objects.toString(c.displayName(), "")).find())
                 .sorted(Comparator.comparing((PlaceCandidate c) -> used.date != null

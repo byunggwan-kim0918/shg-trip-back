@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import lombok.RequiredArgsConstructor;
@@ -61,11 +62,11 @@ class TripHubs {
     Place named(String name, List<Destination> cities, Collection<String> regions) {
         if (name == null || name.isBlank() || cities.isEmpty()) return null;
         if (!TripCalendar.isKorea(cities.get(0).country())) {
-            String key = DraftPlaceResolver.key(name);
+            String key = PlaceNames.exactKey(name);
             return cities.stream().flatMap(c -> gateways(c).stream())
-                    .filter(g -> DraftPlaceResolver.key(g.getName()).contains(key)
-                            || key.contains(DraftPlaceResolver.key(g.getName()))
-                            || g.getNameKo() != null && DraftPlaceResolver.key(g.getNameKo()).contains(key))
+                    .filter(g -> PlaceNames.exactKey(g.getName()).contains(key)
+                            || key.contains(PlaceNames.exactKey(g.getName()))
+                            || g.getNameKo() != null && PlaceNames.exactKey(g.getNameKo()).contains(key))
                     .findFirst().orElse(null);
         }
         Destination first = cities.get(0);

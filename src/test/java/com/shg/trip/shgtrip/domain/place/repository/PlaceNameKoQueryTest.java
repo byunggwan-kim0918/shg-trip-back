@@ -59,11 +59,9 @@ class PlaceNameKoQueryTest {
     void namedLookupsMatchNameKo() {
         Long id = saveSensoji().getId();
 
-        assertThat(placeRepository.findActiveByNameLike("센소지", PageRequest.of(0, 5)))
+        assertThat(placeRepository.findActiveByNameLikeNearest("센소", "센소", 35.71, 139.79, PageRequest.of(0, 5)))
                 .extracting(Place::getId).contains(id);
-        assertThat(placeRepository.findActiveByNameLikeNearest("센소", 35.71, 139.79, PageRequest.of(0, 5)))
-                .extracting(Place::getId).contains(id);
-        assertThat(placeRepository.searchByKeyword("센소지", "센소지", null, PageRequest.of(0, 5)).getContent())
+        assertThat(placeRepository.searchByKeyword("센소지", "센소지", "센소지", null, PageRequest.of(0, 5)).getContent())
                 .extracting(Place::getId).first().isEqualTo(id);
     }
 
