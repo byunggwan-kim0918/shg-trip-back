@@ -1,1 +1,3 @@
 duckdb==1.4.4
+# DuckDB Python UDF(create_function)가 numpy로 값을 넘긴다
+numpy==2.0.2
