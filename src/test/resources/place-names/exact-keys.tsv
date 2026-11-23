@@ -1,0 +1,26 @@
+# 장소 이름 정확 키 계약. Java PlaceNames.exactKey와 place-pipeline names.exact_key가 같은 결과를 내야 한다.
+# 입력<TAB>기대 키. 정확 키는 NFKC·소문자 뒤 글자(L)·숫자(N)만 남긴다(표기 변형·악센트는 다루지 않는다).
+# 알려진 차이: 태국어·데바나가리처럼 결합 모음이 필수인 문자는 PostgreSQL [:alnum:]이 일부 모음 부호를 남겨 키가 다르다.
+광치기해변	광치기해변
+광치기 해변	광치기해변
+Gwangchigi  Beach	gwangchigibeach
+Gwangchigi Beach	gwangchigibeach
+후쿠오카 타워	후쿠오카타워
+후쿠오카타워	후쿠오카타워
+BIG-O쇼 (빅오쇼)	bigo쇼빅오쇼
+小樽運河	小樽運河
+ＡＢＣ　ストア	abcストア
+スターバックス・コーヒー	スターバックスコーヒー
+Phở Hòa	phởhòa
+Café de Flore	cafédeflore
+Restaurant le Marathon	restaurantlemarathon
+St. Patrick's Cathedral	stpatrickscathedral
+Times Square	timessquare
+石窟庵と仏国寺	石窟庵と仏国寺
+N서울타워	n서울타워
+♥카페♥	카페
+❤️카페	카페
+zero​width	zerowidth
+½ cafe	12cafe
+Ⅻ번가	xii번가
+がっこう	がっこう

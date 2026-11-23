@@ -1,0 +1,59 @@
+# 지역별 대표 명소(사람이 고른 편의 표본). 대표 명소 누락률의 분모로만 쓰고 성공률로 일반화하지 않는다.
+# 이름은 현지 표기 하나. 정확 키가 후보 이름(별칭 포함)에 들어 있으면 찾은 것으로 본다.
+area	name
+otaru_canal	小樽運河
+otaru_canal	北一硝子
+otaru_canal	小樽オルゴール堂
+otaru_canal	堺町
+otaru_canal	旧日本銀行小樽支店
+otaru_canal	小樽芸術村
+otaru_canal	三角市場
+otaru_canal	ルタオ
+osaka_namba	道頓堀
+osaka_namba	法善寺
+osaka_namba	黒門市場
+osaka_namba	なんばグランド花月
+osaka_namba	戎橋
+osaka_namba	千日前道具屋筋
+osaka_namba	難波八阪神社
+osaka_namba	大阪松竹座
+jeju_seongsan	성산일출봉
+jeju_seongsan	광치기해변
+jeju_seongsan	성산항
+jeju_seongsan	오조리
+yellowstone_of	Old Faithful
+yellowstone_of	Old Faithful Inn
+yellowstone_of	Upper Geyser Basin
+yellowstone_of	Castle Geyser
+yellowstone_of	Grand Geyser
+yellowstone_of	Morning Glory Pool
+yellowstone_of	Geyser Hill
+moab_ut	Museum of Moab
+moab_ut	Moab Information Center
+moab_ut	Swanny City Park
+moab_ut	Moab Brewery
+hallstatt_at	Skywalk
+hallstatt_at	Salzwelten
+hallstatt_at	Beinhaus
+hallstatt_at	Museum Hallstatt
+hallstatt_at	Marktplatz
+hoian_oldtown	Chùa Cầu
+hoian_oldtown	Chợ Hội An
+hoian_oldtown	Hội Quán Phúc Kiến
+hoian_oldtown	Tấn Ký
+hoian_oldtown	Bảo tàng
+hoian_oldtown	Chợ đêm
+manhattan_mid	Times Square
+manhattan_mid	Bryant Park
+manhattan_mid	New York Public Library
+manhattan_mid	Grand Central
+manhattan_mid	Chrysler Building
+manhattan_mid	Summit One Vanderbilt
+monaco	Casino de Monte-Carlo
+monaco	Musée Océanographique
+monaco	Palais Princier
+monaco	Jardin Exotique
+monaco	Cathédrale
+reunion_cilaos	Cilaos
+reunion_cilaos	Thermes
+reunion_cilaos	Roche Merveilleuse
