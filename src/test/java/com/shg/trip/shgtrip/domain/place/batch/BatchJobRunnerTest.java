@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.place.batch;
 
+import com.shg.trip.shgtrip.domain.place.integrity.PlaceReferenceGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,14 +35,70 @@ class BatchJobRunnerTest {
     @Mock
     private PlaceLinkJob placeLinkJob;
 
+    @Mock
+    private PlaceInvalidationJob placeInvalidationJob;
+
+    @Mock
+    private DestinationCatalogSync destinationCatalogSync;
+
+    @Mock
+    private PlaceReferenceGuard placeReferenceGuard;
+
+    @Mock
+    private BatchRunLock batchRunLock;
+
+    @Mock
+    private BatchRunLog batchRunLog;
+
     @InjectMocks
     private BatchJobRunner batchJobRunner;
 
     @BeforeEach
-    void enableFoursquareStage() {
+    void enableFoursquareStage() throws Exception {
         // @Value("${batch.foursquare.enabled:true}")는 단위 테스트에서 주입되지 않아 boolean 기본값
         // false가 된다. 운영 기본값(true)과 같은 조건에서 검증하도록 명시적으로 켠다.
         ReflectionTestUtils.setField(batchJobRunner, "foursquareEnabled", true);
+        org.mockito.Mockito.lenient().when(batchRunLock.tryAcquire()).thenReturn(true);
+        org.mockito.Mockito.lenient().when(placeReferenceGuard.compare(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(new PlaceReferenceGuard.Report(0, java.util.List.of(), java.util.List.of(),
+                        java.util.List.of(), java.util.List.of()));
+    }
+
+    @Test
+    @DisplayName("다른 배치가 잠금을 쥐고 있으면 아무 단계도 돌지 않고 종료 코드 1이다")
+    void run_lockedSkipsEverything() throws Exception {
+        when(batchRunLock.tryAcquire()).thenReturn(false);
+
+        batchJobRunner.run();
+
+        verify(foursquareSeeder, org.mockito.Mockito.never()).seed();
+        verify(embeddingBatchJob, org.mockito.Mockito.never()).execute();
+        assertThat(batchJobRunner.getExitCode()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("적재 전에 지문을 채우고, 적재 뒤 임베딩 전에 바뀐 장소를 비우고, 끝나면 잠금을 푼다")
+    void run_invalidationWrapsLoaders() throws Exception {
+        batchJobRunner.run();
+
+        InOrder inOrder = inOrder(placeInvalidationJob, foursquareSeeder, embeddingBatchJob, batchRunLock);
+        inOrder.verify(placeInvalidationJob).adopt();
+        inOrder.verify(foursquareSeeder).seed();
+        inOrder.verify(placeInvalidationJob).run();
+        inOrder.verify(embeddingBatchJob).execute();
+        inOrder.verify(batchRunLock).close();
+    }
+
+    @Test
+    @DisplayName("일정이 참조하는 장소가 사라지면 그 확인 단계가 실패한다")
+    void run_lostReferencedPlaceFails() throws Exception {
+        when(placeReferenceGuard.compare(org.mockito.ArgumentMatchers.any())).thenReturn(
+                new PlaceReferenceGuard.Report(1, java.util.List.of(7L), java.util.List.of(), java.util.List.of(),
+                        java.util.List.of()));
+
+        batchJobRunner.run();
+
+        assertThat(batchJobRunner.getExitCode()).isEqualTo(1);
     }
 
     @Test

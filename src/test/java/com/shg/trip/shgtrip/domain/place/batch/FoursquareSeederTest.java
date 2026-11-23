@@ -522,36 +522,59 @@ class FoursquareSeederTest {
         private final FoursquareSeeder.RegionKey shanghai = new FoursquareSeeder.RegionKey("CN", "Shanghai");
 
         @Test
-        @DisplayName("기본값(dry-run)은 건수만 세고 끄지 않는다")
+        @DisplayName("기본값(dry-run)은 누락 횟수만 올리고 끄지 않는다")
         void dryRunOnlyCounts() {
-            when(placeRepository.countStaleFoursquare("JP", "Osaka", since)).thenReturn(10);
+            ReflectionTestUtils.setField(seeder, "minMissingRuns", 2);
+            when(placeRepository.countStaleFoursquare("JP", "Osaka", since, 2)).thenReturn(10);
             when(placeRepository.countExistingFoursquare("JP", "Osaka", since)).thenReturn(100);
 
-            assertThat(seeder.deactivateStalePlaces(Set.of(osaka), since)).isZero();
-            verify(placeRepository, never()).deactivateStaleFoursquare(anyString(), anyString(), any(), anyInt());
+            assertThat(seeder.deactivateStalePlaces(Set.of(osaka), since, "sha256:a")).isEqualTo(FoursquareSeeder.StaleResult.NONE);
+            verify(placeRepository).markMissingFoursquare("JP", "Osaka", since, "sha256:a");
+            verify(placeRepository, never()).deactivateStaleFoursquare(anyString(), anyString(), any(), anyInt(), anyInt());
         }
 
         @Test
-        @DisplayName("켜면 비율 안의 지역만 묶음 단위로 끄고, 비율을 넘는 지역은 건너뛴다")
+        @DisplayName("켜면 비율 안의 지역만 묶음 단위로 끄고, 비율을 넘는 지역은 경고만 남기고 건너뛴다")
         void deactivatesWithinRatioInBatches() {
-            ReflectionTestUtils.setField(seeder, "deactivateStale", true);
-            ReflectionTestUtils.setField(seeder, "maxStaleRatio", 0.3);
-            when(placeRepository.countStaleFoursquare("JP", "Osaka", since)).thenReturn(1500);
+            enable(0.3, 1.0);
+            when(placeRepository.countStaleFoursquare("JP", "Osaka", since, 2)).thenReturn(1500);
             when(placeRepository.countExistingFoursquare("JP", "Osaka", since)).thenReturn(10000);
-            when(placeRepository.deactivateStaleFoursquare("JP", "Osaka", since, 1000)).thenReturn(1000, 500);
-            when(placeRepository.countStaleFoursquare("CN", "Shanghai", since)).thenReturn(80);
+            when(placeRepository.deactivateStaleFoursquare("JP", "Osaka", since, 2, 1000)).thenReturn(1000, 500);
+            when(placeRepository.countStaleFoursquare("CN", "Shanghai", since, 2)).thenReturn(80);
             when(placeRepository.countExistingFoursquare("CN", "Shanghai", since)).thenReturn(100);
 
-            assertThat(seeder.deactivateStalePlaces(Set.of(osaka, shanghai), since)).isEqualTo(1500);
-            verify(placeRepository, times(2)).deactivateStaleFoursquare("JP", "Osaka", since, 1000);
-            verify(placeRepository, never()).deactivateStaleFoursquare(eq("CN"), anyString(), any(), anyInt());
+            FoursquareSeeder.StaleResult result = seeder.deactivateStalePlaces(Set.of(osaka, shanghai), since, "sha256:a");
+            assertThat(result.deactivated()).isEqualTo(1500);
+            assertThat(result.blocked()).isNull();
+            verify(placeRepository, times(2)).deactivateStaleFoursquare("JP", "Osaka", since, 2, 1000);
+            verify(placeRepository, never()).deactivateStaleFoursquare(eq("CN"), anyString(), any(), anyInt(), anyInt());
+        }
+
+        @Test
+        @DisplayName("끌 행이 전체 활성 행의 상한을 넘으면 지역 비율 안이어도 아무것도 끄지 않는다")
+        void totalRatioBlocksEverything() {
+            enable(0.3, 0.05);
+            when(placeRepository.countStaleFoursquare("JP", "Osaka", since, 2)).thenReturn(800);
+            when(placeRepository.countExistingFoursquare("JP", "Osaka", since)).thenReturn(10000);
+
+            FoursquareSeeder.StaleResult result = seeder.deactivateStalePlaces(Set.of(osaka), since, "sha256:a");
+            assertThat(result.deactivated()).isZero();
+            assertThat(result.blocked()).contains("800/10000");
+            verify(placeRepository, never()).deactivateStaleFoursquare(anyString(), anyString(), any(), anyInt(), anyInt());
+        }
+
+        private void enable(double regionRatio, double totalRatio) {
+            ReflectionTestUtils.setField(seeder, "deactivateStale", true);
+            ReflectionTestUtils.setField(seeder, "maxStaleRatio", regionRatio);
+            ReflectionTestUtils.setField(seeder, "maxTotalStaleRatio", totalRatio);
+            ReflectionTestUtils.setField(seeder, "minMissingRuns", 2);
         }
 
         @Test
         @DisplayName("이번 적재에 없는 지역은 조회하지 않는다")
         void onlySeenRegions() {
             ReflectionTestUtils.setField(seeder, "deactivateStale", true);
-            assertThat(seeder.deactivateStalePlaces(Set.of(), since)).isZero();
+            assertThat(seeder.deactivateStalePlaces(Set.of(), since, "sha256:a").deactivated()).isZero();
             verifyNoInteractions(placeRepository);
         }
 
@@ -576,8 +599,8 @@ class FoursquareSeederTest {
             seeder.seed();
 
             ArgumentCaptor<OffsetDateTime> sinceCaptor = ArgumentCaptor.forClass(OffsetDateTime.class);
-            verify(placeRepository).countStaleFoursquare(eq("KR"), eq("Seoul"), sinceCaptor.capture());
-            verify(placeRepository, never()).countStaleFoursquare(eq("KR"), eq("Busan"), any());
+            verify(placeRepository).markMissingFoursquare(eq("KR"), eq("Seoul"), sinceCaptor.capture(), startsWith("sha256:"));
+            verify(placeRepository, never()).markMissingFoursquare(eq("KR"), eq("Busan"), any(), any());
             assertThat(sinceCaptor.getValue()).isBefore(before.minusMinutes(59));
         }
 
@@ -596,7 +619,7 @@ class FoursquareSeederTest {
                     anyString(), anyString(), any());
 
             assertThatThrownBy(() -> seeder.seed()).isInstanceOf(BatchStageFailed.class);
-            verify(placeRepository, never()).countStaleFoursquare(anyString(), anyString(), any());
+            verify(placeRepository, never()).markMissingFoursquare(anyString(), anyString(), any(), any());
         }
     }
 

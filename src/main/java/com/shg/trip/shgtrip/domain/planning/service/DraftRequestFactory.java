@@ -2,9 +2,11 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
+import com.shg.trip.shgtrip.domain.place.destination.DestinationCatalog;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.TransportationHub;
@@ -48,6 +50,7 @@ public class DraftRequestFactory {
     private final PlaceRepository placeRepository;
     private final PlaceRegionValidator placeRegionValidator;
     private final TripHubs hubs;
+    private final DestinationCatalog destinationCatalog;
 
     /**
      * @param input   사용자가 고른 값을 반영한 입력
@@ -66,7 +69,7 @@ public class DraftRequestFactory {
         List<Destination> cities = citiesOf(input);
         if (cities.isEmpty()) {
             log.info("여행 도시를 알 수 없음: country={}, regions={}", input.country(), input.regions());
-            throw new BusinessException(ErrorCode.INSUFFICIENT_PLACE_DATA);
+            throw new BusinessException(ErrorCode.INSUFFICIENT_PLACE_DATA, unsupportedMessage(input));
         }
         requirePlaceData(input);
 
@@ -99,12 +102,12 @@ public class DraftRequestFactory {
                     + "'에 묵는 일정으로 짰어요.");
         }
         Map<String, String> accepted = new LinkedHashMap<>();
-        for (String name : nz(request.acceptedUnmet())) accepted.putIfAbsent(DraftPlaceResolver.key(name), name);
+        for (String name : nz(request.acceptedUnmet())) accepted.putIfAbsent(PlaceNames.exactKey(name), name);
         for (ItineraryGenerateRequest.RequiredExperience x : nz(request.requiredExperiences())) {
             String time = timeOf(x.timing(), x.text());
             mustDo.add(x.text() + ("morning".equals(x.timing()) ? " (아침)" : "evening".equals(x.timing()) ? " (저녁)" : ""));
             wants.add(new DraftItineraryPlanner.UserWant(x.text(), x.areaKeyword(), time, null,
-                    accepted.remove(DraftPlaceResolver.key(x.text())) != null));
+                    accepted.remove(PlaceNames.exactKey(x.text())) != null));
         }
         // 그대로 두기로 한 요구도 조건에 남겨야 일정에 없는 것이 동의 없이 뺀 것과 구별된다.
         for (String name : accepted.values()) {
@@ -203,6 +206,24 @@ public class DraftRequestFactory {
         throw new BusinessException(ErrorCode.INSUFFICIENT_PLACE_DATA, sparseMessage(input));
     }
 
+    /**
+     * 일정을 만들 수 없는 여행지가 사전에 있으면 준비 중인지, 이름만 아는 곳인지 알리고 요청을 남긴다.
+     * 사전에도 없으면 기본 안내다.
+     */
+    String unsupportedMessage(VectorEnrichedInput input) {
+        for (String region : nz(input.regions())) {
+            Optional<DestinationCatalog.Entry> entry = destinationCatalog.lookup(region, input.country())
+                    .filter(e -> e.status() != DestinationCatalog.Status.ACTIVE);
+            if (entry.isEmpty()) continue;
+            destinationCatalog.recordRequest(entry.get().key());
+            String name = entry.get().shownName();
+            return entry.get().status() == DestinationCatalog.Status.PREPARING
+                    ? "'" + name + "'은(는) 아직 장소 정보를 모으는 중이라 일정을 만들 수 없어요."
+                    : "'" + name + "'은(는) 아직 일정을 만들 수 없는 여행지예요. 가까운 큰 도시와 함께 넣어 보세요.";
+        }
+        return ErrorCode.INSUFFICIENT_PLACE_DATA.getMessage();
+    }
+
     String sparseMessage(VectorEnrichedInput input) {
         for (String region : nz(input.regions())) {
             Optional<Destination> parent = destinations.find(region).map(Destination::parent).flatMap(destinations::find);
@@ -243,7 +264,8 @@ public class DraftRequestFactory {
             Place best = null;
             double bestKm = CUSTOM_PLACE_MAX_KM;
             for (Destination city : cities) {
-                for (Place p : placeRepository.findActiveByNameLikeNearest(name, city.lat(), city.lng(),
+                for (Place p : placeRepository.findActiveByNameLikeNearest(name, PlaceNames.exactKey(name),
+                        city.lat(), city.lng(),
                         PageRequest.of(0, CUSTOM_PLACE_SEARCH_LIMIT))) {
                     double km = GeoUtils.haversine(city.lat(), city.lng(), p.getLatitude().doubleValue(),
                             p.getLongitude().doubleValue());

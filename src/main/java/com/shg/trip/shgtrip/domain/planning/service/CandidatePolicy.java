@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 
 import java.util.List;
@@ -106,13 +107,13 @@ public final class CandidatePolicy {
     /** @param country null이면 국내로 본다 */
     static boolean isBlocked(String name, String country) {
         if (name == null) return false;
-        String compact = name.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
+        String compact = PlaceNames.exactKey(name);
         if (BLOCKED_NAME.stream().anyMatch(compact::contains)) return true;
         boolean overseas = country != null && !country.isBlank() && !"KR".equalsIgnoreCase(country.trim());
         return overseas && OVERSEAS_BLOCKED_NAME.stream().anyMatch(compact::contains);
     }
 
-    // 공백 없는 소문자로 비교한다. 야스쿠니는 근처 도로(靖国通り) 이름을 쓰는 가게가 걸리지 않게 시설 이름 전체로 둔다.
+    // 정확 키로 비교한다. 야스쿠니는 근처 도로(靖国通り) 이름을 쓰는 가게가 걸리지 않게 시설 이름 전체로 둔다.
     private static final List<String> BLOCKED_NAME = List.of(
             "야스쿠니신사", "靖国神社", "靖國神社", "yasukunishrine", "yasukunijinja", "유슈칸", "遊就館",
             "제주러브랜드", "jejuloveland");

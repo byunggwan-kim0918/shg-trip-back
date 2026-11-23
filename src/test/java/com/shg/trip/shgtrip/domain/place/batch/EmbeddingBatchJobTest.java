@@ -76,7 +76,10 @@ class EmbeddingBatchJobTest {
 
         assertThat(failed).containsExactly(2L);
         verify(placeVectorSearchService).storeBatch(any());
-        verifyNoInteractions(placeRepository);
+        verify(placeRepository).stampEmbeddingTextFingerprints("1",
+                com.shg.trip.shgtrip.domain.place.integrity.PlaceFingerprints.embeddingText(
+                        com.shg.trip.shgtrip.domain.place.embedding.EmbeddingTextBuilder.buildText(ok)));
+        org.mockito.Mockito.verifyNoMoreInteractions(placeRepository);
     }
 
     @Test

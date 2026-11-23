@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 
 import java.util.*;
@@ -67,7 +68,7 @@ final class CandidateTraits {
     }
 
     static String normalizeName(String name) {
-        return name == null ? "" : name.toLowerCase().replaceAll("\\s+", "");
+        return PlaceNames.exactKey(name);
     }
 
     /**

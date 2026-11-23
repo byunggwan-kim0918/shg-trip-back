@@ -1,10 +1,10 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 
 import java.util.Collection;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -44,18 +44,14 @@ public final class TripExclusions {
      * 이름 언급을 원하는 곳으로 읽는 단계는 이것으로 예외를 둔다. 반대 방향은 보지 않는다. "우도봉"을 피해도 "우도"는 원할 수 있다.
      */
     public static boolean namesAvoided(String name, Collection<String> avoidNames) {
-        String key = compact(name);
+        String key = PlaceNames.exactKey(name);
         if (key.length() < 2 || avoidNames == null) return false;
         for (String avoided : avoidNames) {
-            for (String variant : PlaceIdentity.nameVariants(avoided)) {
-                String a = compact(variant);
+            for (String variant : PlaceNames.variants(avoided)) {
+                String a = PlaceNames.exactKey(variant);
                 if (a.length() >= 2 && key.contains(a)) return true;
             }
         }
         return false;
-    }
-
-    private static String compact(String text) {
-        return text == null ? "" : text.replaceAll("[\\s\\p{IsPunctuation}]", "").toLowerCase(Locale.ROOT);
     }
 }

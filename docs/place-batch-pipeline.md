@@ -14,7 +14,7 @@ Step Functions (월 1회)
           어느 경우든 그 도시 좌표 범위 안이어야 함. region 컬럼은 표준 영어 도시명(Seoul, Jeju…)으로 출력.
           (locality가 자유 텍스트라 표기가 제각각 — 영어 정확일치였던 예전엔 18만 건 중 1.5만, 제주 46건)
         · 사용자 신고(unresolved_flags: closed·doesnt_exist·duplicate…) 있는 행 제외
-        · 갱신 기준: 명소·야외 5년, 그 외 2년
+        · 갱신 기준: Landmarks and Outdoors 대분류 5년, 그 외 2년(박물관·사찰도 2년)
         · 프랜차이즈 제외(음식·음료만, 브랜드 목록은 매달 데이터에서 다시 뽑음):
           한글은 "… OO점" 지점명이 20개 이상인 브랜드, 영문은 같은 이름이 20번 이상 반복되는 상호
           (Starbucks·Paris Baguette 등 57개, 12개 도시 5,121행). 영문 업종 일반명(cafe·coffee·bakery…)은 제외.
@@ -31,7 +31,7 @@ Step Functions (월 1회)
           - signal 컬럼: 전화·웹사이트·SNS·오래 영업(등록 후 2·5년)·구체 업종 점수(0~6). 한국 행은 빈 값
           - 여행지 규모(선별 후 행 수)별 명소·식음료 상한(DESTINATION_CAPS, 6만+ 5000/7500 … 4천 미만 없음).
             순위는 signal → fsq_place_id 해시. 숙소·시장·교통 허브는 상한 없음
-          - EXTRACT_COUNTRIES(쉼표 구분, all = 전체)로 국가를 고른다. 없으면 한국만(월간 실행 기본값),
+          - EXTRACT_COUNTRIES(쉼표 구분, all = 전체)로 국가를 고른다. 없으면 한국만(운영 월간 실행은 terraform이 JP,CN,VN,TW를 준다),
             목록에 없는 코드는 실패. 한국은 항상 포함
         · 규칙 테스트: fsq-extractor/test_extract.py (합성 테이블, CI extractor-test)
         · 이미지 빌드 컨텍스트는 shg-trip-back(-f fsq-extractor/Dockerfile) — destinations.json을 함께 넣는다
@@ -39,6 +39,13 @@ Step Functions (월 1회)
           선택 env: DUCKDB_MEMORY_LIMIT(기본 컨테이너 메모리의 75%, 알 수 없으면 3GB), DUCKDB_THREADS(기본 2)
 
   RunBatch — BatchJobRunner (CommandLineRunner, @Profile("batch"))
+  [잠금] pg_try_advisory_lock으로 한 번에 한 배치만 돈다. 잠금을 못 얻으면 아무 단계도 돌지 않고 종료 코드 1.
+         단계마다 batch_runs에 RUNNING을 먼저 쓰고 SUCCESS/FAILED로 바꾼다(run_id로 한 실행을 묶는다).
+  [0] 일정 참조 장소 기록(PlaceReferenceGuard): 일정 스텝·대안·표지가 가리키는 장소의 이름 키·좌표·활성 여부
+  [0] DestinationCatalogSync.run()  (batch.destinations.enabled, 기본 true, 외부 호출 없음)
+        destinations.json·국내 12개 도시를 destinations에 ACTIVE로 맞추고, batch.destinations.candidates-file을 주면
+        place-pipeline이 만든 GeoNames 후보를 없는 것만 CANDIDATE로 넣는다
+  [0] PlaceInvalidationJob.adopt(): 보강·임베딩·장소 사실 입력 지문이 빈 행을 지금 값으로 채운다
   [1/4] FoursquareSeeder.seed()
         S3FoursquareCsvReader(prod) / 로컬 FoursquareCsvReader(local)
           → foursquare/dt={yyyy-MM-dd}/ 최신 파티션 CSV 읽기
@@ -48,11 +55,17 @@ Step Functions (월 1회)
         → 1000행씩 chunk 분할 → processChunk(): 청크 한 트랜잭션 upsert, 실패하면 행마다 다시 넣어 문제 행만 실패로 셈
           (연결·시간 초과, 행 연속 10건 실패는 청크 실패. 청크 실패 또는 실패 행 1% 초과면 단계 실패)
         → CSV 내부 중복 제거(fsq_place_id) → upsertFoursquarePlace() native upsert
-          (이름이 바뀌면 임베딩·음식 종류·보강 시각·name_ko 초기화, deactivated_reason='stale' 행은 되살림, 'policy'는 그대로)
-        → 빠진 장소 비활성화: 이번 CSV에 나온 (국가, 지역)마다 이번에 다시 나오지 않은 활성 Foursquare 행을
-          deactivated_reason='stale'로 끔(1000행씩). Wikidata·TourAPI와 연결된 행은 다른 시더의 중복 판정에 쓰여 제외.
-          실패 행이 난 지역은 건너뛰고, 실행 전부터 있던 활성 행의 30%(max-ratio)를 넘게 빠지면 그 지역은 건너뜀.
-          BATCH_FOURSQUARE_DEACTIVATE_STALE=false(기본)면 지역별 대상 건수만 로그. 끈 행 수는 이력 deleted에 기록
+          (원문 필드만 쓴다. 이름·카테고리가 바뀐 행의 보강·임베딩·장소 사실은 아래 PlaceInvalidationJob이 비운다.
+          카테고리가 바뀌면 역할은 여기서 비운다(보강 전 행도 역할 기록 배치가 카테고리로 다시 정한다).
+          한글 이름이 한글 없는 이름으로만 바뀌면 이름을 두고, 이름이 바뀌면 name_ko를 비운다. 보강 실패 횟수는 이름·카테고리가
+          바뀌면 0. deactivated_reason='stale' 행은 되살리고 누락 횟수를 지운다, 'policy'는 그대로)
+        → 빠진 장소: 이번 CSV에 나온 (국가, 지역)마다 이번에 다시 나오지 않은 활성 Foursquare 행의 missing_runs를 올린다
+          (CSV 내용 해시마다 한 번만 센다. 실패한 배치를 같은 추출로 다시 돌려도 횟수가 또 오르지 않는다).
+          연속 min-missing-runs(기본 2)번 빠진 행만 deactivated_reason='stale'로 끈다(1000행씩). 공급처에서 한 번 빠진 것은
+          폐업으로 보지 않는다. Wikidata·TourAPI와 연결된 행, 같은 곳으로 합쳐진 활성 행이 가리키는 대표 행은 끄지 않는다.
+          실패 행이 난 지역은 건너뛰고, 지역 활성 행의 30%(max-ratio)를 넘으면 그 지역은 끄지 않고 경고만 남긴다.
+          이번 실행 전체에서 끌 행이 활성 행의 5%(max-total-ratio)를 넘으면 아무것도 끄지 않고 실패한다.
+          BATCH_FOURSQUARE_DEACTIVATE_STALE=false(기본, 운영은 true)면 누락 횟수만 올리고 끄지 않는다. 끈 행 수는 이력 deleted
         → PlaceSeedingHistory에 시작/완료/실패 이력 기록
   [1/4-보완] TourApiSeeder.seed()  (batch.tourapi.enabled=true일 때만)
         한국관광공사 TourAPI areaBasedList2 (12 관광지, 14 문화시설, 39 음식점, 32 숙박)
@@ -83,6 +96,16 @@ Step Functions (월 1회)
           역사 지구, 하나마치, 차이나타운, 광장, 보행자 교차로, 보드워크, 호수, 야시장). 큰길·거리·동네 분류는
           국도·철도 노선·주택가가 섞여 받지 않는다. 분류가 큰길뿐이거나 없는 대표 명소(왕푸징·부이비엔·지우펀 옛거리·
           나카미세)는 EXTRA_LANDMARKS로 지정해 언어판 기준 없이 받는다
+  [1/4-무효화] PlaceInvalidationJob.run()  (항상, 외부 호출 없음. 모든 적재 뒤, 역할 기록·보강·임베딩 전)
+        지문별로 바뀐 입력에 걸린 것만 다시 만들 대상으로 돌린다(places.enrich_input_fp·embedding_text_fp, place_facts.input_fp)
+        → 보강 입력(이름·카테고리·지역·국가)이 바뀐 보강 행: 보강 결과(태그·설명·역할·음식 종류·속성의 보강 키·추천 시간·
+          입장료·알려진 정도)·임베딩·장소 사실을 비우고, 다른 곳이 됐을 수 있어 같은 장소 묶음(merged_into)을 푼다.
+          TourAPI 공식 원문(attributes.official)은 남긴다. 옛 설명과 새 이름이 섞인 임베딩을 만들지 않는다
+        → 임베딩 텍스트만 바뀐 행: 임베딩만 비운다 / 장소 사실 입력(이름·카테고리·좌표 소수 셋째 자리)이 바뀐 행: 사실을 지운다
+        → 한 페이지(2,000행)의 비우기·묶음 풀기·사실 지우기는 한 트랜잭션이다
+        → 지문이 빈 행은 지금 값으로 채운다. 보강 결과 쓰기(writeEnrichment)와 임베딩 저장은 그 입력의 지문을 같이 남긴다
+        → 지운 장소 사실은 scripts/eval/place-facts.py를 로컬 복사본에서 다시 돌려 운영에 복사할 때까지 비어 있다
+          (그동안 그 장소는 휴무 요일·방문 가치 판정 없이 생성된다. 지문은 다음 배치가 채운다)
   [2/4] WikidataSitelinksJob.run()  (batch.wikidata.enabled=true일 때만 — 운영 ecs.tf에서 켬)
         지역 bbox(장소 좌표 2~98 백분위 + 여유 0.05도)당 SPARQL 1회(언어판 1개 이상 항목만)
         + 항목 300개씩 한국어 별칭·분류(P31) 조회 + 실행당 식음료 분류 목록 1회. 일시 오류는 3회 재시도.
@@ -240,8 +263,8 @@ Step Functions (월 1회)
   [4/4] EmbeddingBatchJob.execute()
         embedding IS NULL AND active=true 인 장소를 100건씩 페이징 조회
         → EmbeddingTextBuilder.buildText() (name+name_ko+category+tags+description+region 결합)
-        → EmbeddingService.embedBatch() (OpenAI text-embedding-3-small, 1536차원)
-        → PgVectorPlaceSearchService.storeBatch() (JDBC batchUpdate, ::vector 캐스팅)
+        → EmbeddingService.embedBatch() (OpenAI text-embedding-3-small, dimensions=768)
+        → PgVectorPlaceSearchService.storeBatch() (JDBC batchUpdate, ::halfvec 캐스팅) + embedding_text_fp(텍스트 지문)
         ※ 순서 주의: enrich가 임베딩보다 먼저다 — 같은 실행 안에서 보강 내용이 임베딩에 반영되도록.
         ※ 미임베딩이 batch.embedding.ann-rebuild-min-pending(기본 20만) 이상이면 HNSW 인덱스를 내렸다가 끝나고
           다시 만든다(maintenance_work_mem = VECTOR_ANN_BUILD_MEMORY, 기본 1GB — DB 메모리의 1/4 이하로. RDS를
@@ -250,6 +273,8 @@ Step Functions (월 1회)
         ※ name_ko가 원문 이름과 같으면 임베딩 텍스트에 넣지 않는다. Wikidata가 name_ko를 채우면 보강이 끝난 행만
           임베딩을 다시 만든다(보강 전인 행은 보강 결과 반영 때 다시 만들어진다)
           OpenAI 429는 retry-after(-ms)만큼 기다려 재시도
+  [5] 일정 참조 장소 확인(PlaceReferenceGuard): [0]의 기록과 비교해 사라진 참조가 있으면 단계 실패. 이름이 바뀌거나
+        1km 넘게 옮겨지거나 꺼진 참조는 개수와 예를 로그에 남긴다(일정은 장소 행을 그대로 참조해 화면이 같이 바뀐다)
   [4/4-같은 장소] PlaceLinkJob.run()  (batch.place-links.enabled, 기본 false, 임베딩 뒤)
         가까운 장소 행 쌍을 같은 곳(SAME)·한쪽이 다른 쪽에 딸린 일부·다른 곳으로 판정해 place_pair_verdicts에 남기고,
         행마다 합쳐지는 대표 행을 places.merged_into_id(merge_relation SAME·PART)에 기록한다.

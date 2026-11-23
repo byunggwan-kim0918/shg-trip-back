@@ -218,27 +218,19 @@ class PlaceRepositoryBatchQueryTest {
     }
 
     @Test
-    @DisplayName("Foursquare 재적재에서 업종이나 원문 이름이 바뀌면 주재료를 지우고, 그대로면 남긴다")
-    void foursquareUpsertClearsIngredientsOnChange() {
+    @DisplayName("Foursquare 재적재는 원문만 쓰고 보강 속성은 건드리지 않는다(바뀐 입력은 PlaceInvalidationJob이 비운다)")
+    void foursquareUpsertLeavesDerivedAttributes() {
         upsert("zz-fsq-ing-cat", "饭店");
-        upsert("zz-fsq-ing-name", "饭店");
-        upsert("zz-fsq-ing-same", "饭店");
-        for (String fsqId : List.of("zz-fsq-ing-cat", "zz-fsq-ing-name", "zz-fsq-ing-same")) {
-            em.createNativeQuery("""
-                    UPDATE places SET attributes = CAST('{"venue":"MEAL","ingredients":["PORK"]}' AS jsonb)
-                    WHERE fsq_place_id = ?""").setParameter(1, fsqId).executeUpdate();
-        }
+        em.createNativeQuery("""
+                UPDATE places SET attributes = CAST('{"venue":"MEAL","ingredients":["PORK"]}' AS jsonb)
+                WHERE fsq_place_id = 'zz-fsq-ing-cat'""").executeUpdate();
 
         placeRepository.upsertFoursquarePlace("zz-fsq-ing-cat", "饭店", "", BigDecimal.valueOf(31.23),
                 BigDecimal.valueOf(121.47), "CN", REGION, "Dining and Drinking > BBQ Joint", "{}", "", null);
-        upsert("zz-fsq-ing-name", "烤肉店");
-        upsert("zz-fsq-ing-same", "饭店");
         em.flush();
         em.clear();
 
-        assertThat(attributesOf("zz-fsq-ing-cat")).isEqualTo("{\"venue\": \"MEAL\"}");
-        assertThat(attributesOf("zz-fsq-ing-name")).isEqualTo("{\"venue\": \"MEAL\"}");
-        assertThat(attributesOf("zz-fsq-ing-same")).isEqualTo("{\"venue\": \"MEAL\", \"ingredients\": [\"PORK\"]}");
+        assertThat(attributesOf("zz-fsq-ing-cat")).isEqualTo("{\"venue\": \"MEAL\", \"ingredients\": [\"PORK\"]}");
     }
 
     private String attributesOf(String fsqId) {
@@ -622,7 +614,7 @@ class PlaceRepositoryBatchQueryTest {
         loaded.assignRole("SIGHT", null);
 
         int changed = placeRepository.writeEnrichmentColumns(loaded.getId(), null, null, null, null, null, null, null,
-                "SIGHT", null, null, null, OffsetDateTime.now());
+                "SIGHT", null, null, null, OffsetDateTime.now(), null);
         em.clear();
 
         Object[] row = (Object[]) em.createNativeQuery(
@@ -641,7 +633,7 @@ class PlaceRepositoryBatchQueryTest {
         loaded.rateFame((short) 2);
         placeRepository.writeEnrichment(loaded);
         placeRepository.writeEnrichmentColumns(p.getId(), null, null, null, null, null, null, null,
-                "MARKET", null, null, null, OffsetDateTime.now());
+                "MARKET", null, null, null, OffsetDateTime.now(), null);
         em.clear();
 
         Object fame = em.createNativeQuery("SELECT traveler_fame FROM places WHERE id = ?")
@@ -719,21 +711,62 @@ class PlaceRepositoryBatchQueryTest {
                 BigDecimal.valueOf(121.47), "CN", REGION + "_OTHER", "Dining and Drinking > Restaurant", "{}", "", null);
 
         // 방금 적재한 행은 이번 실행 기준(시작 1시간 전)으로는 빠진 행이 아니다
-        assertThat(placeRepository.countStaleFoursquare("CN", REGION, OffsetDateTime.now().minusHours(1))).isZero();
+        assertThat(placeRepository.markMissingFoursquare("CN", REGION, OffsetDateTime.now().minusHours(1), "x1")).isZero();
 
         OffsetDateTime nextRunStart = OffsetDateTime.now().plusHours(2);
-        assertThat(placeRepository.countStaleFoursquare("CN", REGION, nextRunStart)).isEqualTo(1);
+        assertThat(placeRepository.markMissingFoursquare("CN", REGION, nextRunStart, "x1")).isEqualTo(2);
+        // 같은 추출로 다시 돌린 실행은 누락을 또 세지 않는다
+        assertThat(placeRepository.markMissingFoursquare("CN", REGION, nextRunStart, "x1")).isZero();
+        assertThat(placeRepository.countStaleFoursquare("CN", REGION, nextRunStart, 2)).isZero();
+        assertThat(placeRepository.markMissingFoursquare("CN", REGION, nextRunStart, "x2")).isEqualTo(2);
+        assertThat(placeRepository.countStaleFoursquare("CN", REGION, nextRunStart, 2)).isEqualTo(1);
         assertThat(placeRepository.countExistingFoursquare("CN", REGION, nextRunStart)).isEqualTo(2);
-        assertThat(placeRepository.deactivateStaleFoursquare("CN", REGION, nextRunStart, 1000)).isEqualTo(1);
+        assertThat(placeRepository.deactivateStaleFoursquare("CN", REGION, nextRunStart, 2, 1000)).isEqualTo(1);
         assertThat(state("zz-fsq-stale")).containsSequence(false, "stale");
         assertThat(state("zz-fsq-linked")).containsSequence(true, null);
         assertThat(state("zz-fsq-other")).containsSequence(true, null);
 
         upsert("zz-fsq-stale", "饭店");
         assertThat(state("zz-fsq-stale")).containsSequence(true, null);
-        Object deactivatedAt = em.createNativeQuery(
-                "SELECT deactivated_at FROM places WHERE fsq_place_id = 'zz-fsq-stale'").getSingleResult();
-        assertThat(deactivatedAt).isNull();
+        Object[] revived = (Object[]) em.createNativeQuery(
+                "SELECT deactivated_at, missing_runs, missing_since FROM places WHERE fsq_place_id = 'zz-fsq-stale'")
+                .getSingleResult();
+        assertThat(revived[0]).isNull();
+        assertThat(((Number) revived[1]).intValue()).isZero();
+        assertThat(revived[2]).isNull();
+    }
+
+    @Test
+    @DisplayName("보강 전 행도 카테고리가 바뀌면 역할을 비워 다시 정하게 한다")
+    void categoryChangeClearsRoleOfUnenrichedRow() {
+        upsert("zz-fsq-role", "饭店");
+        em.createNativeQuery("UPDATE places SET place_role = 'NOT_VISITABLE' WHERE fsq_place_id = 'zz-fsq-role'")
+                .executeUpdate();
+        placeRepository.upsertFoursquarePlace("zz-fsq-role", "饭店", "", BigDecimal.valueOf(31.23),
+                BigDecimal.valueOf(121.47), "CN", REGION, "Landmarks and Outdoors > Park", "{}", "", null);
+        em.flush();
+        em.clear();
+
+        assertThat(em.createNativeQuery("SELECT place_role FROM places WHERE fsq_place_id = 'zz-fsq-role'")
+                .getSingleResult()).isNull();
+    }
+
+    @Test
+    @DisplayName("같은 곳으로 합쳐진 활성 행이 가리키는 대표 행은 빠져도 끄지 않는다")
+    void staleRepresentativeIsKept() {
+        upsert("zz-fsq-rep", "饭店");
+        upsert("zz-fsq-member", "饭店 本店");
+        em.createNativeQuery("""
+                UPDATE places SET merged_into_id = (SELECT id FROM places WHERE fsq_place_id = 'zz-fsq-rep'),
+                                  merge_relation = 'SAME'
+                WHERE fsq_place_id = 'zz-fsq-member'""").executeUpdate();
+        OffsetDateTime nextRunStart = OffsetDateTime.now().plusHours(2);
+        placeRepository.markMissingFoursquare("CN", REGION, nextRunStart, "x1");
+
+        assertThat(placeRepository.countStaleFoursquare("CN", REGION, nextRunStart, 1)).isEqualTo(1);
+        placeRepository.deactivateStaleFoursquare("CN", REGION, nextRunStart, 1, 1000);
+        assertThat(state("zz-fsq-rep")).containsSequence(true, null);
+        assertThat(state("zz-fsq-member")).containsSequence(false, "stale");
     }
 
     @Test
@@ -749,8 +782,8 @@ class PlaceRepositoryBatchQueryTest {
     }
 
     @Test
-    @DisplayName("원문 이름이 바뀌면 한국어 이름·보강 시각을 비우고, 한글 이름 행은 그대로 둔다")
-    void renameResetsKoreanNameAndEnrichment() {
+    @DisplayName("원문 이름이 바뀌면 한국어 이름을 비우고, 한글 이름이 한글 없는 이름으로만 바뀌면 그대로 둔다")
+    void renameResetsKoreanName() {
         upsert("zz-fsq-rename", "饭店");
         upsert("zz-fsq-hangul", "한글식당");
         em.createNativeQuery("UPDATE places SET name_ko = '판뎬', enriched_at = now() WHERE fsq_place_id IN (?, ?)")
@@ -762,10 +795,11 @@ class PlaceRepositoryBatchQueryTest {
         Object[] renamed = state("zz-fsq-rename");
         assertThat(renamed[2]).isEqualTo("新饭店");
         assertThat(renamed[3]).isNull();
-        assertThat(renamed[4]).isNull();
         Object[] hangul = state("zz-fsq-hangul");
         assertThat(hangul[2]).isEqualTo("한글식당");
         assertThat(hangul[3]).isEqualTo("판뎬");
-        assertThat(hangul[4]).isNotNull();
+
+        upsert("zz-fsq-hangul", "새한글식당");
+        assertThat(state("zz-fsq-hangul")[2]).isEqualTo("새한글식당");
     }
 }

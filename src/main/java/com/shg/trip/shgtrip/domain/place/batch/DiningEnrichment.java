@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.place.batch;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 
 import java.util.ArrayList;
@@ -299,7 +300,7 @@ final class DiningEnrichment {
         return finalizeTags(venue, modelTags, Set.of());
     }
 
-    /** @param extraRegionNames 한국 지역명에 더해 지울 이름. 공백을 뺀 소문자로 비교한다 */
+    /** @param extraRegionNames 한국 지역명에 더해 지울 이름. {@link PlaceNames#exactKey}로 만든 값이다 */
     static List<String> finalizeTags(Venue venue, List<String> modelTags, Set<String> extraRegionNames) {
         LinkedHashSet<String> out = new LinkedHashSet<>();
         out.add(venue.label);
@@ -308,7 +309,7 @@ final class DiningEnrichment {
             if (out.size() >= MAX_TAGS) break;
             String tag = normalizeTag(raw);
             if (tag == null || isFiller(tag) || isRegionName(tag)
-                    || extraRegionNames.contains(tag.replaceAll("\\s+", "").toLowerCase(Locale.ROOT))) {
+                    || extraRegionNames.contains(PlaceNames.exactKey(tag))) {
                 continue;
             }
             if (venue.isLightStop() ? PlaceCategoryConstants.isRestaurantTag(tag)
@@ -343,7 +344,7 @@ final class DiningEnrichment {
     }
 
     static boolean isRegionName(String tag) {
-        return REGION_NAMES.contains(tag.replaceAll("\\s+", "").toLowerCase(Locale.ROOT));
+        return REGION_NAMES.contains(PlaceNames.exactKey(tag));
     }
 
     /** 적재 대상 도시·광역 이름과 행정 접미사 조합. 완전 일치만 본다("제주흑돼지"는 남는다). */

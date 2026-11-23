@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.place.batch;
 
+import com.shg.trip.shgtrip.domain.place.integrity.PlaceReferenceGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,6 +13,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 /** SPRING_PROFILES_ACTIVE=batch에서만 실행된다. 실패한 단계가 있으면 종료 코드 1로 끝나 Step Functions가 실패로 받는다. */
 @Slf4j
@@ -32,7 +35,14 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     private final TourApiDetailJob tourApiDetailJob;
     private final CommonsImageJob commonsImageJob;
     private final PlaceLinkJob placeLinkJob;
+    private final PlaceInvalidationJob placeInvalidationJob;
+    private final DestinationCatalogSync destinationCatalogSync;
+    private final PlaceReferenceGuard placeReferenceGuard;
+    private final BatchRunLock batchRunLock;
+    private final BatchRunLog batchRunLog;
     private final ApplicationContext context;
+
+    private final UUID runId = UUID.randomUUID();
 
     private final List<String> failedStages = new ArrayList<>();
 
@@ -78,13 +88,51 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     @Value("${batch.commons-images.enabled:true}")
     private boolean commonsImagesEnabled;
 
+    /** 외부 호출이 없다. 후보 파일(batch.destinations.candidates-file)을 주면 GeoNames 후보도 넣는다. */
+    @Value("${batch.destinations.enabled:true}")
+    private boolean destinationsEnabled;
+
     /** 켜면 근처 장소 쌍마다 Haiku Batch 호출이 나간다. 판정이 남은 쌍은 다시 묻지 않는다. */
     @Value("${batch.place-links.enabled:false}")
     private boolean placeLinksEnabled;
 
     @Override
     public void run(String... args) {
-        log.info("=== 배치 파이프라인 시작 (enrich.enabled={}) ===", enrichEnabled);
+        log.info("=== 배치 파이프라인 시작 (enrich.enabled={}, run={}) ===", enrichEnabled, runId);
+        try {
+            if (!batchRunLock.tryAcquire()) {
+                failedStages.add("배치 잠금");
+                log.error("다른 배치가 실행 중이라 이번 실행을 멈춘다");
+                finish();
+                return;
+            }
+        } catch (java.sql.SQLException e) {
+            failedStages.add("배치 잠금");
+            log.error("배치 잠금을 얻지 못해 이번 실행을 멈춘다: {}", e.getMessage(), e);
+            finish();
+            return;
+        }
+        try {
+            runStages();
+        } finally {
+            batchRunLock.close();
+        }
+        finish();
+    }
+
+    private void runStages() {
+        Map<Long, PlaceReferenceGuard.Ref> referenced = null;
+        try {
+            referenced = placeReferenceGuard.snapshot();
+        } catch (RuntimeException e) {
+            failedStages.add("[0] 일정 참조 장소 기록");
+            log.error("[0] 일정 참조 장소 기록 실패, 끝의 확인을 건너뛴다: {}", e.getMessage(), e);
+        }
+
+        if (destinationsEnabled) stage("[0] 여행지 사전 맞춤", destinationCatalogSync::run);
+
+        // 적재 전에 비어 있는 지문을 채워야 첫 실행에서도 이번 적재로 바뀐 행을 알아본다.
+        stage("[0] 장소 입력 지문 채우기", placeInvalidationJob::adopt);
 
         if (foursquareEnabled) {
             log.info("[1/4] Foursquare 장소 시딩 시작");
@@ -118,6 +166,9 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
         } else {
             log.info("[1/4-명소] Wikidata 대표 명소 적재 건너뜀 (batch.wikidata.landmarks.enabled=false)");
         }
+
+        // 모든 적재 뒤, 역할 기록·보강·임베딩 전에 돌아야 바뀐 행이 같은 실행에서 다시 만들어진다.
+        stage("[1/4-무효화] 바뀐 장소 파생 데이터 비우기", placeInvalidationJob::run);
 
         // 보강은 하루 가까이 걸릴 수 있어 인기도를 먼저 채워야 중간에 끊겨도 유명한 장소부터 끝나 있다.
         // Maps 약관 3.2.3(a)가 세부정보·좌표·평점 캐싱을 금지해 인기도는 Wikidata로 채운다.
@@ -167,6 +218,16 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
             stage("[4/4-같은 장소] 같은 장소·딸린 장소 판정", placeLinkJob::run);
         }
 
+        if (referenced == null) return;
+        Map<Long, PlaceReferenceGuard.Ref> before = referenced;
+        stage("[5] 일정 참조 장소 확인", () -> {
+            PlaceReferenceGuard.Report report = placeReferenceGuard.compare(before);
+            log.info("[5] 일정 참조 장소: {}", report.summary());
+            if (report.lostPlaces()) throw new BatchStageFailed("일정이 참조하는 장소가 사라졌다: " + report.summary());
+        });
+    }
+
+    private void finish() {
         if (failedStages.isEmpty()) {
             log.info("=== 배치 파이프라인 완료 ===");
         } else {
@@ -176,11 +237,14 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
     }
 
     private void stage(String label, Runnable job) {
+        Long historyId = batchRunLog.start(runId, label);
         try {
             job.run();
+            batchRunLog.finish(historyId, true, null);
             log.info("{} 완료", label);
         } catch (Exception e) {
             failedStages.add(label);
+            batchRunLog.finish(historyId, false, e.getMessage());
             log.error("{} 실패, 이후 단계 계속 진행: {}", label, e.getMessage(), e);
         }
     }

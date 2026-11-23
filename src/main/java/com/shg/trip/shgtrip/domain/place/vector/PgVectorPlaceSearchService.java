@@ -45,6 +45,17 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
 
     private final JdbcTemplate jdbcTemplate;
 
+    /**
+     * 임베딩이 있는 활성 행이 이보다 적은 지역은 HNSW 대신 정확 검색을 한다. 전역 그래프는 질의와 먼 작은 지역의 최근접을
+     * 놓치고, 정확 검색은 이 크기에서 약 50ms다(1천 행당 1.7ms).
+     */
+    static final int EXACT_SCAN_MAX_ROWS = 30_000;
+    /** 지역 행 수는 월간 적재로만 크게 바뀌어 자주 다시 세지 않는다. */
+    private static final java.time.Duration REGION_SIZE_TTL = java.time.Duration.ofMinutes(30);
+
+    private volatile Map<String, Long> regionSizes = Map.of();
+    private volatile java.time.Instant regionSizesAt = java.time.Instant.EPOCH;
+
     @Override
     @Transactional(readOnly = true)
     public List<VectorSearchResult> search(VectorSearchRequest request) {
@@ -234,7 +245,8 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
         appendCategoryExclusions(where, whereParams, request.excludedCategoryPatterns());
         appendRadiusFilter(where, whereParams, request.center(), request.radiusKm());
 
-        return queryTwoLeg(vectorString, where.toString(), whereParams, request.limit(), request.popularitySeed());
+        return queryTwoLeg(vectorString, where.toString(), whereParams, request.limit(), request.popularitySeed(),
+                regions != null && !regions.isEmpty() && smallEnoughForExactScan(regions));
     }
 
     /**
@@ -250,11 +262,13 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
      */
     private List<VectorSearchResult> queryTwoLeg(
             String vectorString, String whereClause, List<Object> whereParams, int limit,
-            boolean popularitySeed) {
+            boolean popularitySeed, boolean exact) {
 
         int seedLimit = Math.min(POPULARITY_SEED_MAX, Math.max(POPULARITY_SEED_MIN, limit));
 
-        String similarityLeg = "(" + SELECT_COLUMNS + whereClause + "ORDER BY p.embedding <=> ?::halfvec\nLIMIT ?)";
+        // "+ 0"을 붙이면 거리 식이 HNSW 연산자와 달라져 지역 인덱스로 좁힌 뒤 정확하게 정렬한다.
+        String distance = exact ? "(p.embedding <=> ?::halfvec) + 0" : "p.embedding <=> ?::halfvec";
+        String similarityLeg = "(" + SELECT_COLUMNS + whereClause + "ORDER BY " + distance + "\nLIMIT ?)";
         if (!popularitySeed) {
             List<Object> params = new ArrayList<>();
             params.add(vectorString);
@@ -307,7 +321,36 @@ public class PgVectorPlaceSearchService implements PlaceVectorSearchService {
 
         appendCategoryExclusions(where, whereParams, excludedCategoryPatterns);
 
-        return queryTwoLeg(vectorString, where.toString(), whereParams, limitPerRegion, popularitySeed);
+        return queryTwoLeg(vectorString, where.toString(), whereParams, limitPerRegion, popularitySeed,
+                smallEnoughForExactScan(List.of(targetRegion)));
+    }
+
+    /** 모르는 지역(행 수를 세기 전 새 지역)은 HNSW로 둔다. 정확 검색이 큰 지역에 걸리면 수백 ms가 든다. */
+    boolean smallEnoughForExactScan(Collection<String> regions) {
+        Map<String, Long> sizes = regionSizes();
+        long total = 0;
+        for (String region : regions) {
+            Long size = sizes.get(region);
+            if (size == null) return false;
+            total += size;
+        }
+        return total < EXACT_SCAN_MAX_ROWS;
+    }
+
+    private Map<String, Long> regionSizes() {
+        if (java.time.Instant.now().isBefore(regionSizesAt.plus(REGION_SIZE_TTL))) return regionSizes;
+        try {
+            Map<String, Long> counted = new HashMap<>();
+            jdbcTemplate.query("SELECT region, count(*) FROM places WHERE active AND embedding IS NOT NULL "
+                    + "AND region IS NOT NULL GROUP BY region", rs -> {
+                counted.put(rs.getString(1), rs.getLong(2));
+            });
+            regionSizes = Map.copyOf(counted);
+        } catch (RuntimeException e) {
+            log.warn("지역 행 수를 세지 못해 HNSW로 검색한다: {}", e.getMessage());
+        }
+        regionSizesAt = java.time.Instant.now();
+        return regionSizes;
     }
 
     /**

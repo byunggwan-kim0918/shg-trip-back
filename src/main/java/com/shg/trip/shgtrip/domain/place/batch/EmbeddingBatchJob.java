@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.place.batch;
 import com.shg.trip.shgtrip.domain.place.embedding.EmbeddingService;
 import com.shg.trip.shgtrip.domain.place.embedding.EmbeddingTextBuilder;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.integrity.PlaceFingerprints;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.place.vector.PlaceVectorSearchService;
 import lombok.RequiredArgsConstructor;
@@ -162,6 +163,9 @@ public class EmbeddingBatchJob {
 
         try {
             placeVectorSearchService.storeBatch(embeddingMap);
+            placeRepository.stampEmbeddingTextFingerprints(
+                    validPlaces.stream().map(p -> String.valueOf(p.getId())).collect(java.util.stream.Collectors.joining(",")),
+                    texts.stream().map(PlaceFingerprints::embeddingText).collect(java.util.stream.Collectors.joining(",")));
         } catch (Exception e) {
             apiFailures++;
             log.error("임베딩 일괄 저장 실패: {}", e.getMessage(), e);

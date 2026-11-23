@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.place.service;
 
 import com.shg.trip.shgtrip.domain.place.dto.PlaceResponse;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
@@ -42,14 +43,15 @@ public class PlaceService {
     public Page<PlaceResponse> searchPlaces(String keyword, String category, Pageable pageable) {
         String lowered = keyword.strip().toLowerCase(Locale.ROOT);
         Pageable unsorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
-        return placeRepository.searchByKeyword(escapeLike(lowered), lowered,
+        return placeRepository.searchByKeyword(escapeLike(lowered), lowered, PlaceNames.exactKey(keyword),
                         category == null || category.isBlank() ? null : category, unsorted)
                 .map(PlaceResponse::from);
     }
 
     public List<PlaceResponse> searchPlacesInRegions(String keyword, Collection<String> regions, int limit) {
         String lowered = keyword.strip().toLowerCase(Locale.ROOT);
-        return placeRepository.searchByKeywordInRegions(escapeLike(lowered), lowered, regions, PageRequest.of(0, limit))
+        return placeRepository.searchByKeywordInRegions(escapeLike(lowered), lowered, PlaceNames.exactKey(keyword),
+                        regions, PageRequest.of(0, limit))
                 .stream().map(PlaceResponse::from).toList();
     }
 

@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.planning.service.ai;
 
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.service.TripExclusions;
 
 import java.util.ArrayList;
@@ -83,7 +84,7 @@ final class EnrichDestinations {
     static List<String> mentionedDestinations(List<String> regions, String text, Destinations destinations,
                                               List<String> avoidPlaceNames) {
         if (regions == null || regions.isEmpty() || text == null || text.isBlank()) return List.of();
-        String compact = text.replaceAll("\\s+", "");
+        String compact = PlaceNames.exactKey(text);
         Set<String> roots = regions.stream().map(destinations::rootOf).collect(Collectors.toSet());
         List<String> out = new ArrayList<>();
         for (Destination d : destinations.all()) {
@@ -91,7 +92,7 @@ final class EnrichDestinations {
             if (regions.contains(d.name()) || !roots.contains(destinations.rootOf(d.name()))) continue;
             List<String> aliases = d.aliases().stream().filter(EnrichDestinations::isKoreanAlias).toList();
             if (aliases.stream().anyMatch(a -> TripExclusions.namesAvoided(a, avoidPlaceNames))) continue;
-            if (aliases.stream().anyMatch(a -> compact.contains(a.replaceAll("\\s+", "")))) {
+            if (aliases.stream().anyMatch(a -> compact.contains(PlaceNames.exactKey(a)))) {
                 out.add(d.name());
             }
         }

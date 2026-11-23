@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.place.embedding.EmbeddingService;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.place.vector.PlaceVectorSearchService;
 import com.shg.trip.shgtrip.domain.place.vector.VectorSearchRequest;
 import com.shg.trip.shgtrip.domain.place.vector.VectorSearchResult;
@@ -19,7 +20,6 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -412,15 +412,6 @@ public class VectorSearchQueryService {
 
     record ScoredResult(VectorSearchResult result, double score) {}
 
-
-    /** 병기 주석("불국사 (佛國寺)")을 떼야 앞부분이 문장의 "불국사"와 맞는다. */
-    private static String placeName(String name) {
-        return compact(name == null ? null : name.replaceAll("\\(.*?\\)|\\[.*?]", ""));
-    }
-
-    private static String compact(String s) {
-        return s == null ? "" : s.toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
-    }
 
     /**
      * 검색 실행 단위. 지역 분리가 없으면 슬롯당 1개, 있으면 (슬롯 × regionAllocation 엔트리)마다 1개다.

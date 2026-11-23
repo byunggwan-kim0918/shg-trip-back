@@ -7,6 +7,7 @@ import com.shg.trip.shgtrip.domain.place.batch.PlaceLinkResolver.LinkFacts;
 import com.shg.trip.shgtrip.domain.place.batch.PlaceLinkResolver.Verdict;
 import com.shg.trip.shgtrip.domain.place.batch.PlacePairJudge.PairPlace;
 import com.shg.trip.shgtrip.domain.place.batch.PlacePairJudge.Relation;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceLinkRepository;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceLinkRepository.LinkRow;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceLinkRepository.PairClass;
@@ -26,10 +27,8 @@ import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -52,9 +51,6 @@ public class PlaceLinkJob {
     static final String BASIS_RULE = "RULE";
     static final String BASIS_LLM = "LLM";
 
-    private static final Pattern NON_WORD = Pattern.compile("[^\\p{L}\\p{N}]+");
-    private static final Pattern TRAILING_NOTE = Pattern.compile("\\s*[(（\\[][^()（）\\[\\]]*[)）\\]]\\s*$");
-    private static final Pattern LATIN_TAIL = Pattern.compile("[\\s(（]+[A-Za-z0-9][A-Za-z0-9 .,'’&()（）/-]*$");
 
     private final PlaceLinkRepository links;
     private final AnthropicBatchClient batchClient;
@@ -202,15 +198,13 @@ public class PlaceLinkJob {
     }
 
     static String compact(String name) {
-        return name == null ? "" : NON_WORD.matcher(name.toLowerCase(Locale.ROOT)).replaceAll("");
+        return PlaceNames.exactKey(name);
     }
 
     /** 한글·한자 이름 뒤의 괄호 설명과 영문 병기를 뗀 이름("용연사(강릉)", "해동용궁사 Haedong Yonggungsa"). */
     static String bare(String name) {
         if (name == null) return "";
-        String s = TRAILING_NOTE.matcher(name.strip()).replaceFirst("");
-        if (s.chars().anyMatch(ch -> ch >= 0x80)) s = LATIN_TAIL.matcher(s).replaceFirst("");
-        return compact(s);
+        return PlaceNames.exactKey(PlaceNames.withoutLatinTail(PlaceNames.withoutTrailingNote(name)));
     }
 
     /** 구역 이름(관광특구)·음식 거리는 검색에 나와도 일정 본 칸에 넣지 않아 대표나 큰 장소로 두면 묶인 곳이 사라진다. */

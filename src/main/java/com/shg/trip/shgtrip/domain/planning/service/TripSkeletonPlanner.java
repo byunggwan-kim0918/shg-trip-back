@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.dto.DraftPlan;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.TripCities;
@@ -138,7 +139,7 @@ public class TripSkeletonPlanner {
         List<String> asked = new ArrayList<>();
         for (String s : List.of(Objects.toString(u.text(), ""), Objects.toString(u.place(), ""),
                 u.pinned() == null ? "" : Objects.toString(u.pinned().name(), ""))) {
-            String k = DraftPlaceResolver.key(s);
+            String k = PlaceNames.exactKey(s);
             if (k.length() >= 2) asked.add(k);
         }
         for (int i = 0; i < wants.size(); i++) {
@@ -148,7 +149,7 @@ public class TripSkeletonPlanner {
             named.add(w.text());
             named.add(w.place());
             for (String s : named) {
-                String k = DraftPlaceResolver.key(s);
+                String k = PlaceNames.exactKey(s);
                 if (k.length() >= 2 && asked.stream().anyMatch(a -> a.contains(k) || k.contains(a))) return i;
             }
         }

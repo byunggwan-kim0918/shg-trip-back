@@ -1,12 +1,12 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -54,7 +54,7 @@ public final class WantMatcher {
         // "성산일출봉 일출"의 뒤쪽 '일출'만 시각 말이다. 이름 속 '일출'(일출봉)은 남긴다.
         String cleaned = Arrays.stream(wantText.trim().split("\\s+"))
                 .filter(w -> !TIME_WORDS.contains(w)).collect(Collectors.joining(" "));
-        for (String alias : PlaceIdentity.nameVariants(cleaned)) {
+        for (String alias : PlaceNames.variants(cleaned)) {
             if (matchesName(alias, place)) return true;
         }
         return false;
@@ -85,8 +85,8 @@ public final class WantMatcher {
         if (serves(food, c)) return true;
         if (named == null || c.attributes() != null && c.attributes().official() != null
                 && !c.attributes().official().isEmpty()) return false;
-        String bare = DraftPlaceResolver.bareKey(c.name());
-        return named.stream().map(DraftPlaceResolver::bareKey).anyMatch(n -> n.length() >= 2
+        String bare = PlaceNames.bareKey(c.name());
+        return named.stream().map(PlaceNames::bareKey).anyMatch(n -> n.length() >= 2
                 && (bare.equals(n) || bare.startsWith(n) && bare.length() - n.length() <= BRANCH_SUFFIX_CHARS));
     }
 
@@ -103,15 +103,14 @@ public final class WantMatcher {
     private static boolean servesDish(String dish, PlaceCandidate c) {
         if (dish.length() < 2) return false;
         if (GENERIC_DISH.contains(dish)) return false;
-        String menu = c.attributes() == null || c.attributes().official() == null ? ""
-                : String.join(" ", c.attributes().official().values());
-        String text = key(String.join(" ", Objects.toString(c.name(), ""), Objects.toString(c.nameKo(), ""),
-                Objects.toString(c.cuisine(), ""),
-                c.tags() == null ? "" : String.join(" ", c.tags()), menu));
-        return text.contains(dish);
+        List<String> texts = new java.util.ArrayList<>(List.of(Objects.toString(c.name(), ""),
+                Objects.toString(c.nameKo(), ""), Objects.toString(c.cuisine(), "")));
+        if (c.tags() != null) texts.addAll(c.tags());
+        if (c.attributes() != null && c.attributes().official() != null) texts.addAll(c.attributes().official().values());
+        return texts.stream().anyMatch(t -> PlaceNames.mentions(t, dish));
     }
 
-    static String key(String s) {
-        return Objects.toString(s, "").toLowerCase(Locale.ROOT).replaceAll("[\\s\\p{Punct}·]", "");
+    private static String key(String s) {
+        return PlaceNames.exactKey(s);
     }
 }

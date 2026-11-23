@@ -4,6 +4,7 @@ import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.destination.DomesticCities;
 import com.shg.trip.shgtrip.domain.place.dto.PlaceResponse;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceFactsReader;
 import com.shg.trip.shgtrip.domain.place.service.PlaceService;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
@@ -127,7 +128,7 @@ public class PlaceMatcher {
         Map<String, List<PlaceResponse>> searched = new java.util.HashMap<>();
         // 같은 이름을 먼저 본다. 이름을 담기만 한 딸린 시설("경포해변 중앙광장")이 별칭 이름의 본래 장소를 가린다.
         for (boolean exactOnly : new boolean[]{true, false}) {
-            for (String variant : PlaceIdentity.nameVariants(name)) {
+            for (String variant : PlaceNames.variants(name)) {
                 java.util.Optional<PlaceMatch> found = findExactly(variant, destination, avoiding || exactOnly,
                         searched);
                 if (found.isEmpty()) continue;

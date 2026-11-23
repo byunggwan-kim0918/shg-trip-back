@@ -82,7 +82,7 @@ public class PlaceLinkRepository {
                 WITH s AS (
                   SELECT id, last_candidate_at IS NOT NULL AS cand, COALESCE(wikidata_sitelinks, 0) AS links,
                          source = 'tourapi' AS tourapi,
-                         regexp_replace(lower(name), '[[:space:][:punct:]]', '', 'g') AS cname,
+                         place_name_key(name) AS cname,
                          latitude::float8 AS la, longitude::float8 AS lo
                   FROM places
                   WHERE active AND region = :region AND place_role IN (:roles)

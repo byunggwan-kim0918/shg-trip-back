@@ -87,8 +87,8 @@ class DraftEvalRunner implements CommandLineRunner {
 
     @Override
     public void run(String... args) throws IOException {
-        if ("chat".equals(mode)) return;
-        if (!"trip".equals(mode)) throw new IllegalArgumentException("eval.mode는 trip·chat만 있다: " + mode);
+        if ("chat".equals(mode) || "resolve".equals(mode)) return;
+        if (!"trip".equals(mode)) throw new IllegalArgumentException("eval.mode는 trip·chat·resolve만 있다: " + mode);
         if (drafts.isBlank()) throw new IllegalArgumentException("--eval.drafts=<기록 폴더>가 필요하다");
         if (!draftRequests.isBlank()) {
             List<String> ids = Arrays.stream(draftIds.split(",")).map(String::trim).filter(x -> !x.isEmpty()).toList();
