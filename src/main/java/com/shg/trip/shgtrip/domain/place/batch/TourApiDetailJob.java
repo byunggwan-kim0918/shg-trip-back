@@ -34,6 +34,7 @@ public class TourApiDetailJob {
 
     private static final String BASE_URL = "https://apis.data.go.kr/B551011/KorService2/";
     private static final int PAGE = 100;
+    private static final int REPARSE_PAGE = 1_000;
 
     /** contentTypeId → [이용시간, 쉬는날, 요금] 필드. 관광지(12)·쇼핑·음식점은 요금 필드가 없다. */
     static final Map<Integer, String[]> FIELDS = Map.of(
@@ -103,6 +104,32 @@ public class TourApiDetailJob {
         log.info("TourAPI 상세 완료 - 호출 검색 {}건·상세 {}건, 연결 {}건, 못 찾음 {}건, 상세 {}건(영업시간 {}건, 판독 실패 {}건, 요금 {}건)",
                 searchCalls, detailCalls, match[0], match[1], detail[0], detail[1], detail[3], detail[2]);
         if (failure != null) throw new BatchStageFailed("TourAPI 상세 중단: " + failure);
+    }
+
+    /**
+     * 저장된 공식 요금 원문(attributes.official)을 지금 판독 규칙으로 다시 읽어, 읽힌 금액이 다르면 입장료를 바꾼다.
+     * 공식 입장료를 쓰는 곳은 상세 조회와 이 단계뿐이다. 상세를 조회한 장소는 다시 조회하지 않아 이 단계 없이는 판독 규칙이 나아져도
+     * 모델 추정 입장료가 남는다. 판독되지 않는 원문은 기존 값을 둔다.
+     *
+     * @return 바꾼 행 수
+     */
+    public int reparseStoredFees() {
+        int changed = 0;
+        int read = 0;
+        long afterId = 0;
+        while (true) {
+            List<Object[]> page = placeRepository.findOfficialFeeTexts(afterId, REPARSE_PAGE);
+            if (page.isEmpty()) break;
+            for (Object[] row : page) {
+                long id = ((Number) row[0]).longValue();
+                Integer fee = OfficialHoursParser.admissionFee((String) row[1]);
+                read++;
+                if (fee != null) changed += placeRepository.writeOfficialFee(id, fee);
+            }
+            afterId = ((Number) page.get(page.size() - 1)[0]).longValue();
+        }
+        log.info("저장된 관광공사 요금 다시 읽기 - 원문 {}건, 입장료 바뀐 행 {}건", read, changed);
+        return changed;
     }
 
     private boolean searchBudgetLeft() {

@@ -45,9 +45,9 @@ class EnrichRoleDerivationTest {
     @DisplayName("관광지 역할은 허용 값만 받고, 모르는 값은 버린다(일정 로직이 카테고리로 추정)")
     void attractionRoleParsing() throws Exception {
         ObjectMapper om = new ObjectMapper();
-        assertThat(BatchEnrichScheduler.parseAttractionRole(om.readTree("\"not_visitable\""))).isEqualTo("NOT_VISITABLE");
-        assertThat(BatchEnrichScheduler.parseAttractionRole(om.readTree("\"SIGHT\""))).isEqualTo("SIGHT");
-        assertThat(BatchEnrichScheduler.parseAttractionRole(om.readTree("\"MEAL\""))).isNull();
-        assertThat(BatchEnrichScheduler.parseAttractionRole(null)).isNull();
+        assertThat(AttractionEnrichment.role(om.readTree("\"not_visitable\""))).isEqualTo("NOT_VISITABLE");
+        assertThat(AttractionEnrichment.role(om.readTree("\"SIGHT\""))).isEqualTo("SIGHT");
+        assertThat(AttractionEnrichment.role(om.readTree("\"MEAL\""))).isNull();
+        assertThat(AttractionEnrichment.role(null)).isNull();
     }
 }

@@ -2,11 +2,9 @@ package com.shg.trip.shgtrip.domain.place.embedding;
 
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import java.math.BigDecimal;
-import java.time.OffsetDateTime;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -14,261 +12,75 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class EmbeddingTextBuilderTest {
 
-    @Nested
-    @DisplayName("buildText(Place) - Place 엔티티 기반 텍스트 결합")
-    class BuildTextFromPlaceTests {
-
-        @Test
-        @DisplayName("모든 필드가 존재하면 name + category + tags + description + region 결합")
-        void allFieldsPresent() {
-            Place place = Place.builder()
-                    .name("센소지")
-                    .address("도쿄 아사쿠사")
-                    .latitude(BigDecimal.valueOf(35.7148))
-                    .longitude(BigDecimal.valueOf(139.7967))
-                    .category("관광")
-                    .tags(List.of("사찰", "역사", "아사쿠사"))
-                    .description("도쿄의 가장 오래된 불교 사원")
-                    .region("아사쿠사")
-                    .savedAt(OffsetDateTime.now())
-                    .build();
-
-            String result = EmbeddingTextBuilder.buildText(place);
-
-            assertThat(result).isEqualTo("센소지 관광 사찰 역사 아사쿠사 도쿄의 가장 오래된 불교 사원 아사쿠사");
-        }
-
-        @Test
-        @DisplayName("tags가 null이면 건너뛴다")
-        void tagsNull() {
-            Place place = Place.builder()
-                    .name("메이지신궁")
-                    .address("도쿄 하라주쿠")
-                    .latitude(BigDecimal.valueOf(35.6764))
-                    .longitude(BigDecimal.valueOf(139.6993))
-                    .category("관광")
-                    .tags(null)
-                    .description("일본의 대표적인 신사")
-                    .region("하라주쿠")
-                    .savedAt(OffsetDateTime.now())
-                    .build();
-
-            String result = EmbeddingTextBuilder.buildText(place);
-
-            assertThat(result).isEqualTo("메이지신궁 관광 일본의 대표적인 신사 하라주쿠");
-        }
-
-        @Test
-        @DisplayName("description이 null이면 건너뛴다")
-        void descriptionNull() {
-            Place place = Place.builder()
-                    .name("스크램블교차로")
-                    .address("도쿄 시부야")
-                    .latitude(BigDecimal.valueOf(35.6595))
-                    .longitude(BigDecimal.valueOf(139.7004))
-                    .category("관광")
-                    .tags(List.of("시부야", "랜드마크"))
-                    .description(null)
-                    .region("시부야")
-                    .savedAt(OffsetDateTime.now())
-                    .build();
-
-            String result = EmbeddingTextBuilder.buildText(place);
-
-            assertThat(result).isEqualTo("스크램블교차로 관광 시부야 랜드마크 시부야");
-        }
-
-        @Test
-        @DisplayName("region이 null이면 건너뛴다")
-        void regionNull() {
-            Place place = Place.builder()
-                    .name("도쿄타워")
-                    .address("도쿄 미나토구")
-                    .latitude(BigDecimal.valueOf(35.6586))
-                    .longitude(BigDecimal.valueOf(139.7454))
-                    .category("관광")
-                    .tags(List.of("타워", "전망대"))
-                    .description("도쿄의 상징적인 타워")
-                    .region(null)
-                    .savedAt(OffsetDateTime.now())
-                    .build();
-
-            String result = EmbeddingTextBuilder.buildText(place);
-
-            assertThat(result).isEqualTo("도쿄타워 관광 타워 전망대 도쿄의 상징적인 타워");
-        }
-
-        @Test
-        @DisplayName("category가 null이면 건너뛴다")
-        void categoryNull() {
-            Place place = Place.builder()
-                    .name("어떤식당")
-                    .address("도쿄 어딘가")
-                    .latitude(BigDecimal.valueOf(35.0))
-                    .longitude(BigDecimal.valueOf(139.0))
-                    .category(null)
-                    .tags(List.of("맛집"))
-                    .description("좋은 식당")
-                    .region("시부야")
-                    .savedAt(OffsetDateTime.now())
-                    .build();
-
-            String result = EmbeddingTextBuilder.buildText(place);
-
-            assertThat(result).isEqualTo("어떤식당 맛집 좋은 식당 시부야");
-        }
-
-        @Test
-        @DisplayName("name만 있고 나머지 모두 null이면 name만 반환")
-        void onlyName() {
-            Place place = Place.builder()
-                    .name("테스트장소")
-                    .address("주소")
-                    .latitude(BigDecimal.ZERO)
-                    .longitude(BigDecimal.ZERO)
-                    .category(null)
-                    .tags(null)
-                    .description(null)
-                    .region(null)
-                    .savedAt(OffsetDateTime.now())
-                    .build();
-
-            String result = EmbeddingTextBuilder.buildText(place);
-
-            assertThat(result).isEqualTo("테스트장소");
-        }
-
-        @Test
-        @DisplayName("빈 tags 리스트는 건너뛴다")
-        void emptyTagsList() {
-            Place place = Place.builder()
-                    .name("카페")
-                    .address("주소")
-                    .latitude(BigDecimal.ZERO)
-                    .longitude(BigDecimal.ZERO)
-                    .category("맛집")
-                    .tags(List.of())
-                    .description("좋은 카페")
-                    .region("강남")
-                    .savedAt(OffsetDateTime.now())
-                    .build();
-
-            String result = EmbeddingTextBuilder.buildText(place);
-
-            assertThat(result).isEqualTo("카페 맛집 좋은 카페 강남");
-        }
-
-        @Test
-        @DisplayName("tags에 null/빈 값이 섞여있으면 유효한 것만 포함")
-        void tagsWithNullAndBlankElements() {
-            Place place = Place.builder()
-                    .name("장소")
-                    .address("주소")
-                    .latitude(BigDecimal.ZERO)
-                    .longitude(BigDecimal.ZERO)
-                    .category("관광")
-                    .tags(List.of("유효", "", "  "))
-                    .description(null)
-                    .region(null)
-                    .savedAt(OffsetDateTime.now())
-                    .build();
-
-            String result = EmbeddingTextBuilder.buildText(place);
-
-            assertThat(result).isEqualTo("장소 관광 유효");
-        }
-
-        @Test
-        @DisplayName("null Place에 대해 IllegalArgumentException")
-        void nullPlace() {
-            assertThatThrownBy(() -> EmbeddingTextBuilder.buildText((Place) null))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("null");
-        }
-
-        @Test
-        @DisplayName("name이 null인 Place에 대해 IllegalArgumentException")
-        void placeWithNullName() {
-            Place place = Place.builder()
-                    .name(null)
-                    .address("주소")
-                    .latitude(BigDecimal.ZERO)
-                    .longitude(BigDecimal.ZERO)
-                    .category("관광")
-                    .savedAt(OffsetDateTime.now())
-                    .build();
-
-            assertThatThrownBy(() -> EmbeddingTextBuilder.buildText(place))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("name");
-        }
-
-        @Test
-        @DisplayName("name이 빈 문자열인 Place에 대해 IllegalArgumentException")
-        void placeWithBlankName() {
-            Place place = Place.builder()
-                    .name("   ")
-                    .address("주소")
-                    .latitude(BigDecimal.ZERO)
-                    .longitude(BigDecimal.ZERO)
-                    .category("관광")
-                    .savedAt(OffsetDateTime.now())
-                    .build();
-
-            assertThatThrownBy(() -> EmbeddingTextBuilder.buildText(place))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("name");
-        }
-    }
-
-    @Nested
-    @DisplayName("buildText(fields) - 개별 필드 기반 텍스트 결합")
-    class BuildTextFromFieldsTests {
-
-        @Test
-        @DisplayName("모든 필드 존재 시 정상 결합")
-        void allFieldsPresent() {
-            String result = EmbeddingTextBuilder.buildText(
-                    "센소지", "관광", List.of("사찰", "역사", "아사쿠사"),
-                    "도쿄의 가장 오래된 불교 사원", "아사쿠사");
-
-            assertThat(result).isEqualTo("센소지 관광 사찰 역사 아사쿠사 도쿄의 가장 오래된 불교 사원 아사쿠사");
-        }
-
-        @Test
-        @DisplayName("null name에 대해 IllegalArgumentException")
-        void nullName() {
-            assertThatThrownBy(() ->
-                    EmbeddingTextBuilder.buildText(null, "관광", List.of("태그"), "설명", "지역"))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("name");
-        }
-
-        @Test
-        @DisplayName("빈 name에 대해 IllegalArgumentException")
-        void blankName() {
-            assertThatThrownBy(() ->
-                    EmbeddingTextBuilder.buildText("  ", "관광", List.of("태그"), "설명", "지역"))
-                    .isInstanceOf(IllegalArgumentException.class)
-                    .hasMessageContaining("name");
-        }
-
-        @Test
-        @DisplayName("optional 필드 모두 null이면 name만 반환")
-        void onlyName() {
-            String result = EmbeddingTextBuilder.buildText("장소명", null, null, null, null);
-
-            assertThat(result).isEqualTo("장소명");
-        }
+    private static Place place(String name, String nameKo, String category, List<String> tags, String description) {
+        return Place.builder().name(name).nameKo(nameKo).category(category).tags(tags).description(description)
+                .region("Seoul").build();
     }
 
     @Test
-    @DisplayName("해외 장소는 원문 이름 뒤에 한국어 이름을 넣는다")
-    void includesNameKo() {
-        com.shg.trip.shgtrip.domain.place.entity.Place place = com.shg.trip.shgtrip.domain.place.entity.Place.builder()
-                .name("浅草寺").nameKo("센소지").category("Buddhist Temple").region("Tokyo")
-                .latitude(java.math.BigDecimal.ONE).longitude(java.math.BigDecimal.ONE).address("x").build();
+    @DisplayName("이름·카테고리 마지막 단계·태그·설명을 한국어 문장으로 잇고, 지역과 카테고리 대분류는 넣지 않는다")
+    void sentence() {
+        Place p = place("순수박물관", null, "Arts and Entertainment > Art Gallery", List.of("미술관", "전시", "예술"),
+                "현대 미술 작품을 전시하는 공간입니다.");
 
-        assertThat(EmbeddingTextBuilder.buildText(place)).isEqualTo("浅草寺 센소지 Buddhist Temple Tokyo");
+        assertThat(EmbeddingTextBuilder.buildText(p)).isEqualTo(
+                "순수박물관은 Art Gallery입니다. 미술관, 전시, 예술과 관련된 곳입니다. 현대 미술 작품을 전시하는 공간입니다.");
+    }
+
+    @Test
+    @DisplayName("조사는 마지막 글자의 받침으로 고른다")
+    void particles() {
+        Place p = place("어국 스시", null, "Dining and Drinking > Restaurant > Sushi Restaurant", List.of("식당", "일식", "회"),
+                null);
+
+        assertThat(EmbeddingTextBuilder.buildText(p)).isEqualTo("어국 스시는 Sushi Restaurant입니다. 식당, 일식, 회와 관련된 곳입니다.");
+    }
+
+    @Test
+    @DisplayName("마지막 글자가 한글이 아니면 두 조사를 함께 쓴다")
+    void nonHangulParticles() {
+        Place p = place("Spao", null, "Retail > Fashion Retail", List.of("의류", "SPA"), null);
+
+        assertThat(EmbeddingTextBuilder.buildText(p)).isEqualTo("Spao은(는) Fashion Retail입니다. 의류, SPA과(와) 관련된 곳입니다.");
+    }
+
+    @Test
+    @DisplayName("해외 장소는 한국어 이름을 앞에, 원문 이름을 괄호에 둔다. 같은 이름이면 한 번만 쓴다")
+    void koreanNameFirst() {
+        assertThat(EmbeddingTextBuilder.buildText(place("浅草寺", "센소지", "Community and Government > Buddhist Temple",
+                null, null))).isEqualTo("센소지(浅草寺)는 Buddhist Temple입니다.");
+        assertThat(EmbeddingTextBuilder.buildText(place("경복궁", "경복궁", "Landmarks and Outdoors > Palace", null, null)))
+                .isEqualTo("경복궁은 Palace입니다.");
+    }
+
+    @Test
+    @DisplayName("카테고리·태그·설명이 없으면 그 문장을 빼고, 태그의 null·빈 값은 건너뛴다")
+    void missingParts() {
+        assertThat(EmbeddingTextBuilder.buildText(place("테스트장소", null, null, null, null))).isEqualTo("테스트장소입니다.");
+        assertThat(EmbeddingTextBuilder.buildText(place("장소", null, "관광", Arrays.asList(null, " ", "유효"), "  ")))
+                .isEqualTo("장소는 관광입니다. 유효와 관련된 곳입니다.");
+    }
+
+    @Test
+    @DisplayName("장소 자신의 지역·나라 이름 태그는 임베딩 글에서만 빼고, 지역 이름이 든 다른 태그와 DB 태그는 그대로 둔다")
+    void ownAreaTagsDropped() {
+        Place seoul = Place.builder().name("순수박물관").category("Arts and Entertainment > Art Gallery")
+                .tags(List.of("미술관", "서울", "서울시", "한국", "서울야경")).region("Seoul").country("KR").build();
+        Place tokyo = Place.builder().name("浅草寺").nameKo("센소지").category("Buddhist Temple")
+                .tags(List.of("사찰", "도쿄", "Tokyo", "일본")).region("Tokyo").country("JP").build();
+
+        assertThat(EmbeddingTextBuilder.buildText(seoul)).isEqualTo("순수박물관은 Art Gallery입니다. 미술관, 서울야경과 관련된 곳입니다.");
+        assertThat(seoul.getTags()).contains("서울");
+        assertThat(EmbeddingTextBuilder.buildText(tokyo)).isEqualTo("센소지(浅草寺)는 Buddhist Temple입니다. 사찰과 관련된 곳입니다.");
+    }
+
+    @Test
+    @DisplayName("null 장소나 빈 이름은 IllegalArgumentException")
+    void invalid() {
+        assertThatThrownBy(() -> EmbeddingTextBuilder.buildText(null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> EmbeddingTextBuilder.buildText(place(null, null, "관광", null, null)))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> EmbeddingTextBuilder.buildText(place("  ", null, "관광", null, null)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

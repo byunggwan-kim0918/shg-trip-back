@@ -114,7 +114,7 @@ class OfficialHoursParserTest {
         assertThat(OfficialHoursParser.admissionFee("무료※ 단, 유료 특별 전시 제외")).isZero();
         assertThat(OfficialHoursParser.admissionFee("[성인]- 1,000원[초·중·고등학생 및 군경]- 500원 ※ 무료 : 6세 이하")).isEqualTo(1000);
         assertThat(OfficialHoursParser.admissionFee("5,000원")).isEqualTo(5000);
-        assertThat(OfficialHoursParser.admissionFee("대인 3,000원 / 소인 2,000원")).isNull();
+        assertThat(OfficialHoursParser.admissionFee("1관 3,000원 / 2관 2,000원")).isNull();
         assertThat(OfficialHoursParser.admissionFee("")).isNull();
     }
 
@@ -156,5 +156,19 @@ class OfficialHoursParserTest {
     void nonAdmissionFee() {
         assertThat(OfficialHoursParser.admissionFee("주차료 2,000원")).isNull();
         assertThat(OfficialHoursParser.admissionFee("체험료 성인 10,000원")).isNull();
+        assertThat(OfficialHoursParser.admissionFee("일반 대여 3,000원")).isNull();
+        assertThat(OfficialHoursParser.admissionFee("[연회원회비] 20,000원[문화강좌]-중국어 50,000원")).isNull();
+    }
+
+    @Test
+    @DisplayName("성인 요금은 어른·대인·일반·개인 표기와 나이 괄호도 읽고, 비고의 다른 요금 이름은 무시한다")
+    void adultFeeVariants() {
+        assertThat(OfficialHoursParser.admissionFee("[개인]- 어른 5,000원- 청소년 3,000원")).isEqualTo(5000);
+        assertThat(OfficialHoursParser.admissionFee("- 대인 45,500원 - 청소년/경로 43,600원")).isEqualTo(45500);
+        assertThat(OfficialHoursParser.admissionFee("일반요금 5,000원※ 무료 : 미취학 아동")).isEqualTo(5000);
+        assertThat(OfficialHoursParser.admissionFee("- 개인 1,000원- 단체(10인 이상) 800원")).isEqualTo(1000);
+        assertThat(OfficialHoursParser.admissionFee("- 성인(만 19세 이상) 8,000원 - 청소년 5,000원")).isEqualTo(8000);
+        assertThat(OfficialHoursParser.admissionFee("[오죽헌]- 어른 : 개인 3,000원 / 단체 2,000원")).isEqualTo(3000);
+        assertThat(OfficialHoursParser.admissionFee("[개인] - 성인 10,000원 ※ 체험료는 별도로 부과됨")).isEqualTo(10000);
     }
 }

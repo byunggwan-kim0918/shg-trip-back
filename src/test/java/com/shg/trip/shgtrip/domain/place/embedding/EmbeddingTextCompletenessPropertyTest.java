@@ -2,8 +2,6 @@ package com.shg.trip.shgtrip.domain.place.embedding;
 
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import net.jqwik.api.*;
-import net.jqwik.api.constraints.NotBlank;
-import net.jqwik.api.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -12,24 +10,18 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Property-based test: 임베딩 텍스트 결합 완전성.
- * <p>
- * 장소 데이터에서 name, category, tags, description, region이 모두 존재(non-null, non-empty)할 때,
- * 결합된 임베딩 텍스트는 5개 필드의 내용을 모두 포함해야 한다.
+ * Property-based test: 임베딩 텍스트 완전성. 이름·카테고리·태그·설명이 있으면 문장에 모두 들어가고, 지역은 들어가지 않는다.
  */
-// Feature: llm-optimization, Property 5: 임베딩 텍스트 결합 완전성
 class EmbeddingTextCompletenessPropertyTest {
 
     @Property(tries = 100)
-    // Feature: llm-optimization, Property 5: 임베딩 텍스트 결합 완전성
-    void buildTextFromPlaceContainsAllFiveFields(
+    void buildTextContainsDescriptiveFieldsButNotRegion(
             @ForAll("validNames") String name,
             @ForAll("validCategories") String category,
             @ForAll("validTagLists") List<String> tags,
             @ForAll("validDescriptions") String description,
             @ForAll("validRegions") String region
     ) {
-        // Given: 모든 5개 필드가 non-null, non-empty인 Place
         Place place = Place.builder()
                 .name(name)
                 .address("테스트 주소")
@@ -42,59 +34,11 @@ class EmbeddingTextCompletenessPropertyTest {
                 .savedAt(OffsetDateTime.now())
                 .build();
 
-        // When: 임베딩 텍스트 생성
         String result = EmbeddingTextBuilder.buildText(place);
 
-        // Then: 결합된 텍스트에 5개 필드 내용이 모두 포함되어야 한다
-        assertThat(result)
-                .as("결합 텍스트에 name '%s'이 포함되어야 한다", name)
-                .contains(name);
-        assertThat(result)
-                .as("결합 텍스트에 category '%s'가 포함되어야 한다", category)
-                .contains(category);
-        for (String tag : tags) {
-            assertThat(result)
-                    .as("결합 텍스트에 tag '%s'가 포함되어야 한다", tag)
-                    .contains(tag);
-        }
-        assertThat(result)
-                .as("결합 텍스트에 description '%s'이 포함되어야 한다", description)
-                .contains(description);
-        assertThat(result)
-                .as("결합 텍스트에 region '%s'이 포함되어야 한다", region)
-                .contains(region);
-    }
-
-    @Property(tries = 100)
-    // Feature: llm-optimization, Property 5: 임베딩 텍스트 결합 완전성
-    void buildTextFromFieldsContainsAllFiveFields(
-            @ForAll("validNames") String name,
-            @ForAll("validCategories") String category,
-            @ForAll("validTagLists") List<String> tags,
-            @ForAll("validDescriptions") String description,
-            @ForAll("validRegions") String region
-    ) {
-        // When: 개별 필드 기반 임베딩 텍스트 생성
-        String result = EmbeddingTextBuilder.buildText(name, category, tags, description, region);
-
-        // Then: 결합된 텍스트에 5개 필드 내용이 모두 포함되어야 한다
-        assertThat(result)
-                .as("결합 텍스트에 name '%s'이 포함되어야 한다", name)
-                .contains(name);
-        assertThat(result)
-                .as("결합 텍스트에 category '%s'가 포함되어야 한다", category)
-                .contains(category);
-        for (String tag : tags) {
-            assertThat(result)
-                    .as("결합 텍스트에 tag '%s'가 포함되어야 한다", tag)
-                    .contains(tag);
-        }
-        assertThat(result)
-                .as("결합 텍스트에 description '%s'이 포함되어야 한다", description)
-                .contains(description);
-        assertThat(result)
-                .as("결합 텍스트에 region '%s'이 포함되어야 한다", region)
-                .contains(region);
+        assertThat(result).contains(name, category, description);
+        for (String tag : tags) assertThat(result).contains(tag);
+        assertThat(result).doesNotContain(region);
     }
 
     // --- Arbitrary Providers ---

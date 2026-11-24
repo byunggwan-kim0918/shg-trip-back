@@ -115,6 +115,13 @@ batch:
     max-per-region: ${BATCH_ENRICH_MAX_PER_REGION:0}
     # 대상 카테고리 접두어(예: Dining and Drinking). 비우면 전체. 식당 견본 보강용
     category-prefix: ${BATCH_ENRICH_CATEGORY_PREFIX:}
+    # 대상 국가(쉼표 구분 ISO 코드, 예: JP,TW). 비우면 전체. 그 나라 활성 장소의 지역으로 바꿔 regions와 겹친다
+    countries: ${BATCH_ENRICH_COUNTRIES:}
+    # 패스(v1, 이어지는 소개 다시 쓰기)마다 보내는 요청 상한(0=무제한). 나라 하나를 통째로 적재한 달(일본 약 19만)도 넘지 않고,
+    # 이미 보강된 장소가 버그로 전부 다시 대상이 될 때만 걸린다. 걸렸는데 대상이 남으면 보강 단계가 실패로 끝난다
+    max-requests: ${BATCH_ENRICH_MAX_REQUESTS:200000}
+    # true면 대상 수·예상 비용만 로그에 남기고 요청은 보내지 않는다
+    dry-run: ${BATCH_ENRICH_DRY_RUN:false}
     # 동시에 제출하는 Batch API 묶음 수(묶음당 chunk-size건)
     parallel-chunks: ${BATCH_ENRICH_PARALLEL_CHUNKS:5}
     # 묶음 결과 대기 상한. Batch API는 최대 24시간 걸린다

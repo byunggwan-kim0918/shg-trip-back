@@ -169,6 +169,8 @@ public class BatchJobRunner implements CommandLineRunner, ExitCodeGenerator {
 
         // 모든 적재 뒤, 역할 기록·보강·임베딩 전에 돌아야 바뀐 행이 같은 실행에서 다시 만들어진다.
         stage("[1/4-무효화] 바뀐 장소 파생 데이터 비우기", placeInvalidationJob::run);
+        // 무효화가 비운 입장료도 다시 채우도록 무효화 뒤에 돈다. 외부 호출이 없어 상세 조회를 끈 실행에서도 돈다.
+        stage("[1/4-공식 요금] 저장된 관광공사 요금 다시 읽기", tourApiDetailJob::reparseStoredFees);
 
         // 보강은 하루 가까이 걸릴 수 있어 인기도를 먼저 채워야 중간에 끊겨도 유명한 장소부터 끝나 있다.
         // Maps 약관 3.2.3(a)가 세부정보·좌표·평점 캐싱을 금지해 인기도는 Wikidata로 채운다.

@@ -55,7 +55,7 @@ public final class DescriptionRewrite {
         String description = place.getDescription();
         if (description == null || description.isBlank()) return false;
         return hasReputation(description, place) || (!OverseasEnrichment.isOverseas(place.getCountry())
-                && BatchEnrichScheduler.mixesForeignScript(description, place.getName()));
+                && EnrichOutputs.mixesForeignScript(description, place.getName()));
     }
 
     /** 장소 이름에 든 낱말("소문난 국밥", "명성교회")은 평판으로 보지 않는다. 이름은 고쳐 쓸 수 없어 매번 실패한다. */
@@ -117,7 +117,7 @@ public final class DescriptionRewrite {
             return null;
         }
         if (!OverseasEnrichment.isOverseas(place.getCountry())
-                && BatchEnrichScheduler.mixesForeignScript(text, place.getName())) {
+                && EnrichOutputs.mixesForeignScript(text, place.getName())) {
             return null;
         }
         return text;

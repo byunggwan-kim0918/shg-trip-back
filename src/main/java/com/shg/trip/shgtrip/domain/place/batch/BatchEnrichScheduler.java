@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes;
+import com.shg.trip.shgtrip.domain.place.integrity.PlaceFingerprints;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -11,8 +12,13 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectWriter;
+import com.fasterxml.jackson.databind.SerializationFeature;
+
 import java.time.Duration;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -35,6 +41,9 @@ public class BatchEnrichScheduler {
     private static final double MAX_FAILURE_RATIO = 0.2;
 
     private static final String CUSTOM_ID_PREFIX = "place_";
+    // 맵 항목 순서가 달라도 같은 본문이면 같은 키가 되게 키 순으로 쓴다.
+    private static final ObjectWriter REQUEST_KEY_WRITER = new ObjectMapper()
+            .writer().with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
     /** 실행에서 제외한 실패 id 상한. 대상 조회의 NOT IN 바인드 파라미터 한도(pgjdbc 32767)보다 작아야 한다. */
     static final int MAX_EXCLUDED_IDS = 20_000;
 
@@ -70,6 +79,29 @@ public class BatchEnrichScheduler {
     /** 보강 대상 카테고리 접두어(예: "Dining and Drinking"). 비면 전체다. 대상 순서가 명소 먼저라 식당 견본을 따로 뽑을 때 쓴다. */
     @Value("${batch.enrich.category-prefix:}")
     private String categoryPrefix = "";
+
+    /**
+     * 보강 국가(쉼표 구분 ISO 코드, 예: "JP,TW"). 비면 전체다. 그 나라 활성 장소가 있는 지역 목록으로 바꿔 지역 범위와 겹친다.
+     * 공급처·적재 경로(월간 적재, 카탈로그에서 올린 장소)와 무관하게 DB에 있는 지역을 쓴다.
+     */
+    @Value("${batch.enrich.countries:}")
+    private String enrichCountries = "";
+
+    /**
+     * 패스(v1, 이어지는 소개 다시 쓰기)마다 보내는 요청 상한(0이면 무제한). 새 장소는 모두 보강하되, 보강된 장소가 버그로
+     * 한꺼번에 다시 대상이 될 때 운영 전체를 다시 사지 않게 한다.
+     */
+    @Value("${batch.enrich.max-requests:200000}")
+    private long maxRequests;
+
+    /** 대상 수와 예상 비용만 남기고 요청은 보내지 않는다. */
+    @Value("${batch.enrich.dry-run:false}")
+    private boolean dryRun;
+
+    private final AtomicLong submittedRequests = new AtomicLong();
+
+    /** 이번 실행에서 요청 상한 때문에 남긴 대상이 있다. */
+    private volatile boolean leftByRequestCap;
 
     /**
      * 이미 제출·완료된 배치의 결과를 다시 적용할 때 쓰는 batchId.
@@ -159,17 +191,22 @@ public class BatchEnrichScheduler {
 
         List<String> resumeIds = parseList(resumeBatchId);
         if (!resumeIds.isEmpty()) {
+            if (dryRun) {
+                log.info("dry-run - 배치 결과 재반영 {}개를 건너뜀(DB에 쓰지 않음)", resumeIds.size());
+                return;
+            }
             resume(resumeIds);
             return;
         }
 
-        List<String> regions = parseRegions();
+        List<String> regions = scopeRegions();
         if ((mode() == Mode.ATTRIBUTES || mode() == Mode.INGREDIENTS) && regions.isEmpty()) {
             log.warn("속성·주재료 보강(mode={})은 batch.enrich.regions가 필요합니다. 건너뜁니다.", mode().value);
             return;
         }
         long deadline = System.currentTimeMillis() + maxDuration.toMillis();
         runDeadlineMs = deadline;
+        leftByRequestCap = false;
         failIfPassFailed(runPass(regions, deadline));
         // v1 프롬프트 설명 가이드를 어긴 소개를 같은 실행에서 고쳐 쓴다. 카테고리 견본 실행은 범위가 달라 건너뛴다.
         if (mode() == Mode.V1 && rewriteDescriptionsAfterV1 && categoryPrefix.isEmpty()) {
@@ -180,10 +217,19 @@ public class BatchEnrichScheduler {
                 passMode = null;
             }
         }
+        // 다 돌고 나서 실패로 남겨야 상한이 밀린 양을 종료 코드·batch_runs로 드러낸다. 남은 장소는 다음 실행이 잇는다.
+        if (leftByRequestCap) {
+            throw new BatchStageFailed("패스당 요청 상한 " + maxRequests + "건에 닿아 보강 대상이 남음(BATCH_ENRICH_MAX_REQUESTS)");
+        }
     }
 
-    /** @return [성공, 실패, 연속 실패 중단 횟수] */
+    /**
+     * 요청 상한은 패스마다 센다. v1이 상한을 다 써도 v1 결과의 소개 다시 쓰기는 같은 실행에서 돈다.
+     *
+     * @return [성공, 실패, 연속 실패 중단 횟수]
+     */
     private int[] runPass(List<String> regions, long deadline) {
+        submittedRequests.set(0);
         log.info("BatchEnrichScheduler 시작 - mode={}, chunkSize={}, regions={}, maxPerRegion={}, category={}",
                 mode().value, chunkSize, regions.isEmpty() ? "전체" : regions,
                 maxPerRegion > 0 ? maxPerRegion : "무제한",
@@ -199,6 +245,7 @@ public class BatchEnrichScheduler {
             long exhausted = placeRepository.countDescriptionRewriteExhausted();
             if (exhausted > 0) log.warn("소개 고쳐 쓰기에 3번 실패해 제외된 장소 {}건", exhausted);
         } else {
+            logEstimate(regions);
             long waiting = placeRepository.countEnrichWaitingForWikidata();
             // batch.wikidata.countries 밖 국가, 한국 50곳 미만 지역, 좌표·지역 없는 행은 계속 기다려 로그로 드러낸다(지역 무관 전체 건수).
             if (waiting > 0) log.warn("Wikidata 매칭 전이라 보강을 미룬 장소 {}건", waiting);
@@ -207,15 +254,26 @@ public class BatchEnrichScheduler {
         }
 
         int[] totals = new int[3];
+        if (dryRun) {
+            log.info("dry-run - 요청을 보내지 않음(mode={})", mode().value);
+            return totals;
+        }
         if (maxPerRegion > 0 && !regions.isEmpty()) {
             // 지역별로 따로 돌려야 큰 지역(서울)이 상한을 다 먹지 않는다.
             for (String region : regions) {
+                if (requestCapReached()) break;
                 enrichScope(List.of(region), totals, deadline);
             }
         } else {
             enrichScope(regions, totals, deadline);
         }
 
+        if (requestCapReached() && !fetchTargets(regions, List.of(-1L), PageRequest.of(0, 1)).isEmpty()) {
+            // 소개 다시 쓰기 후보 조회는 이름 속 낱말까지 걸려 남은 대상을 부풀린다. 경고만 남긴다.
+            if (mode() != Mode.DESCRIPTIONS) leftByRequestCap = true;
+            log.warn("패스당 요청 상한 {}건에 닿아 남은 장소를 다음 실행으로 넘김(mode={}){}", maxRequests, mode().value,
+                    mode() == Mode.V1 ? " - 남은 대상 견적: " + estimateSummary(regions) : "");
+        }
         log.info("BatchEnrichScheduler 완료 - mode={}, 보강 성공: {}건, 실패: {}건, 중단 {}회",
                 mode().value, totals[0], totals[1], totals[2]);
         return totals;
@@ -253,18 +311,14 @@ public class BatchEnrichScheduler {
                 if (remaining <= 0) break;
                 pageSize = Math.min(pageSize, remaining);
             }
+            if (requestCapReached()) break;
+            if (maxRequests > 0) {
+                // 장소 수가 요청 수 이상이라 남은 요청 수만큼만 읽으면 상한을 넘지 않는다.
+                pageSize = (int) Math.min(pageSize, maxRequests - submittedRequests.get());
+            }
             // NOT IN에 빈 컬렉션을 넘기지 않는다(존재할 수 없는 id로 대신한다).
             Collection<Long> excluded = excludedIds.isEmpty() ? List.of(-1L) : excludedIds;
-            PageRequest page = PageRequest.of(0, pageSize);
-            List<Place> places = switch (mode()) {
-                case ATTRIBUTES -> placeRepository.findAttributeTargetsInRegions(regions, excluded, page);
-                case INGREDIENTS -> placeRepository.findIngredientTargetsInRegions(regions, excluded, page);
-                case DESCRIPTIONS -> placeRepository.findDescriptionRewriteTargets(regions.isEmpty(),
-                        regionsParam(regions), overseasCountries(), DescriptionRewrite.REPUTATION_REGEX, excluded, page);
-                case V1 -> regions.isEmpty()
-                        ? placeRepository.findEnrichTargets(categoryPrefix, excluded, page)
-                        : placeRepository.findEnrichTargetsInRegions(regions, categoryPrefix, excluded, page);
-            };
+            List<Place> places = fetchTargets(regions, excluded, PageRequest.of(0, pageSize));
 
             if (places.isEmpty()) {
                 break;
@@ -302,6 +356,18 @@ public class BatchEnrichScheduler {
         totals[1] += failed;
     }
 
+    private List<Place> fetchTargets(List<String> regions, Collection<Long> excluded, PageRequest page) {
+        return switch (mode()) {
+            case ATTRIBUTES -> placeRepository.findAttributeTargetsInRegions(regions, excluded, page);
+            case INGREDIENTS -> placeRepository.findIngredientTargetsInRegions(regions, excluded, page);
+            case DESCRIPTIONS -> placeRepository.findDescriptionRewriteTargets(regions.isEmpty(),
+                    regionsParam(regions), overseasCountries(), DescriptionRewrite.REPUTATION_REGEX, excluded, page);
+            case V1 -> regions.isEmpty()
+                    ? placeRepository.findEnrichTargets(categoryPrefix, excluded, page)
+                    : placeRepository.findEnrichTargetsInRegions(regions, categoryPrefix, excluded, page);
+        };
+    }
+
     /** 비어 있으면 v1이고, 알 수 없는 값이면 null이다. v1 뒤 소개 다시 쓰기를 도는 동안은 descriptions다. */
     Mode mode() {
         if (passMode != null) return passMode;
@@ -318,8 +384,59 @@ public class BatchEnrichScheduler {
         return List.copyOf(OverseasEnrichment.COUNTRIES.keySet());
     }
 
-    private List<String> parseRegions() {
-        return parseList(enrichRegions);
+    private boolean requestCapReached() {
+        return maxRequests > 0 && submittedRequests.get() >= maxRequests;
+    }
+
+    /**
+     * 지역 범위(비면 전체). 국가를 정하면 그 나라 지역 목록이 되어, 지역이 필요한 속성·주재료 모드도 한 나라 전체를 돈다.
+     *
+     * @throws BatchStageFailed 국가를 정했는데 겹치는 지역이 없을 때. 국가 코드 오타가 성공으로 기록되지 않게 한다
+     */
+    private List<String> scopeRegions() {
+        List<String> regions = parseList(enrichRegions);
+        List<String> countries = parseList(enrichCountries).stream().map(c -> c.toUpperCase(Locale.ROOT)).toList();
+        if (countries.isEmpty()) return regions;
+        List<String> inCountries = placeRepository.findActiveRegionsInCountries(countries);
+        List<String> scoped = regions.isEmpty() ? inCountries : regions.stream().filter(inCountries::contains).toList();
+        if (scoped.isEmpty()) {
+            throw new BatchStageFailed("보강 국가 " + countries + "에 해당하는 지역이 없음(지역 범위 " + regions + ")");
+        }
+        log.info("보강 국가 {} → 지역 {}곳", countries, scoped.size());
+        return scoped;
+    }
+
+    private void logEstimate(List<String> regions) {
+        log.info("v1 보강 견적 - {}", estimateSummary(regions));
+    }
+
+    // 견적은 안내라 조회가 실패해도 보강을 막지 않는다.
+    private String estimateSummary(List<String> regions) {
+        try {
+            return estimateV1(regions).summary();
+        } catch (RuntimeException e) {
+            log.warn("v1 보강 견적 조회 실패: {}", e.getMessage());
+            return "조회 실패";
+        }
+    }
+
+    /**
+     * 상한은 식당이 아닌 갈래부터 채운다(실제 순서의 인기도는 반영하지 않아 상한이 걸리면 갈래 구성이 조금 다르다).
+     * 지역당 상한도 전체 상한으로 바꿔 넣는다.
+     */
+    EnrichEstimate.Total estimateV1(List<String> regions) {
+        List<EnrichEstimate.Line> lines = placeRepository
+                .countEnrichTargetsByKind(regions.isEmpty(), regionsParam(regions), categoryPrefix).stream()
+                .map(r -> new EnrichEstimate.Line((String) r[0], ((Number) r[1]).intValue() == 1,
+                        ((Number) r[2]).longValue()))
+                .sorted(Comparator.comparing(EnrichEstimate.Line::dining))
+                .toList();
+        long budget = maxRequests;
+        if (maxPerRegion > 0 && !regions.isEmpty()) {
+            long perRegion = (long) maxPerRegion * regions.size();
+            budget = budget > 0 ? Math.min(budget, perRegion) : perRegion;
+        }
+        return EnrichEstimate.of(lines, budget);
     }
 
     private static List<String> parseList(String csv) {
@@ -332,7 +449,8 @@ public class BatchEnrichScheduler {
 
     /**
      * 끝난 배치들의 결과만 다시 반영한다(재제출 없음, 결과 보관 29일). 장소는 결과의 custom_id로 읽는다.
-     * 그 사이 보강된 행은 옛 결과로 덮지 않고, 실패 횟수도 올리지 않는다.
+     * 그 사이 보강된 행은 옛 결과로 덮지 않고, 실패 횟수도 올리지 않는다. 같은 요청으로 묶여 결과 행이 없는 장소는
+     * 여기서 반영되지 않고 다음 실행에서 다시 묻는다.
      */
     void resume(List<String> batchIds) {
         runDeadlineMs = Long.MAX_VALUE;
@@ -419,7 +537,7 @@ public class BatchEnrichScheduler {
         return poll.resultsUrl() == null ? null : downloadResults(poll.resultsUrl());
     }
 
-    /** 결과 행의 장소 id → 요청 입력 지문(주재료·소개 모드만, 없으면 null). */
+    /** 결과 행의 장소 id → 요청 입력 지문(지문 없는 옛 custom_id면 null). */
     Map<Long, String> inputKeysIn(String jsonl) {
         Map<Long, String> keys = new LinkedHashMap<>();
         for (String line : jsonl.split("\n")) {
@@ -440,12 +558,17 @@ public class BatchEnrichScheduler {
         return CUSTOM_ID_PREFIX + place.getId() + (key == null ? "" : "_" + key);
     }
 
-    /** 결과를 기다리는 사이 바뀐 입력에 옛 답을 쓰지 않도록 요청에 붙이는 지문. 입력을 다시 읽어 쓰는 모드만 있다. */
+    /**
+     * 결과를 기다리는 사이 바뀐 입력에 옛 답을 쓰지 않도록 요청에 붙이는 지문. v1은 무효화 작업과 같은 보강 입력 지문이라,
+     * 옛 이름으로 받은 결과가 새 이름의 지문을 달고 저장되지 않는다.
+     */
     static String inputKey(Place place, Mode mode) {
         return switch (mode) {
+            case V1 -> PlaceFingerprints.enrichInput(place.getName(), place.getCategory(), place.getRegion(),
+                    place.getCountry());
+            case ATTRIBUTES -> AttributeEnrichment.inputKey(place);
             case INGREDIENTS -> IngredientEnrichment.inputKey(place);
             case DESCRIPTIONS -> DescriptionRewrite.inputKey(place);
-            case V1, ATTRIBUTES -> null;
         };
     }
 
@@ -501,6 +624,7 @@ public class BatchEnrichScheduler {
                 log.error("배치 제출 실패 - {}건 모두 실패 처리", places.size());
                 return new ChunkResult(0, places.size(), allIds(places));
             }
+            submittedRequests.addAndGet(requests.size());
 
             AnthropicBatchClient.PollResult poll = pollForCompletion(batchId);
             if (poll.resultsUrl() == null) {
@@ -521,29 +645,47 @@ public class BatchEnrichScheduler {
         return places.stream().map(Place::getId).toList();
     }
 
+    /** 요청 본문이 같은 장소는 한 번만 묻는다. custom_id는 묶음의 첫 장소다. */
     List<Map<String, Object>> buildBatchRequests(List<Place> places) {
         List<Map<String, Object>> requests = new ArrayList<>();
-
-        for (Place place : places) {
-            Map<String, Object> params = switch (mode()) {
-                case ATTRIBUTES -> AttributeEnrichment.requestParams(place, enrichModel);
-                case INGREDIENTS -> IngredientEnrichment.requestParams(place, enrichModel);
-                case DESCRIPTIONS -> DescriptionRewrite.requestParams(place, enrichModel);
-                case V1 -> Map.of(
-                        "model", enrichModel,
-                        "max_tokens", 1024,
-                        // Haiku 5.5는 thinking이 기본으로 켜진다. 단순 JSON 생성엔 불필요하고,
-                        // 켜두면 thinking 토큰이 max_tokens를 잡아먹어 JSON이 잘린다.
-                        "thinking", Map.of("type", "disabled"),
-                        "messages", List.of(Map.of("role", "user", "content", buildEnrichPrompt(place))));
-            };
-            requests.add(Map.of("custom_id", customId(place, mode()), "params", params));
+        for (List<Place> group : requestGroups(places)) {
+            Place first = group.get(0);
+            requests.add(Map.of("custom_id", customId(first, mode()), "params", requestParams(first)));
         }
-
         return requests;
     }
 
-    String buildEnrichPrompt(Place place) {
+    private Map<String, Object> requestParams(Place place) {
+        return switch (mode()) {
+            case ATTRIBUTES -> AttributeEnrichment.requestParams(place, enrichModel);
+            case INGREDIENTS -> IngredientEnrichment.requestParams(place, enrichModel);
+            case DESCRIPTIONS -> DescriptionRewrite.requestParams(place, enrichModel);
+            case V1 -> buildEnrichPrompt(place).requestParams(enrichModel);
+        };
+    }
+
+    /**
+     * 요청 본문이 글자까지 같은 장소 묶음(입력 순서 유지). 체인 지점처럼 이름·카테고리가 같고 주소를 묻지 않는 장소는
+     * 모델이 보는 입력이 같아, 따로 물으면 같은 답에 비용만 더 든다.
+     */
+    List<List<Place>> requestGroups(List<Place> places) {
+        Map<String, List<Place>> groups = new LinkedHashMap<>();
+        for (Place place : places) {
+            groups.computeIfAbsent(requestKey(place), k -> new ArrayList<>()).add(place);
+        }
+        return List.copyOf(groups.values());
+    }
+
+    private String requestKey(Place place) {
+        try {
+            return REQUEST_KEY_WRITER.writeValueAsString(requestParams(place));
+        } catch (JsonProcessingException e) {
+            log.debug("요청 본문 키를 만들지 못해 묶지 않음 - placeId={}: {}", place.getId(), e.getMessage());
+            return "place:" + place.getId();
+        }
+    }
+
+    EnrichPrompt buildEnrichPrompt(Place place) {
         boolean overseas = OverseasEnrichment.isOverseas(place.getCountry());
         if (DiningEnrichment.isDiningVenue(place.getCategory())) {
             return DiningEnrichment.buildPrompt(place.getName(), place.getCategory(), place.getDescription(),
@@ -552,82 +694,7 @@ public class BatchEnrichScheduler {
                     overseas ? OverseasEnrichment.contextLines(place) : null,
                     overseas && place.getNameKo() == null);
         }
-        if (overseas) return buildOverseasPrompt(place);
-        StringBuilder sb = new StringBuilder();
-        sb.append("다음 장소 정보를 분석하여 태그, 설명, 추천 방문 시간대를 생성해주세요.\n\n");
-        sb.append("장소 정보:\n");
-        sb.append("- 이름: ").append(place.getName()).append("\n");
-        sb.append("- 카테고리: ").append(place.getCategory()).append("\n");
-        if (place.getRegion() != null) {
-            sb.append("- 지역: ").append(place.getRegion()).append("\n");
-        }
-        if (place.getCountry() != null) {
-            sb.append("- 국가: ").append(place.getCountry()).append("\n");
-        }
-        if (place.getDescription() != null && !place.getDescription().isBlank()) {
-            sb.append("- 기존 설명: ").append(place.getDescription()).append("\n");
-        }
-        sb.append("\n");
-        sb.append("다음 JSON 형식으로만 응답해주세요 (다른 텍스트 없이):\n");
-        sb.append("{\n");
-        sb.append("  \"tags\": [\"태그1\", \"태그2\", ...],  // 5~10개 관련 태그 (한국어)\n");
-        sb.append("  \"description\": \"장소에 대한 2~3문장 설명 (한국어)\",\n");
-        sb.append("  \"recommended_time_slots\": [\"morning\", \"afternoon\", \"evening\"],  // 추천 방문 시간대\n");
-        sb.append("  \"recommended_duration_minutes\": 90,  // 평균 체류시간(분, 정수)\n");
-        sb.append("  \"admission_fee\": 0,  // 입장료(원, 정수). 무료면 0, 유료면 성인 1인 기준 실제 입장료\n");
-        sb.append("  \"place_role\": \"SIGHT\"  // 여행 일정에서의 역할(아래 목록 중 하나)\n");
-        sb.append("}\n");
-        sb.append("\n추천 시간대는 다음 중에서 선택: morning, afternoon, evening, night, all_day");
-        sb.append("\n체류시간 가이드: 등산·오름·트레킹 150~240 / 해변·시장 60 / 박물관·미술관 90 / 카페 60 / 식당 70");
-        sb.append("\n입장료 가이드: 오름·해변·포구·공원·산책로 등 자연 명소는 대부분 0(무료). "
-                + "성산일출봉 5000, 산방산 1000처럼 관리되는 유료 명소만 실제 금액. 식당·카페·숙소는 0.");
-        sb.append("\n").append(DescriptionRewrite.ENRICH_RULE);
-        sb.append("\nplace_role: SIGHT(명소·자연·유적·박물관·공원) / ACTIVITY(체험·레저·테마파크) / "
-                + "SHOPPING(쇼핑몰·백화점·쇼핑거리) / MARKET(전통시장·야시장) / LODGING(숙소) / TRANSIT(공항·역·터미널) / "
-                + "NOT_VISITABLE(여행자가 일부러 찾아갈 곳이 아님: 편의점·은행·병원·사무실·주차장·일반 매장·아파트·학교 등)");
-        return sb.toString();
-    }
-
-    /**
-     * 해외 관광지 프롬프트. 한국 프롬프트와 같은 항목에 국가·여행지·주소, 현지 통화 입장료, (비어 있으면) name_ko를 더한다.
-     * 입장료 예시가 제주 명소라 해외 행에 쓰면 원화 금액이 나온다.
-     */
-    String buildOverseasPrompt(Place place) {
-        OverseasEnrichment.Currency currency = OverseasEnrichment.currencyOf(place.getCountry());
-        boolean askNameKo = place.getNameKo() == null;
-        StringBuilder sb = new StringBuilder();
-        sb.append("다음 해외 장소 정보를 분석하여 한국인 여행자용 태그, 설명, 추천 방문 시간대를 생성해주세요.\n\n");
-        sb.append("장소 정보:\n");
-        sb.append("- 이름: ").append(place.getName()).append("\n");
-        sb.append("- 카테고리: ").append(place.getCategory()).append("\n");
-        sb.append(OverseasEnrichment.contextLines(place));
-        if (place.getDescription() != null && !place.getDescription().isBlank()) {
-            sb.append("- 기존 설명: ").append(place.getDescription()).append("\n");
-        }
-        sb.append("\n");
-        sb.append("다음 JSON 형식으로만 응답해주세요 (다른 텍스트 없이):\n");
-        sb.append("{\n");
-        if (askNameKo) sb.append("  \"name_ko\": \"...\",  // 한국어 표시 이름(아래 규칙)\n");
-        sb.append("  \"tags\": [\"태그1\", \"태그2\", ...],  // 5~10개 관련 태그 (한국어)\n");
-        sb.append("  \"description\": \"장소에 대한 2~3문장 설명 (한국어)\",\n");
-        sb.append("  \"recommended_time_slots\": [\"morning\", \"afternoon\", \"evening\"],  // 추천 방문 시간대\n");
-        sb.append("  \"recommended_duration_minutes\": 90,  // 평균 체류시간(분, 정수)\n");
-        sb.append("  \"admission_fee_local\": 0,  // 입장료(").append(currency.label()).append(", 정수). ")
-                .append("무료면 0, 유료면 성인 1인 기준 실제 입장료\n");
-        sb.append("  \"place_role\": \"SIGHT\",  // 여행 일정에서의 역할(아래 목록 중 하나)\n");
-        sb.append("  \"traveler_fame\": 0  // 알려진 정도(0~2, 아래 규칙)\n");
-        sb.append("}\n");
-        sb.append("\n추천 시간대는 다음 중에서 선택: morning, afternoon, evening, night, all_day");
-        sb.append("\n체류시간 가이드: 등산·트레킹 150~240 / 해변·시장 60 / 박물관·미술관 90 / 사찰·신사 60 / 테마파크 300");
-        sb.append("\n입장료 가이드: 공원·해변·거리·외관만 보는 곳·대부분의 신사는 0(무료). 관리되는 유료 명소만 ")
-                .append(currency.label()).append(" 단위 실제 금액. 식당·카페·숙소는 0.");
-        sb.append("\n").append(DescriptionRewrite.ENRICH_RULE);
-        sb.append("\nplace_role: SIGHT(명소·자연·유적·박물관·공원) / ACTIVITY(체험·레저·테마파크) / "
-                + "SHOPPING(쇼핑몰·백화점·쇼핑거리) / MARKET(전통시장·야시장) / LODGING(숙소) / TRANSIT(공항·역·터미널) / "
-                + "NOT_VISITABLE(여행자가 일부러 찾아갈 곳이 아님: 편의점·은행·병원·사무실·주차장·일반 매장·아파트·학교 등)");
-        sb.append("\n").append(OverseasEnrichment.fameRule());
-        if (askNameKo) sb.append("\n").append(OverseasEnrichment.nameKoRule());
-        return sb.toString();
+        return overseas ? AttractionEnrichment.overseasPrompt(place) : AttractionEnrichment.prompt(place);
     }
 
     String submitBatch(List<Map<String, Object>> requests) {
@@ -671,108 +738,53 @@ public class BatchEnrichScheduler {
         for (Place place : places) {
             placeMap.put(place.getId(), place);
         }
+        // 결과에 자기 행이 있는 장소(따로 물은 묶음의 재반영)는 그 행으로만 반영한다.
+        Set<Long> answered = inputKeysIn(jsonl).keySet();
+        Map<Long, List<Place>> followers = new HashMap<>();
+        for (List<Place> group : requestGroups(places)) {
+            followers.put(group.get(0).getId(),
+                    group.stream().skip(1).filter(p -> !answered.contains(p.getId())).toList());
+        }
 
-        List<Long> succeededIds = new ArrayList<>();
-        Set<Long> erroredIds = new HashSet<>();
-        Set<Long> unreadableIds = new HashSet<>();
-        Set<Long> skippedIds = new HashSet<>();
-        int expiredOrCanceled = 0;
-        int seen = 0;
-        long[] usage = new long[4]; // input, output, cache read, cache write
-        int unclassifiable = 0;
-        Map<String, Integer> ingredientCounts = new TreeMap<>();
-
+        Tally tally = new Tally();
+        Set<Long> handled = new HashSet<>();
         for (String line : jsonl.split("\n")) {
             if (line.isBlank()) continue;
 
+            JsonNode resultBody;
+            List<Place> members = new ArrayList<>();
             try {
                 JsonNode resultNode = objectMapper.readTree(line);
                 String customId = resultNode.get("custom_id").asText();
                 Long placeId = placeIdOf(customId);
                 Place place = placeId == null ? null : placeMap.get(placeId);
-
                 if (place == null) {
                     log.warn("결과에 매칭되는 장소 없음 - customId={}", customId);
                     continue;
                 }
-
-                seen++;
-                JsonNode resultBody = resultNode.get("result");
-                String type = resultBody == null ? "" : resultBody.path("type").asText();
-                if (!"succeeded".equals(type)) {
-                    log.warn("장소 보강 실패 - placeId={}, result={}", placeId, resultBody);
-                    if ("expired".equals(type) || "canceled".equals(type)) expiredOrCanceled++;
-                    else if (isRequestError(resultBody)) erroredIds.add(placeId);
-                    continue;
-                }
-
-                addUsage(usage, resultBody.path("message").path("usage"));
-                if (mode() == Mode.INGREDIENTS) {
-                    List<String> ingredients = IngredientEnrichment.interpret(resultBody.get("message"));
-                    if (ingredients == null) {
-                        log.warn("주재료 응답 없음 또는 잘림 - placeId={}", placeId);
-                        unreadableIds.add(placeId);
-                        continue;
-                    }
-                    if (ingredients.isEmpty()) unclassifiable++;
-                    ingredients.forEach(kind -> ingredientCounts.merge(kind, 1, Integer::sum));
-                    placeRepository.writeIngredients(placeId, objectMapper.writeValueAsString(ingredients));
-                    succeededIds.add(placeId);
-                    continue;
-                }
-                if (mode() == Mode.DESCRIPTIONS) {
-                    String rewritten = DescriptionRewrite.interpret(resultBody.get("message"), place);
-                    if (rewritten == null) {
-                        log.warn("소개 응답 없음·잘림 또는 평판 문구·섞인 글자 남음 - placeId={}", placeId);
-                        unreadableIds.add(placeId);
-                        continue;
-                    }
-                    if (placeRepository.writeDescription(placeId, rewritten, place.getDescription()) == 0) {
-                        log.info("결과를 기다리는 사이 소개가 바뀌어 반영하지 않음 - placeId={}", placeId);
-                        skippedIds.add(placeId);
-                        continue;
-                    }
-                    place.rewriteDescription(rewritten);
-                    succeededIds.add(placeId);
-                    continue;
-                }
-                if (mode() == Mode.ATTRIBUTES) {
-                    PlaceAttributes attributes =
-                            AttributeEnrichment.interpret(resultBody.get("message"), place.getCategory());
-                    if (attributes == null) {
-                        log.warn("속성 분류 응답 없음 또는 잘림 - placeId={}", placeId);
-                        unreadableIds.add(placeId);
-                        continue;
-                    }
-                    if (attributes.hasNoClassification()) unclassifiable++;
-                    placeRepository.writeAttributeClassification(placeId, attributes.classificationJson(),
-                            (short) AttributeEnrichment.VERSION);
-                    succeededIds.add(placeId);
-                    continue;
-                }
-
-                String content = extractTextContent(resultBody.get("message"));
-                if (content == null) {
-                    log.warn("응답 텍스트 추출 실패 - placeId={}", placeId);
-                    unreadableIds.add(placeId);
-                    continue;
-                }
-
-                if (!applyEnrichment(place, content)) {
-                    unreadableIds.add(placeId);
-                    continue;
-                }
-                placeRepository.writeEnrichment(place);
-                succeededIds.add(placeId);
-
+                resultBody = resultNode.get("result");
+                members.add(place);
+                members.addAll(followers.getOrDefault(placeId, List.of()));
             } catch (Exception e) {
-                // 저장 실패·코드 오류는 장소 탓이 아니라 실패 횟수에 넣지 않는다
                 log.error("결과 행 처리 중 오류: {}", e.getMessage(), e);
+                continue;
+            }
+            String type = resultBody == null ? "" : resultBody.path("type").asText();
+            if ("succeeded".equals(type)) tally.addUsage(resultBody.path("message").path("usage"));
+            for (Place member : members) {
+                if (!handled.add(member.getId())) continue;
+                try {
+                    applyOne(member, type, resultBody, tally);
+                } catch (Exception e) {
+                    // 저장 실패·코드 오류는 장소 탓이 아니라 실패 횟수에 넣지 않는다
+                    log.error("결과 행 처리 중 오류 - placeId={}: {}", member.getId(), e.getMessage(), e);
+                }
             }
         }
 
         // 보강분을 비워 두고 마지막 임베딩 단계에서 채우면 보강이 도는 내내 벡터 검색에서 빠진다.
         // 재임베딩에 실패한 것만 비워 임베딩 단계가 다시 잡게 한다. 속성·주재료 보강은 임베딩 텍스트를 바꾸지 않는다.
+        List<Long> succeededIds = tally.succeededIds;
         if (!succeededIds.isEmpty() && (mode() == Mode.V1 || mode() == Mode.DESCRIPTIONS)) {
             List<Place> enriched = succeededIds.stream().map(placeMap::get).toList();
             List<Long> notReembedded = embeddingBatchJob.reembed(enriched);
@@ -783,8 +795,8 @@ public class BatchEnrichScheduler {
 
         Set<Long> succeeded = new HashSet<>(succeededIds);
         List<Long> failedIds = places.stream().map(Place::getId).filter(id -> !succeeded.contains(id)).toList();
-        Set<Long> placeFaults = new HashSet<>(unreadableIds);
-        if (!succeededIds.isEmpty()) placeFaults.addAll(erroredIds);
+        Set<Long> placeFaults = new HashSet<>(tally.unreadableIds);
+        if (!succeededIds.isEmpty()) placeFaults.addAll(tally.erroredIds);
         if (countAttempts && !placeFaults.isEmpty() && (mode() == Mode.V1 || mode() == Mode.DESCRIPTIONS)) {
             try {
                 if (mode() == Mode.V1) placeRepository.incrementEnrichAttempts(placeFaults);
@@ -793,13 +805,112 @@ public class BatchEnrichScheduler {
                 log.warn("보강 실패 횟수 기록 실패: {}", e.getMessage());
             }
         }
-        if (!ingredientCounts.isEmpty()) log.info("주재료 분포: {}", ingredientCounts);
-        boolean allExpired = succeededIds.isEmpty() && seen > 0 && expiredOrCanceled == seen;
-        // 그사이 다른 단계가 소개를 바꾼 행은 이번 실행에서만 빼고 실패로 세지 않는다.
-        int failed = failedIds.size() - skippedIds.size();
+        if (!tally.ingredientCounts.isEmpty()) log.info("주재료 분포: {}", tally.ingredientCounts);
+        boolean allExpired = succeededIds.isEmpty() && tally.seen > 0 && tally.expiredOrCanceled == tally.seen;
+        // 그사이 다른 단계가 바꾼 행은 이번 실행에서만 빼고 실패로 세지 않는다.
+        int failed = failedIds.size() - tally.skippedIds.size();
         log.info("배치 결과 처리 완료 - 성공: {}건(분류 없음 {}건), 실패: {}건, 건너뜀 {}건, 토큰 input={} output={} 캐시읽음={} 캐시쓰기={}",
-                succeededIds.size(), unclassifiable, failed, skippedIds.size(), usage[0], usage[1], usage[2], usage[3]);
-        return new ChunkResult(succeededIds.size(), failed, failedIds, !allExpired);
+                succeededIds.size(), tally.unclassifiable, failed, tally.skippedIds.size(), tally.inputTokens,
+                tally.outputTokens, tally.cacheReadTokens, tally.cacheWriteTokens);
+        // 전부 건너뛴 묶음은 다른 단계가 먼저 쓴 것이라 API 키·모델 오류처럼 중단 판정에 세지 않는다.
+        return new ChunkResult(succeededIds.size(), failed, failedIds, !allExpired && failed > 0);
+    }
+
+    private static final class Tally {
+        final List<Long> succeededIds = new ArrayList<>();
+        final Set<Long> erroredIds = new HashSet<>();
+        final Set<Long> unreadableIds = new HashSet<>();
+        final Set<Long> skippedIds = new HashSet<>();
+        long inputTokens;
+        long outputTokens;
+        long cacheReadTokens;
+        long cacheWriteTokens;
+        final Map<String, Integer> ingredientCounts = new TreeMap<>();
+        int expiredOrCanceled;
+        int seen;
+        int unclassifiable;
+
+        void addUsage(JsonNode node) {
+            inputTokens += node.path("input_tokens").asLong(0);
+            outputTokens += node.path("output_tokens").asLong(0);
+            cacheReadTokens += node.path("cache_read_input_tokens").asLong(0);
+            cacheWriteTokens += node.path("cache_creation_input_tokens").asLong(0);
+        }
+    }
+
+    private void applyOne(Place place, String type, JsonNode resultBody, Tally t) throws Exception {
+        long placeId = place.getId();
+        t.seen++;
+        if (!"succeeded".equals(type)) {
+            log.warn("장소 보강 실패 - placeId={}, result={}", placeId, resultBody);
+            if ("expired".equals(type) || "canceled".equals(type)) t.expiredOrCanceled++;
+            else if (isRequestError(resultBody)) t.erroredIds.add(placeId);
+            return;
+        }
+        JsonNode message = resultBody.get("message");
+        switch (mode()) {
+            case INGREDIENTS -> {
+                List<String> ingredients = IngredientEnrichment.interpret(message);
+                if (ingredients == null) {
+                    log.warn("주재료 응답 없음 또는 잘림 - placeId={}", placeId);
+                    t.unreadableIds.add(placeId);
+                    return;
+                }
+                if (ingredients.isEmpty()) t.unclassifiable++;
+                ingredients.forEach(kind -> t.ingredientCounts.merge(kind, 1, Integer::sum));
+                placeRepository.writeIngredients(placeId, objectMapper.writeValueAsString(ingredients));
+                t.succeededIds.add(placeId);
+            }
+            case DESCRIPTIONS -> {
+                String rewritten = DescriptionRewrite.interpret(message, place);
+                if (rewritten == null) {
+                    log.warn("소개 응답 없음·잘림 또는 평판 문구·섞인 글자 남음 - placeId={}", placeId);
+                    t.unreadableIds.add(placeId);
+                    return;
+                }
+                if (placeRepository.writeDescription(placeId, rewritten, place.getDescription()) == 0) {
+                    log.info("결과를 기다리는 사이 소개가 바뀌어 반영하지 않음 - placeId={}", placeId);
+                    t.skippedIds.add(placeId);
+                    return;
+                }
+                place.rewriteDescription(rewritten);
+                t.succeededIds.add(placeId);
+            }
+            case ATTRIBUTES -> {
+                PlaceAttributes attributes = AttributeEnrichment.interpret(message, place.getCategory());
+                if (attributes == null) {
+                    log.warn("속성 분류 응답 없음 또는 잘림 - placeId={}", placeId);
+                    t.unreadableIds.add(placeId);
+                    return;
+                }
+                if (attributes.hasNoClassification()) t.unclassifiable++;
+                if (placeRepository.writeAttributeClassification(placeId, attributes.classificationJson(),
+                        (short) AttributeEnrichment.VERSION) == 0) {
+                    log.info("결과를 기다리는 사이 속성이 분류돼 반영하지 않음 - placeId={}", placeId);
+                    t.skippedIds.add(placeId);
+                    return;
+                }
+                t.succeededIds.add(placeId);
+            }
+            case V1 -> {
+                String content = EnrichOutputs.extractText(message);
+                if (content == null) {
+                    log.warn("응답 텍스트 추출 실패 - placeId={}", placeId);
+                    t.unreadableIds.add(placeId);
+                    return;
+                }
+                if (!applyEnrichment(place, content)) {
+                    t.unreadableIds.add(placeId);
+                    return;
+                }
+                if (placeRepository.writeEnrichment(place) == 0) {
+                    log.info("결과를 기다리는 사이 보강됐거나 이름·카테고리가 바뀌어 반영하지 않음 - placeId={}", placeId);
+                    t.skippedIds.add(placeId);
+                    return;
+                }
+                t.succeededIds.add(placeId);
+            }
+        }
     }
 
     /** errored 결과의 오류 종류. 결과 형식이 error.error.type이라 한 단계 안쪽을 먼저 본다. */
@@ -810,179 +921,62 @@ public class BatchEnrichScheduler {
         return "invalid_request_error".equals(type);
     }
 
-    private static void addUsage(long[] usage, JsonNode node) {
-        usage[0] += node.path("input_tokens").asLong(0);
-        usage[1] += node.path("output_tokens").asLong(0);
-        usage[2] += node.path("cache_read_input_tokens").asLong(0);
-        usage[3] += node.path("cache_creation_input_tokens").asLong(0);
-    }
-
-    String extractTextContent(JsonNode message) {
-        if (message == null) return null;
-
-        JsonNode contentArray = message.get("content");
-        if (contentArray == null || !contentArray.isArray()) return null;
-
-        StringBuilder text = new StringBuilder();
-        for (JsonNode block : contentArray) {
-            if ("text".equals(block.path("type").asText())) {
-                text.append(block.get("text").asText());
-            }
-        }
-
-        return text.isEmpty() ? null : text.toString();
-    }
-
-    /** 관광지 프롬프트가 허용하는 역할 값만 받는다. 모르는 값이면 null(일정 로직이 카테고리로 추정). */
-    static String parseAttractionRole(JsonNode node) {
-        if (node == null || node.isNull()) return null;
-        String v = node.asText("").trim().toUpperCase(java.util.Locale.ROOT);
-        return ATTRACTION_ROLES.contains(v) ? v : null;
-    }
-
-    private static final java.util.Set<String> ATTRACTION_ROLES = java.util.Set.of(
-            "SIGHT", "ACTIVITY", "SHOPPING", "MARKET", "LODGING", "TRANSIT", "NOT_VISITABLE");
-
     /**
-     * 응답이 JSON이 아니거나(잘림 포함) 국내 장소 설명에 한자·가나가 섞이면 false라 실패 횟수에 넣고 다음 실행에서 다시 받는다.
+     * 응답이 JSON이 아니거나(잘림 포함) 규칙에 맞지 않으면 false라 실패 횟수에 넣고 다음 실행에서 다시 받는다.
      * 그 밖의 예외는 던진다. 코드 오류를 장소 실패 횟수로 세지 않는다.
      */
     boolean applyEnrichment(Place place, String content) {
         try {
-            String json = extractJson(content);
-            JsonNode root = objectMapper.readTree(json);
+            JsonNode root = objectMapper.readTree(EnrichOutputs.extractJson(content));
+            if (!DiningEnrichment.isDiningVenue(place.getCategory())) return AttractionEnrichment.apply(root, place);
             boolean overseas = OverseasEnrichment.isOverseas(place.getCountry());
-
-            if (DiningEnrichment.isDiningVenue(place.getCategory())) {
-                if (!root.isObject()) {
-                    log.warn("식당 보강 응답이 JSON 객체가 아님 - placeId={}", place.getId());
-                    return false;
-                }
-                Short fame = overseas ? OverseasEnrichment.fame(root.get("traveler_fame")) : null;
-                // Wikidata에 없는 유명 식당은 모델이 알려진 곳이라고 할 때만 설명을 받는다.
-                boolean describe = DiningEnrichment.isFamous(place.getWikidataSitelinks()) || (fame != null && fame >= 1);
-                DiningEnrichment.Result dining = DiningEnrichment.interpret(root,
-                        DiningEnrichment.venueOf(place.getCategory()), describe,
-                        overseas ? OverseasEnrichment.ownRegionNames(place) : Set.of());
-                if (rejectsDescription(place, overseas, dining.description())) return false;
-                place.enrichWith(dining.tags(), dining.description(), dining.timeSlots(),
-                        dining.durationMinutes(), null);
-                // 카테고리 리프까지 보고 음식 종류를 다시 정한다(태그만으로는 "라멘집"의 면요리가 빠질 수 있다).
-                String cuisine = !"MEAL".equals(dining.placeRole()) ? null
-                        : overseas ? OverseasEnrichment.cuisineOf(dining.tags(), place.getCategory())
-                        : DiningEnrichment.cuisineOf(dining.tags(), place.getCategory());
-                place.assignRole(dining.placeRole(), cuisine);
-                place.rateFame(fame);
-                if (overseas) place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko")));
-                return true;
+            if (!root.isObject()) {
+                log.warn("식당 보강 응답이 JSON 객체가 아님 - placeId={}", place.getId());
+                return false;
             }
-
-            List<String> tags = new ArrayList<>();
-            JsonNode tagsNode = root.get("tags");
-            if (tagsNode != null && tagsNode.isArray()) {
-                for (JsonNode tag : tagsNode) {
-                    tags.add(tag.asText());
-                }
+            Short fame = overseas ? OverseasEnrichment.fame(root.get("traveler_fame")) : null;
+            // Wikidata에 없는 유명 식당은 모델이 알려진 곳이라고 할 때만 설명을 받는다.
+            boolean describe = DiningEnrichment.isFamous(place.getWikidataSitelinks()) || (fame != null && fame >= 1);
+            DiningEnrichment.Result dining = DiningEnrichment.interpret(root,
+                    DiningEnrichment.venueOf(place.getCategory()), describe,
+                    overseas ? OverseasEnrichment.ownRegionNames(place) : Set.of());
+            if (EnrichOutputs.rejectsDescription(place.getId(), place.getName(), overseas, dining.description())) {
+                return false;
             }
-
-            String description = null;
-            JsonNode descNode = root.get("description");
-            if (descNode != null && !descNode.isNull()) {
-                description = descNode.asText();
-            }
-            if (rejectsDescription(place, overseas, description)) return false;
-
-            List<String> timeSlots = new ArrayList<>();
-            JsonNode timeSlotsNode = root.get("recommended_time_slots");
-            if (timeSlotsNode != null && timeSlotsNode.isArray()) {
-                for (JsonNode slot : timeSlotsNode) {
-                    timeSlots.add(slot.asText());
-                }
-            }
-
-            Integer durationMinutes = null;
-            JsonNode durationNode = root.get("recommended_duration_minutes");
-            if (durationNode != null && durationNode.canConvertToInt()) {
-                int parsed = durationNode.asInt();
-                if (parsed > 0) durationMinutes = parsed;
-            }
-
-            Integer admissionFee = null;
-            JsonNode feeNode = root.get("admission_fee");
-            if (!overseas && feeNode != null && feeNode.canConvertToInt()) {
-                int parsed = feeNode.asInt();
-                if (parsed >= 0) admissionFee = parsed; // 0(무료)도 유효값
-            }
-
-            // 공식 상세를 반영한 행은 모델 추정 입장료로 덮지 않는다
-            place.enrichWith(tags, description, timeSlots, durationMinutes,
-                    place.getTourapiDetailAt() != null ? null : admissionFee);
-            place.assignRole(parseAttractionRole(root.get("place_role")), null);
-            if (overseas) {
-                OverseasEnrichment.Currency currency = OverseasEnrichment.currencyOf(place.getCountry());
-                place.recordAdmissionLocal(OverseasEnrichment.admissionLocal(root.get("admission_fee_local"), currency),
-                        currency.code());
-                place.rateFame(OverseasEnrichment.fame(root.get("traveler_fame")));
-                place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko")));
-            }
+            place.enrichWith(dining.tags(), dining.description(), dining.timeSlots(), dining.durationMinutes(), null);
+            // 카테고리 리프까지 보고 음식 종류를 다시 정한다(태그만으로는 "라멘집"의 면요리가 빠질 수 있다).
+            String cuisine = !"MEAL".equals(dining.placeRole()) ? null
+                    : overseas ? OverseasEnrichment.cuisineOf(dining.tags(), place.getCategory())
+                    : DiningEnrichment.cuisineOf(dining.tags(), place.getCategory());
+            place.assignRole(dining.placeRole(), cuisine);
+            place.rateFame(fame);
+            if (overseas) place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko")));
             return true;
-
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             log.warn("보강 데이터 파싱 실패 - placeId={}, error={}", place.getId(), e.getMessage());
             return false;
         }
     }
 
-    // 해외 장소 설명은 현지어 이름에 조사가 붙어("金閣寺는") 판정하지 않는다.
-    private static boolean rejectsDescription(Place place, boolean overseas, String description) {
-        if (overseas || !mixesForeignScript(description, place.getName())) return false;
-        log.warn("국내 장소 설명에 한자·가나 섞임 - placeId={}", place.getId());
-        return true;
-    }
-
-    private static final String FOREIGN_SCRIPT = "[\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}]";
-    private static final java.util.regex.Pattern FOREIGN_SCRIPT_RUN = java.util.regex.Pattern.compile(FOREIGN_SCRIPT + "+");
-    /** 한글 낱말에 붙은 한자·가나("适합니다"). 괄호로 병기한 한자는 한글과 붙지 않아 걸리지 않는다. */
-    private static final java.util.regex.Pattern FOREIGN_SCRIPT_IN_WORD = java.util.regex.Pattern.compile(
-            "[가-힣]" + FOREIGN_SCRIPT + "|" + FOREIGN_SCRIPT + "[가-힣]");
-
-    /** 장소 이름에 든 한자·가나("세이천洗耳泉")는 빼고 본다. 이름을 따라 쓴 설명까지 막으면 그 장소는 매번 실패한다. */
-    static boolean mixesForeignScript(String text, String placeName) {
-        if (text == null) return false;
-        String checked = text;
-        if (placeName != null) {
-            java.util.regex.Matcher run = FOREIGN_SCRIPT_RUN.matcher(placeName);
-            while (run.find()) checked = checked.replace(run.group(), "");
-        }
-        return FOREIGN_SCRIPT_IN_WORD.matcher(checked).find();
-    }
-
-    /** 코드 블록(```json ... ```)과 순수 JSON을 모두 받는다. */
-    String extractJson(String content) {
-        String trimmed = content.trim();
-
-        if (trimmed.startsWith("```")) {
-            int firstNewline = trimmed.indexOf('\n');
-            int lastBackticks = trimmed.lastIndexOf("```");
-            if (firstNewline > 0 && lastBackticks > firstNewline) {
-                trimmed = trimmed.substring(firstNewline + 1, lastBackticks).trim();
-            }
-        }
-
-        int jsonStart = trimmed.indexOf('{');
-        int jsonEnd = trimmed.lastIndexOf('}');
-        if (jsonStart >= 0 && jsonEnd > jsonStart) {
-            return trimmed.substring(jsonStart, jsonEnd + 1);
-        }
-
-        return trimmed;
-    }
-
+    /** 묶음마다 요청이 chunkSize건을 넘지 않게 나눈다. 같은 요청으로 묶인 장소는 결과 한 건으로 반영돼 한 묶음에 넣는다. */
     List<List<Place>> splitIntoChunks(List<Place> places) {
-        List<List<Place>> chunks = new ArrayList<>();
-        for (int i = 0; i < places.size(); i += chunkSize) {
-            chunks.add(places.subList(i, Math.min(i + chunkSize, places.size())));
+        List<List<Place>> groups = requestGroups(places);
+        if (groups.size() < places.size()) {
+            log.info("요청 본문이 같은 장소 {}건을 요청 {}건으로 묶음", places.size(), groups.size());
         }
+        List<List<Place>> chunks = new ArrayList<>();
+        List<Place> current = new ArrayList<>();
+        int requests = 0;
+        for (List<Place> group : groups) {
+            if (requests == chunkSize) {
+                chunks.add(current);
+                current = new ArrayList<>();
+                requests = 0;
+            }
+            current.addAll(group);
+            requests++;
+        }
+        if (!current.isEmpty()) chunks.add(current);
         return chunks;
     }
 }

@@ -100,12 +100,19 @@ Step Functions (월 1회)
         지문별로 바뀐 입력에 걸린 것만 다시 만들 대상으로 돌린다(places.enrich_input_fp·embedding_text_fp, place_facts.input_fp)
         → 보강 입력(이름·카테고리·지역·국가)이 바뀐 보강 행: 보강 결과(태그·설명·역할·음식 종류·속성의 보강 키·추천 시간·
           입장료·알려진 정도)·임베딩·장소 사실을 비우고, 다른 곳이 됐을 수 있어 같은 장소 묶음(merged_into)을 푼다.
-          TourAPI 공식 원문(attributes.official)은 남긴다. 옛 설명과 새 이름이 섞인 임베딩을 만들지 않는다
+          TourAPI 공식 원문(attributes.official)은 남긴다(공식 입장료는 뒤의 [1/4-공식 요금] 단계가 원문에서 다시 채운다).
+          옛 설명과 새 이름이 섞인 임베딩을 만들지 않는다
         → 임베딩 텍스트만 바뀐 행: 임베딩만 비운다 / 장소 사실 입력(이름·카테고리·좌표 소수 셋째 자리)이 바뀐 행: 사실을 지운다
         → 한 페이지(2,000행)의 비우기·묶음 풀기·사실 지우기는 한 트랜잭션이다
         → 지문이 빈 행은 지금 값으로 채운다. 보강 결과 쓰기(writeEnrichment)와 임베딩 저장은 그 입력의 지문을 같이 남긴다
         → 지운 장소 사실은 scripts/eval/place-facts.py를 로컬 복사본에서 다시 돌려 운영에 복사할 때까지 비어 있다
           (그동안 그 장소는 휴무 요일·방문 가치 판정 없이 생성된다. 지문은 다음 배치가 채운다)
+  [1/4-공식 요금] TourApiDetailJob.reparseStoredFees()  (항상, 무효화 뒤, 외부 호출 없음. "이 단계만" 실행에서도 돈다)
+        저장된 관광공사 요금 원문(attributes.official의 usefee·usefeeleports)을 지금 판독 규칙(OfficialHoursParser.admissionFee)으로
+        다시 읽어 금액이 다르면 admission_fee를 바꾼다. 공식 입장료를 쓰는 곳은 상세 조회와 이 단계뿐이고, 무효화가 비운 입장료도
+        여기서 다시 채운다. 판독되지 않는 원문은 기존 값을 둔다. 상세를 조회한 장소는 다시 조회하지
+        않아, 판독 규칙이 바뀌어도 이 단계 없이는 모델 추정 입장료가 남는다(운영 월간 실행은 상세 조회를 켜지 않는다)
+        · 판독: 성인 요금 표기 성인·어른·대인·일반·개인 + 나이 괄호, 금액 앞 이름에 주차·대여·체험·프로그램·회비·강좌 등이 있으면 비움
   [2/4] WikidataSitelinksJob.run()  (batch.wikidata.enabled=true일 때만 — 운영 ecs.tf에서 켬)
         지역 bbox(장소 좌표 2~98 백분위 + 여유 0.05도)당 SPARQL 1회(언어판 1개 이상 항목만)
         + 항목 300개씩 한국어 별칭·분류(P31) 조회 + 실행당 식음료 분류 목록 1회. 일시 오류는 3회 재시도.
@@ -148,7 +155,7 @@ Step Functions (월 1회)
         ※ 환경 규약: 운영(AWS)은 상시 ON(terraform/ecs.tf batch task에
           BATCH_ENRICH_ENABLED=true 고정) → 임베딩 전 항상 보강. 로컬은 기본값 false →
           enrich 없이 적재(비용·시간 절약). enriched_at IS NULL 게이트라 신규 유입분만 증분 보강.
-        enriched_at IS NULL AND active=true 인 장소를 1000건씩 조회 — 인기도 → 비식당 → id 순,
+        enriched_at IS NULL AND active=true 인 장소를 1000건씩 조회 — 인기도 → 비식당 → 이름 → id 순(이름 순은 체인 지점을 한 페이지에 모은다),
         Wikidata 매칭을 아직 거치지 않은 행(wikidata_matched_at IS NULL)은 다음 실행으로 미룸
         (인기도 없이 보강하면 유명 식당이 설명 없이 완료된다. 매칭 실패 지역·국가 범위 밖 신규 행이 여기 걸린다.
         미룬 건수는 "Wikidata 매칭 전이라 보강을 미룬 장소 N건" 로그),
@@ -165,7 +172,23 @@ Step Functions (월 1회)
         (BATCH_ENRICH_REGIONS="Jeju,..."로 지역 스코프 가능 — 비우면 전체. 운영은 비워서 전 지역)
         (BATCH_ENRICH_CATEGORY_PREFIX="Dining and Drinking"으로 카테고리 스코프 가능 — 대상 순서가 명소 먼저라 식당 견본을
          따로 뽑을 때 쓴다. BATCH_ENRICH_MAX_PER_REGION은 지역 목록과 함께 써야 지역별로 센다)
+        (BATCH_ENRICH_COUNTRIES="JP,TW"로 국가 스코프 — 그 나라 활성 장소가 있는 지역 목록으로 바꿔 BATCH_ENRICH_REGIONS와
+         겹친다. 겹치는 지역이 없으면(국가 코드 오타 등) 단계 실패. 지역 목록이 되므로 MAX_PER_REGION도 지역별로 세고,
+         지역이 필요한 v2·ingredients 모드도 국가만 주면 그 나라 전체를 돈다)
+        → 실행 전 견적: 대상 수(국가·식당 여부별)와 예상 토큰·비용을 "v1 보강 견적" 로그로 남긴다(요청 묶기 몫은 빼지 않은 상한).
+          BATCH_ENRICH_DRY_RUN=true면 견적·대상 수만 남기고 요청은 보내지 않는다(v1 뒤 소개 다시 쓰기 후보 수도 남긴다).
+          재반영(RESUME_BATCH_ID)도 하지 않는다. 견적 조회가 실패하면 경고만 남기고 보강은 돈다
+        → 요청 상한 BATCH_ENRICH_MAX_REQUESTS(기본 200,000, 0=무제한). 새로 들어온 장소는 모두 보강하도록, 나라 하나를 통째로
+          적재한 달(일본 약 19만)도 넘지 않게 잡았다. 보강된 장소가 버그로 한꺼번에 다시 대상이 될 때만 걸린다. 그보다 큰 나라를
+          적재하는 실행이나 견본 실행은 값을 따로 준다. 패스(v1, 이어지는 소개 다시 쓰기)마다 센다. 닿으면 새 묶음을 내지 않고, 대상이
+          남았으면 남은 대상 견적을 경고로 남긴 뒤 보강 단계를 실패로 끝낸다(종료 코드 1, batch_runs FAILED. 뒤 단계는 돈다).
+          비용은 실행 전 견적 로그와 dry-run으로 먼저 본다
+        → 요청 본문이 글자까지 같은 장소(주소를 묻지 않는 국내 체인 지점 등)는 묶음 안에서 요청 하나로 묻고 결과를 장소마다 쓴다.
+          묶음 크기(chunk-size)는 요청 수로 센다. 로그 "요청 본문이 같은 장소 N건을 요청 M건으로 묶음"
+          (국내 대상 모의 계산: 페이지 안 묶기로 요청 13.8% 감소. 국내 식당 프롬프트에는 지역이 없어 도시가 달라도 같은 요청이다)
         → Anthropic Batch API(Haiku 5.5, thinking off, 50% 할인) 제출 → 폴링 → 결과 JSON 파싱
+          규칙(응답 형식·가이드)은 장소와 무관해 system에 두고 캐시한다(cache_control). 장소 정보만 user로 간다.
+          같은 갈래(국내·해외, 업종, 물을 항목)끼리 system이 글자까지 같아야 캐시가 맞으므로 규칙에 장소 값을 넣지 않는다
         → tags/description/recommended_time_slots 갱신
         → 식당·카페·술집(카테고리 "Dining and Drinking …")은 DiningEnrichment 규칙:
           업종(식당/카페/베이커리/디저트/술집/간식)을 카테고리로 정해 태그 첫 자리에 넣고, 업종과 어긋나는
@@ -189,11 +212,15 @@ Step Functions (월 1회)
             인기도 매칭도 비식음료 항목과 맞춘다
           한국 장소 프롬프트는 그대로다
         → 결과는 보강 컬럼만 쓴다(writeEnrichment). 엔티티째 저장하면 제출~결과 사이(최대 하루)에 바뀐 컬럼을
-          그때 읽은 값으로 되돌린다
+          그때 읽은 값으로 되돌린다. 이미 보강된 행과 요청 뒤 이름·카테고리·지역·국가가 바뀐 행에는 쓰지 않는다(쓰기 0건은
+          실패가 아니라 건너뜀). custom_id는 place_{id}_{보강 입력 지문}이라 재반영도 입력이 바뀐 장소에는 쓰지 않는다
+        → 관광지 응답은 허용 시간대만 받고, 태그는 "#"·빈 값·중복을 떼고 10개(20자)까지 받는다. 태그·설명·역할이 모두 비면
+          보강 완료로 찍지 않고 실패(enrich_attempts)로 센다
         → 성공분은 바로 재임베딩, 실패분만 embedding=NULL → 다음 단계에서 재임베딩
           (임베딩 텍스트가 tags/description을 포함하므로 재임베딩 없이는 검색에 미반영)
         → 결과 반영만 다시 할 때: BATCH_ENRICH_RESUME_BATCH_ID="msgbatch_a,msgbatch_b" — 결과의 custom_id로 장소를
-          읽어 반영하고 새 보강은 하지 않는다(재제출·재과금 없음, Anthropic 결과 보관 29일). 그 사이 보강된 행은
+          읽어 반영하고 새 보강은 하지 않는다(재제출·재과금 없음, Anthropic 결과 보관 29일). 같은 요청으로 묶여 결과 행이 없는
+          장소(결과 파일에는 질문을 보낸 대표만 있다)는 반영되지 않고 다음 실행에서 다시 묻는다. 그 사이 보강된 행은
           덮지 않고(v2는 속성 버전, ingredients는 주재료 키 기준) 실패 횟수도 올리지 않는다. ingredients 결과는
           custom_id(place_{id}_{입력 지문})로 요청 입력을 확인해 그사이 이름·업종·태그·메뉴가 바뀐 장소에는 쓰지 않는다.
           결과 파일의 모드(도구 이름)가 BATCH_ENRICH_MODE와 다르면 반영하지 않고 실패로 끝낸다
@@ -208,6 +235,7 @@ Step Functions (월 1회)
           역할이 아직 없는 행은 보강 업종(MEAL·BAR·SNACK)으로, 업종도 없으면 식음료 카테고리 전체로 고른다.
           모드 값을 알 수 없으면(오타 등) v1로 돌지 않고 보강 단계가 실패한다
         → ingredients 실행 절차
+          · 속성 보강(v2) 결과도 요청 입력 지문을 custom_id에 붙이고, 이미 이 버전으로 분류된 행에는 쓰지 않는다
           · 이 단계만: BATCH_ENRICH_ENABLED=true BATCH_ENRICH_MODE=ingredients BATCH_ENRICH_REGIONS=<지역들>
             BATCH_FOURSQUARE_ENABLED=false BATCH_GATEWAYS_ENABLED=false BATCH_ROLE_BACKFILL_ENABLED=false
             BATCH_COMMONS_IMAGES_ENABLED=false BATCH_NAME_KO_OVERRIDES_ENABLED=false
@@ -262,7 +290,11 @@ Step Functions (월 1회)
         표만 고치면 재보강 없이 다음 배치에 반영. 바뀐 행은 embedding=NULL
   [4/4] EmbeddingBatchJob.execute()
         embedding IS NULL AND active=true 인 장소를 100건씩 페이징 조회
-        → EmbeddingTextBuilder.buildText() (name+name_ko+category+tags+description+region 결합)
+        → EmbeddingTextBuilder.buildText(): 한국어 문장 "{한국어 이름}({원문 이름})은 {카테고리 마지막 단계}입니다. {태그, …}와 관련된
+          곳입니다. {설명}". 지역(검색 SQL이 먼저 거른다)과 카테고리 대분류(많은 장소가 같다)는 넣지 않는다.
+          태그 중 그 장소의 지역·나라 이름과 같은 것(서울, 제주도, 도쿄, 일본)도 임베딩 글에서만 뺀다(DB 태그는 그대로).
+          형식을 바꾸면 텍스트 지문이 모두 바뀌어 다음 배치의 무효화 단계가 전 장소 임베딩을 다시 만든다(20만 건 이상이면
+          근사 검색 인덱스를 내렸다가 다시 만든다). 카탈로그(Parquet)의 임베딩도 같은 형식으로 다시 만들어야 한다
         → EmbeddingService.embedBatch() (OpenAI text-embedding-3-small, dimensions=768)
         → PgVectorPlaceSearchService.storeBatch() (JDBC batchUpdate, ::halfvec 캐스팅) + embedding_text_fp(텍스트 지문)
         ※ 순서 주의: enrich가 임베딩보다 먼저다 — 같은 실행 안에서 보강 내용이 임베딩에 반영되도록.
@@ -313,6 +345,23 @@ Step Functions (월 1회)
           요청당 입력 약 390토큰 + 시스템 프롬프트 캐시 읽기 약 1,400토큰, 출력 약 40토큰
         ※ 프롬프트는 라벨 표본 304쌍으로 골랐다(docs/eval-baseline.md "같은 장소 판정")
 ```
+
+### v1 요청당 토큰 (2026-11-24, 표본 40곳 직접 호출 실측)
+
+| 갈래 | 규칙을 user에 둔 이전 입력 | 지금(장소 입력 + 캐시 읽기) | 출력 |
+|---|---|---|---|
+| 국내 식당 | 945 | 108 + 837 | 42 |
+| 국내 관광지 | 949 | 108 + 842 | 232 |
+| 해외 식당 | 2,266 | 157 + 2,110 | 69 |
+| 해외 관광지 | 1,996 | 151 + 1,846 | 282 |
+
+모델 추정 입장료는 공식 원문으로 덮이기 전 값이 남은 국내 12곳(모두 공식 유료)에서 8곳을 무료(0)로, 3곳만 30% 안으로
+맞혔다. 공식 원문이 있으면 원문 값을 쓰고(위 [1/4-공식 요금]), 없는 곳의 값은 일정 화면의 "예상" 금액으로만 쓰인다.
+
+캐시 읽기가 입력 단가의 0.1배라 요청당 비용은 국내 식당 약 65%, 국내 관광지 약 37%, 해외 식당 약 73% 줄어든다
+(캐시 쓰기는 갈래·묶음마다 한 번이라 뺐다). 같은 표본에서 규칙을 앞에 두자 체류시간이 짧게 나오는 쪽으로 이동했다
+(이전끼리 ±25% 일치 0.90 → 이전·지금 0.45, 상점 60→40분·작은 산 150~180→120분). 응답 해석 실패 0건, 평판어·지역명
+태그 0건은 같고, 역할은 규칙(일반 매장 → NOT_VISITABLE)을 더 따랐다. 이미 보강된 행은 다시 묻지 않아 이전 값이 남는다.
 
 ### 규모와 비용 (2026-10 실측, 한국 12개 도시)
 

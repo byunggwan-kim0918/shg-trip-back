@@ -298,7 +298,7 @@ class IngredientEnrichmentTest {
         assertThat(BatchEnrichScheduler.placeIdOf("other_12")).isNull();
         assertThat(BatchEnrichScheduler.placeIdOf("place_x")).isNull();
         assertThat(BatchEnrichScheduler.customId(place(12L, "큰집 설렁탕", List.of(), null),
-                BatchEnrichScheduler.Mode.V1)).isEqualTo("place_12");
+                BatchEnrichScheduler.Mode.V1)).matches("place_12_[0-9a-f]{16}");
     }
 
     private static Place place(Long id, String name, List<String> tags, PlaceAttributes attributes) {

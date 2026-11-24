@@ -248,7 +248,7 @@ class DiningEnrichmentTest {
     @Test
     @DisplayName("업종이 정해져 있으면 venue를 묻지 않고, 유명하지 않으면 설명을 묻지 않는다")
     void buildPrompt_knownVenue_notFamous() {
-        String prompt = DiningEnrichment.buildPrompt("한본새", KOREAN, null, Venue.MEAL, false);
+        String prompt = EnrichPrompts.text(DiningEnrichment.buildPrompt("한본새", KOREAN, null, Venue.MEAL, false));
 
         assertThat(prompt).contains("한본새", KOREAN, "업종: 식당");
         assertThat(prompt).doesNotContain("\"venue\"", "description", "admission_fee", "recommended_duration_minutes");
@@ -257,7 +257,7 @@ class DiningEnrichmentTest {
     @Test
     @DisplayName("총칭이면 venue를 묻고, 유명하면 설명을 묻고, 기존 설명을 넘긴다")
     void buildPrompt_generic_famous_withExistingDescription() {
-        String prompt = DiningEnrichment.buildPrompt("명동교자", GENERIC, "칼국수 전문점", null, true);
+        String prompt = EnrichPrompts.text(DiningEnrichment.buildPrompt("명동교자", GENERIC, "칼국수 전문점", null, true));
 
         assertThat(prompt).contains("업종: 미정", "\"venue\"", "\"description\"", "기존 설명: 칼국수 전문점");
     }
@@ -275,10 +275,10 @@ class DiningEnrichmentTest {
     @org.junit.jupiter.api.Test
     @org.junit.jupiter.api.DisplayName("한국 식당 프롬프트는 해외 문맥 없이 그대로다")
     void koreanDiningPromptUnchanged() {
-        String prompt = DiningEnrichment.buildPrompt("한본새", "Dining and Drinking > Restaurant", null, null, false);
+        String prompt = EnrichPrompts.text(DiningEnrichment.buildPrompt("한본새", "Dining and Drinking > Restaurant", null, null, false));
 
         org.assertj.core.api.Assertions.assertThat(prompt)
-                .isEqualTo(DiningEnrichment.buildPrompt("한본새", "Dining and Drinking > Restaurant", null, null, false, null, false))
+                .isEqualTo(EnrichPrompts.text(DiningEnrichment.buildPrompt("한본새", "Dining and Drinking > Restaurant", null, null, false, null, false)))
                 .contains("서울·부산 같은 지역명")
                 .doesNotContain("name_ko", "- 국가:", "해외 예");
     }

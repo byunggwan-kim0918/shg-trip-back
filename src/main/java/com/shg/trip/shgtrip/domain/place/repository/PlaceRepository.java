@@ -392,28 +392,52 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * Wikidata 매칭을 아직 거치지 않은 행도 뺀다. 인기도 없이 보강하면 유명 식당이 설명 없이 보강 완료로 남는다.
      * 응답이 3번 실패한 행(enrich_attempts)도 뺀다. 매 실행 같은 행을 다시 사는 비용만 든다.
      *
-     * <p><b>순서</b>: 유명한 곳(Wikidata sitelinks) → 식당·카페가 아닌 곳 → id. 보강은 하루 가까이 걸릴 수
-     * 있어서, 중간에 끊겨도 일정에 자주 나오는 곳은 끝나 있게 한다.
+     * <p><b>순서</b>: 유명한 곳(Wikidata sitelinks) → 식당·카페가 아닌 곳 → 이름 → id. 보강은 하루 가까이 걸릴 수
+     * 있어서, 중간에 끊겨도 일정에 자주 나오는 곳은 끝나 있게 한다. 이름 순은 체인 지점처럼 요청이 같은 장소를 한 페이지에
+     * 모아 요청 하나로 묻게 한다.
      *
      * <p><b>excludedIds</b>: 이번 실행에서 이미 실패한 장소. 메모리에서 거르면 실패가 한 페이지를 넘을 때
      * 남은 장소를 두고 끝나므로 쿼리에서 뺀다. 빈 컬렉션은 호출부가 -1 하나로 바꿔 넘긴다.
      *
      * @param categoryPrefix 카테고리 접두어(예: "Dining and Drinking"). 빈 문자열이면 전체다
      */
-    @Query("""
-            SELECT p FROM Place p
-            WHERE p.enrichedAt IS NULL AND p.active = true
+    /** v1 보강 대상 조건. 대상 조회와 견적이 같은 조건을 쓰도록 여기 한 곳에 둔다. */
+    String ENRICH_TARGETS = """
+            p.enrichedAt IS NULL AND p.active = true
               AND p.wikidataMatchedAt IS NOT NULL
               AND p.enrichAttempts < 3
               AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
               AND (:categoryPrefix = '' OR p.category LIKE CONCAT(:categoryPrefix, '%'))
-              AND p.id NOT IN :excludedIds
+            """;
+
+    String ENRICH_TARGET_ORDER = """
             ORDER BY COALESCE(p.wikidataSitelinks, 0) DESC,
                      CASE WHEN p.category LIKE 'Dining and Drinking%' THEN 1 ELSE 0 END,
-                     p.id
-            """)
+                     p.name, p.id
+            """;
+
+    @Query("SELECT p FROM Place p WHERE " + ENRICH_TARGETS + " AND p.id NOT IN :excludedIds " + ENRICH_TARGET_ORDER)
     List<Place> findEnrichTargets(@Param("categoryPrefix") String categoryPrefix,
                                   @Param("excludedIds") Collection<Long> excludedIds, Pageable pageable);
+
+    /** 식당 프롬프트 대상(DiningEnrichment.isDiningVenue와 같은 판정: 식음료이되 야시장이 아님)이면 1. */
+    String DINING_VENUE_FLAG = "CASE WHEN LOWER(p.category) LIKE 'dining and drinking%' "
+            + "AND LOWER(p.category) NOT LIKE '%night market%' THEN 1 ELSE 0 END";
+
+    /**
+     * v1 보강 대상 수. 실행 전 견적에 쓴다. 행: [국가(없으면 빈 문자열), 식당 프롬프트 대상이면 1, 건수].
+     * allRegions가 true면 지역 조건을 끈다.
+     */
+    @Query("SELECT COALESCE(p.country, ''), " + DINING_VENUE_FLAG + ", COUNT(p) FROM Place p WHERE " + ENRICH_TARGETS
+            + " AND (:allRegions = true OR p.region IN :regions) GROUP BY COALESCE(p.country, ''), " + DINING_VENUE_FLAG)
+    List<Object[]> countEnrichTargetsByKind(@Param("allRegions") boolean allRegions,
+                                           @Param("regions") List<String> regions,
+                                           @Param("categoryPrefix") String categoryPrefix);
+
+    /** 그 나라 활성 장소의 지역. 보강 국가 범위를 지역 범위로 바꿀 때 쓴다(공급처·적재 경로와 무관하게 DB에 있는 지역). */
+    @Query(value = "SELECT DISTINCT region FROM places WHERE active AND region IS NOT NULL AND country IN (:countries)",
+            nativeQuery = true)
+    List<String> findActiveRegionsInCountries(@Param("countries") Collection<String> countries);
 
     /** Wikidata 매칭을 기다리느라 {@link #findEnrichTargets}에서 빠진 행 수. */
     @Query(value = """
@@ -427,6 +451,10 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * 보강 컬럼만 쓴다. 엔티티째 저장하면 결과를 기다린 동안(최대 하루) 바뀐 컬럼을 그때 읽은 값으로 되돌린다.
      * 배열은 chr(31)로 이은 문자열로 받고, name_ko는 비어 있을 때만 채운다(Wikidata 라벨·보정표 우선).
      * 주재료는 옛 태그·설명을 보고 받은 답이라 지운다.
+     * 이미 보강된 행과 요청 뒤 이름·카테고리·지역·국가가 바뀐 행은 쓰지 않는다. 쓰면 옛 결과가 새 입력의 지문을 달고 남아
+     * 무효화 작업이 다시 잡지 못한다.
+     *
+     * @return 바뀐 행 수(그사이 보강됐거나 입력이 바뀌었으면 0)
      */
     @Modifying
     @Transactional
@@ -448,7 +476,10 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 attributes = attributes - 'ingredients',
                 description_rewrite_attempts = 0,
                 updated_at = now()
-             WHERE id = :id
+             WHERE id = :id AND enriched_at IS NULL
+               AND name = :name AND category = :category
+               AND region IS NOT DISTINCT FROM CAST(:region AS varchar)
+               AND country IS NOT DISTINCT FROM CAST(:country AS varchar)
             """, nativeQuery = true)
     int writeEnrichmentColumns(@Param("id") long id, @Param("tags") String tags,
                                @Param("description") String description, @Param("slots") String slots,
@@ -456,7 +487,9 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                                @Param("feeLocal") Integer feeLocal, @Param("currency") String currency,
                                @Param("role") String role, @Param("cuisine") String cuisine,
                                @Param("nameKo") String nameKo, @Param("fame") Short fame,
-                               @Param("enrichedAt") OffsetDateTime enrichedAt, @Param("inputFp") String inputFp);
+                               @Param("enrichedAt") OffsetDateTime enrichedAt, @Param("inputFp") String inputFp,
+                               @Param("name") String name, @Param("category") String category,
+                               @Param("region") String region, @Param("country") String country);
 
     String ARRAY_SEPARATOR = "\u001f";
 
@@ -466,7 +499,8 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                 joinArray(p.getRecommendedTimeSlots()), p.getRecommendedDurationMinutes(), p.getAdmissionFee(),
                 p.getAdmissionFeeLocal(), p.getAdmissionCurrency(), p.getPlaceRole(), p.getCuisine(), p.getNameKo(),
                 p.getTravelerFame(), p.getEnrichedAt(),
-                PlaceFingerprints.enrichInput(p.getName(), p.getCategory(), p.getRegion(), p.getCountry()));
+                PlaceFingerprints.enrichInput(p.getName(), p.getCategory(), p.getRegion(), p.getCountry()),
+                p.getName(), p.getCategory(), p.getRegion(), p.getCountry());
     }
 
     /**
@@ -688,19 +722,8 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * {@link #findEnrichTargets}의 지역 스코프판. BATCH_ENRICH_REGIONS로 지역 단위(예: Jeju부터)
      * 점진 실행할 때 쓴다. 순서·제외 규칙은 같다.
      */
-    @Query("""
-            SELECT p FROM Place p
-            WHERE p.enrichedAt IS NULL AND p.active = true
-              AND p.wikidataMatchedAt IS NOT NULL
-              AND p.enrichAttempts < 3
-              AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
-              AND p.region IN :regions
-              AND (:categoryPrefix = '' OR p.category LIKE CONCAT(:categoryPrefix, '%'))
-              AND p.id NOT IN :excludedIds
-            ORDER BY COALESCE(p.wikidataSitelinks, 0) DESC,
-                     CASE WHEN p.category LIKE 'Dining and Drinking%' THEN 1 ELSE 0 END,
-                     p.id
-            """)
+    @Query("SELECT p FROM Place p WHERE " + ENRICH_TARGETS + " AND p.region IN :regions AND p.id NOT IN :excludedIds "
+            + ENRICH_TARGET_ORDER)
     List<Place> findEnrichTargetsInRegions(@Param("regions") List<String> regions,
                                            @Param("categoryPrefix") String categoryPrefix,
                                            @Param("excludedIds") Collection<Long> excludedIds,
@@ -740,9 +763,10 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
 
     /**
      * 속성 분류만 교체한다. 엔티티 save는 배치 대기(수 시간) 전에 읽은 값으로 행 전체를 덮어써
-     * 그사이 갱신된 last_candidate_at·TourAPI 원문(official)을 되돌린다.
+     * 그사이 갱신된 last_candidate_at·TourAPI 원문(official)을 되돌린다. 이미 이 버전으로 분류된 행은 쓰지 않는다.
      *
      * @param classifiedJson official·주재료를 뺀 {@link com.shg.trip.shgtrip.domain.place.entity.PlaceAttributes} JSON
+     * @return 바뀐 행 수(그사이 분류됐으면 0)
      */
     @Modifying
     @Transactional
@@ -752,7 +776,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
                               - ARRAY['venue', 'subType', 'visitStyle', 'hikeLevel', 'lodgingType', 'breakfast'])
                              || CAST(:classifiedJson AS jsonb),
                 enrich_version = :version
-            WHERE id = :id
+            WHERE id = :id AND (enrich_version IS NULL OR enrich_version < :version)
             """, nativeQuery = true)
     int writeAttributeClassification(@Param("id") Long id, @Param("classifiedJson") String classifiedJson,
                                      @Param("version") short version);
@@ -911,6 +935,25 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             """, nativeQuery = true)
     int writeTourApiDetail(@Param("id") Long id, @Param("officialJson") String officialJson,
                            @Param("hours") String hours, @Param("fee") Integer fee);
+
+    /** 공식 요금 원문이 있는 장소 (id, 원문)을 id 순으로 준다. 문화시설은 usefee, 레포츠는 usefeeleports에 있다. */
+    @Query(value = """
+            SELECT id, COALESCE(attributes -> 'official' ->> 'usefee', attributes -> 'official' ->> 'usefeeleports')
+            FROM places
+            WHERE id > :afterId
+              AND (attributes -> 'official' ->> 'usefee' IS NOT NULL
+                   OR attributes -> 'official' ->> 'usefeeleports' IS NOT NULL)
+            ORDER BY id
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<Object[]> findOfficialFeeTexts(@Param("afterId") long afterId, @Param("limit") int limit);
+
+    /** @return 바뀐 행 수(같은 금액이면 0) */
+    @Modifying
+    @Transactional
+    @Query(value = "UPDATE places SET admission_fee = :fee, updated_at = now() WHERE id = :id AND admission_fee IS DISTINCT FROM :fee",
+            nativeQuery = true)
+    int writeOfficialFee(@Param("id") long id, @Param("fee") int fee);
 
     /**
      * 보강 성공 장소의 임베딩을 초기화한다. 임베딩 텍스트가 tags/description을 포함하고 embedding 컬럼은

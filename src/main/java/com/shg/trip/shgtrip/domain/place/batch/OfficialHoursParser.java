@@ -51,9 +51,14 @@ final class OfficialHoursParser {
     private static final Pattern SEGMENT = Pattern.compile("[/\\n※]");
     private static final Pattern DAY_TOKEN = Pattern.compile("([월화수목금토일])요일");
     private static final Pattern WON = Pattern.compile("([\\d,]+)\\s*원");
-    private static final Pattern ADULT_WON = Pattern.compile("성인[^\\d]{0,12}([\\d,]+)\\s*원");
-    /** 입장료가 아닌 요금이 섞인 표기. 금액이 무엇의 값인지 가를 수 없어 비운다. */
-    private static final Pattern NOT_ADMISSION = Pattern.compile("주차|대여|렌탈|체험|보증금|프로그램|강습|코스");
+    /**
+     * 성인 1인 요금 표기. 관광공사 원문은 성인을 어른·대인·일반·개인(단체의 반대)으로도 쓰고, 나이 괄호("성인(만 19세 이상)")를
+     * 붙인다. 괄호 안 숫자를 금액으로 읽지 않게 괄호는 따로 건너뛴다.
+     */
+    private static final Pattern ADULT_WON = Pattern.compile(
+            "(?:성인|어른|대인|일반|개인)(?:\\s*\\([^)]*\\))?[^\\d(]{0,12}?([\\d,]+)\\s*원");
+    /** 입장료가 아닌 요금 이름. 금액 바로 앞 이름에 있으면 그 금액이 무엇의 값인지 가를 수 없어 비운다. */
+    private static final Pattern NOT_ADMISSION = Pattern.compile("주차|대여|렌탈|체험|보증금|프로그램|강습|코스|회비|강좌");
 
     /** HTML 태그·엔티티를 걷어 낸 원문. 비면 null. */
     static String clean(String raw) {
@@ -166,14 +171,17 @@ final class OfficialHoursParser {
     }
 
     /**
-     * 성인 1인 입장료(원). "무료"만 있으면 0, 성인 요금이 적혀 있으면 그 값, 금액이 하나뿐이면 그 값.
+     * 성인 1인 입장료(원). "무료"만 있으면 0, 성인 요금이 적혀 있으면 첫 성인 요금, 금액이 하나뿐이면 그 값.
      * 그 밖(여러 금액·권종)은 null.
      */
     static Integer admissionFee(String raw) {
         String text = clean(raw);
-        if (text == null || NOT_ADMISSION.matcher(text).find()) return null;
+        if (text == null) return null;
         Matcher adult = ADULT_WON.matcher(text);
-        if (adult.find()) return parseWon(adult.group(1));
+        // 성인 금액보다 앞에 다른 요금 이름이 있으면 그 금액의 이름을 가를 수 없다. 금액 뒤 비고("※ 체험료는 별도")는 보지 않는다.
+        if (adult.find()) return NOT_ADMISSION.matcher(text.substring(0, adult.start(1))).find()
+                ? null : parseWon(adult.group(1));
+        if (NOT_ADMISSION.matcher(text).find()) return null;
         Set<Integer> amounts = new LinkedHashSet<>();
         Matcher m = WON.matcher(text);
         while (m.find()) {

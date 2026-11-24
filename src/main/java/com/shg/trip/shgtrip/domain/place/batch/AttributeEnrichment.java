@@ -98,6 +98,10 @@ final class AttributeEnrichment {
         return sb.toString();
     }
 
+    static String inputKey(Place place) {
+        return Integer.toHexString(userMessage(place).hashCode());
+    }
+
     /**
      * 도구 호출이 없거나 max_tokens에서 잘렸으면 null이다. 버전을 찍지 않아 다음 실행에서 다시 잡힌다.
      * 분류가 전부 null이면 빈 속성을 돌려준다. 출력 형식이 강제돼 있어 "분류할 것 없음"이라는 답이고,

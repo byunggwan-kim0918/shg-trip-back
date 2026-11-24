@@ -43,6 +43,9 @@ class AttributeEnrichmentTest {
         ReflectionTestUtils.setField(scheduler, "anthropicApiKey", "test-api-key");
         ReflectionTestUtils.setField(scheduler, "enrichModel", "claude-haiku-5-5");
         ReflectionTestUtils.setField(scheduler, "mode", "v2");
+        org.mockito.Mockito.lenient().when(placeRepository.writeAttributeClassification(
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyShort())).thenReturn(1);
     }
 
     private JsonNode message(String toolInputJson) throws Exception {

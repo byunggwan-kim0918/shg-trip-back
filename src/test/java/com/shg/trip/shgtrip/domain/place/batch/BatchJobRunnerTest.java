@@ -21,6 +21,9 @@ import static org.mockito.Mockito.when;
 class BatchJobRunnerTest {
 
     @Mock
+    private TourApiDetailJob tourApiDetailJob;
+
+    @Mock
     private FoursquareSeeder foursquareSeeder;
 
     @Mock
@@ -198,5 +201,14 @@ class BatchJobRunnerTest {
         batchJobRunner.run();
 
         assertThat(batchJobRunner.getExitCode()).isZero();
+    }
+
+    @Test
+    @DisplayName("관광공사 상세 조회를 꺼도 저장된 공식 요금 다시 읽기는 돈다(외부 호출 없음)")
+    void storedOfficialFeesAreReparsedBeforeEnrichment() throws Exception {
+        batchJobRunner.run();
+
+        verify(tourApiDetailJob, org.mockito.Mockito.never()).run();
+        verify(tourApiDetailJob).reparseStoredFees();
     }
 }
