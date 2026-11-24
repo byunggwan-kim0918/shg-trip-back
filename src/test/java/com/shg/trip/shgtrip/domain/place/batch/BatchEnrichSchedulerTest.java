@@ -43,6 +43,7 @@ class BatchEnrichSchedulerTest {
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
         ReflectionTestUtils.setField(scheduler, "anthropicApiKey", "test-api-key");
         ReflectionTestUtils.setField(scheduler, "enrichModel", "claude-haiku-4-5-20251001");
+        lenient().when(placeRepository.writeEnrichment(any(Place.class))).thenReturn(1);
     }
 
     @Test
@@ -72,7 +73,7 @@ class BatchEnrichSchedulerTest {
     void buildEnrichPrompt_containsPlaceInfo() {
         Place place = createPlace(1L, "센소지", "관광", "아사쿠사", "일본");
 
-        String prompt = scheduler.buildEnrichPrompt(place);
+        String prompt = EnrichPrompts.text(scheduler.buildEnrichPrompt(place));
 
         assertThat(prompt).contains("센소지");
         assertThat(prompt).contains("관광");
@@ -100,7 +101,7 @@ class BatchEnrichSchedulerTest {
                 .active(true)
                 .build();
 
-        String prompt = scheduler.buildEnrichPrompt(place);
+        String prompt = EnrichPrompts.text(scheduler.buildEnrichPrompt(place));
 
         assertThat(prompt).contains("메이지 천황을 기리는 신사");
     }
@@ -114,8 +115,9 @@ class BatchEnrichSchedulerTest {
         List<Map<String, Object>> requests = scheduler.buildBatchRequests(List.of(place1, place2));
 
         assertThat(requests).hasSize(2);
-        assertThat(requests.get(0).get("custom_id")).isEqualTo("place_1");
-        assertThat(requests.get(1).get("custom_id")).isEqualTo("place_2");
+        assertThat(requests.get(0).get("custom_id")).isEqualTo("place_1_" + com.shg.trip.shgtrip.domain.place
+                .integrity.PlaceFingerprints.enrichInput("센소지", "관광", "아사쿠사", "일본"));
+        assertThat(BatchEnrichScheduler.placeIdOf((String) requests.get(1).get("custom_id"))).isEqualTo(2L);
     }
 
     @Test
@@ -215,7 +217,7 @@ class BatchEnrichSchedulerTest {
     @Test
     @DisplayName("식음료 장소는 식당 전용 프롬프트를 쓴다(업종을 알려주고 입장료·체류시간은 묻지 않는다)")
     void buildEnrichPrompt_dining_usesDiningPrompt() {
-        String prompt = scheduler.buildEnrichPrompt(dining("한본새", KOREAN_RESTAURANT, null, null));
+        String prompt = EnrichPrompts.text(scheduler.buildEnrichPrompt(dining("한본새", KOREAN_RESTAURANT, null, null)));
 
         assertThat(prompt).contains("업종: 식당");
         assertThat(prompt).doesNotContain("admission_fee", "recommended_duration_minutes", "description");
@@ -420,7 +422,7 @@ class BatchEnrichSchedulerTest {
     void extractJson_pureJson_returnsAsIs() {
         String json = "{\"tags\": [\"test\"]}";
 
-        String result = scheduler.extractJson(json);
+        String result = EnrichOutputs.extractJson(json);
 
         assertThat(result).isEqualTo(json);
     }
@@ -430,7 +432,7 @@ class BatchEnrichSchedulerTest {
     void extractJson_codeBlock_strips() {
         String input = "```json\n{\"tags\": [\"test\"]}\n```";
 
-        String result = scheduler.extractJson(input);
+        String result = EnrichOutputs.extractJson(input);
 
         assertThat(result).isEqualTo("{\"tags\": [\"test\"]}");
     }
@@ -440,7 +442,7 @@ class BatchEnrichSchedulerTest {
     void extractJson_surroundingText_extractsJson() {
         String input = "Here is the result:\n{\"tags\": [\"test\"]}\nDone.";
 
-        String result = scheduler.extractJson(input);
+        String result = EnrichOutputs.extractJson(input);
 
         assertThat(result).isEqualTo("{\"tags\": [\"test\"]}");
     }
@@ -458,7 +460,7 @@ class BatchEnrichSchedulerTest {
                 """;
         var messageNode = objectMapper.readTree(messageJson);
 
-        String result = scheduler.extractTextContent(messageNode);
+        String result = EnrichOutputs.extractText(messageNode);
 
         assertThat(result).isEqualTo("Hello World");
     }
@@ -466,7 +468,7 @@ class BatchEnrichSchedulerTest {
     @Test
     @DisplayName("extractTextContent는 메시지가 null이면 null을 반환한다")
     void extractTextContent_nullMessage_returnsNull() {
-        String result = scheduler.extractTextContent(null);
+        String result = EnrichOutputs.extractText(null);
 
         assertThat(result).isNull();
     }
@@ -739,12 +741,12 @@ class BatchEnrichSchedulerTest {
     @Test
     @DisplayName("해외 관광지 프롬프트: 국가·여행지·주소, 현지 통화 입장료, 비어 있으면 name_ko를 묻는다")
     void buildEnrichPrompt_overseasAttraction() {
-        String prompt = scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, null));
+        String prompt = EnrichPrompts.text(scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, null)));
 
         assertThat(prompt).contains("- 국가: 일본", "- 여행지: 교토 (Kyoto)", "- 주소: 京都府",
                 "\"admission_fee_local\"", "입장료(엔", "\"name_ko\"", "외래어 표기법");
         assertThat(prompt).doesNotContain("\"admission_fee\"", "성산일출봉");
-        assertThat(scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, "기요미즈데라")))
+        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, "기요미즈데라"))))
                 .doesNotContain("\"name_ko\"", "외래어 표기법");
     }
 
@@ -753,7 +755,7 @@ class BatchEnrichSchedulerTest {
     void buildEnrichPrompt_koreaUnchanged() {
         Place place = createPlace(1L, "성산일출봉", "Landmarks and Outdoors > Mountain", "Jeju", "KR");
 
-        assertThat(scheduler.buildEnrichPrompt(place))
+        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(place)))
                 .contains("\"admission_fee\"", "성산일출봉 5000")
                 .doesNotContain("name_ko", "admission_fee_local", "- 주소:");
     }
@@ -799,7 +801,7 @@ class BatchEnrichSchedulerTest {
     @Test
     @DisplayName("해외 식당 프롬프트: 국가·여행지·주소와 해외 요리 예시, 비어 있으면 name_ko를 묻는다")
     void buildEnrichPrompt_overseasDining() {
-        String prompt = scheduler.buildEnrichPrompt(overseas("一蘭 祇園店", RAMEN, null));
+        String prompt = EnrichPrompts.text(scheduler.buildEnrichPrompt(overseas("一蘭 祇園店", RAMEN, null)));
 
         assertThat(prompt).contains("- 국가: 일본", "- 여행지: 교토 (Kyoto)", "훠궈", "\"name_ko\"", "도쿄·상하이 같은 지역명");
         assertThat(prompt).doesNotContain("서울·부산 같은 지역명");
@@ -808,12 +810,12 @@ class BatchEnrichSchedulerTest {
     @Test
     @DisplayName("해외 프롬프트는 알려진 정도를 묻고, 식당은 유명하지 않아도 설명을 조건부로 묻는다")
     void buildEnrichPrompt_overseasAsksFame() {
-        String attraction = scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, null));
-        String dining = scheduler.buildEnrichPrompt(overseas("一蘭 祇園店", RAMEN, null));
+        String attraction = EnrichPrompts.text(scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, null)));
+        String dining = EnrichPrompts.text(scheduler.buildEnrichPrompt(overseas("一蘭 祇園店", RAMEN, null)));
 
         assertThat(attraction).contains("\"traveler_fame\"", "미쉐린 스타 식당");
         assertThat(dining).contains("\"traveler_fame\": 0", "traveler_fame이 1 이상일 때만", "\"description\": null");
-        assertThat(scheduler.buildEnrichPrompt(createPlace(1L, "성산일출봉", "Landmarks and Outdoors > Mountain", "Jeju", "KR")))
+        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(createPlace(1L, "성산일출봉", "Landmarks and Outdoors > Mountain", "Jeju", "KR"))))
                 .doesNotContain("traveler_fame");
     }
 
@@ -839,7 +841,7 @@ class BatchEnrichSchedulerTest {
     void nightMarketUsesAttractionPrompt() {
         Place market = overseas("士林夜市", "Dining and Drinking > Night Market", null);
 
-        assertThat(scheduler.buildEnrichPrompt(market)).contains("\"place_role\"", "MARKET(전통시장·야시장)")
+        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(market))).contains("\"place_role\"", "MARKET(전통시장·야시장)")
                 .doesNotContain("venue");
         scheduler.applyEnrichment(market,
                 "{\"tags\":[\"야시장\"],\"place_role\":\"MARKET\",\"traveler_fame\":2,\"recommended_time_slots\":[\"evening\",\"night\"]}");

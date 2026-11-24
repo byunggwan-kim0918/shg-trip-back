@@ -16,6 +16,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -138,8 +139,13 @@ class PlaceRepositoryBatchQueryTest {
                 List.of(-1L), PageRequest.of(0, 10))).extracting(Place::getId).containsExactly(compatHan.getId());
         assertThat(placeRepository.countDescriptionRewriteExhausted()).isGreaterThanOrEqualTo(1);
 
-        // v1 보강이 소개를 새로 쓰면 횟수가 0으로 돌아가 다시 대상이 된다.
+        // v1 보강이 소개를 새로 쓰면 횟수가 0으로 돌아가 다시 대상이 된다. v1은 보강을 비운 행에만 쓴다.
+        em.createNativeQuery("UPDATE places SET enriched_at = NULL WHERE id = ?").setParameter(1, mixed.getId())
+                .executeUpdate();
+        em.clear();
         Place reloaded = placeRepository.findById(mixed.getId()).orElseThrow();
+        em.detach(reloaded);
+        reloaded.enrichWith(List.of("레저"), reloaded.getDescription(), List.of("afternoon"));
         placeRepository.writeEnrichment(reloaded);
         em.clear();
         assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation,
@@ -275,6 +281,9 @@ class PlaceRepositoryBatchQueryTest {
         Place sameMenu = placeRepository.findById(detailed.getId()).orElseThrow();
         assertThat(sameMenu.getAttributes().ingredients()).containsExactly("SEAFOOD");
 
+        em.createNativeQuery("UPDATE places SET enriched_at = NULL WHERE id = ?").setParameter(1, detailed.getId())
+                .executeUpdate();
+        em.detach(sameMenu);
         sameMenu.enrichWith(List.of("식당", "복국"), "복어 요리집", List.of("lunch"), null, null);
         placeRepository.writeEnrichment(sameMenu);
         em.clear();
@@ -369,7 +378,7 @@ class PlaceRepositoryBatchQueryTest {
     }
 
     @Test
-    @DisplayName("보강 대상은 인기도 → 비식당 → id 순이고, 보강된 행과 제외 id는 빠진다")
+    @DisplayName("보강 대상은 인기도 → 비식당 → 이름 순이고, 보강된 행과 제외 id는 빠진다")
     void findEnrichTargets_ordersAndExcludes() {
         Place restaurant = save("식당", "Dining and Drinking > Restaurant", null, false);
         Place park = save("공원", "Landmarks and Outdoors > Park", null, false);
@@ -387,6 +396,62 @@ class PlaceRepositoryBatchQueryTest {
                 .extracting(Place::getId).containsExactly(restaurant.getId());
         assertThat(placeRepository.findEnrichTargets("Dining and Drinking", List.of(-1L), PageRequest.of(0, 500)))
                 .extracting(Place::getId).contains(restaurant.getId()).doesNotContain(park.getId(), famous.getId());
+    }
+
+    @Test
+    @DisplayName("같은 인기도·업종 안에서는 이름 순이라 같은 이름 장소(체인 지점)가 한 페이지에 모인다")
+    void findEnrichTargets_groupsSameNames() {
+        Place chainA = save("메가커피", "Dining and Drinking > Cafe", null, false);
+        Place other = save("가배당", "Dining and Drinking > Cafe", null, false);
+        Place chainB = save("메가커피", "Dining and Drinking > Cafe", null, false);
+
+        assertThat(placeRepository.findEnrichTargetsInRegions(List.of(REGION), "", List.of(-1L), PageRequest.of(0, 10)))
+                .extracting(Place::getId).containsExactly(other.getId(), chainA.getId(), chainB.getId());
+    }
+
+    @Test
+    @DisplayName("견적 대상 수는 보강 대상 조건과 같고 국가·식당 여부로 나뉘며, 국가 지역 조회는 그 나라 활성 지역만 준다")
+    void estimateCountsAndCountryRegions() {
+        save("식당", "Dining and Drinking > Restaurant", null, false);
+        save("야시장", "Dining and Drinking > Night Market", null, false);
+        save("공원", "Landmarks and Outdoors > Park", null, false);
+        save("보강됨", "Landmarks and Outdoors > Park", null, true);
+        Place hidden = save("비방문", "Landmarks and Outdoors > Park", null, false);
+        em.createNativeQuery("UPDATE places SET place_role = 'NOT_VISITABLE' WHERE id = ?")
+                .setParameter(1, hidden.getId()).executeUpdate();
+
+        List<Object[]> rows = placeRepository.countEnrichTargetsByKind(false, List.of(REGION), "");
+        Map<Boolean, Long> byDining = new java.util.HashMap<>();
+        for (Object[] r : rows) {
+            assertThat(r[0]).isEqualTo("KR");
+            byDining.put(((Number) r[1]).intValue() == 1, ((Number) r[2]).longValue());
+        }
+        assertThat(byDining).containsEntry(true, 1L).containsEntry(false, 2L);
+        assertThat(placeRepository.countEnrichTargetsByKind(true, List.of(""), "Dining and Drinking")).isNotEmpty();
+        assertThat(placeRepository.findActiveRegionsInCountries(List.of("KR"))).contains(REGION);
+        assertThat(placeRepository.findActiveRegionsInCountries(List.of("ZZ"))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("공식 요금 원문은 문화시설·레포츠 필드에서 읽고, 입장료는 금액이 다를 때만 바꾼다")
+    void officialFeeTextsAndWrites() {
+        Place culture = save("박물관", "Arts and Entertainment > Museum", null, true);
+        Place leports = save("레일바이크", "Sports and Recreation", null, true);
+        save("요금 없음", "Landmarks and Outdoors > Park", null, true);
+        em.createNativeQuery("UPDATE places SET attributes = CAST(? AS jsonb), admission_fee = 0 WHERE id = ?")
+                .setParameter(1, "{\"official\":{\"usefee\":\"어른 3,000원\"}}").setParameter(2, culture.getId())
+                .executeUpdate();
+        em.createNativeQuery("UPDATE places SET attributes = CAST(? AS jsonb) WHERE id = ?")
+                .setParameter(1, "{\"official\":{\"usefeeleports\":\"2인승 30,000원\"}}")
+                .setParameter(2, leports.getId()).executeUpdate();
+
+        List<Object[]> rows = placeRepository.findOfficialFeeTexts(culture.getId() - 1, 10);
+
+        assertThat(rows).extracting(r -> ((Number) r[0]).longValue()).contains(culture.getId(), leports.getId());
+        assertThat(rows).filteredOn(r -> ((Number) r[0]).longValue() == leports.getId())
+                .extracting(r -> r[1]).containsExactly("2인승 30,000원");
+        assertThat(placeRepository.writeOfficialFee(culture.getId(), 3000)).isEqualTo(1);
+        assertThat(placeRepository.writeOfficialFee(culture.getId(), 3000)).isZero();
     }
 
     @Test
@@ -539,6 +604,7 @@ class PlaceRepositoryBatchQueryTest {
         em.clear();
 
         Place enriched = placeRepository.findById(p.getId()).orElseThrow();
+        em.detach(enriched);
         enriched.enrichWith(List.of("사찰", "전망"), "교토의 절", List.of("morning", "afternoon"), null, null);
         enriched.recordAdmissionLocal(400, "JPY");
         enriched.assignRole("SIGHT", null);
@@ -614,7 +680,8 @@ class PlaceRepositoryBatchQueryTest {
         loaded.assignRole("SIGHT", null);
 
         int changed = placeRepository.writeEnrichmentColumns(loaded.getId(), null, null, null, null, null, null, null,
-                "SIGHT", null, null, null, OffsetDateTime.now(), null);
+                "SIGHT", null, null, null, OffsetDateTime.now(), null, "새 명소", "Landmarks and Outdoors > Park", REGION,
+                "KR");
         em.clear();
 
         Object[] row = (Object[]) em.createNativeQuery(
@@ -628,17 +695,54 @@ class PlaceRepositoryBatchQueryTest {
     @DisplayName("알려진 정도는 값이 있을 때만 쓰고, 없으면(한국 보강) 기존 값을 둔다")
     void writeEnrichment_travelerFame() {
         Place p = save("士林夜市", "Dining and Drinking > Night Market", 0, false);
-        em.clear();
-        Place loaded = placeRepository.findById(p.getId()).orElseThrow();
-        loaded.rateFame((short) 2);
-        placeRepository.writeEnrichment(loaded);
+        em.createNativeQuery("UPDATE places SET traveler_fame = 2 WHERE id = ?").setParameter(1, p.getId())
+                .executeUpdate();
         placeRepository.writeEnrichmentColumns(p.getId(), null, null, null, null, null, null, null,
-                "MARKET", null, null, null, OffsetDateTime.now(), null);
+                "MARKET", null, null, null, OffsetDateTime.now(), null, "士林夜市", "Dining and Drinking > Night Market",
+                REGION, "KR");
         em.clear();
 
         Object fame = em.createNativeQuery("SELECT traveler_fame FROM places WHERE id = ?")
                 .setParameter(1, p.getId()).getSingleResult();
         assertThat(((Number) fame).intValue()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("보강 결과는 요청 뒤 이미 보강됐거나 이름·카테고리가 바뀐 행에 쓰지 않는다")
+    void writeEnrichment_skipsEnrichedOrChangedRows() {
+        Place renamed = save("옛 이름", "Landmarks and Outdoors > Park", null, false);
+        Place done = save("이미 보강", "Landmarks and Outdoors > Park", null, true);
+        Place pending = save("그대로", "Landmarks and Outdoors > Park", null, false);
+        em.clear();
+        Place requestedRenamed = placeRepository.findById(renamed.getId()).orElseThrow();
+        Place requestedDone = placeRepository.findById(done.getId()).orElseThrow();
+        Place requestedPending = placeRepository.findById(pending.getId()).orElseThrow();
+        // 배치는 요청 때 읽은 엔티티를 트랜잭션 밖에서 들고 있다가 결과를 쓴다.
+        em.clear();
+        em.createNativeQuery("UPDATE places SET name = '새 이름' WHERE id = ?").setParameter(1, renamed.getId())
+                .executeUpdate();
+        for (Place p : List.of(requestedRenamed, requestedDone, requestedPending)) {
+            p.enrichWith(List.of("공원"), "옛 결과", List.of("morning"));
+        }
+
+        assertThat(placeRepository.writeEnrichment(requestedRenamed)).isZero();
+        assertThat(placeRepository.writeEnrichment(requestedDone)).isZero();
+        assertThat(placeRepository.writeEnrichment(requestedPending)).isEqualTo(1);
+        em.clear();
+        Object renamedDescription = em.createNativeQuery("SELECT description FROM places WHERE id = ?")
+                .setParameter(1, renamed.getId()).getSingleResult();
+        assertThat(renamedDescription).isNull();
+    }
+
+    @Test
+    @DisplayName("속성 분류는 이미 이 버전으로 분류된 행을 다시 쓰지 않는다")
+    void writeAttributeClassification_skipsSameVersion() {
+        Place p = save("분류됨", "Landmarks and Outdoors > Park", 3, true);
+
+        assertThat(placeRepository.writeAttributeClassification(p.getId(), "{\"subType\":\"park\"}", (short) 2))
+                .isEqualTo(1);
+        assertThat(placeRepository.writeAttributeClassification(p.getId(), "{\"subType\":\"garden\"}", (short) 2))
+                .isZero();
     }
 
     @Test

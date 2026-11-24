@@ -9,10 +9,14 @@ import org.springframework.core.io.ClassPathResource;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** 한국 장소 보강 프롬프트 고정본. 바꾸면 이미 보강된 한국 장소와 새 장소의 태그·설명 기준이 갈린다. */
+/**
+ * 한국 장소 보강 프롬프트 고정본. 바꾸면 이미 보강된 한국 장소와 새 장소의 태그·설명 기준이 갈린다.
+ * 고정본은 장소 정보(user) 뒤에 규칙(system)을 이은 글이고, 아래 캐시 테스트가 둘로 나뉘어 가는지 본다.
+ */
 class KoreanPromptGoldenTest {
 
     private final BatchEnrichScheduler scheduler = new BatchEnrichScheduler(null, new ObjectMapper(), null,
@@ -31,7 +35,7 @@ class KoreanPromptGoldenTest {
                 .latitude(BigDecimal.ONE).longitude(BigDecimal.ONE)
                 .category("Landmarks and Outdoors > Mountain").region("Jeju").country("KR").description("화산").build();
 
-        assertThat(scheduler.buildEnrichPrompt(place)).isEqualTo(golden("kr-attraction.txt"));
+        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(place))).isEqualTo(golden("kr-attraction.txt"));
     }
 
     @Test
@@ -41,7 +45,7 @@ class KoreanPromptGoldenTest {
                 .latitude(BigDecimal.ONE).longitude(BigDecimal.ONE)
                 .category("Dining and Drinking > Restaurant").region("Seoul").country("KR").build();
 
-        assertThat(scheduler.buildEnrichPrompt(place)).isEqualTo(golden("kr-dining.txt"));
+        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(place))).isEqualTo(golden("kr-dining.txt"));
     }
 
     private Place dining(String name, String category, Integer sitelinks) {
@@ -55,15 +59,36 @@ class KoreanPromptGoldenTest {
     @Test
     @DisplayName("유명 식당·카페·술집 프롬프트와 국가 없는 관광지 프롬프트도 고정본과 같다")
     void otherVariants() throws Exception {
-        assertThat(scheduler.buildEnrichPrompt(dining("하동관", "Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant", 3)))
+        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(dining("하동관", "Dining and Drinking > Restaurant > Asian Restaurant > Korean Restaurant", 3))))
                 .isEqualTo(golden("kr-dining-famous.txt"));
-        assertThat(scheduler.buildEnrichPrompt(dining("테라로사", "Dining and Drinking > Cafe, Coffee, and Tea House > Café", null)))
+        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(dining("테라로사", "Dining and Drinking > Cafe, Coffee, and Tea House > Café", null))))
                 .isEqualTo(golden("kr-cafe.txt"));
-        assertThat(scheduler.buildEnrichPrompt(dining("을지로 포차", "Dining and Drinking > Bar > Pub", null)))
+        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(dining("을지로 포차", "Dining and Drinking > Bar > Pub", null))))
                 .isEqualTo(golden("kr-bar.txt"));
         Place noCountry = Place.builder().id(4L).name("이름만 있는 곳").address("주소")
                 .latitude(BigDecimal.ONE).longitude(BigDecimal.ONE).category("Landmarks and Outdoors > Park").build();
-        assertThat(scheduler.buildEnrichPrompt(noCountry)).isEqualTo(golden("kr-no-country.txt"));
+        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(noCountry))).isEqualTo(golden("kr-no-country.txt"));
+    }
+
+    @Test
+    @DisplayName("규칙(system)은 장소와 무관해 같은 갈래끼리 글자까지 같고, 장소 정보만 user로 간다(프롬프트 캐시)")
+    void rulesAreSharedAcrossPlaces() {
+        Place a = Place.builder().id(5L).name("성산일출봉").address("제주").latitude(BigDecimal.ONE)
+                .longitude(BigDecimal.ONE).category("Landmarks and Outdoors > Mountain").region("Jeju").country("KR").build();
+        Place b = Place.builder().id(6L).name("경복궁").address("서울").latitude(BigDecimal.ONE)
+                .longitude(BigDecimal.ONE).category("Landmarks and Outdoors > Palace").region("Seoul").country("KR")
+                .description("조선 궁궐").build();
+        EnrichPrompt first = scheduler.buildEnrichPrompt(a);
+        EnrichPrompt second = scheduler.buildEnrichPrompt(b);
+
+        assertThat(first.system()).isEqualTo(second.system()).doesNotContain("경복궁", "조선 궁궐");
+        assertThat(first.user()).contains("성산일출봉").doesNotContain("place_role");
+        assertThat(scheduler.buildEnrichPrompt(dining("하동관", "Dining and Drinking > Bar > Pub", null)).system())
+                .isEqualTo(scheduler.buildEnrichPrompt(dining("을지로 포차", "Dining and Drinking > Bar > Pub", null)).system());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> system = ((List<Map<String, Object>>) first.requestParams("m").get("system")).get(0);
+        assertThat(system).containsEntry("text", first.system()).containsEntry("cache_control", Map.of("type", "ephemeral"));
     }
 
     @Test

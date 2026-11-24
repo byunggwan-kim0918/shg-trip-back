@@ -92,10 +92,36 @@ class PlaceInvalidationJobIntegrationTest {
     }
 
     @Test
+    @DisplayName("보강을 비우면 입장료도 비우고, 공식 요금 다시 읽기가 원문이 있는 행만 원문 값으로 되돌린다")
+    void invalidatedFeeIsRestoredOnlyFromOfficialText() {
+        Place official = enriched("首里城");
+        Place estimated = enriched("波上宮");
+        jdbcTemplate.update("""
+                UPDATE places SET admission_fee = 400, tourapi_detail_at = now(),
+                       attributes = CAST('{"official":{"usefee":"성인 400원"}}' AS jsonb) WHERE id = ?""",
+                official.getId());
+        jdbcTemplate.update("UPDATE places SET admission_fee = 1000 WHERE id = ?", estimated.getId());
+        PlaceInvalidationJob job = new PlaceInvalidationJob(jdbcTemplate, namedJdbc, transactionTemplate);
+
+        job.adopt();
+        jdbcTemplate.update("UPDATE places SET category = 'Landmarks and Outdoors > Castle' WHERE id IN (?, ?)",
+                official.getId(), estimated.getId());
+        job.run();
+        new TourApiDetailJob(placeRepository, new com.fasterxml.jackson.databind.ObjectMapper()).reparseStoredFees();
+
+        assertThat(jdbcTemplate.queryForObject("SELECT admission_fee FROM places WHERE id = ?", Integer.class,
+                official.getId())).isEqualTo(400);
+        assertThat(jdbcTemplate.queryForObject("SELECT admission_fee FROM places WHERE id = ?", Integer.class,
+                estimated.getId())).isNull();
+    }
+
+    @Test
     @DisplayName("보강 결과 쓰기와 임베딩 저장은 그 입력의 지문을 남긴다")
     void writersStampFingerprints() {
         Place p = enriched("一蘭");
-        Place loaded = placeRepository.findById(p.getId()).orElseThrow();
+        jdbcTemplate.update("UPDATE places SET enriched_at = NULL WHERE id = ?", p.getId());
+        Place loaded = Place.builder().id(p.getId()).name("一蘭").category("Dining and Drinking > Restaurant")
+                .region(REGION).country("JP").build();
         loaded.enrichWith(List.of("라멘"), "돈코츠 라멘집이다", List.of("lunch"));
         placeRepository.writeEnrichment(loaded);
         placeRepository.stampEmbeddingTextFingerprints(p.getId() + "", "abcdef0123456789");

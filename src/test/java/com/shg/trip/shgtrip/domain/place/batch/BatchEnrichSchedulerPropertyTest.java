@@ -36,6 +36,7 @@ class BatchEnrichSchedulerPropertyTest {
         BatchEnrichScheduler scheduler = new BatchEnrichScheduler(mockRepo, objectMapper, Mockito.mock(EmbeddingBatchJob.class),
                 Mockito.mock(AnthropicBatchClient.class));
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
+        ReflectionTestUtils.setField(scheduler, "enrichModel", "claude-haiku-5-5");
 
         // Act
         List<List<Place>> chunks = scheduler.splitIntoChunks(places);

@@ -50,6 +50,7 @@ class BatchEnrichSchedulerHttpTest {
         ReflectionTestUtils.setField(scheduler, "anthropicApiKey", "test-key");
         ReflectionTestUtils.setField(scheduler, "enrichModel", "test-model");
         ReflectionTestUtils.setField(scheduler, "chunkSize", 1000);
+        when(repository.writeEnrichment(any())).thenReturn(1);
     }
 
     private static AnthropicBatchClient client(HttpClient http) {

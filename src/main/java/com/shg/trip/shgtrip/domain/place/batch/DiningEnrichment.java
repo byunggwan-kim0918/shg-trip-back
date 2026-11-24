@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
 
-import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -79,8 +78,6 @@ final class DiningEnrichment {
     private static final Set<String> GENERIC_CATEGORIES = Set.of(
             "dining and drinking", "dining and drinking > restaurant");
 
-    private static final Set<String> TIME_SLOTS = Set.of("morning", "afternoon", "evening", "night", "all_day");
-
     /** 홍보성·주관적 단어. 부분 일치로 거른다("부산맛집"도 걸린다). */
     private static final List<String> FILLER_WORDS = List.of(
             "맛집", "인기", "유명", "로컬", "현지", "핫플", "추천", "가성비", "분위기", "감성",
@@ -141,7 +138,8 @@ final class DiningEnrichment {
      * @param venue  null이면 모델이 venue를 고른다
      * @param famous true일 때만 description을 요청한다
      */
-    static String buildPrompt(String name, String category, String existingDescription, Venue venue, boolean famous) {
+    static EnrichPrompt buildPrompt(String name, String category, String existingDescription, Venue venue,
+                                    boolean famous) {
         return buildPrompt(name, category, existingDescription, venue, famous, null, false);
     }
 
@@ -150,21 +148,22 @@ final class DiningEnrichment {
      *                        해외면 traveler_fame을 묻고, 유명하지 않아도 description을 조건부로 묻는다
      * @param askNameKo       name_ko를 함께 묻는다
      */
-    static String buildPrompt(String name, String category, String existingDescription, Venue venue, boolean famous,
-                              String overseasContext, boolean askNameKo) {
+    static EnrichPrompt buildPrompt(String name, String category, String existingDescription, Venue venue,
+                                    boolean famous, String overseasContext, boolean askNameKo) {
         boolean overseas = overseasContext != null;
-        StringBuilder sb = new StringBuilder();
-        sb.append("다음 음식·음료 업장의 검색용 태그와 방문 시간대를 정리해주세요.\n\n");
-        sb.append("장소 정보:\n");
-        sb.append("- 이름: ").append(name).append("\n");
-        sb.append("- 카테고리: ").append(category).append("\n");
-        sb.append("- 업종: ").append(venue != null ? venue.label : "미정").append("\n");
-        if (overseas) sb.append(overseasContext);
+        StringBuilder user = new StringBuilder();
+        user.append("다음 음식·음료 업장의 검색용 태그와 방문 시간대를 정리해주세요.\n\n");
+        user.append("장소 정보:\n");
+        user.append("- 이름: ").append(name).append("\n");
+        user.append("- 카테고리: ").append(category).append("\n");
+        user.append("- 업종: ").append(venue != null ? venue.label : "미정").append("\n");
+        if (overseas) user.append(overseasContext);
         if (existingDescription != null && !existingDescription.isBlank()) {
-            sb.append("- 기존 설명: ").append(existingDescription.strip()).append("\n");
+            user.append("- 기존 설명: ").append(existingDescription.strip()).append("\n");
         }
 
-        sb.append("\n규칙:\n");
+        StringBuilder sb = new StringBuilder();
+        sb.append("규칙:\n");
         int n = 1;
         if (venue == null) {
             sb.append(n++).append(". venue는 식당, 카페, 베이커리, 디저트, 술집, 간식 중 하나다. ")
@@ -227,7 +226,7 @@ final class DiningEnrichment {
         if (overseas) sb.append(",\n  \"traveler_fame\": 0");
         if (famous || overseas) sb.append(",\n  \"description\": null");
         sb.append("\n}");
-        return sb.toString();
+        return new EnrichPrompt(sb.toString(), user.toString());
     }
 
     /**
@@ -247,8 +246,8 @@ final class DiningEnrichment {
             venue = Venue.fromLabel(textOrNull(root.get("venue")));
             if (venue == null) venue = Venue.MEAL;
         }
-        List<String> tags = finalizeTags(venue, textList(root.get("tags")), extraRegionNames);
-        List<String> slots = sanitizeSlots(textList(root.get("recommended_time_slots")), venue);
+        List<String> tags = finalizeTags(venue, EnrichOutputs.textList(root.get("tags")), extraRegionNames);
+        List<String> slots = sanitizeSlots(EnrichOutputs.textList(root.get("recommended_time_slots")), venue);
         String description = famous ? textOrNull(root.get("description")) : null;
         return new Result(tags, description, slots, venue.defaultMinutes, roleOf(venue),
                 venue == Venue.MEAL ? cuisineOf(tags, null) : null);
@@ -307,7 +306,7 @@ final class DiningEnrichment {
         out.addAll(venue.extraTags);
         for (String raw : modelTags) {
             if (out.size() >= MAX_TAGS) break;
-            String tag = normalizeTag(raw);
+            String tag = EnrichOutputs.normalizeTag(raw, MAX_TAG_LENGTH);
             if (tag == null || isFiller(tag) || isRegionName(tag)
                     || extraRegionNames.contains(PlaceNames.exactKey(tag))) {
                 continue;
@@ -322,21 +321,8 @@ final class DiningEnrichment {
     }
 
     static List<String> sanitizeSlots(List<String> modelSlots, Venue venue) {
-        LinkedHashSet<String> out = new LinkedHashSet<>();
-        for (String raw : modelSlots) {
-            if (raw == null) continue;
-            String slot = raw.strip().toLowerCase(Locale.ROOT);
-            if (TIME_SLOTS.contains(slot)) out.add(slot);
-        }
-        return out.isEmpty() ? venue.defaultSlots : List.copyOf(out);
-    }
-
-    private static String normalizeTag(String raw) {
-        if (raw == null) return null;
-        String tag = raw.strip();
-        while (tag.startsWith("#")) tag = tag.substring(1).strip();
-        if (tag.isEmpty() || tag.length() > MAX_TAG_LENGTH) return null;
-        return tag;
+        List<String> slots = EnrichOutputs.validSlots(modelSlots);
+        return slots.isEmpty() ? venue.defaultSlots : slots;
     }
 
     static boolean isFiller(String tag) {
@@ -362,15 +348,6 @@ final class DiningEnrichment {
         names.addAll(List.of("seoul", "busan", "incheon", "daegu", "daejeon", "gwangju", "jeju",
                 "suwon", "gangneung", "gyeongju", "jeonju", "yeosu", "korea"));
         return Set.copyOf(names);
-    }
-
-    private static List<String> textList(JsonNode node) {
-        List<String> out = new ArrayList<>();
-        if (node == null || !node.isArray()) return out;
-        for (JsonNode item : node) {
-            if (item != null && !item.isNull()) out.add(item.asText());
-        }
-        return out;
     }
 
     private static String textOrNull(JsonNode node) {
