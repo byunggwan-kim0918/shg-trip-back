@@ -75,6 +75,24 @@ final class EnrichOutputs {
         return List.copyOf(out);
     }
 
+    /** traveler_fame 규칙. 국내·해외 관광지·식당 프롬프트가 같은 기준을 쓴다(유명도 점수가 국내외에서 같은 눈금이 된다). */
+    static String fameRule() {
+        return """
+                traveler_fame은 여행자 사이에서 알려진 정도다.
+                - 2: 이 도시 여행 가이드북의 주요 명소·맛집, 미쉐린 스타 식당, 이 도시에 가는 여행자 대부분이 들르는 곳. \
+                한 도시에 수십 곳 정도다(경복궁, 불국사, 자금성, 센소지, 스린 야시장, 니시키 시장, 하노이 문묘, 딘타이펑 신이 본점).
+                - 1: 현지에서 이름난 곳(오래된 노포, 지역 대표 맛집·명소, 여행 후기에 자주 나오는 곳).
+                - 0: 그 밖의 평범한 곳. 체인점은 본점·대표 지점만 1 이상이다.
+                - 모르는 장소면 0이다.""";
+    }
+
+    /** 0~2 정수만 받는다. 그 밖은 모름(null)이다. */
+    static Short fame(JsonNode node) {
+        if (node == null || !node.isIntegralNumber()) return null;
+        int v = node.asInt();
+        return v >= 0 && v <= 2 ? (short) v : null;
+    }
+
     private static final String FOREIGN_SCRIPT = "[\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}]";
     private static final Pattern FOREIGN_SCRIPT_RUN = Pattern.compile(FOREIGN_SCRIPT + "+");
     /** 한글 낱말에 붙은 한자·가나("适합니다"). 괄호로 병기한 한자는 한글과 붙지 않아 걸리지 않는다. */

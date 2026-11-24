@@ -366,6 +366,17 @@ class TripRequestMapperTest {
     }
 
     @Test
+    @DisplayName("한적한 곳 테마만 있으면 검색할 주제가 없어 기본 취향을 더하고 성향은 남긴다")
+    void quietThemeAloneGetsDefaultTopics() {
+        Events e = Events.busanTrip().clearSlot(Slot.MOOD).inferred(DraftField.THEMES, "quiet");
+
+        TripRequestMapper.Result r = map(e);
+
+        assertThat(r.request().themes()).contains("quiet").containsAll(GeneratorSupport.DEFAULT_THEMES);
+        assertThat(VALIDATOR.validate(r.request())).isEmpty();
+    }
+
+    @Test
     @DisplayName("취향을 맡기면 기본 취향으로 채우고 제안이라고 표시한다")
     void delegatedTasteUsesDefaults() {
         Events e = Events.busanTrip().clearSlot(Slot.MOOD).outcome(Slot.MOOD, FieldStatus.DELEGATED);

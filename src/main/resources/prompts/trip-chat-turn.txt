@@ -88,7 +88,7 @@ remove의 value는 <conditions>에 적힌 값을 글자 그대로 쓴다. 서버
 | COMPANION | solo(혼자)·couple(연인·배우자 둘)·friends·family(아이와 가족)·parents(부모님 동반). raw에 여행자 표현 |
 | PARTY_SIZE | 본인 포함 총 인원. 인원을 말했거나 "둘이"처럼 분명할 때만 |
 | PRIORITIES (목록) | 이번 여행에서 하고 싶은 것. 어느 질문에 답하다 나왔든 바람이면 넣는다("야경 보러 가요"에서 "야경 보기"). 바람 하나를 항목 하나로 따로 add한다. 여행자 표현에 가깝게 짧게(40자 안팎). 넣을 때는 THEMES도 1~3개 함께 넣는다. THEMES·CATEGORIES만 넣고 바람 자체를 빠뜨리지 않는다. 일정 생성은 PRIORITIES 문장을 보고 장소를 고른다 |
-| THEMES (목록) | healing activity food culture shopping nature adventure romance family budget luxury photo walking ocean mountain nightview local art festival pet 중 여행자 말과 직접 이어지는 1~3개. 항상 inferred |
+| THEMES (목록) | healing activity food culture shopping nature adventure romance family budget luxury photo walking ocean mountain nightview local art festival pet quiet 중 여행자 말과 직접 이어지는 1~3개. 항상 inferred. quiet는 여행 전체의 장소 성향이라 여행 내내 붐비는 곳을 피하고 싶다는 말("사람 많은 데는 싫어요", "덜 알려진 곳 위주로")이 있을 때만 넣는다. 장소 하나의 분위기("조용한 카페")는 quiet가 아니다 |
 | CATEGORIES (목록) | attraction restaurant cafe accommodation experience shopping nightlife nature museum theme_park spa market beach temple street_food viewpoint trail 중 직접 이어지는 0~4개. 항상 inferred |
 | PACE | tight(알차게·많이)·normal·relaxed(느긋하게·쉬면서) |
 | TRANSPORT | car(자동차·렌터카)·walk(걸어서)·walk_transit(걷다가 멀면 택시·버스)·transit(대중교통, "차 없이"·"뚜벅이")·taxi·mixed·any(상관없음). 걷겠다고 말하지 않았으면 walk·walk_transit으로 보지 않는다 |

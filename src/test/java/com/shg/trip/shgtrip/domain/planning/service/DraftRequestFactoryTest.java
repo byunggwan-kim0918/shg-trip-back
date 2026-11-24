@@ -172,6 +172,20 @@ class DraftRequestFactoryTest {
                 .doesNotContain("가지 않을 곳");
     }
 
+    @Test
+    @DisplayName("한적한 곳 취향은 초안 요청에 장소 성향으로 적고, 성향이 없으면 적지 않는다")
+    void fameMixReachesDraftPrompt() {
+        ItineraryGenerateRequest base = request("car", List.of());
+        VectorEnrichedInput plain = enriched("KR", "car", "Jeju");
+        VectorEnrichedInput quiet = new VectorEnrichedInput("여행", List.of("nature", "quiet"), List.of("restaurant"),
+                "relaxed", "car", new BigDecimal("500000"), LocalDate.of(2027, 5, 1), LocalDate.of(2027, 5, 3), "여행",
+                List.of(), "여행", "KR", List.of("Jeju"), List.of(), Map.of(), null, null, null, null, Map.of(),
+                VectorEnrichedInput.CompanionType.UNKNOWN, 3, List.of());
+
+        assertThat(DraftItineraryPlanner.prompt(factory.prepare(base, quiet).request())).contains("장소 성향: 한적한 곳 위주");
+        assertThat(DraftItineraryPlanner.prompt(factory.prepare(base, plain).request())).doesNotContain("장소 성향");
+    }
+
     private static Place lodging(long id, String name, double lat, double lng) {
         return Place.builder().id(id).name(name).address("부산").category("Travel and Transportation > Lodging > Hotel")
                 .region("Busan").country("KR").placeRole("LODGING").latitude(BigDecimal.valueOf(lat))
