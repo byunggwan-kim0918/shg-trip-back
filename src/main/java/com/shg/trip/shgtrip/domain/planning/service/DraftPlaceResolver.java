@@ -1,5 +1,8 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.catalog.CatalogPlace;
+import com.shg.trip.shgtrip.domain.place.catalog.PlaceCatalog;
+import com.shg.trip.shgtrip.domain.place.catalog.PlaceCatalogPromoter;
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
@@ -73,6 +76,8 @@ public class DraftPlaceResolver {
 
     private final PlaceRepository placeRepository;
     private final Destinations destinations;
+    private final PlaceCatalog catalog;
+    private final PlaceCatalogPromoter promoter;
 
     /**
      * @param status ok·none·ambiguous·too_short
@@ -117,6 +122,75 @@ public class DraftPlaceResolver {
      */
     public Resolution resolve(String name, String kind, Collection<String> regions, Collection<String> cityNames,
                               double[] anchor) {
+        Resolution found = resolveIn(dbLookup(), name, kind, regions, cityNames, anchor);
+        if (found.place() != null || "ambiguous".equals(found.status()) || !catalog.enabled() || "transit".equals(kind)) {
+            return found;
+        }
+        CatalogLookup lookup = new CatalogLookup(catalog);
+        Resolution pulled = resolveIn(lookup, name, kind, regions, cityNames, anchor);
+        if (pulled.place() == null) return found;
+        return new Resolution(promoter.promote(lookup.source(pulled.place())), pulled.status(), pulled.match());
+    }
+
+    /**
+     * 이름을 찾는 곳. 운영 DB를 먼저 보고, 없으면 같은 규칙으로 카탈로그를 본다. 카탈로그 행은 해석 안에서만 쓰는
+     * 음수 id를 달고, 고른 행만 DB에 올린다.
+     */
+    interface Lookup {
+        List<Place> byCompactName(String compact, int minLength, Collection<String> regions, List<String> roles);
+
+        List<Place> byNameEdges(String head, String tail, Collection<String> regions, List<String> roles);
+    }
+
+    private Lookup dbLookup() {
+        return new Lookup() {
+            @Override
+            public List<Place> byCompactName(String compact, int minLength, Collection<String> regions,
+                                             List<String> roles) {
+                return placeRepository.findActiveByCompactName(compact, minLength, regions, roles);
+            }
+
+            @Override
+            public List<Place> byNameEdges(String head, String tail, Collection<String> regions, List<String> roles) {
+                return placeRepository.findActiveByNameEdges(head, tail, regions, roles);
+            }
+        };
+    }
+
+    static final class CatalogLookup implements Lookup {
+        private final PlaceCatalog catalog;
+        private final Map<Long, CatalogPlace> byId = new java.util.HashMap<>();
+        private final Map<CatalogPlace, Place> transients = new java.util.HashMap<>();
+
+        CatalogLookup(PlaceCatalog catalog) {
+            this.catalog = catalog;
+        }
+
+        @Override
+        public List<Place> byCompactName(String compact, int minLength, Collection<String> regions, List<String> roles) {
+            return places(catalog.findByCompactName(compact, minLength, regions, roles));
+        }
+
+        @Override
+        public List<Place> byNameEdges(String head, String tail, Collection<String> regions, List<String> roles) {
+            return places(catalog.findByNameEdges(head, tail, regions, roles));
+        }
+
+        private List<Place> places(List<CatalogPlace> rows) {
+            return rows.stream().map(c -> transients.computeIfAbsent(c, k -> {
+                long id = -(byId.size() + 1L);
+                byId.put(id, k);
+                return k.transientPlace(id);
+            })).toList();
+        }
+
+        CatalogPlace source(Place p) {
+            return byId.get(p.getId());
+        }
+    }
+
+    private Resolution resolveIn(Lookup lookup, String name, String kind, Collection<String> regions,
+                                 Collection<String> cityNames, double[] anchor) {
         Resolution last = Resolution.miss("too_short");
         List<String> variants = queryVariants(name, cityNames);
         List<String> aliases = PlaceNames.variants(name);
@@ -131,22 +205,22 @@ public class DraftPlaceResolver {
         // 별칭이 있으면 같은 이름을 먼저 쓴다. 앞부분만 맞는 딸린 시설("경포해변 중앙광장")이 별칭 이름의 본래 장소를 가린다.
         // 별칭이 없으면 질의 순서가 이미 긴 이름부터라 이 조회를 더하지 않는다.
         for (String query : aliases.size() > 1 ? variants : List.<String>of()) {
-            last = resolveKey(query, roles, regions, anchor, 0, fetched, p -> true);
+            last = resolveKey(lookup, query, roles, regions, anchor, 0, fetched, p -> true);
             if (last.place() != null) return writtenAs(last, query, asWritten, lastWords);
         }
         java.util.function.Predicate<Hit> keepsRest = keepsRestOf(aliases, cityNames);
         for (String query : variants) {
-            last = resolveKey(query, roles, regions, anchor, 3, fetched, lastWords.contains(query) ? keepsRest : p -> true);
+            last = resolveKey(lookup, query, roles, regions, anchor, 3, fetched, lastWords.contains(query) ? keepsRest : p -> true);
             if (last.place() != null) return writtenAs(last, query, asWritten, lastWords);
         }
         // 모델이 명소로 적은 카페·빵집(테라로사 커피공장, 성심당)은 이름이 거의 같을 때만 잇는다.
         for (String query : variants) {
-            last = resolveKey(query, ANY_VISIT, regions, anchor, 2, fetched,
+            last = resolveKey(lookup, query, ANY_VISIT, regions, anchor, 2, fetched,
                     lastWords.contains(query) ? keepsRest : p -> true);
             if (last.place() != null) return writtenAs(last, query, asWritten, lastWords);
         }
         for (String query : variants.subList(0, Math.min(2, variants.size()))) {
-            Resolution infixed = resolveInfixed(query, roles, regions);
+            Resolution infixed = resolveInfixed(lookup, query, roles, regions);
             if (infixed.place() != null) return infixed;
         }
         // 표기 변형은 근거가 약해 다른 단계가 모두 실패했을 때 같은 이름이거나 앞부분이 맞을 때만 받는다.
@@ -154,7 +228,7 @@ public class DraftPlaceResolver {
             for (String query : new java.util.LinkedHashSet<>(List.of(PlaceNames.exactKey(spelled),
                     queryKey(spelled, cityNames)))) {
                 if (query.length() < 2) continue;
-                Resolution spelledHit = resolveKey(query, roles, regions, anchor, 1, fetched, p -> true);
+                Resolution spelledHit = resolveKey(lookup, query, roles, regions, anchor, 1, fetched, p -> true);
                 if (spelledHit.place() != null) return spelledHit.as(Match.VARIANT);
             }
         }
@@ -173,9 +247,9 @@ public class DraftPlaceResolver {
     }
 
     /** 알려진 이름 가운데 꾸밈말이 낀 질의("대인예술시장")를 그 꾸밈말을 뺀 DB 이름("대인시장")으로 잇는다. */
-    private Resolution resolveInfixed(String query, List<String> roles, Collection<String> regions) {
+    private Resolution resolveInfixed(Lookup lookup, String query, List<String> roles, Collection<String> regions) {
         if (query.length() < MIN_INFIXED_NAME + 2) return Resolution.miss("none");
-        List<Hit> hits = hits(placeRepository.findActiveByNameEdges(query.substring(0, 2),
+        List<Hit> hits = hits(lookup.byNameEdges(query.substring(0, 2),
                         query.substring(query.length() - 2), regions, roles), roles).stream()
                 .filter(h -> readableName(h.place()))
                 .filter(h -> h.forms().stream().anyMatch(f -> dropsInfix(f.key(), query)))
@@ -278,11 +352,11 @@ public class DraftPlaceResolver {
      * @param fetched 한 이름을 잇는 동안 같은 질의를 다시 조회하지 않게 결과를 담아 둔다
      * @param accepts 순위를 매기기 전에 걸러 낼 조건
      */
-    private Resolution resolveKey(String query, List<String> roles, Collection<String> regions, double[] anchor,
-                                  int maxTier, Map<String, List<Hit>> fetched,
+    private Resolution resolveKey(Lookup lookup, String query, List<String> roles, Collection<String> regions,
+                                  double[] anchor, int maxTier, Map<String, List<Hit>> fetched,
                                   java.util.function.Predicate<Hit> accepts) {
         List<Hit> rows = fetched.computeIfAbsent(roles + "|" + query,
-                k -> hits(placeRepository.findActiveByCompactName(query, MIN_CONTAINED_NAME, regions, roles), roles));
+                k -> hits(lookup.byCompactName(query, MIN_CONTAINED_NAME, regions, roles), roles));
         if (rows.isEmpty()) return Resolution.miss("none");
 
         // 같은 순위 안에서는 원래 이름으로 맞은 곳, 이름난 곳 순이다. 별칭은 출처마다 붙이는 방식이 달라 덜 믿고,

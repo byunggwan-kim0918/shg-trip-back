@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.catalog.PlaceCatalog;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
@@ -24,7 +25,8 @@ class DraftPlaceResolverMatchingTest {
     private static final String SIGHT = "Landmarks and Outdoors > Tourist Attraction";
 
     private final PlaceRepository repository = mock(PlaceRepository.class);
-    private final DraftPlaceResolver resolver = new DraftPlaceResolver(repository, Destinations.fromClasspath());
+    private final DraftPlaceResolver resolver = new DraftPlaceResolver(repository, Destinations.fromClasspath(),
+            new PlaceCatalog(""), null);
 
     private void rows(Place... places) {
         given(repository.findActiveByCompactName(anyString(), anyInt(), any(), any())).willAnswer(inv -> {
