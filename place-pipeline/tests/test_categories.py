@@ -1,3 +1,4 @@
+from pipeline import policy
 from pipeline.categories import load_overture_map, overture_label
 
 
@@ -30,10 +31,10 @@ def test_primary_without_hierarchy_is_used():
 
 
 def test_every_label_uses_fsq_top_level():
-    tops = {"Arts and Entertainment", "Community and Government", "Dining and Drinking", "Landmarks and Outdoors",
+    tops = {"Arts and Entertainment", "Business and Professional Services", "Community and Government", "Dining and Drinking", "Landmarks and Outdoors",
             "Retail", "Sports and Recreation", "Travel and Transportation"}
     for key, label in load_overture_map().items():
-        assert not label or label.split(" > ")[0] in tops, key
+        assert label in ("", policy.REVIEW_LABEL) or label.split(" > ")[0] in tops, key
 
 
 def test_well_known_venues_are_loaded_and_left_to_recommendation():

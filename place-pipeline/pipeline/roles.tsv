@@ -1,0 +1,159 @@
+# 풀 분류(FSQ 라벨 체계) → 장소 역할. 가장 긴 접두어가 맞는 줄을 쓴다.
+# role: destination(관광 목적지) experience(지역 경험) food(식음료) support(숙박·교통·편의) general(일반 시설)
+# needs_notability=yes면 같은 분류 안에 명소와 일반 시설이 섞여 지명도로 다시 가른다. 지명도가 높으면 목적지, 낮으면 when_low를 따른다.
+# when_low: exclude(일반 시설이라 일정에 쓰지 않음) situational(상황에 따라 활용) review(분류만으로는 알 수 없어 검토)
+label_prefix	role	needs_notability	when_low
+Dining and Drinking	food	no	-
+Travel and Transportation	support	no	-
+Travel and Transportation > Lodging	support	no	-
+Travel and Transportation > Tourist Information and Service	support	no	-
+Travel and Transportation > Tourist Information and Service > Tour Provider	experience	no	-
+Travel and Transportation > Rest Area	experience	no	-
+Travel and Transportation > Boat or Ferry	support	no	-
+Travel and Transportation > Cruise	experience	no	-
+Travel and Transportation > Cable Car	destination	no	-
+Travel and Transportation > Funicular	destination	no	-
+Landmarks and Outdoors	destination	yes	review
+Landmarks and Outdoors > Other Great Outdoors	destination	yes	review
+Landmarks and Outdoors > Park	destination	yes	situational
+Landmarks and Outdoors > Park > National Park	destination	no	-
+Landmarks and Outdoors > Park > State or Provincial Park	destination	no	-
+Landmarks and Outdoors > Park > Natural Park	destination	no	-
+Landmarks and Outdoors > National Park	destination	no	-
+Landmarks and Outdoors > Nature Preserve	destination	no	-
+Landmarks and Outdoors > Waterfall	destination	no	-
+Landmarks and Outdoors > Beach	destination	no	-
+Landmarks and Outdoors > Lake	destination	no	-
+Landmarks and Outdoors > Hot Spring	destination	no	-
+Landmarks and Outdoors > Scenic Lookout	destination	no	-
+Landmarks and Outdoors > Botanical Garden	destination	no	-
+Landmarks and Outdoors > Garden	destination	no	-
+Landmarks and Outdoors > Sculpture Garden	destination	no	-
+Landmarks and Outdoors > Castle	destination	no	-
+Landmarks and Outdoors > Palace	destination	no	-
+Landmarks and Outdoors > Archaeological Site	destination	no	-
+Landmarks and Outdoors > Cave	destination	no	-
+Landmarks and Outdoors > Island	destination	no	-
+Landmarks and Outdoors > Volcano	destination	no	-
+Landmarks and Outdoors > Cape	destination	no	-
+Landmarks and Outdoors > Bay	destination	no	-
+Landmarks and Outdoors > Lighthouse	destination	no	-
+Landmarks and Outdoors > Canal	destination	no	-
+Landmarks and Outdoors > Waterfront	destination	no	-
+Landmarks and Outdoors > Surf Spot	destination	no	-
+Landmarks and Outdoors > Dive Spot	destination	no	-
+Landmarks and Outdoors > Rock Climbing Spot	destination	no	-
+Landmarks and Outdoors > Bathing Area	destination	no	-
+Landmarks and Outdoors > Historic and Protected Site	destination	yes	situational
+Landmarks and Outdoors > Memorial Site	destination	yes	situational
+Landmarks and Outdoors > Mountain	destination	yes	situational
+Landmarks and Outdoors > Hill	destination	yes	situational
+Landmarks and Outdoors > Pass	destination	yes	situational
+Landmarks and Outdoors > River	destination	yes	situational
+Landmarks and Outdoors > Forest	destination	yes	situational
+Landmarks and Outdoors > Field	destination	yes	situational
+Landmarks and Outdoors > Pond	destination	yes	situational
+Landmarks and Outdoors > Wetland	destination	yes	situational
+Landmarks and Outdoors > Reservoir	destination	yes	situational
+Landmarks and Outdoors > Dam	destination	yes	situational
+Landmarks and Outdoors > Tree	destination	yes	situational
+Landmarks and Outdoors > Hiking Trail	destination	yes	situational
+Landmarks and Outdoors > Bike Trail	destination	yes	situational
+Landmarks and Outdoors > Harbor or Marina	destination	yes	situational
+Landmarks and Outdoors > Campground	experience	no	-
+Landmarks and Outdoors > Farm	experience	no	-
+Landmarks and Outdoors > Mountain Hut	support	no	-
+Landmarks and Outdoors > Bridge	general	yes	exclude
+Landmarks and Outdoors > Tunnel	general	yes	exclude
+Landmarks and Outdoors > Structure	general	yes	exclude
+Landmarks and Outdoors > Plaza	general	yes	exclude
+Landmarks and Outdoors > Fountain	general	yes	exclude
+Landmarks and Outdoors > Monument	general	yes	situational
+Landmarks and Outdoors > Well	general	yes	exclude
+Landmarks and Outdoors > Picnic Shelter	general	yes	exclude
+Landmarks and Outdoors > Canal Lock	general	yes	exclude
+Landmarks and Outdoors > Boat Launch	general	yes	situational
+Landmarks and Outdoors > Roof Deck	general	yes	exclude
+Landmarks and Outdoors > Stable	general	yes	exclude
+Community and Government > Spiritual Center	destination	yes	situational
+Community and Government > Spiritual Center > Church	general	yes	exclude
+Community and Government > Spiritual Center > Prayer Room	general	no	-
+Community and Government > Spiritual Center > Cemevi	general	no	-
+Community and Government > Spiritual Center > Mosque	general	yes	exclude
+Community and Government > Observatory	destination	no	-
+Community and Government > Cultural Center	experience	yes	situational
+Community and Government	general	no	-
+Arts and Entertainment	experience	yes	review
+Arts and Entertainment > Museum	destination	no	-
+Arts and Entertainment > Zoo	destination	no	-
+Arts and Entertainment > Aquarium	destination	no	-
+Arts and Entertainment > Amusement Park	destination	no	-
+Arts and Entertainment > Water Park	destination	no	-
+Arts and Entertainment > Planetarium	destination	no	-
+Arts and Entertainment > Art Gallery	experience	no	-
+Arts and Entertainment > Performing Arts Venue	experience	no	-
+Arts and Entertainment > Exhibit	experience	no	-
+Arts and Entertainment > Fair	experience	no	-
+Arts and Entertainment > Comedy Club	experience	no	-
+Arts and Entertainment > Escape Room	experience	no	-
+Arts and Entertainment > Arcade	experience	no	-
+Arts and Entertainment > Bowling Alley	experience	no	-
+Arts and Entertainment > Mini Golf Course	experience	no	-
+Arts and Entertainment > Pool Hall	experience	no	-
+Arts and Entertainment > Night Club	experience	no	-
+Arts and Entertainment > Stadium	support	no	-
+Arts and Entertainment > Public Art	general	yes	exclude
+Arts and Entertainment > Casino	general	no	-
+Arts and Entertainment > Psychic and Astrologer	general	no	-
+Arts and Entertainment > Ticket Seller	general	no	-
+Sports and Recreation	experience	yes	review
+Sports and Recreation > Snow Sports	experience	no	-
+Sports and Recreation > Water Sports	experience	no	-
+Sports and Recreation > Fishing Area	experience	no	-
+Sports and Recreation > Golf	experience	no	-
+Sports and Recreation > Race Track	experience	no	-
+Sports and Recreation > Sauna	experience	no	-
+Sports and Recreation > Skating	experience	no	-
+Sports and Recreation > Indoor Play Area	experience	no	-
+Sports and Recreation > Racquet Sports	general	no	-
+Sports and Recreation > Athletic Field	general	no	-
+Sports and Recreation > Basketball	general	no	-
+Sports and Recreation > Martial Arts Dojo	general	no	-
+Sports and Recreation > Sports Club	general	no	-
+Sports and Recreation > Recreation Center	general	no	-
+Sports and Recreation > Running and Track	general	no	-
+Sports and Recreation > Baseball	general	no	-
+Sports and Recreation > Paintball Field	experience	no	-
+Business and Professional Services > Health and Beauty Service > Spa	experience	yes	exclude
+Business and Professional Services > Health and Beauty Service > Bath House	experience	no	-
+Retail	general	yes	situational
+Retail > Souvenir Store	experience	no	-
+Retail > Gift Store	experience	no	-
+Retail > Arts and Crafts Store	experience	no	-
+Retail > Antique Store	experience	no	-
+Retail > Vintage and Thrift Store	experience	no	-
+Retail > Record Store	experience	no	-
+Retail > Market	experience	no	-
+Retail > Flea Market	experience	no	-
+Retail > Shopping Mall	experience	no	-
+Retail > Shopping Plaza	experience	no	-
+Retail > Department Store	experience	no	-
+Retail > Outlet Store	experience	no	-
+Retail > Duty-free Store	experience	no	-
+Retail > Food and Beverage Retail > Farmers Market	experience	no	-
+Retail > Food and Beverage Retail > Fish Market	experience	no	-
+Retail > Food and Beverage Retail > Liquor Store	experience	no	-
+Retail > Food and Beverage Retail > Candy Store	experience	no	-
+Retail > Food and Beverage Retail > Chocolate Store	experience	no	-
+Retail > Food and Beverage Retail > Gourmet Store	experience	no	-
+Retail > Food and Beverage Retail > Coffee Roaster	experience	no	-
+Retail > Food and Beverage Retail > Wine Store	experience	no	-
+Retail > Food and Beverage Retail > Cheese Store	experience	no	-
+Retail > Vending Machine	general	no	-
+Retail > Smoke Shop	general	no	-
+Retail > Vape Store	general	no	-
+Retail > Tobacco Store	general	no	-
+Retail > Betting Shop	general	no	-
+Retail > Medical Supply Store	general	no	-
+Retail > Baby Store	general	no	-
+Event	general	no	-

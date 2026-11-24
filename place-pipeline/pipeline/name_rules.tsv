@@ -1,0 +1,143 @@
+# 이름 규칙. 한 줄이 정규식 하나이고 대소문자는 구분하지 않는다. region은 *(모든 나라)이거나 행의 국가 코드(JP·KR 등)이고,
+# 국가 규칙은 그 나라 행에만 건다. 문자·표기 관습이 나라마다 달라 한 나라의 패턴이 다른 나라 이름에 우연히 걸린다.
+# 확실 제외: all은 분류 무관, non_food는 식음료 제외, transit은 교통 분류, sight는 식음료·소매·숙소·교통 제외에 건다.
+# review는 지우지 않고 검토로 남긴다(식음료 제외). 지점·본사 이름에는 옛 지점 건물(旧○○支店)과 노포 지점이 섞인다.
+# 승강장·출구 규칙을 명소에 걸면 등산로 입구(大株歩道入口)가 빠진다. 식당·숙소 이름에는 メゾン·マンション·ヴィラ가 흔하다.
+# branch_suffix는 체인 같은 이름을 셀 때 떼는 지점명이다. 띄어 쓴 지점명만 떼서 "山田精肉店" 같은 상호를 자르지 않는다.
+# generic은 이름 포함 관계로 출처를 이을 때 짧은 쪽이 되면 안 되는 일반명사 키(정확 키 전체에 맞춘다).
+# sight_notable·sight_general은 같은 분류 안에서 명소와 생활 시설을 가르는 이름 근거다(selection.py). 지우는 규칙이 아니다.
+# flagship은 체인의 본점·본포라서 체인 강등을 하지 않는 이름이다(selection.py). 본점 자체가 여행 목적지가 된다.
+# 붙여 쓴 "…本店"은 지명 끝 글자(橋本店·矢本店)나 백화점 본점(阪急うめだ本店) 안 매장이 섞여 띄어 쓴 것만 본다.
+# flagship_suffix는 브랜드명 바로 뒤에 붙는 본점 접미어다. 브랜드명을 뗀 나머지 전체에 맞춘다(정확 키 기준).
+# 브랜드명 자체가 本店으로 끝나는 체인(山本屋本店)은 모든 지점이 그 이름이라 본점으로 보지 않는다.
+# part_marker는 한 이름이 다른 이름에 붙어 그 장소의 일부(문·본전·입구·별관)를 가리키는 남은 부분이다(dedup.py). 남은 부분 전체에 맞춘다.
+region	use	pattern
+# 교통 시설의 승강장·개찰구·출구·탑승구, 식음료 외 주차장
+JP	transit	番線
+JP	transit	改札
+JP	transit	\d番ホーム
+JP	transit	駅\s?ホーム
+JP	transit	出口
+JP	transit	入口
+JP	non_food	駐車場
+JP	review	乗り場
+JP	review	のりば
+JP	transit	搭乗口
+JP	transit	[A-Z]\d*口
+JP	transit	\d+号口
+CN	transit	站台
+JP	transit	出入口
+CN	transit	出站口
+CN	transit	登机口
+CN	non_food	停车场
+JP	non_food	停車場
+VN	non_food	Bãi (đỗ|giữ) xe
+*	transit	\bExit\s?\d
+*	transit	\bGate\s?\d
+*	transit	\bPlatform\s?\d
+KR	non_food	주차장
+KR	transit	출구
+KR	transit	승강장
+# 회사 지점·본사(검토)
+JP	review	^[^旧].*(支店|本社)$
+# 공중화장실·자전거 주차장·공유 자전거 정류장·코인 시설·러브호텔·사업소·편의점. 분류가 명소·식당으로 잘못 붙어 온다.
+JP	all	公衆トイレ
+JP	all	公衆便所
+JP	all	^トイレ
+JP	all	トイレ$
+JP	all	駐輪場
+JP	all	自転車シェアリング
+JP	all	バイクシェア
+JP	all	コミュニティサイクル
+JP	all	HELLO CYCLING
+JP	all	チャリチャリ
+JP	all	コインパーキング
+JP	all	コインランドリー
+JP	all	ラブホテル
+JP	all	レジャーホテル
+JP	all	(営業所|支社|出張所|事業所|事務所)$
+JP	all	セブン-?イレブン
+JP	all	ローソン
+JP	all	ファミリーマート
+JP	all	ミニストップ
+JP	all	デイリーヤマザキ
+*	all	7-eleven
+*	all	familymart
+# 명소로 잘못 분류된 집합주택·단체
+JP	sight	マンション
+JP	sight	ハイツ
+JP	sight	アパート
+JP	sight	コーポ([^レ]|$)
+JP	sight	ハイム
+JP	sight	サーパス
+JP	sight	パークハウス
+JP	sight	ライオンズクラブ
+JP	sight	ロータリークラブ
+# 지점명
+JP	branch_suffix	[\s　]+\S*店$
+# 업종 일반명사
+*	generic	^(bar|pub|cafe|coffee|kitchen|dining|restaurant|shop|store|hotel|salon)$
+JP	generic	^(バー|パブ|カフェ|喫茶|喫茶店|居酒屋|スナック|食堂|レストラン|ラーメン|寿司|焼肉|焼鳥|ダイニング|キッチン|ホテル|旅館|酒場)$
+# 명소 근거(문화재·명승·대형 공원·주요 사찰·전망·온천)
+JP	sight_notable	世界(文化|自然)?遺産
+JP	sight_notable	国宝
+JP	sight_notable	重要文化財
+JP	sight_notable	史跡
+JP	sight_notable	名勝
+JP	sight_notable	天然記念物
+JP	sight_notable	国立公園
+JP	sight_notable	国定公園
+JP	sight_notable	(県立|府立|道立|都立|国営).*公園
+JP	sight_notable	庭園
+JP	sight_notable	城(跡|址|趾)
+JP	sight_notable	天守
+JP	sight_notable	大社
+JP	sight_notable	神宮
+JP	sight_notable	(総|大)?本山
+JP	sight_notable	総本宮
+JP	sight_notable	大仏
+JP	sight_notable	展望(台|所)
+JP	sight_notable	渓谷
+JP	sight_notable	古墳
+JP	sight_notable	温泉
+JP	sight_notable	銭湯
+JP	sight_notable	湯$
+JP	sight_notable	の湯
+JP	sight_notable	足湯
+JP	sight_notable	サウナ
+JP	sight_notable	健康ランド
+*	sight_notable	\bworld heritage\b
+*	sight_notable	\bnational park\b
+# 생활 시설(동네 공원·보행 시설·작은 비석·집회 시설)
+JP	sight_general	児童(公園|遊園)
+JP	sight_general	ちびっこ
+JP	sight_general	街区公園
+JP	sight_general	第[0-9０-９一二三四五六七八九十]+(公園|緑地|広場)
+JP	sight_general	[0-9０-９]+号(公園|緑地)
+JP	sight_general	ポケットパーク
+JP	sight_general	プレイロット
+JP	sight_general	緑地$
+JP	sight_general	歩道橋
+JP	sight_general	跨線橋
+JP	sight_general	陸橋
+JP	sight_general	踏切
+JP	sight_general	地蔵
+JP	sight_general	道祖神
+JP	sight_general	(句|歌|石|忠魂|慰霊)碑
+JP	sight_general	公民館
+JP	sight_general	集会所
+# 장소의 일부를 가리키는 남은 이름
+*	part_marker	^(main |east |west |south |north |new )?(gate|entrance|exit|parking|lobby|annex|wing|hall|tower|platform|terminal|building [a-z0-9]+)$
+JP	part_marker	^([東西南北中大総表裏楼山神随唐]|仁王|旧){0,2}門$
+JP	part_marker	^(一の|二の|三の|大)?鳥居$
+JP	part_marker	^(本殿|拝殿|本堂|幣殿|境内|社務所|授与所|御朱印所|手水舎|鐘楼|五重塔|三重塔|山門|楼門|奥の院|奥宮)$
+JP	part_marker	^(第[0-9一二三]+)?(入口|出口|駐車場|駐輪場|案内所|売店|休憩所|展望台|受付)$
+JP	part_marker	^(本館|別館|新館|旧館|分館|東館|西館|南館|北館|[a-z0-9]号館|[a-z0-9]棟)$
+# 체인 본점
+*	flagship	\bflagship\b
+JP	flagship	[\s　]本店$
+JP	flagship	総本店$
+JP	flagship	本舗$
+JP	flagship	総本家$
+*	flagship_suffix	^(flagship|main store)$
+JP	flagship_suffix	^(総)?本店$
