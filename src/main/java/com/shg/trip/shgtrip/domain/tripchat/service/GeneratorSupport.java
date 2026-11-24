@@ -19,7 +19,8 @@ public final class GeneratorSupport {
             "healing", "힐링", "activity", "액티비티", "food", "맛집", "culture", "문화/역사", "nature", "자연/풍경",
             "family", "가족여행", "shopping", "쇼핑", "adventure", "모험/탐험", "romance", "로맨틱", "budget", "알뜰여행",
             "luxury", "럭셔리", "photo", "사진", "walking", "도보/산책", "ocean", "바다/해변", "mountain", "산/트레킹",
-            "nightview", "야경", "local", "로컬 체험", "art", "예술/전시", "festival", "축제", "pet", "반려동물");
+            "nightview", "야경", "local", "로컬 체험", "art", "예술/전시", "festival", "축제", "pet", "반려동물",
+            "quiet", "한적한 곳");
 
     public static final Map<String, String> PACE_LABELS = labels(
             "tight", "알찬 일정", "normal", "보통 일정", "relaxed", "느긋한 일정");

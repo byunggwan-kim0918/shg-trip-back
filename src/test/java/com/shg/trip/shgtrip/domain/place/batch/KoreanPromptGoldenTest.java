@@ -75,13 +75,13 @@ class KoreanPromptGoldenTest {
     void rulesAreSharedAcrossPlaces() {
         Place a = Place.builder().id(5L).name("성산일출봉").address("제주").latitude(BigDecimal.ONE)
                 .longitude(BigDecimal.ONE).category("Landmarks and Outdoors > Mountain").region("Jeju").country("KR").build();
-        Place b = Place.builder().id(6L).name("경복궁").address("서울").latitude(BigDecimal.ONE)
+        Place b = Place.builder().id(6L).name("덕수궁").address("서울").latitude(BigDecimal.ONE)
                 .longitude(BigDecimal.ONE).category("Landmarks and Outdoors > Palace").region("Seoul").country("KR")
                 .description("조선 궁궐").build();
         EnrichPrompt first = scheduler.buildEnrichPrompt(a);
         EnrichPrompt second = scheduler.buildEnrichPrompt(b);
 
-        assertThat(first.system()).isEqualTo(second.system()).doesNotContain("경복궁", "조선 궁궐");
+        assertThat(first.system()).isEqualTo(second.system()).doesNotContain("덕수궁", "조선 궁궐");
         assertThat(first.user()).contains("성산일출봉").doesNotContain("place_role");
         assertThat(scheduler.buildEnrichPrompt(dining("하동관", "Dining and Drinking > Bar > Pub", null)).system())
                 .isEqualTo(scheduler.buildEnrichPrompt(dining("을지로 포차", "Dining and Drinking > Bar > Pub", null)).system());

@@ -145,7 +145,7 @@ final class DiningEnrichment {
 
     /**
      * @param overseasContext 해외 장소의 국가·여행지·주소 줄({@link OverseasEnrichment#contextLines}). 한국이면 null.
-     *                        해외면 traveler_fame을 묻고, 유명하지 않아도 description을 조건부로 묻는다
+     *                        해외면 유명하지 않아도 description을 조건부로 묻는다(traveler_fame은 국내·해외 모두 묻는다)
      * @param askNameKo       name_ko를 함께 묻는다
      */
     static EnrichPrompt buildPrompt(String name, String category, String existingDescription, Venue venue,
@@ -211,9 +211,7 @@ final class DiningEnrichment {
                     .append("(역사·대표 메뉴)을 한국어 2문장 이내로 쓴다. ").append(DescriptionRewrite.NO_REPUTATION)
                     .append(" 0이거나 확실하지 않으면 null.\n");
         }
-        if (overseas) {
-            sb.append(n++).append(". ").append(OverseasEnrichment.fameRule().replace("\n", "\n   ")).append("\n");
-        }
+        sb.append(n++).append(". ").append(EnrichOutputs.fameRule().replace("\n", "\n   ")).append("\n");
         if (askNameKo) {
             sb.append(n++).append(". ").append(OverseasEnrichment.nameKoRule().replace("\n", "\n   ")).append("\n");
         }
@@ -223,7 +221,7 @@ final class DiningEnrichment {
         if (venue == null) sb.append("  \"venue\": \"식당\",\n");
         sb.append("  \"tags\": [\"칼국수\", \"면요리\"],\n");
         sb.append("  \"recommended_time_slots\": [\"afternoon\", \"evening\"]");
-        if (overseas) sb.append(",\n  \"traveler_fame\": 0");
+        sb.append(",\n  \"traveler_fame\": 0");
         if (famous || overseas) sb.append(",\n  \"description\": null");
         sb.append("\n}");
         return new EnrichPrompt(sb.toString(), user.toString());

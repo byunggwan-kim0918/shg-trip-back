@@ -10,7 +10,7 @@ public final class WizardOptionIds {
 
     public static final String THEME_PATTERN =
             "healing|activity|food|culture|shopping|nature|adventure|romance|family|budget|luxury|photo"
-                    + "|walking|ocean|mountain|nightview|local|art|festival|pet";
+                    + "|walking|ocean|mountain|nightview|local|art|festival|pet|quiet";
     public static final String CATEGORY_PATTERN =
             "attraction|restaurant|cafe|accommodation|experience|shopping|nightlife|nature|museum"
                     + "|theme_park|spa|market|beach|temple|street_food|viewpoint|trail";
@@ -21,6 +21,9 @@ public final class WizardOptionIds {
     public static final Set<String> CATEGORIES = Set.of(CATEGORY_PATTERN.split("\\|"));
     public static final Set<String> PACES = Set.of(PACE_PATTERN.split("\\|"));
     public static final Set<String> TRANSPORTS = Set.of(TRANSPORT_PATTERN.split("\\|"));
+
+    /** 장소 주제가 아니라 덜 알려진 곳을 원하는 성향이다. 이것만 있으면 검색할 주제가 없어 기본 테마를 더한다. */
+    public static final String QUIET_THEME = "quiet";
 
     private WizardOptionIds() {
     }

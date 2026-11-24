@@ -90,7 +90,7 @@ public final class TripRequestMapper {
         List<String> categories = new ArrayList<>(whitelisted(draft.items(DraftField.CATEGORIES), WizardOptionIds.CATEGORIES));
         String pace = inSet(draft.value(DraftField.PACE), WizardOptionIds.PACES);
         tasteNotes(draft, themes, pace, notes);
-        if (themes.isEmpty()) themes.addAll(GeneratorSupport.DEFAULT_THEMES);
+        if (themes.stream().allMatch(WizardOptionIds.QUIET_THEME::equals)) themes.addAll(GeneratorSupport.DEFAULT_THEMES);
         if (categories.isEmpty()) categories.addAll(deriveCategories(themes));
         List<Item> wishes = draft.items(DraftField.PRIORITIES);
         List<Item> kept = latestWithin(wishes, MAX_PRIORITIES_TEXT);

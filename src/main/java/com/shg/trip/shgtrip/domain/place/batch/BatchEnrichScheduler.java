@@ -934,9 +934,10 @@ public class BatchEnrichScheduler {
                 log.warn("식당 보강 응답이 JSON 객체가 아님 - placeId={}", place.getId());
                 return false;
             }
-            Short fame = overseas ? OverseasEnrichment.fame(root.get("traveler_fame")) : null;
-            // Wikidata에 없는 유명 식당은 모델이 알려진 곳이라고 할 때만 설명을 받는다.
-            boolean describe = DiningEnrichment.isFamous(place.getWikidataSitelinks()) || (fame != null && fame >= 1);
+            Short fame = EnrichOutputs.fame(root.get("traveler_fame"));
+            // 모델이 모르는 동네 식당의 설명은 지어낸 내용이다. 해외는 Wikidata에 없는 유명 식당이 많아 알려진 곳 판단을 믿는다.
+            boolean describe = DiningEnrichment.isFamous(place.getWikidataSitelinks())
+                    || (overseas && fame != null && fame >= 1);
             DiningEnrichment.Result dining = DiningEnrichment.interpret(root,
                     DiningEnrichment.venueOf(place.getCategory()), describe,
                     overseas ? OverseasEnrichment.ownRegionNames(place) : Set.of());
