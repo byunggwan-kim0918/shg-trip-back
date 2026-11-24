@@ -1,0 +1,52 @@
+# 위키보야주 언어판의 장소 목록 틀과 절 제목 → 목록 종류. 언어판이 늘면 줄을 더한다.
+# kind: see(볼거리) do(할거리) buy(살거리) eat(먹을거리) drink(마실거리) sleep(숙소) go(교통) other
+# match=template은 틀 이름, match=section은 절 제목(== 제목 ==), match=type은 vCard·listing 틀의 type·group 값이다.
+wiki	match	value	kind
+*	template	see	see
+*	template	do	do
+*	template	buy	buy
+*	template	eat	eat
+*	template	drink	drink
+*	template	sleep	sleep
+*	template	go	go
+*	type	see	see
+*	type	do	do
+*	type	buy	buy
+*	type	eat	eat
+*	type	drink	drink
+*	type	sleep	sleep
+*	type	go	go
+*	type	restaurant	eat
+*	type	cafe	drink
+*	type	bar	drink
+*	type	hotel	sleep
+*	type	museum	see
+*	type	temple	see
+*	type	castle	see
+*	type	park	see
+*	type	national_park	see
+*	type	nature	see
+*	type	monument	see
+*	type	landmark	see
+*	type	viewpoint	see
+*	type	festival	do
+*	type	station	go
+*	type	airport	go
+*	type	tourist information	go
+*	type	city	other
+en	section	See	see
+en	section	Do	do
+en	section	Buy	buy
+en	section	Eat	eat
+en	section	Drink	drink
+en	section	Sleep	sleep
+en	section	Get in	go
+en	section	Get around	go
+ja	section	観る	see
+ja	section	する	do
+ja	section	買う	buy
+ja	section	食べる	eat
+ja	section	飲む	drink
+ja	section	泊まる	sleep
+ja	section	着く	go
+ja	section	移動する	go

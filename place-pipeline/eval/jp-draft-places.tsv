@@ -1,0 +1,225 @@
+# 일정 초안(eval-records/m4, 일본 30건)이 이름으로 고른 장소 → 일본어 이름. 정책별 "계획자가 쓰려던 장소가 남는가"를 잰다.
+# ja는 |로 이은 후보 이름(하나라도 맞으면 그 장소). kind=area는 거리·동네 이름이라 장소 하나로 잇지 않는다. kind=unknown은 실재 여부를 확인하지 못한 이름이다.
+city	ko	ja	kind
+sapporo	홋카이도 구 본청사	北海道庁旧本庁舎|赤れんが庁舎|北海道庁赤れんが庁舎	place
+sapporo	홋카이도 구 도청사	北海道庁旧本庁舎|赤れんが庁舎|北海道庁赤れんが庁舎	place
+sapporo	삿포로 시계탑	札幌市時計台|時計台	place
+sapporo	오도리 공원	大通公園	place
+sapporo	삿포로 오도리 공원	大通公園	place
+sapporo	삿포로 TV타워	さっぽろテレビ塔|札幌テレビ塔	place
+sapporo	삿포로 TV 타워	さっぽろテレビ塔|札幌テレビ塔	place
+sapporo	니조 시장	二条市場	place
+sapporo	다누키코지 상점가	狸小路商店街|狸小路	place
+sapporo	타누키코지 상점가	狸小路商店街|狸小路	place
+sapporo	홋카이도 신궁	北海道神宮	place
+sapporo	모이와산	藻岩山	place
+sapporo	모이와야마 전망대	藻岩山展望台|もいわ山山頂展望台	place
+sapporo	모이와산 전망대	藻岩山展望台|もいわ山山頂展望台	place
+sapporo	모이와야마 로프웨이	もいわ山ロープウェイ|札幌もいわ山ロープウェイ|藻岩山ロープウェイ	place
+sapporo	마루야마 공원	円山公園	place
+sapporo	마루야마 동물원	円山動物園|札幌市円山動物園	place
+sapporo	삿포로 맥주박물관	サッポロビール博物館	place
+sapporo	삿포로 맥주 박물관	サッポロビール博物館	place
+sapporo	삿포로 맥주 정원	サッポロビール園	place
+sapporo	삿포로 팩토리	サッポロファクトリー	place
+sapporo	삿포로 스텔라플레이스	札幌ステラプレイス|ステラプレイス	place
+sapporo	삿포로 스텔라 플레이스	札幌ステラプレイス|ステラプレイス	place
+sapporo	오타루 운하	小樽運河	place
+sapporo	오타루 오르골당	小樽オルゴール堂|小樽オルゴール堂本館	place
+sapporo	르타오 본점	ルタオ本店|LeTAO本店|小樽洋菓子舗ルタオ本店	place
+sapporo	사카이마치 거리	堺町通り|堺町通	area
+sapporo	사카이마치 도리	堺町通り|堺町通	area
+sapporo	기타이치 글라스 3호관	北一硝子三号館	place
+sapporo	오타루 키타이치 글라스 3호관	北一硝子三号館	place
+sapporo	기타이치 글라스 산고칸	北一硝子三号館	place
+sapporo	오타루 수족관	おたる水族館	place
+sapporo	오타루 시장	小樽市場|三角市場|小樽三角市場	place
+sapporo	구 닛폰유센 오타루 지점	旧日本郵船株式会社小樽支店|旧日本郵船小樽支店	place
+sapporo	홋카이도 개척 기념관	北海道博物館|北海道開拓記念館	place
+sapporo	홋카이도 대학 식물원	北海道大学植物園	place
+sapporo	홋카이도 대학	北海道大学	place
+sapporo	홋카이도 대학 포플러 가로수길	ポプラ並木|北大ポプラ並木	place
+sapporo	홋카이도 대학 은행나무 길	イチョウ並木|北大イチョウ並木	place
+sapporo	홋카이도 대학 은행나무길	イチョウ並木|北大イチョウ並木	place
+sapporo	시로이 코이비토 파크	白い恋人パーク	place
+sapporo	스스키노	すすきの	area
+sapporo	스스키노 교차로	すすきの交差点	area
+sapporo	나카지마 공원	中島公園	place
+sapporo	삿포로 화이트 일루미네이션	さっぽろホワイトイルミネーション	area
+sapporo	삿포로 JR타워 T38	JRタワー展望室|T38|JRタワー展望室T38	place
+sapporo	삿포로 대통로 공원	大通公園	place
+sapporo	다이마루 삿포로	大丸札幌店|大丸 札幌店	place
+sapporo	미쓰코시 삿포로 라이온	サッポロライオン|札幌三越	unknown
+fukuoka	후쿠오카 시립 박물관	福岡市博物館	place
+fukuoka	후쿠오카시 박물관	福岡市博物館	place
+fukuoka	후쿠오카 타워	福岡タワー	place
+fukuoka	모모치 해변공원	シーサイドももち海浜公園|ももち浜	place
+fukuoka	모모치 해변 공원	シーサイドももち海浜公園|ももち浜	place
+fukuoka	모모치 해변	シーサイドももち海浜公園|ももち浜	place
+fukuoka	나카스 야타이 거리	中洲屋台|中洲屋台街	area
+fukuoka	나카스 야타이	中洲屋台|中洲屋台街	area
+fukuoka	나카스 포장마차 거리	中洲屋台|中洲屋台街	area
+fukuoka	마리존	マリゾン	place
+fukuoka	캐널시티 하카타	キャナルシティ博多	place
+fukuoka	캐널 시티 하카타	キャナルシティ博多	place
+fukuoka	구시다 신사	櫛田神社|博多総鎮守 櫛田神社	place
+fukuoka	쿠시다 신사	櫛田神社|博多総鎮守 櫛田神社	place
+fukuoka	조텐지	承天寺	place
+fukuoka	쇼텐지	承天寺	place
+fukuoka	오호리 공원	大濠公園	place
+fukuoka	마이즈루 공원	舞鶴公園	place
+fukuoka	다자이후 텐만구	太宰府天満宮	place
+fukuoka	다자이후 텐만구 보물전	太宰府天満宮宝物殿	place
+fukuoka	나카강 산책로	那珂川	area
+fukuoka	나카스 강변	那珂川	area
+fukuoka	돈키호테 나카스점	ドン・キホーテ中洲店|ドンキホーテ中洲店	place
+fukuoka	후쿠오카 성터	福岡城跡|福岡城址	place
+fukuoka	후쿠오카성 터	福岡城跡|福岡城址	place
+fukuoka	후쿠오카성터	福岡城跡|福岡城址	place
+fukuoka	후쿠오카 시립미술관	福岡市美術館	place
+fukuoka	후쿠오카 시립 미술관	福岡市美術館	place
+fukuoka	후쿠오카 시 미술관	福岡市美術館	place
+fukuoka	후쿠오카 아시아 미술관	福岡アジア美術館	place
+fukuoka	일본 정원	友泉亭公園|松風園|大濠公園日本庭園	unknown
+fukuoka	니혼 정원	大濠公園日本庭園	unknown
+fukuoka	하카타 리버레인	博多リバレイン	place
+fukuoka	도초지	東長寺	place
+fukuoka	하카타 마치야 후루사토칸	博多町家ふるさと館	place
+fukuoka	하카타 마치야 퓨처 뮤지엄	博多町家ふるさと館	unknown
+fukuoka	JR 하카타 시티 아뮤플라자	アミュプラザ博多	place
+fukuoka	하카타 역 아뮤 플라자	アミュプラザ博多	place
+fukuoka	아뮤 플라자 하카타	アミュプラザ博多	place
+fukuoka	JR 하카타 시티 전망대	つばめの杜ひろば|JR博多シティ屋上	place
+fukuoka	요카토피아	よかトピア通り	unknown
+fukuoka	스이젠지 공원	水前寺成趣園|水前寺公園	unknown
+fukuoka	텐진 지하가	天神地下街	place
+fukuoka	텐진 지하상가	天神地下街	place
+fukuoka	덴진 지하상가	天神地下街	place
+fukuoka	다이마루 후쿠오카 텐진점	大丸福岡天神店	place
+fukuoka	아크로스 후쿠오카	アクロス福岡	place
+fukuoka	파르코 후쿠오카	福岡パルコ	place
+fukuoka	파르코	福岡パルコ	place
+fukuoka	마리노아 시사이드 아울렛	マリノアシティ福岡	place
+fukuoka	다이묘 거리	大名	area
+fukuoka	규슈 국립박물관	九州国立博物館	place
+fukuoka	큐슈 국립박물관	九州国立博物館	place
+fukuoka	고묘젠지	光明禅寺	place
+fukuoka	코묘젠지	光明禅寺	place
+fukuoka	스타벅스 다자이후 텐만구 오모테산도점	スターバックスコーヒー太宰府天満宮表参道店	place
+fukuoka	스타벅스 다자이후 오모테산도점	スターバックスコーヒー太宰府天満宮表参道店	place
+fukuoka	다자이후 유원지	だざいふ遊園地	place
+fukuoka	쇼후쿠지	聖福寺	place
+fukuoka	와타나베도리	渡辺通	area
+fukuoka	미츠코시 후쿠오카	福岡三越	place
+fukuoka	노코노시마	能古島	place
+fukuoka	네코노시마	相島	unknown
+fukuoka	가와바타 상점가	上川端商店街|川端商店街	place
+fukuoka	카와바타 상점가	上川端商店街|川端商店街	place
+fukuoka	스미요시 신사	住吉神社	place
+fukuoka	하카타 한큐	博多阪急	place
+fukuoka	하카타 한큐 백화점	博多阪急	place
+fukuoka	고텐만구	天満宮	unknown
+fukuoka	고마도 신사	竈門神社|宝満宮竈門神社	place
+fukuoka	고미야 신사	宮地嶽神社	unknown
+fukuoka	후쿠오카 PayPay 돔	みずほPayPayドーム福岡|福岡PayPayドーム	place
+fukuoka	후타미가우라 부부바위	二見ヶ浦|桜井二見ヶ浦|夫婦岩	place
+fukuoka	사쿠라이 신사	櫻井神社|桜井神社	place
+tokyo	츠키지 장외시장	築地場外市場	place
+tokyo	하마리큐 온시정원	浜離宮恩賜庭園	place
+tokyo	하마리큐 온시 정원	浜離宮恩賜庭園	place
+tokyo	가쓰도키 다리	勝鬨橋	place
+tokyo	츠키지 혼간지	築地本願寺	place
+tokyo	쓰키지 혼간지	築地本願寺	place
+tokyo	긴자 식스 정원	GINZA SIX ガーデン|GINZA SIX屋上庭園	place
+tokyo	긴자 식스	GINZA SIX|ギンザシックス	place
+tokyo	우에노 동물원	上野動物園|恩賜上野動物園	place
+tokyo	우에노 공원	上野公園|上野恩賜公園	place
+tokyo	아메요코 시장	アメ横|アメヤ横丁|アメ横商店街	place
+tokyo	아메야요코초	アメ横|アメヤ横丁|アメ横商店街	place
+tokyo	국립과학박물관	国立科学博物館	place
+tokyo	시노바즈노이케	不忍池	place
+tokyo	시노바즈 연못	不忍池	place
+tokyo	시노바즈노 연못	不忍池	place
+tokyo	도쿄국립박물관	東京国立博物館	place
+tokyo	도쿄 국립박물관	東京国立博物館	place
+tokyo	긴자 이토야	銀座 伊東屋|伊東屋|G.Itoya	place
+tokyo	이토야 긴자	銀座 伊東屋|伊東屋|G.Itoya	place
+tokyo	히비야 공원	日比谷公園	place
+tokyo	고쿄 히가시교엔	皇居東御苑	place
+tokyo	도쿄 캐릭터 스트리트	東京キャラクターストリート	place
+tokyo	센소지	浅草寺	place
+tokyo	도쿄 스카이트리	東京スカイツリー	place
+tokyo	스미다 공원	隅田公園	place
+tokyo	소라마치	東京ソラマチ	place
+tokyo	도쿄 소라마치	東京ソラマチ	place
+tokyo	아사쿠사 문화관광센터	浅草文化観光センター	place
+tokyo	메이지 신궁	明治神宮	place
+tokyo	다케시타 거리	竹下通り	place
+tokyo	시부야 스크램블 교차로	渋谷スクランブル交差点	place
+tokyo	오모테산도 힐즈	表参道ヒルズ	place
+tokyo	오모테산도 힐스	表参道ヒルズ	place
+tokyo	네즈 미술관	根津美術館	place
+tokyo	시부야 스카이	SHIBUYA SKY|渋谷スカイ	place
+tokyo	요요기 공원	代々木公園	place
+tokyo	시부야 파르코	渋谷PARCO|渋谷パルコ	place
+tokyo	시부야 요코초	渋谷横丁	place
+tokyo	하치코 동상	忠犬ハチ公像|ハチ公像	place
+tokyo	시부야 히카리에	渋谷ヒカリエ	place
+tokyo	가파바시 도구거리	かっぱ橋道具街	place
+tokyo	가파바시 도구가이	かっぱ橋道具街	place
+tokyo	가파바시 도구 거리	かっぱ橋道具街	place
+tokyo	갓파바시 도구거리	かっぱ橋道具街	place
+tokyo	갓파바시 도구 거리	かっぱ橋道具街	place
+tokyo	오모테산도	表参道	area
+tokyo	가미나리몬	雷門	place
+tokyo	신주쿠 교엔	新宿御苑	place
+tokyo	신주쿠교엔	新宿御苑	place
+tokyo	도쿄 도청 전망대	東京都庁展望室|都庁展望室|東京都庁 北展望室|東京都庁 南展望室	place
+tokyo	도쿄도청 전망대	東京都庁展望室|都庁展望室|東京都庁 北展望室|東京都庁 南展望室	place
+tokyo	네즈 신사	根津神社	place
+tokyo	오모이데 요코초	思い出横丁	place
+tokyo	오모이데요코초	思い出横丁	place
+tokyo	오モ이데요코초	思い出横丁	place
+tokyo	나카메구로	中目黒	area
+tokyo	시부야 스크램블 스퀘어	渋谷スクランブルスクエア	place
+tokyo	조조지	増上寺	place
+tokyo	조조지 정원	増上寺	unknown
+tokyo	도쿄 타워	東京タワー	place
+tokyo	시바 공원	芝公園	place
+tokyo	아카바네바시	赤羽橋	area
+tokyo	가부키자	歌舞伎座	place
+tokyo	우에노 도쇼구	上野東照宮	place
+tokyo	국립서양미술관	国立西洋美術館	place
+tokyo	나카미세 거리	仲見世通り|仲見世商店街|浅草仲見世	place
+tokyo	스미다 수족관	すみだ水族館	place
+tokyo	우에노 마루이 백화점	上野マルイ|マルイ上野	place
+tokyo	야나카 긴자	谷中銀座|谷中銀座商店街	place
+tokyo	간에이지	寛永寺	place
+tokyo	덴보인 도리	伝法院通り|伝法院通商店街	place
+tokyo	팀랩 플래닛 도쿄	チームラボプラネッツ TOKYO|チームラボプラネッツ|teamLab Planets TOKYO	place
+tokyo	오다이바 해변공원	お台場海浜公園	place
+tokyo	다이버시티 도쿄 플라자	ダイバーシティ東京 プラザ|ダイバーシティ東京	place
+tokyo	아쿠아시티 오다이바	アクアシティお台場	place
+tokyo	도요스 시장	豊洲市場	place
+tokyo	가부키초	歌舞伎町	area
+tokyo	하나조노 신사	花園神社	place
+tokyo	미야시타 파크	MIYASHITA PARK|ミヤシタパーク	place
+tokyo	도쿄역 마루노우치 역사	東京駅丸の内駅舎|東京駅 丸の内駅舎	place
+tokyo	아키하바라 전자상가	秋葉原電気街	area
+tokyo	아키하바라 전기 거리	秋葉原電気街	area
+tokyo	간다 묘진	神田明神|神田神社	place
+tokyo	유니콘 건담 입상	実物大ユニコーンガンダム立像|ユニコーンガンダム立像	place
+tokyo	도쿄 조이폴리스	東京ジョイポリス	place
+tokyo	자유의 여신상 오다이바	自由の女神像	place
+tokyo	루미네 신주쿠	ルミネ新宿	place
+tokyo	골든가이	新宿ゴールデン街|ゴールデン街	place
+tokyo	돈키호테 신주쿠	ドン・キホーテ新宿東南口店|ドン・キホーテ 新宿歌舞伎町店|ドン・キホーテ新宿店	place
+tokyo	아사히 맥주 본사	アサヒビール本社|アサヒビールタワー|アサヒグループ本社ビル	place
+tokyo	아사쿠사 하나야시키	浅草花やしき|花やしき	place
+tokyo	모리 미술관	森美術館	place
+tokyo	롯폰기 힐즈	六本木ヒルズ	place
+tokyo	도쿄 미드타운	東京ミッドタウン	place
+tokyo	국립신미술관	国立新美術館	place
+tokyo	아자부다이 힐즈	麻布台ヒルズ	place
+tokyo	모리 정원	毛利庭園	place
+tokyo	야도바시 카메라	ヨドバシカメラ マルチメディアAkiba|ヨドバシAkiba	place

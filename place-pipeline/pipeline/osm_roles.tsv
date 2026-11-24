@@ -1,0 +1,143 @@
+# OSM 주 태그(key=value, 또는 key=*) → 풀 분류 라벨(FSQ 라벨 체계)과 여행 근거. OSM 태그 체계는 전 세계 공통이다.
+# key=value;sub=val은 보조 태그까지 맞는 행이다. 보조 태그 줄 → key=value → key=* 순으로 우선한다.
+# 역할은 이 라벨로 roles.tsv에서 찾는다(역할 판정은 roles.tsv 한 곳). 라벨이 비어 있으면 facility다.
+# facility는 시설 이름을 그대로 다는 부대시설(주차장·화장실)이라 어떤 풀 행과도 같은 장소로 잇지 않고, 풀에 더하지도 않는다.
+# signal: attraction(매퍼가 관광지로 표시) nature(자연 지형) heritage(문화재) none
+osm_tag	label	signal
+amenity=*	Community and Government	none
+amenity=parking		none
+amenity=parking_entrance		none
+amenity=parking_space		none
+amenity=bicycle_parking		none
+amenity=motorcycle_parking		none
+amenity=bicycle_rental		none
+amenity=toilets		none
+amenity=vending_machine		none
+amenity=atm		none
+amenity=bench		none
+amenity=shelter		none
+amenity=waste_disposal		none
+amenity=drinking_water		none
+amenity=restaurant	Dining and Drinking > Restaurant	none
+amenity=cafe	Dining and Drinking > Cafe, Coffee, and Tea House	none
+amenity=fast_food	Dining and Drinking > Restaurant > Fast Food Restaurant	none
+amenity=bar	Dining and Drinking > Bar	none
+amenity=pub	Dining and Drinking > Bar > Pub	none
+amenity=biergarten	Dining and Drinking > Bar > Beer Garden	none
+amenity=food_court	Dining and Drinking > Food Court	none
+amenity=ice_cream	Dining and Drinking > Dessert Shop > Ice Cream Parlor	none
+amenity=place_of_worship	Community and Government > Spiritual Center	none
+amenity=monastery	Community and Government > Spiritual Center > Monastery	none
+amenity=theatre	Arts and Entertainment > Performing Arts Venue > Theater	none
+amenity=arts_centre	Community and Government > Cultural Center	none
+amenity=marketplace	Retail > Market	none
+amenity=public_bath	Business and Professional Services > Health and Beauty Service > Bath House	none
+amenity=planetarium	Arts and Entertainment > Planetarium	none
+amenity=ferry_terminal	Travel and Transportation > Boat or Ferry	none
+amenity=bus_station	Travel and Transportation > Transport Hub > Bus Station	none
+tourism=*	Landmarks and Outdoors	none
+tourism=attraction	Landmarks and Outdoors	attraction
+tourism=viewpoint	Landmarks and Outdoors > Scenic Lookout	attraction
+tourism=museum	Arts and Entertainment > Museum	none
+tourism=gallery	Arts and Entertainment > Art Gallery	none
+tourism=zoo	Arts and Entertainment > Zoo	none
+tourism=aquarium	Arts and Entertainment > Aquarium	none
+tourism=theme_park	Arts and Entertainment > Amusement Park	none
+tourism=artwork	Arts and Entertainment > Public Art	none
+tourism=information	Travel and Transportation > Tourist Information and Service	none
+tourism=picnic_site	Landmarks and Outdoors > Picnic Shelter	none
+tourism=hotel	Travel and Transportation > Lodging > Hotel	none
+tourism=guest_house	Travel and Transportation > Lodging	none
+tourism=hostel	Travel and Transportation > Lodging	none
+tourism=motel	Travel and Transportation > Lodging	none
+tourism=apartment	Travel and Transportation > Lodging	none
+tourism=chalet	Travel and Transportation > Lodging	none
+tourism=alpine_hut	Landmarks and Outdoors > Mountain Hut	none
+tourism=wilderness_hut	Landmarks and Outdoors > Mountain Hut	none
+tourism=camp_site	Landmarks and Outdoors > Campground	none
+tourism=caravan_site	Landmarks and Outdoors > Campground	none
+historic=*	Landmarks and Outdoors > Historic and Protected Site	heritage
+historic=castle	Landmarks and Outdoors > Castle	heritage
+historic=archaeological_site	Landmarks and Outdoors > Archaeological Site	heritage
+historic=memorial	Landmarks and Outdoors > Monument	none
+historic=monument	Landmarks and Outdoors > Monument	none
+historic=stone	Landmarks and Outdoors > Monument	none
+historic=locomotive	Landmarks and Outdoors > Monument	none
+historic=railway_car	Landmarks and Outdoors > Monument	none
+historic=aircraft	Landmarks and Outdoors > Monument	none
+historic=wayside_shrine	Landmarks and Outdoors > Monument	none
+historic=wayside_cross	Landmarks and Outdoors > Monument	none
+historic=boundary_stone	Landmarks and Outdoors > Monument	none
+historic=milestone	Landmarks and Outdoors > Monument	none
+natural=*	Landmarks and Outdoors > Other Great Outdoors	nature
+natural=peak	Landmarks and Outdoors > Mountain	nature
+natural=volcano	Landmarks and Outdoors > Volcano	nature
+natural=water	Landmarks and Outdoors > Pond	nature
+natural=water;water=lake	Landmarks and Outdoors > Lake	nature
+natural=water;water=lagoon	Landmarks and Outdoors > Lake	nature
+natural=water;water=pond	Landmarks and Outdoors > Pond	none
+natural=water;water=oxbow	Landmarks and Outdoors > Pond	none
+natural=water;water=moat	Landmarks and Outdoors > Pond	none
+natural=water;water=reservoir	Landmarks and Outdoors > Reservoir	none
+natural=water;water=basin	Landmarks and Outdoors > Structure	none
+natural=water;water=river	Landmarks and Outdoors > River	none
+natural=water;water=stream	Landmarks and Outdoors > River	none
+natural=water;water=canal	Landmarks and Outdoors > River	none
+natural=water;water=drain	Landmarks and Outdoors > Structure	none
+natural=water;water=harbour	Landmarks and Outdoors > Harbor or Marina	none
+natural=hot_spring	Landmarks and Outdoors > Hot Spring	nature
+natural=beach	Landmarks and Outdoors > Beach	nature
+natural=cape	Landmarks and Outdoors > Cape	nature
+natural=bay	Landmarks and Outdoors > Bay	nature
+natural=cave_entrance	Landmarks and Outdoors > Cave	nature
+natural=island	Landmarks and Outdoors > Island	nature
+natural=islet	Landmarks and Outdoors > Island	nature
+natural=wetland	Landmarks and Outdoors > Wetland	nature
+natural=tree	Landmarks and Outdoors > Tree	none
+natural=wood	Landmarks and Outdoors > Forest	none
+natural=scrub	Landmarks and Outdoors > Field	none
+natural=grassland	Landmarks and Outdoors > Field	none
+waterway=waterfall	Landmarks and Outdoors > Waterfall	nature
+waterway=rapids	Landmarks and Outdoors > River	nature
+leisure=*	Sports and Recreation > Recreation Center	none
+leisure=park	Landmarks and Outdoors > Park	none
+leisure=nature_reserve	Landmarks and Outdoors > Nature Preserve	nature
+leisure=garden	Landmarks and Outdoors > Garden	none
+leisure=beach_resort	Landmarks and Outdoors > Beach	none
+leisure=water_park	Arts and Entertainment > Water Park	none
+leisure=golf_course	Sports and Recreation > Golf	none
+leisure=marina	Landmarks and Outdoors > Harbor or Marina	none
+leisure=resort	Travel and Transportation > Lodging	none
+leisure=amusement_arcade	Arts and Entertainment > Arcade	none
+leisure=bathing_place	Landmarks and Outdoors > Bathing Area	nature
+leisure=fishing	Sports and Recreation > Fishing Area	none
+shop=*	Retail	none
+shop=gift	Retail > Gift Store	none
+shop=souvenir	Retail > Souvenir Store	none
+shop=craft	Retail > Arts and Crafts Store	none
+shop=confectionery	Retail > Food and Beverage Retail > Candy Store	none
+shop=pastry	Dining and Drinking > Dessert Shop > Pastry Shop	none
+shop=bakery	Dining and Drinking > Bakery	none
+shop=alcohol	Retail > Food and Beverage Retail > Liquor Store	none
+shop=wine	Retail > Food and Beverage Retail > Wine Store	none
+shop=antiques	Retail > Antique Store	none
+shop=second_hand	Retail > Vintage and Thrift Store	none
+shop=mall	Retail > Shopping Mall	none
+shop=department_store	Retail > Department Store	none
+craft=*	Business and Professional Services	none
+craft=brewery	Dining and Drinking > Brewery	none
+craft=distillery	Dining and Drinking > Brewery	none
+craft=winery	Dining and Drinking > Winery	none
+craft=confectionery	Retail > Food and Beverage Retail > Candy Store	none
+craft=pottery	Retail > Arts and Crafts Store	none
+craft=handicraft	Retail > Arts and Crafts Store	none
+man_made=*	Landmarks and Outdoors > Structure	none
+man_made=lighthouse	Landmarks and Outdoors > Lighthouse	none
+man_made=bridge	Landmarks and Outdoors > Bridge	none
+railway=*	Travel and Transportation	none
+public_transport=*	Travel and Transportation	none
+aeroway=*	Travel and Transportation	none
+boundary=national_park	Landmarks and Outdoors > National Park	nature
+boundary=protected_area	Landmarks and Outdoors > Nature Preserve	nature
+route=hiking	Landmarks and Outdoors > Hiking Trail	none
+route=foot	Landmarks and Outdoors > Hiking Trail	none

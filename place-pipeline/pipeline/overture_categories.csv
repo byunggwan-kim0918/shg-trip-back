@@ -1,4 +1,4 @@
-# Overture taxonomy 항목 → Foursquare 카테고리 라벨. 빈 라벨은 여행 장소가 아니다.
+# Overture taxonomy 항목 → Foursquare 카테고리 라벨. 빈 라벨은 여행 장소가 아니고, ?는 검토 대상(다른 공급처·이름으로 다시 본다)이다.
 # taxonomy.hierarchy를 가장 구체적인 항목부터 거슬러 올라가 처음 맞는 줄을 쓴다.
 # 라벨을 FSQ 체계로 맞추면 역할 판정(CandidatePolicy)·식당 보강·공용 게이트를 그대로 쓴다.
 overture_key,fsq_label
@@ -7,7 +7,7 @@ services_and_business,
 health_care,
 education,
 lifestyle_services,
-community_and_government,
+community_and_government,?
 # 식음료
 food_and_drink,Dining and Drinking > Restaurant
 restaurant,Dining and Drinking > Restaurant
@@ -79,7 +79,7 @@ campground,Landmarks and Outdoors > Campground
 private_lodging,
 service_apartment,
 # 교통
-travel_and_transportation,
+travel_and_transportation,?
 airport,Travel and Transportation > Transport Hub > Airport
 airport_terminal,Travel and Transportation > Transport Hub > Airport > Airport Terminal
 train_station,Travel and Transportation > Transport Hub > Rail Station
@@ -162,6 +162,7 @@ hot_springs,Landmarks and Outdoors > Hot Spring
 canal,Landmarks and Outdoors > Waterfront
 quay,Landmarks and Outdoors > Waterfront
 pier,Travel and Transportation > Pier
+ferry_boat_company,Travel and Transportation > Boat or Ferry
 marina,Landmarks and Outdoors > Harbor or Marina
 bridge,Landmarks and Outdoors > Bridge
 cave,Landmarks and Outdoors > Cave
@@ -180,8 +181,9 @@ scenic_viewpoint,Landmarks and Outdoors > Scenic Lookout
 public_plaza,Landmarks and Outdoors > Plaza
 public_fountain,Landmarks and Outdoors > Fountain
 wildlife_sanctuary,Landmarks and Outdoors > Nature Preserve
+farm,Landmarks and Outdoors > Farm
 # 스포츠·체험
-sports_and_recreation,
+sports_and_recreation,?
 ski_resort,Sports and Recreation > Snow Sports > Ski Resort and Area
 golf_course,Sports and Recreation > Golf
 scuba_diving_center,Sports and Recreation > Water Sports
@@ -190,10 +192,12 @@ rafting_kayaking_area,Sports and Recreation > Water Sports
 boat_rental_and_training,Sports and Recreation > Water Sports
 sky_diving,Sports and Recreation
 hot_air_balloons_tour,Travel and Transportation > Tourist Information and Service > Tour Provider
-public_bath,Sports and Recreation > Sauna
+public_bath_house,Business and Professional Services > Health and Beauty Service > Bath House
+spa,Business and Professional Services > Health and Beauty Service > Spa
+medical_spa,
 onsen,Landmarks and Outdoors > Hot Spring
 # 쇼핑
-shopping,
+shopping,?
 shopping_mall,Retail > Shopping Mall
 department_store,Retail > Department Store
 souvenir_store,Retail > Souvenir Store
@@ -209,3 +213,192 @@ public_market,Retail > Market
 night_market,Dining and Drinking > Night Market
 outlet_store,Retail > Outlet Store
 duty_free_shop,Retail > Duty-free Store
+discount_store,Retail > Discount Store
+liquor_store,Retail > Food and Beverage Retail > Liquor Store
+seafood_market,Retail > Food and Beverage Retail > Fish Market
+second_hand_store,Retail > Vintage and Thrift Store
+pawn_shop,
+junkyard,
+clothing_store,Retail > Fashion Retail > Clothing Store
+bridal_shop,
+uniform_store,
+maternity_wear,
+fashion_boutique,Retail > Boutique
+fashion_accessories_store,Retail > Fashion Retail > Fashion Accessories Store
+shoe_store,Retail > Fashion Retail > Shoe Store
+jewelry_store,Retail > Fashion Retail > Jewelry Store
+watch_store,Retail > Fashion Retail > Watch Store
+cosmetics_and_fragrance_store,Retail > Cosmetics Store
+flowers_and_gifts_store,Retail > Gift Store
+florist,
+toy_store,Retail > Toy Store
+music_and_dvd_store,Retail > Record Store
+outdoor_store,Retail > Outdoor Supply Store
+surf_store,Retail > Sporting Goods Retail > Surf Store
+ski_and_snowboard_store,Retail > Sporting Goods Retail > Ski Store
+# 검토(?): 여행 장소와 비여행 시설이 섞여 이름·다른 공급처로 다시 봐야 하는 분류
+travel_service,?
+travel_company,?
+glass_and_mirror_sales_service,?
+sport_or_fitness_facility,?
+party_and_event_planning,?
+# 쇼핑 최상위 아래 비여행 매장
+convenience_store,
+pharmacy,
+drugstore,
+grocery_store,
+organic_grocery_store,
+auto_dealer,
+used_auto_dealer,
+motorcycle_dealer,
+mobile_phone_store,
+furniture_store,
+home_improvement_store,
+eyewear_store,
+auto_parts_store,
+warehouse_club_store,
+pet_store,
+hardware_store,
+hardware_home_and_garden_store,
+beauty_supply_store,
+building_supply_store,
+office_supply_store,
+appliance_store,
+hair_supply_store,
+mattress_store,
+lumber_store,
+computer_store,
+tobacco_shop,
+health_food_store,
+nursery_and_gardening_store,
+# 교통 최상위 아래 비여행 시설·서비스
+parking,
+gas_station,
+fueling_station,
+automotive_repair,
+automotive_service,
+tire_dealer_and_repair,
+taxi_service,
+auto_body_shop,
+motorcycle_repair,
+auto_detailing,
+auto_customization,
+car_wash,
+travel_agent,
+bike_parking,
+motorcycle_parking,
+auto_restoration_service,
+passport_and_visa_service,
+airline,
+auto_glass_service,
+towing_service,
+boat_service,
+tire_shop,
+emissions_inspection,
+luggage_storage,
+automotive_consultant,
+ev_charging_station,
+automobile_registration_service,
+airport_shuttle,
+ride_share_service,
+car_inspection,
+truck_repair,
+car_window_tinting,
+emergency_roadside_service,
+brake_service_and_repair,
+wheel_and_rim_repair,
+limo_service,
+oil_change_station,
+avionics_shop,
+train,
+aircraft_service,
+car_sharing,
+light_rail_and_subway_station,Travel and Transportation > Transport Hub > Metro Station
+rest_stop,Travel and Transportation > Rest Area
+# 스포츠 최상위 아래: 생활 체육 시설은 비여행, 여행 활동은 매핑
+gym,
+dance_studio,
+sport_league,
+martial_arts_club,
+yoga_studio,
+tennis_court,
+soccer_field,
+baseball_field,
+fitness_trainer,
+swimming_pool,
+pilates_studio,
+fishing_club,
+amateur_sport_team,
+boxing_class,
+swimming_instructor,
+golf_instructor,
+gymnastics_center,
+ski_and_snowboard_school,
+sport_or_recreation_club,
+school_sport_team,
+basketball_court,
+professional_sport_team,
+rugby_pitch,
+rock_climbing_spot,Sports and Recreation
+bowling_alley,Sports and Recreation
+race_track,Sports and Recreation
+pool_billiards,Sports and Recreation
+batting_cage,Sports and Recreation
+shooting_range,Sports and Recreation
+skate_park,Sports and Recreation
+equestrian_facility,Sports and Recreation
+horse_riding,Sports and Recreation
+indoor_playcenter,Sports and Recreation
+ice_skating_rink,Sports and Recreation
+archery_range,Sports and Recreation
+go_kart_club,Sports and Recreation
+paintball,Sports and Recreation
+horseback_riding_service,Sports and Recreation
+surfing,Sports and Recreation > Water Sports
+fishing_charter,Sports and Recreation > Water Sports
+diving_center,Sports and Recreation > Water Sports
+ski_resort_area,Sports and Recreation > Snow Sports > Ski Resort and Area
+# 공공 최상위 아래 비여행 기관
+social_or_community_service,
+government_office,
+community_center,
+town_hall,
+police_station,
+disability_services_and_support_organization,
+fire_station,
+garbage_collection_service,
+public_utility,
+civic_organization,
+senior_citizen_service,
+military_site,
+political_organization,
+non_governmental_association,
+charity_organization,
+political_party_office,
+labor_union,
+embassy,
+courthouse,
+water_utility_provider,
+youth_organization,
+public_restroom,
+housing_authority,
+government_department,
+social_and_human_service,
+electric_utility_provider,
+jail_or_prison,
+military_base,
+department_of_motor_vehicles,
+child_protection_service,
+foster_care_service,
+health_department,
+food_bank,
+homeless_shelter,
+social_welfare_center,
+volunteer_association,
+septic_service,
+social_security_service,
+natural_gas_utility_provider,
+civic_center,
+unemployment_office,
+chambers_of_commerce,
+public_safety_service,

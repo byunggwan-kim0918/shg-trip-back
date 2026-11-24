@@ -6,7 +6,7 @@ _MAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "overture_c
 
 
 def load_overture_map(path=_MAP_FILE):
-    """{overture_key: fsq_label}. 빈 라벨("")은 여행 장소가 아니라는 뜻이다."""
+    """{overture_key: fsq_label}. 빈 라벨("")은 여행 장소가 아니고, "?"는 검토 대상 분류다."""
     with open(path, encoding="utf-8") as f:
         rows = csv.DictReader(line for line in f if not line.startswith("#"))
         mapping = {}

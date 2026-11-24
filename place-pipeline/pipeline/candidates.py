@@ -7,12 +7,15 @@ import re
 import duckdb
 from duckdb.sqltypes import VARCHAR
 
-from . import policy
+from . import identity, policy
+from .rules import literal as _literal
+from .rules import load_name_rules, match_sql
 from .categories import load_overture_map, overture_label
 from .names import exact_key
 
 COMMON_COLUMNS = ("source, source_id, release, name, name_key, names, lat, lon, country, address, locality, "
-                  "category_raw, category, refreshed_at, closed, flagged, brand, links, license")
+                  "category_raw, category, refreshed_at, closed, flagged, flagged_review, brand, links, datasets, websites, "
+                  "socials, phones, confidence, license")
 
 
 def register_functions(con, mapping=None):
@@ -30,7 +33,9 @@ def register_functions(con, mapping=None):
                         null_handling="special")
 
 
-def overture_sql(raw, release):
+def overture_sql(raw, release, columns=()):
+    socials = "coalesce(socials, [])" if "socials" in columns else "[]::VARCHAR[]"
+    dated = "[" + ", ".join(f"'{_literal(d)}'" for d in policy.DATED_DATASETS) + "]"
     return f"""
     SELECT 'overture' AS source, id AS source_id, '{_literal(release)}' AS release,
            names."primary" AS name, name_key(names."primary") AS name_key,
@@ -45,18 +50,30 @@ def overture_sql(raw, release):
            addresses[1].country AS country, addresses[1].freeform AS address, addresses[1].locality AS locality,
            coalesce(taxonomy."primary", basic_category) AS category_raw,
            overture_label(taxonomy.hierarchy, taxonomy."primary") AS category,
-           CAST(list_max(list_transform(sources, s -> try_cast(s.update_time AS TIMESTAMP))) AS DATE) AS refreshed_at,
+           CAST(list_max(list_transform(list_filter(sources, s -> list_contains({dated}, s.dataset)),
+                                        s -> try_cast(s.update_time AS TIMESTAMP))) AS DATE) AS refreshed_at,
            coalesce(operating_status = 'permanently_closed', false) AS closed,
            false AS flagged,
+           false AS flagged_review,
            brand.names."primary" AS brand,
            coalesce(list_transform(list_filter(sources, s -> s.dataset = 'Foursquare' AND s.record_id IS NOT NULL),
                                    s -> struct_pack(source := 'fsq', id := s.record_id)), []) AS links,
+           list_distinct(list_transform(sources, s -> s.dataset)) AS datasets,
+           coalesce(websites, []) AS websites,
+           {socials} AS socials,
+           {_phone_tails("coalesce(phones, [])")} AS phones,
+           confidence,
            array_to_string(list_sort(list_distinct(list_transform(sources, s -> s.license))), ';') AS license
     FROM {raw}
     """
 
 
-def fsq_sql(raw, release):
+def fsq_sql(raw, release, columns=()):
+    # FSQ는 SNS를 URL이 아니라 계정 이름·ID로 준다.
+    handles = [f"CASE WHEN coalesce({col}, '') = '' THEN NULL ELSE '{prefix}' || {col} END"
+               for col, prefix in (("instagram", "https://instagram.com/"), ("facebook_id", "https://facebook.com/"),
+                                   ("twitter", "https://twitter.com/")) if col in columns]
+    socials = f"list_filter([{', '.join(handles)}], u -> u IS NOT NULL)" if handles else "[]::VARCHAR[]"
     return f"""
     SELECT 'fsq' AS source, fsq_place_id AS source_id, '{_literal(release)}' AS release,
            name, name_key(name) AS name_key,
@@ -66,9 +83,15 @@ def fsq_sql(raw, release):
            fsq_category_labels[1] AS category_raw, fsq_category_labels[1] AS category,
            try_cast(date_refreshed AS DATE) AS refreshed_at,
            date_closed IS NOT NULL AS closed,
-           coalesce(len(unresolved_flags), 0) > 0 AS flagged,
+           list_has_any(coalesce(unresolved_flags, []), {_list(policy.FSQ_CERTAIN_FLAGS)}) AS flagged,
+           list_has_any(coalesce(unresolved_flags, []), {_list(policy.FSQ_REVIEW_FLAGS)}) AS flagged_review,
            CAST(NULL AS VARCHAR) AS brand,
            CAST([] AS STRUCT(source VARCHAR, id VARCHAR)[]) AS links,
+           ['Foursquare'] AS datasets,
+           CASE WHEN coalesce(website, '') = '' THEN []::VARCHAR[] ELSE [website] END AS websites,
+           {socials} AS socials,
+           {_phone_tails("CASE WHEN coalesce(tel, '') = '' THEN []::VARCHAR[] ELSE [tel] END")} AS phones,
+           NULL::DOUBLE AS confidence,
            'Apache-2.0' AS license
     FROM {raw}
     """
@@ -77,8 +100,12 @@ def fsq_sql(raw, release):
 def exclusion_sql():
     """행마다 첫 제외 사유(없으면 NULL). 순서는 policy.EXCLUSION_ORDER와 같다."""
     non_travel = "|".join(re.escape(k) for k in policy.NON_TRAVEL_LABEL_KEYWORDS)
+    exceptions = ", ".join(f"'{_literal(label)}'" for label in policy.TRAVEL_LABEL_EXCEPTIONS)
+    rules = load_name_rules()
     lasting = " OR ".join(f"starts_with(category, '{_literal(p)}')" for p in policy.LASTING_LABEL_PREFIXES)
-    tourist = " OR ".join(f"starts_with(lower(name), '{_literal(b)}')" for b in policy.TOURIST_CHAINS)
+    review_keywords = "|".join(re.escape(k) for k in policy.REVIEW_LABEL_KEYWORDS)
+    food = "starts_with(category, 'Dining and Drinking')"
+    transit = "starts_with(category, 'Travel and Transportation')"
     return f"""
     CASE
       WHEN coalesce(name_key, '') = '' THEN 'no_name'
@@ -86,34 +113,64 @@ def exclusion_sql():
            OR (lat = 0 AND lon = 0) THEN 'bad_coordinate'
       WHEN closed THEN 'closed'
       WHEN flagged THEN 'flagged'
+      WHEN {match_sql('name', 'country', rules['all'])} THEN 'junk_name'
       WHEN category IS NULL THEN 'unmapped_category'
-      WHEN category = '' OR regexp_matches(lower(category), '{_literal(non_travel)}') THEN 'non_travel_category'
+      WHEN category = '{policy.REVIEW_LABEL}' THEN 'review_category'
+      WHEN category = '' OR (regexp_matches(lower(category), '{_literal(non_travel)}')
+                             AND category NOT IN ({exceptions})) THEN 'non_travel_category'
+      WHEN category IN ({_quoted(policy.REVIEW_LABELS)})
+           OR regexp_matches(lower(category), '{_literal(review_keywords)}') THEN 'review_category'
+      WHEN NOT {food} AND {match_sql('name', 'country', rules['non_food'])} THEN 'junk_name'
+      WHEN {transit} AND {match_sql('name', 'country', rules['transit'])} THEN 'junk_name'
+      WHEN NOT ({food} OR starts_with(category, 'Retail') OR {transit})
+           AND {match_sql('name', 'country', rules['sight'])} THEN 'junk_name'
       WHEN refreshed_at < current_date - to_years(CASE WHEN {lasting} THEN {policy.FRESH_YEARS_LASTING}
                                                        ELSE {policy.FRESH_YEARS_DEFAULT} END) THEN 'stale'
-      WHEN NOT starts_with(category, 'Dining and Drinking')
-           AND regexp_matches(name, '{_literal(policy.JUNK_NAME_PATTERN)}') THEN 'junk_name'
-      WHEN starts_with(category, 'Dining and Drinking') AND brand IS NOT NULL AND NOT ({tourist}) THEN 'chain'
+      WHEN NOT {food} AND {match_sql('name', 'country', rules['review'])} THEN 'review_name'
+      WHEN flagged_review THEN 'review_flag'
     END
     """
+
+
+def tier_sql():
+    """제외 사유의 단계. 검토(review)는 지우지 않고 보완 후보로 남기고, 나머지 사유는 확실 제외(certain)다."""
+    return (f"CASE WHEN exclusion IN ({_quoted(policy.REVIEW_EXCLUSIONS)}) THEN 'review' "
+            f"WHEN exclusion IS NOT NULL THEN 'certain' END")
 
 
 def build(con, overture_raw=None, overture_release=None, fsq_raw=None, fsq_release=None, table="candidates"):
     """원본 테이블(또는 Parquet 경로)을 받아 공통 후보 테이블을 만든다. 공급처는 하나만 있어도 된다."""
     parts = []
     if overture_raw:
-        parts.append(overture_sql(overture_raw, overture_release))
+        parts.append(overture_sql(overture_raw, overture_release, _columns(con, overture_raw)))
     if fsq_raw:
-        parts.append(fsq_sql(fsq_raw, fsq_release))
+        parts.append(fsq_sql(fsq_raw, fsq_release, _columns(con, fsq_raw)))
     if not parts:
         raise ValueError("원본이 하나도 없다")
     union = " UNION ALL BY NAME ".join(f"({p})" for p in parts)
     con.execute(f"""
         CREATE OR REPLACE TABLE {table} AS
-        SELECT {COMMON_COLUMNS}, {exclusion_sql()} AS exclusion
-        FROM ({union})
+        SELECT *, {tier_sql()} AS exclusion_tier FROM (
+            SELECT {COMMON_COLUMNS}, {exclusion_sql()} AS exclusion
+            FROM ({union}))
     """)
     return table
 
 
-def _literal(value):
-    return str(value).replace("'", "''")
+def _quoted(values):
+    return ", ".join(f"'{_literal(v)}'" for v in values)
+
+
+def _list(values):
+    return f"[{_quoted(values)}]"
+
+
+def _columns(con, raw):
+    """SNS 열이 없던 시기의 스냅샷도 그대로 읽도록 원본에 있는 열 이름을 본다."""
+    return {row[0] for row in con.execute(f"DESCRIBE SELECT * FROM {raw}").fetchall()}
+
+
+def _phone_tails(numbers):
+    digits = identity.PHONE_DIGITS
+    return (f"list_distinct(list_filter(list_transform({numbers}, p -> right(regexp_replace(p, '[^0-9]', '', 'g'), "
+            f"{digits})), p -> length(p) = {digits}))")

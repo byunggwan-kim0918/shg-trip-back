@@ -21,9 +21,10 @@ FSQ_TABLE = "places.datasets.places_os"
 
 # 원본에서 받는 열. 공통 후보로 옮길 때 쓰는 열과 출처 추적에 필요한 열만 고른다.
 OVERTURE_COLUMNS = ("id, version, names, taxonomy, basic_category, confidence, operating_status, "
-                    "addresses, websites, phones, brand, sources, bbox")
+                    "addresses, websites, socials, emails, phones, brand, sources, bbox")
 FSQ_COLUMNS = ("fsq_place_id, name, latitude, longitude, address, locality, region, country, "
-               "date_created, date_refreshed, date_closed, fsq_category_labels, unresolved_flags, website, tel")
+               "date_created, date_refreshed, date_closed, fsq_category_labels, unresolved_flags, website, tel, "
+               "email, facebook_id, instagram, twitter")
 
 
 def overture_path(release):
