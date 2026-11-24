@@ -228,6 +228,8 @@ public class DraftItineraryPlanner {
         if (input.partySize() != null) sb.append(' ').append(input.partySize()).append("명");
         sb.append('\n');
         sb.append("페이스: ").append(PACE_LABELS.getOrDefault(Objects.toString(input.pace(), ""), "보통")).append('\n');
+        String mix = FameMix.of(input.themes()).draftLine();
+        if (mix != null) sb.append("장소 성향: ").append(mix).append('\n');
         sb.append("이동: ").append(TRANSPORT_LABELS.getOrDefault(Objects.toString(input.transportPref(), ""),
                 "대중교통 또는 상관없음")).append('\n');
         if (arrival != null) sb.append("첫날 도착: ").append(arrival).append('\n');
@@ -383,7 +385,7 @@ public class DraftItineraryPlanner {
                 if (reason != null && place.placeId() != null) reasons.putIfAbsent(place.placeId(), reason);
             }
             spares.addAll(knownSightsNear(input, anchor, registry, exclusions, input.startDate().plusDays(d - 1),
-                    req.country()));
+                    req.country(), fillDirection(input, stops)));
             sparesByDay.add(spares);
         }
         // 예비 장소는 일정에 있는 곳의 다른 이름이나 관광지가 아닌 곳을 빼 둔다. 빈 시간을 채우며 같은 곳이 두 번 들어간다.
@@ -424,7 +426,8 @@ public class DraftItineraryPlanner {
             for (PlaceCandidate from : lastNight == null ? List.of(departureHubOf) : List.of(departureHubOf, lastNight)) {
                 if (coordsOf(from) == null) continue;
                 for (DayBuilder.Stop near : knownSightsNear(input, coordsOf(from), registry, exclusions,
-                        input.startDate().plusDays(dayCount - 1), req.country(), MIN_DEPARTURE_FILL_VALUE)) {
+                        input.startDate().plusDays(dayCount - 1), req.country(), MIN_DEPARTURE_FILL_VALUE,
+                        fillDirection(input, stopsByDay.get(dayCount - 1)))) {
                     if (registry.whyNotVisit(near.place(), seen) == null && seen.add(registry.canonical(near.place()))) {
                         sparesByDay.get(dayCount - 1).add(near);
                     }
@@ -516,7 +519,8 @@ public class DraftItineraryPlanner {
                         && coordsOf(x.place()) != null && kmBetween(coordsOf(x.place()), at) > FAR_LODGING_KM);
                 Set<String> seen = new HashSet<>(tripSights);
                 sparesByDay.get(d - 1).forEach(x -> seen.add(registry.canonical(x.place())));
-                for (DayBuilder.Stop near : knownSightsNear(input, lodging, registry, exclusions, date, req.country())) {
+                for (DayBuilder.Stop near : knownSightsNear(input, lodging, registry, exclusions, date, req.country(),
+                        fillDirection(input, stops))) {
                     if (registry.whyNotVisit(near.place(), seen) == null && seen.add(registry.canonical(near.place()))) {
                         sparesByDay.get(d - 1).add(near);
                     }
@@ -526,7 +530,8 @@ public class DraftItineraryPlanner {
                     usedEateries, registry);
             PlaceCandidate startAt = first ? null : lodgingByNight.get(d - 1);
             DayBuilder.Frame frame = new DayBuilder.Frame(d, date, start, end, lodgingBy, sunset, sunrise, startAt,
-                    arrivalHub, endAt, endIsHub, last, transfer, slow, input.transportPref(), sparesByDay.get(d - 1),
+                    arrivalHub, endAt, endIsHub, last, transfer, slow, input.transportPref(),
+                    sparesNotVisited(sparesByDay.get(d - 1), earlier, registry),
                     List.copyOf(earlier), maxSights, stayFactor, lastLeg, req.country());
             DayBuilder.Built built = DayBuilder.build(frame, stops);
             built.dropped().forEach(x -> notes.add(frame.dayNumber() + "일차 뺌: " + x));
@@ -537,6 +542,17 @@ public class DraftItineraryPlanner {
         }
         return new Result(AlternativeBuilder.pruneUsedAndRenumber(steps), registry.list(), notes, frames, placed,
                 reasons);
+    }
+
+    /**
+     * 짓기의 같은 곳 판정은 가까운 행끼리만 이름을 봐서, 좌표가 떨어진 다른 행("엑스포공원"·"여수엑스포공원")은 저장 검사
+     * ({@code TripConditionChecks.duplicates})에서야 중복이 된다. 그래서 그 검사와 같은 이름 키로 미리 거른다.
+     */
+    static List<DayBuilder.Stop> sparesNotVisited(List<DayBuilder.Stop> spares, List<PlaceCandidate> earlier,
+                                                  Registry registry) {
+        Set<String> visited = new HashSet<>();
+        earlier.forEach(c -> visited.add(registry.canonical(c)));
+        return spares.stream().filter(x -> !visited.contains(registry.canonical(x.place()))).toList();
     }
 
     /** 체류 시간 배수. 여유롭게는 한 곳을 오래 보고, 빡빡하게는 여러 곳을 짧게 본다. */
@@ -744,7 +760,7 @@ public class DraftItineraryPlanner {
             // 모델이 뺀 장소를 빼고 남은 예비 장소로 빈 시간을 채운다.
             List<DayBuilder.Stop> spares = f.spares().stream()
                     .filter(x -> !removed.contains(x.place().placeId())).toList();
-            DayBuilder.Frame frame = f.withSpares(spares, List.copyOf(earlier));
+            DayBuilder.Frame frame = f.withSpares(sparesNotVisited(spares, earlier, registry), List.copyOf(earlier));
             List<DayBuilder.Stop> stops = day.stream()
                     .sorted(Comparator.comparingInt(Placed::at)).map(Placed::stop).toList();
             DayBuilder.Built built = DayBuilder.build(frame, stops, true);
@@ -1311,36 +1327,47 @@ public class DraftItineraryPlanner {
     private static final int KNOWN_SIGHTS_LIMIT = 8;
 
     /**
-     * 빈 시간을 채울 근처 명소. 방문 가치 판정이 있으면 그 값으로, 없으면 위키 언어판이 있는 곳만 쓴다. 장소 정보가 빈약한
+     * 빈 시간을 채울 근처 명소. 방문 가치 판정이 없으면 언어판이나 알려진 정도가 있는 곳만 쓴다. 장소 정보가 빈약한
      * 곳으로 채우면 관공서·운동장이 관광지로 들어간다.
      */
     private List<DayBuilder.Stop> knownSightsNear(VectorEnrichedInput input, double[] anchor, Registry registry,
-                                                  TripExclusions exclusions, LocalDate date, String country) {
-        return knownSightsNear(input, anchor, registry, exclusions, date, country, MIN_FILL_VALUE);
+                                                  TripExclusions exclusions, LocalDate date, String country,
+                                                  double direction) {
+        return knownSightsNear(input, anchor, registry, exclusions, date, country, MIN_FILL_VALUE, direction);
     }
 
+    /** @param direction {@link FameMix#fillDirection} */
     private List<DayBuilder.Stop> knownSightsNear(VectorEnrichedInput input, double[] anchor, Registry registry,
                                                   TripExclusions exclusions, LocalDate date, String country,
-                                                  int minValue) {
+                                                  int minValue, double direction) {
         if (anchor == null) return List.of();
+        long seed = FameMix.seedOf(input.destination(), String.valueOf(date),
+                input.companionType() == null ? "" : input.companionType().name(),
+                input.themes() == null ? "" : String.join(",", input.themes().stream().sorted().toList()));
         double radius = "car".equals(input.transportPref()) ? CAR_SEARCH_KM : TRANSIT_SEARCH_KM;
-        return registry.withClosures(candidateSupplement.enrichFromDb(registry.near.search(SearchRole.ATTRACTION,
-                        anchor, radius, SEARCH_LIMIT, 1))).stream()
+        List<PlaceCandidate> eligible = registry.withClosures(candidateSupplement.enrichFromDb(
+                registry.near.search(SearchRole.ATTRACTION, anchor, radius, SEARCH_LIMIT, 1))).stream()
                 .filter(c -> !TripCalendar.isKorea(c.country()) || HANGUL.matcher(Objects.toString(c.name(), "")).find())
                 .filter(c -> !DraftPlaceResolver.notAVisit(c.name(), c.category()))
                 .filter(c -> {
                     PlaceFactsReader.PlaceFact f = registry.fact(c);
                     if (f != null && f.value() != null) return f.value() >= minValue;
-                    return c.wikidataSitelinks() != null && c.wikidataSitelinks() >= 1;
+                    Integer sitelinks = PlaceProminence.effectiveSitelinks(c.wikidataSitelinks(), c.travelerFame());
+                    return sitelinks != null && sitelinks >= 1;
                 })
                 .filter(c -> !CandidatePolicy.isEventOnlySight(c.name(), c.category()))
                 .filter(c -> exclusions.violatedBy(c) == null)
                 // 쉬는 곳을 자르기 전에 빼야 휴관일에 채울 곳이 남는다.
                 .filter(c -> !closedOn(c, date, country))
-                .sorted(Comparator.comparingDouble(c -> -PlaceProminence.of(c)))
-                .limit(KNOWN_SIGHTS_LIMIT)
+                .toList();
+        return FameMix.pickNearby(eligible, direction, seed, KNOWN_SIGHTS_LIMIT).stream()
                 .map(c -> new DayBuilder.Stop(registry.add(c), "sight", "afternoon", List.of()))
                 .toList();
+    }
+
+    private static double fillDirection(VectorEnrichedInput input, List<DayBuilder.Stop> dayStops) {
+        return FameMix.of(input.themes()).fillDirection(
+                dayStops == null ? List.of() : dayStops.stream().filter(s -> !s.meal()).map(DayBuilder.Stop::place).toList());
     }
 
     /**
@@ -1638,7 +1665,7 @@ public class DraftItineraryPlanner {
     }
 
     /** 장소를 한 번만 후보로 만들고 index를 목록 위치와 맞춘다. */
-    private static final class Registry {
+    static final class Registry {
         private static final java.util.regex.Pattern BRACKETS = java.util.regex.Pattern.compile("[(\\[（【].*?[)\\]）】]");
         private final Map<Long, PlaceCandidate> byId = new LinkedHashMap<>();
         private final Map<Long, PlaceFactsReader.PlaceFact> facts = new HashMap<>();

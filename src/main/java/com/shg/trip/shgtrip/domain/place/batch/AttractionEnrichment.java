@@ -48,7 +48,8 @@ final class AttractionEnrichment {
         sb.append("  \"recommended_time_slots\": [\"morning\", \"afternoon\", \"evening\"],  // 추천 방문 시간대\n");
         sb.append("  \"recommended_duration_minutes\": 90,  // 평균 체류시간(분, 정수)\n");
         sb.append("  \"admission_fee\": 0,  // 입장료(원, 정수). 무료면 0, 유료면 성인 1인 기준 실제 입장료\n");
-        sb.append("  \"place_role\": \"SIGHT\"  // 여행 일정에서의 역할(아래 목록 중 하나)\n");
+        sb.append("  \"place_role\": \"SIGHT\",  // 여행 일정에서의 역할(아래 목록 중 하나)\n");
+        sb.append("  \"traveler_fame\": 0  // 알려진 정도(0~2, 아래 규칙)\n");
         sb.append("}\n");
         sb.append("\n추천 시간대는 다음 중에서 선택: morning, afternoon, evening, night, all_day");
         sb.append("\n체류시간 가이드: 등산·오름·트레킹 150~240 / 해변·시장 60 / 박물관·미술관 90 / 카페 60 / 식당 70");
@@ -58,6 +59,7 @@ final class AttractionEnrichment {
         sb.append("\nplace_role: SIGHT(명소·자연·유적·박물관·공원) / ACTIVITY(체험·레저·테마파크) / "
                 + "SHOPPING(쇼핑몰·백화점·쇼핑거리) / MARKET(전통시장·야시장) / LODGING(숙소) / TRANSIT(공항·역·터미널) / "
                 + "NOT_VISITABLE(여행자가 일부러 찾아갈 곳이 아님: 편의점·은행·병원·사무실·주차장·일반 매장·아파트·학교 등)");
+        sb.append("\n").append(EnrichOutputs.fameRule());
         return new EnrichPrompt(sb.toString(), user.toString());
     }
 
@@ -98,7 +100,7 @@ final class AttractionEnrichment {
         sb.append("\nplace_role: SIGHT(명소·자연·유적·박물관·공원) / ACTIVITY(체험·레저·테마파크) / "
                 + "SHOPPING(쇼핑몰·백화점·쇼핑거리) / MARKET(전통시장·야시장) / LODGING(숙소) / TRANSIT(공항·역·터미널) / "
                 + "NOT_VISITABLE(여행자가 일부러 찾아갈 곳이 아님: 편의점·은행·병원·사무실·주차장·일반 매장·아파트·학교 등)");
-        sb.append("\n").append(OverseasEnrichment.fameRule());
+        sb.append("\n").append(EnrichOutputs.fameRule());
         if (askNameKo) sb.append("\n").append(OverseasEnrichment.nameKoRule());
         return new EnrichPrompt(sb.toString(), user.toString());
     }
@@ -129,11 +131,11 @@ final class AttractionEnrichment {
 
         place.enrichWith(tags, description, timeSlots, durationMinutes, admissionFee);
         place.assignRole(role, null);
+        place.rateFame(EnrichOutputs.fame(root.get("traveler_fame")));
         if (overseas) {
             OverseasEnrichment.Currency currency = OverseasEnrichment.currencyOf(place.getCountry());
             place.recordAdmissionLocal(OverseasEnrichment.admissionLocal(root.get("admission_fee_local"), currency),
                     currency.code());
-            place.rateFame(OverseasEnrichment.fame(root.get("traveler_fame")));
             place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko")));
         }
         return true;

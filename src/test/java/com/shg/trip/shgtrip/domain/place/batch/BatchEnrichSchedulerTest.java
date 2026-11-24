@@ -808,15 +808,33 @@ class BatchEnrichSchedulerTest {
     }
 
     @Test
-    @DisplayName("해외 프롬프트는 알려진 정도를 묻고, 식당은 유명하지 않아도 설명을 조건부로 묻는다")
-    void buildEnrichPrompt_overseasAsksFame() {
+    @DisplayName("국내·해외 모두 알려진 정도를 묻고, 유명하지 않은 식당의 설명은 해외만 조건부로 묻는다")
+    void buildEnrichPrompt_asksFameEverywhere() {
         String attraction = EnrichPrompts.text(scheduler.buildEnrichPrompt(overseas("清水寺", TEMPLE, null)));
         String dining = EnrichPrompts.text(scheduler.buildEnrichPrompt(overseas("一蘭 祇園店", RAMEN, null)));
+        String krAttraction = EnrichPrompts.text(scheduler.buildEnrichPrompt(
+                createPlace(1L, "성산일출봉", "Landmarks and Outdoors > Mountain", "Jeju", "KR")));
+        String krDining = EnrichPrompts.text(scheduler.buildEnrichPrompt(dining("한본새", KOREAN_RESTAURANT, null, null)));
 
         assertThat(attraction).contains("\"traveler_fame\"", "미쉐린 스타 식당");
         assertThat(dining).contains("\"traveler_fame\": 0", "traveler_fame이 1 이상일 때만", "\"description\": null");
-        assertThat(EnrichPrompts.text(scheduler.buildEnrichPrompt(createPlace(1L, "성산일출봉", "Landmarks and Outdoors > Mountain", "Jeju", "KR"))))
-                .doesNotContain("traveler_fame");
+        assertThat(krAttraction).contains("\"traveler_fame\"", "미쉐린 스타 식당");
+        assertThat(krDining).contains("\"traveler_fame\": 0").doesNotContain("traveler_fame이 1 이상일 때만", "\"description\"");
+    }
+
+    @Test
+    @DisplayName("국내 장소도 알려진 정도를 기록하고, 국내 식당 설명은 Wikidata에 잡힌 곳만 받는다")
+    void applyEnrichment_domesticFame() {
+        Place sight = createPlace(1L, "사려니숲길", "Landmarks and Outdoors > Hiking Trail", "Jeju", "KR");
+        Place eatery = dining("한본새", KOREAN_RESTAURANT, null, null);
+
+        assertThat(scheduler.applyEnrichment(sight, "{\"tags\":[\"숲길\"],\"place_role\":\"SIGHT\",\"traveler_fame\":1}"))
+                .isTrue();
+        assertThat(scheduler.applyEnrichment(eatery,
+                "{\"tags\":[\"곰탕\"],\"traveler_fame\":1,\"description\":\"지어낸 설명\"}")).isTrue();
+        assertThat(sight.getTravelerFame()).isEqualTo((short) 1);
+        assertThat(eatery.getTravelerFame()).isEqualTo((short) 1);
+        assertThat(eatery.getDescription()).isNull();
     }
 
     @Test

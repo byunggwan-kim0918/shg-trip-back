@@ -58,6 +58,15 @@ class UpdateSanitizerTest {
     }
 
     @Test
+    @DisplayName("한적한 곳 취향은 테마로 받고, 성향으로 쓰지 않는 landmark는 버린다")
+    void quietThemeOnly() {
+        List<DraftEvent> events = run("사람 많은 데는 싫어요", "answered", u("THEMES", "add", "quiet", "inferred", ""),
+                u("THEMES", "add", "landmark", "inferred", ""));
+
+        assertThat(events).extracting(DraftEvent::value).containsExactly("quiet");
+    }
+
+    @Test
     @DisplayName("허용되지 않은 값·형식이 틀린 값은 버린다")
     void dropsInvalidValues() {
         List<DraftEvent> events = run("x", "answered",
