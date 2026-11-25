@@ -44,8 +44,7 @@ public final class TripFeasibility {
         } else if (departure == null) {
             end = minutes(DraftItineraryPlanner.LAST_DAY_END);
         } else {
-            end = TripHubs.departureDeadline(departure, null, false, country) - TripHubs.HUB_TRAVEL_MINUTES
-                    - TripHubs.estimatedLegSlack(TripHubs.HUB_TRAVEL_MINUTES);
+            end = TripHubs.latestLeave(TripHubs.departureDeadline(departure, null, false, country), null);
         }
         return end - Math.max(start, sunset + DayBuilder.NIGHT_AFTER_SUNSET) >= MIN_EVENING_MINUTES;
     }

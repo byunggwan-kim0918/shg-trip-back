@@ -64,8 +64,8 @@ final class DayScore {
             dinner |= InvariantChecker.inMealWindow(start, DINNER_START, DINNER_END);
         }
         int dayStart = steps.isEmpty() ? f.startMin() : ScheduleTimes.toMinutesOrZero(steps.get(0).startTime());
-        if (!lunch && dayStart <= LUNCH_START && f.endMin() >= LUNCH_END) out += PER_MISSING_MEAL;
-        if (!dinner && dayStart <= DINNER_START && f.endMin() >= DINNER_END) out += PER_MISSING_MEAL;
+        if (!lunch && dayStart <= LUNCH_START && f.dayEnd() >= LUNCH_END) out += PER_MISSING_MEAL;
+        if (!dinner && dayStart <= DINNER_START && f.dayEnd() >= DINNER_END) out += PER_MISSING_MEAL;
         if (!f.hardEnd() && lastActivityEnd >= 0 && lastActivityEnd < EARLY_FINISH_MINUTES) {
             out += (EARLY_FINISH_MINUTES - lastActivityEnd) * PER_EARLY_MINUTE;
         }

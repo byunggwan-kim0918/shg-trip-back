@@ -27,7 +27,7 @@ class TripPlannerTest {
     void editProblemsAreHardOnly() {
         DraftItineraryPlanner.Result result = new DraftItineraryPlanner.Result(List.of(), List.of(),
                 List.of("요청 장소 '감천문화마을' 찾지 못함", "1일차 뺌: 카페(하루 끝 시각 초과)"), List.of(), List.of(),
-                Map.of());
+                Map.of(), List.of());
         Violation soft = new Violation(Rule.DINNER_MISSING, 1, "day1 저녁 없음");
         Violation hard = new Violation(Rule.WANT_MISSING, 0, "요청한 '감천문화마을'이(가) 없음", List.of("감천문화마을"),
                 "'감천문화마을'을(를) 넣을 날짜와 시간대를 정한다");
@@ -61,7 +61,7 @@ class TripPlannerTest {
 
     private static DraftItineraryPlanner.Result result(List<StepData> steps, PlaceCandidate candidate) {
         return new DraftItineraryPlanner.Result(steps, candidate == null ? List.of() : List.of(candidate), List.of(),
-                List.of(), List.of(), Map.of());
+                List.of(), List.of(), Map.of(), List.of());
     }
 
     private static TripPlanner.Built built(DraftItineraryPlanner.Result result, List<Violation> violations) {

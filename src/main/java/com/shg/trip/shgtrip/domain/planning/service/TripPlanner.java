@@ -234,9 +234,24 @@ public class TripPlanner {
             if (want == null) continue;
             String noFood = want.food() == null ? null : "요청 음식 '" + want.food() + "'";
             String why = noFood != null && result.notes().stream().anyMatch(n -> n.contains(noFood))
-                    ? " 여행지에서 그 음식을 낸다고 메뉴로 확인되는 식당을 찾지 못했어요." : "";
+                    ? " 여행지에서 그 음식을 낸다고 메뉴로 확인되는 식당을 찾지 못했어요." : missedWhy(want, result);
             out.add("요청하신 '" + want.text() + "'은(는) 일정에 넣지 못했어요." + why);
         }
         return out;
+    }
+
+    /** 장소는 찾았지만 넣지 못한 요구의 까닭. 까닭을 모르면 빈 문자열이다. */
+    static String missedWhy(TripConditions.Want want, DraftItineraryPlanner.Result result) {
+        DraftItineraryPlanner.Omission o = result.omissions().stream()
+                .filter(x -> WantMatcher.matches(want, x.place())).reduce((a, b) -> b).orElse(null);
+        if (o == null) return "";
+        return switch (o.cause()) {
+            case DEPARTURE -> " 출발 시각에 맞춰 공항·역으로 가야 해서 들를 시간이 없었어요.";
+            case CLOSED -> " 여행 날짜에 쉬는 곳이에요.";
+            case HOURS -> " 영업시간에 맞춰 들를 수 있는 날이 없었어요.";
+            case TIME -> " 하루 일정 안에 들를 시간이 모자랐어요.";
+            case DAYLIGHT -> " 해 지기 전에 들를 시간이 없었어요.";
+            case ROUTE, OTHER -> "";
+        };
     }
 }

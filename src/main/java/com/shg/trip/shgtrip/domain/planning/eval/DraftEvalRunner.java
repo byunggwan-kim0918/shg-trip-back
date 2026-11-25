@@ -214,6 +214,8 @@ class DraftEvalRunner implements CommandLineRunner {
                 built.put(file, new String[]{md.toString(), objectMapper.writeValueAsString(Map.ofEntries(
                         Map.entry("id", id), Map.entry("request", req), Map.entry("steps", stepRows(result)),
                         Map.entry("notes", result.notes()), Map.entry("violations", violations),
+                        Map.entry("omissions", result.omissions().stream().map(o -> Map.of("day", o.day(),
+                                "name", o.place().name(), "reason", o.reason(), "cause", o.cause())).toList()),
                         Map.entry("intent", TripPlanner.intentOf(trip)), Map.entry("problems", root.path("problems")),
                         Map.entry("edits", edits.size()), Map.entry("finished", root.path("finished").asBoolean(true)),
                         Map.entry("ms", buildMs)))});
