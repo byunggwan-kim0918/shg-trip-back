@@ -114,7 +114,7 @@ public class TripSkeletonPlanner {
                 DraftPlan.Want w = wants.get(at);
                 if (u.time() != null && !sameTime(u.time(), w.time())) {
                     wants.set(at, new DraftPlan.Want(w.id(), w.kind(), w.text(), w.place(), w.food(), u.time(),
-                            w.satisfy(), w.localNames()));
+                            w.satisfy(), w.localNames(), w.foodAliases()));
                 }
                 if (u.pinned() != null) pinned.put(w.id(), u.pinned());
                 userById.put(w.id(), u);
@@ -423,7 +423,8 @@ public class TripSkeletonPlanner {
                     ? TripConditions.Reach.NOT_FOUND : TripConditions.Reach.PLACEABLE;
             DraftItineraryPlanner.UserWant user = userById.get(w.id());
             out.add(new TripConditions.Want(w.text(), timing(w.time()), satisfy, food, reach, user != null,
-                    user != null && user.accepted(), overseas ? w.localNames() : List.of()));
+                    user != null && user.accepted(), overseas ? w.localNames() : List.of(),
+                    food == null ? List.of() : w.foodAliases()));
         }
         VectorEnrichedInput input = base.input();
         boolean low = input.companionType() == VectorEnrichedInput.CompanionType.SENIOR
@@ -471,7 +472,7 @@ public class TripSkeletonPlanner {
     private boolean inData(String text, List<String> satisfy, List<String> localNames,
                            DraftItineraryPlanner.Request base) {
         TripConditions.Want want = new TripConditions.Want(text, null, satisfy, null, TripConditions.Reach.PLACEABLE,
-                false, false, localNames);
+                false, false, localNames, List.of());
         List<String> names = new ArrayList<>(satisfy);
         names.add(text);
         for (String n : names) {

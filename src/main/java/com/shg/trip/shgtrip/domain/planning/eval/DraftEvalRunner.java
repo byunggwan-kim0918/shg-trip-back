@@ -237,8 +237,8 @@ class DraftEvalRunner implements CommandLineRunner {
     }
 
     /**
-     * 정답 조건마다 초안이 같은 요구로 적은 장소 이름·음식·데이터에 없음 표시를 붙인다. 음식 요구는 메뉴로 확인하고, 메뉴 정보가 없는
-     * 식당만 이름으로 본다.
+     * 정답 조건마다 초안이 같은 요구로 적은 장소 이름·음식·음식의 다른 표기·데이터에 없음 표시를 붙인다. 음식 요구는 메뉴로
+     * 확인하고, 메뉴 정보가 없는 식당만 이름으로 본다.
      */
     private static TripConditions withSatisfy(TripConditions expect, TripConditions designed) {
         List<TripConditions.Want> wants = new ArrayList<>();
@@ -251,6 +251,7 @@ class DraftEvalRunner implements CommandLineRunner {
             boolean noSlot = false;
             boolean required = w.required();
             boolean accepted = false;
+            List<String> aliases = new ArrayList<>(w.foodAliases());
             String k = w.text().replaceAll("\\s", "");
             for (TripConditions.Want d : designed.wants()) {
                 String dk = d.text().replaceAll("\\s", "");
@@ -258,6 +259,7 @@ class DraftEvalRunner implements CommandLineRunner {
                 satisfy.addAll(d.satisfy());
                 localNames.addAll(d.localNames());
                 if (food == null && d.food() != null) food = d.food();
+                aliases.addAll(d.foodAliases());
                 matched = true;
                 notFound &= d.reach() == TripConditions.Reach.NOT_FOUND;
                 noSlot |= d.reach() == TripConditions.Reach.NO_SLOT;
@@ -267,7 +269,7 @@ class DraftEvalRunner implements CommandLineRunner {
             TripConditions.Reach reach = noSlot ? TripConditions.Reach.NO_SLOT
                     : matched && notFound ? TripConditions.Reach.NOT_FOUND : TripConditions.Reach.PLACEABLE;
             wants.add(new TripConditions.Want(w.text(), w.timing(), satisfy, food, reach, required, accepted,
-                    localNames));
+                    localNames, aliases.stream().distinct().toList()));
         }
         return new TripConditions(wants, expect.cityDays(), expect.avoid(), expect.lowMobility(), expect.transport(),
                 expect.arrival(), expect.departure(), designed.pace(), designed.chosenPlaceIds());

@@ -203,16 +203,17 @@ public class WikidataSitelinksJob {
     /**
      * 지역 전체를 0("항목 없음")으로 덮고 매칭된 곳만 다시 쓴다. 한 트랜잭션이라 일정 생성이 중간 상태(인기도가
      * 다 0인 순간)를 보지 않는다. 해외는 이름 전체가 같은 매칭만 한국어 라벨로 name_ko를 채운다. 채운 이름은
-     * 매칭이 바뀌어도 지워지지 않아 병기·지점명으로 붙은 매칭에서는 쓰지 않는다.
+     * 매칭이 바뀌어도 지워지지 않아 병기·지점명으로 붙은 매칭에서는 쓰지 않는다. 라벨도 모델 이름과 같은 검사
+     * ({@link OverseasEnrichment#nameKo})를 거친다. 검사에 걸리는 라벨을 채우면 무효화가 지우고 이 단계가 다시 채우기를 반복한다.
      */
     void writeAssignments(String region, List<Assignment> assignments, boolean overseas) {
         transactionTemplate.executeWithoutResult(status -> {
             placeRepository.resetWikidataForRegion(region);
             for (Assignment a : assignments) {
                 placeRepository.updateWikidataMatch(a.placeId(), a.item().id(), a.item().sitelinks());
-                if (overseas && a.exact() && a.item().koLabel() != null) {
-                    placeRepository.fillNameKo(a.placeId(), a.item().koLabel());
-                }
+                String nameKo = overseas && a.exact() && a.item().koLabel() != null
+                        ? OverseasEnrichment.nameKoText(a.item().koLabel(), a.placeName()) : null;
+                if (nameKo != null) placeRepository.fillNameKo(a.placeId(), nameKo);
             }
         });
     }
@@ -296,7 +297,7 @@ public class WikidataSitelinksJob {
             for (KeyedCandidate kc : eligible.values()) {
                 Candidate p = kc.place();
                 if (categoryTier(p.category()) != bestTier || !taken.add(p.id())) continue;
-                result.add(new Assignment(p.id(), item, kc.key().exact()));
+                result.add(new Assignment(p.id(), p.name(), item, kc.key().exact()));
             }
         }
         return result;
@@ -928,5 +929,5 @@ public class WikidataSitelinksJob {
      *
      * @param exact 장소 이름 전체가 항목 이름과 같은가(병기 첫 묶음·지점명을 뗀 키로 붙은 게 아닌가)
      */
-    record Assignment(long placeId, WikidataItem item, boolean exact) {}
+    record Assignment(long placeId, String placeName, WikidataItem item, boolean exact) {}
 }

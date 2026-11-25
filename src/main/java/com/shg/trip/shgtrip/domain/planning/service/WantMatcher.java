@@ -20,8 +20,11 @@ public final class WantMatcher {
     static final Pattern BRACKETS = Pattern.compile("[(\\[（【].*?[)\\]）】]");
     /** 같은 식당으로 보는 이름 뒤 덧붙은 글자 수("진로집본점"). */
     private static final int BRANCH_SUFFIX_CHARS = 3;
-    /** 음식 종류가 아니라 조리법·끼니를 가리키는 말. 이 말만 맞는 식당은 요청한 음식을 낸다고 볼 수 없다. */
-    private static final Set<String> GENERIC_DISH = Set.of("구이", "찌개", "요리", "식사", "정식", "맛집");
+    /** 음식 종류가 아니라 조리법·끼니·업종을 가리키는 말. 이 말만 맞는 식당은 요청한 음식을 낸다고 볼 수 없다. */
+    private static final Set<String> GENERIC_DISH = Set.of("구이", "찌개", "요리", "식사", "정식", "맛집",
+            "料理", "定食", "食堂", "食事", "居酒屋", "レストラン", "餐厅", "饭店", "小吃");
+    /** 음식 종류 전체를 가리키는 말. 다른 음식의 다른 표기로 오면 그 종류 식당이 모두 요청 음식을 내는 것이 된다. */
+    private static final Set<String> DISH_CATEGORY = Set.of("해산물", "海鮮");
 
     private WantMatcher() {}
 
@@ -30,7 +33,7 @@ public final class WantMatcher {
         if (want.food() != null) {
             boolean eatery = role == CandidatePolicy.Role.MEAL || role == CandidatePolicy.Role.CAFE
                     || role == CandidatePolicy.Role.BAR;
-            return eatery && serves(want.food(), want.satisfy(), place);
+            return eatery && serves(want.food(), want.foodAliases(), want.satisfy(), place);
         }
         if (matches(want.text(), place)) return true;
         for (String s : want.satisfy() == null ? List.<String>of() : want.satisfy()) {
@@ -82,9 +85,13 @@ public final class WantMatcher {
     /**
      * 메뉴로 확인되거나, 메뉴 정보가 없는 식당이 그 음식으로 이름난 곳(모델이 적은 식당)과 이름이 같으면 요청 음식을 낸다고
      * 본다. 메뉴가 있는데 그 음식이 없으면 이름이 같아도 아니다.
+     *
+     * @param aliases 같은 음식의 다른 표기. 해외 식당은 이름이 현지어이고 태그는 한국에서 부르는 이름이라 요청한 말과 다르다
      */
-    static boolean serves(String food, List<String> named, PlaceCandidate c) {
+    static boolean serves(String food, List<String> aliases, List<String> named, PlaceCandidate c) {
         if (serves(food, c)) return true;
+        if (aliases != null && aliases.stream().map(WantMatcher::key)
+                .anyMatch(a -> !DISH_CATEGORY.contains(a) && servesDish(a, c))) return true;
         if (named == null || c.attributes() != null && c.attributes().official() != null
                 && !c.attributes().official().isEmpty()) return false;
         String bare = PlaceNames.bareKey(c.name());

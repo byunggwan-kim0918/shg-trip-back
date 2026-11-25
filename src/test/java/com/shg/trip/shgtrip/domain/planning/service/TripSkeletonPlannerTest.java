@@ -166,7 +166,7 @@ class TripSkeletonPlannerTest {
         given(resolver.resolveNamed(anyString(), anyList(), anyString(), any(), any(), any()))
                 .willReturn(new DraftPlaceResolver.Resolution(izakaya, "ok", PlaceNames.Match.FUZZY));
         DraftPlan.Want want = new DraftPlan.Want("w1", "place", "시라카와고", "시라카와고", null, null,
-                List.of("시라카와고"), List.of("白川郷"));
+                List.of("시라카와고"), List.of("白川郷"), List.of());
         DraftPlan draft = new DraftPlan("다카야마", List.of(want), List.of(new DraftPlan.Day(1, "다카야마", null,
                 List.of(new DraftPlan.Item("morning", "sight", "시라카와고", "시라카와고", true, "w1", null, null)),
                 List.of())));

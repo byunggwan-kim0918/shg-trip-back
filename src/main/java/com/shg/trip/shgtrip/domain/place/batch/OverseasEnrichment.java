@@ -108,21 +108,74 @@ final class OverseasEnrichment {
     private static final java.util.Set<String> NON_NAMES = java.util.Set.of(
             "한국어이름", "한국어표시이름", "없음", "미상", "알수없음", "모름", "해당없음", "이름없음", "null", "na");
 
-    private static final java.util.regex.Pattern BRACKETED = java.util.regex.Pattern.compile("\\s*[(（\\[【][^)）\\]】]*[)）\\]】]");
+    private static final java.util.regex.Pattern BRACKETED = java.util.regex.Pattern.compile("\\s*[(（\\[【]([^)）\\]】]*)[)）\\]】]");
+    /** 모델이 이름 칸에 덧붙이는 설명("본점 아님 — 본문: …")의 구분 기호. 원문에도 있으면 이름의 일부다. */
+    private static final java.util.regex.Pattern REMARK_MARK = java.util.regex.Pattern.compile("[—–―:：]");
 
     /**
-     * 한국어 표시 이름만 받는다. 괄호 병기는 떼고, 한자·가나가 남거나 한글이 없거나 이름이 아닌 말이면 버린다.
+     * 한국어 표시 이름만 받는다. 한자·가나가 남거나 한글이 없거나 이름이 아닌 말이면 버린다.
      * 저장한 이름은 다시 묻지 않으므로 애매하면 버리고 보정표·재보강에 맡긴다.
+     *
+     * @param originalName 원문 이름. 한글 밖의 글자·설명 기호는 원문에 있을 때만 이름의 일부로 본다
      */
-    static String nameKo(JsonNode node) {
+    /** 저장된 이름·Wikidata 라벨을 {@link #nameKo(JsonNode, String)}와 같은 검사로 본다. value가 null이면 null이다. */
+    static String nameKoText(String value, String originalName) {
+        return value == null ? null : nameKo(com.fasterxml.jackson.databind.node.TextNode.valueOf(value), originalName);
+    }
+
+    static String nameKo(JsonNode node, String originalName) {
         if (node == null || node.isNull()) return null;
         String v = node.asText("").strip();
         if (v.length() >= 2 && (v.startsWith("\"") && v.endsWith("\""))) v = v.substring(1, v.length() - 1).strip();
-        v = BRACKETED.matcher(v).replaceAll("").strip();
+        String original = java.text.Normalizer.normalize(originalName == null ? "" : originalName,
+                java.text.Normalizer.Form.NFKC).toLowerCase(java.util.Locale.ROOT);
+        v = unbracket(v, BRACKETED.matcher(original).find());
         if (v.isEmpty() || v.length() > MAX_NAME_KO_LENGTH) return null;
         if (NON_NAMES.contains(PlaceNames.exactKey(v))) return null;
         boolean hasHangul = v.codePoints().anyMatch(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HANGUL);
-        return hasHangul && !OverseasNameKeys.hasCjk(v) ? v : null;
+        if (!hasHangul || OverseasNameKeys.hasCjk(v)) return null;
+        return foreignLettersFrom(v, original) && remarksFrom(v, original) ? v : null;
+    }
+
+    /**
+     * 원문 괄호를 옮긴 한글 괄호("妹背の滝（雄滝）" → "이모세노타키 (오타키)")는 부속 시설 이름일 수 있어 괄호만 뗀다.
+     * 괄호째 지우면 부속 시설이 큰 장소 이름을 받는다. 원문에 없는 괄호("나카노 역 (도쿄 도)")는 모델이 붙인 구분이다.
+     */
+    private static String unbracket(String v, boolean originalBracketed) {
+        java.util.regex.Matcher m = BRACKETED.matcher(v);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String inner = m.group(1).strip();
+            boolean keep = originalBracketed && inner.codePoints()
+                    .anyMatch(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HANGUL);
+            m.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(keep ? " " + inner : ""));
+        }
+        m.appendTail(out);
+        return out.toString().replaceAll("\\s+", " ").strip();
+    }
+
+    /** 한글이 아닌 글자 덩어리. 상호의 로마자("PokéPark", "ØL")는 원문에 그대로 있다. */
+    private static final java.util.regex.Pattern FOREIGN_RUN =
+            java.util.regex.Pattern.compile("[\\p{L}&&[^\\p{IsHangul}]]+");
+    private static final java.util.regex.Pattern ORIGINAL_MARK = java.util.regex.Pattern.compile("[—–―:：\\-−〜~]");
+
+    /** 가타카나로 적은 약어(ディーアイ → DI, インター → IC)는 원문에 로마자로 없다. */
+    private static final java.util.regex.Pattern ABBREVIATION = java.util.regex.Pattern.compile("[A-Z]{1,4}");
+
+    /** 원문에 없는 글자("로ккō", "사न", 가나를 옮기다 만 "소honke")는 모델 출력이 깨진 것이다. */
+    private static boolean foreignLettersFrom(String nameKo, String original) {
+        java.util.regex.Matcher m = FOREIGN_RUN.matcher(nameKo);
+        while (m.find()) {
+            String run = m.group();
+            if (!original.contains(run.toLowerCase(java.util.Locale.ROOT)) && !ABBREVIATION.matcher(run).matches()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean remarksFrom(String nameKo, String original) {
+        return !REMARK_MARK.matcher(nameKo).find() || ORIGINAL_MARK.matcher(original).find();
     }
 
     /** 현지 통화 입장료. 숫자가 아니거나 그 통화로 있을 수 없는 금액은 버린다(0은 무료). */
