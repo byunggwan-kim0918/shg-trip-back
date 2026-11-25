@@ -20,3 +20,10 @@ def test_exact_key_follows_shared_contract(raw, expected):
 def test_empty_name_has_empty_key():
     assert exact_key(None) == ""
     assert exact_key("  · ") == ""
+
+
+def test_bare_key_drops_bracketed_notes_like_java():
+    from pipeline.names import bare_key
+    assert bare_key("大涌谷 (Ōwakudani)") == "大涌谷"
+    assert bare_key("鹿苑寺（金閣寺）") == "鹿苑寺"
+    assert bare_key("(株)") == "株"

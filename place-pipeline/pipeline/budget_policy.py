@@ -199,22 +199,71 @@ def values(con, base, evidence, wikivoyage, settlements, wikidata, area_items=No
 DEFAULT_SHARES = {"sight": 0.5, "food": 0.45, "support": 0.05}
 
 
-def build(con, base, value_table, places, table, shares=None):
+# 여행지마다 먼저 담는 최소치. 장소 부족 관문(날마다 관광 1·끼니 2·숙소 1)을 가장 긴 일정(6일)에서 넘고 같은 날 대안을
+# 고를 여유를 둔다. 후보가 이보다 적은 여행지는 있는 만큼 담는다.
+DESTINATION_FLOORS = {"sight": 40, "meal": 60, "cafe": 10, "lodging": 10}
+
+
+def assign_destinations(con, rows, destinations, table="budget_destinations", temp=False):
+    """rows(source, source_id, lat, lon)를 반경 안 여행지(destinations: name, lat, lon, km)에 배정한다.
+    여럿에 들면 반경 대비 가장 가까운 곳이다. 어느 반경에도 없는 행은 결과에 없다. temp면 임시 표로 만든다."""
+    km = ("2 * 6371 * asin(sqrt(pow(sin(radians(r.lat - d.lat) / 2), 2) + cos(radians(d.lat)) * cos(radians(r.lat)) "
+          "* pow(sin(radians(r.lon - d.lon) / 2), 2)))")
+    con.execute(f"""
+        CREATE OR REPLACE {"TEMP TABLE" if temp else "TABLE"} {table} AS
+        SELECT r.source, r.source_id, d.name AS region
+        FROM {rows} r JOIN {destinations} d
+            ON abs(r.lat - d.lat) < d.km / 111.0 AND abs(r.lon - d.lon) < d.km / (111.0 * cos(radians(d.lat)))
+        WHERE {km} <= d.km
+        QUALIFY row_number() OVER (PARTITION BY r.source, r.source_id ORDER BY {km} / d.km, d.name) = 1
+    """)
+    return table
+
+
+def build(con, base, value_table, places, table, shares=None, regions=None, floors=None):
     """base의 모든 행에 kept 열을 단 표. 역할 묶음마다 places × 몫까지, 유명 행부터 한계 가치 순으로 담는다.
-    한 묶음의 후보가 몫보다 적으면 남는 몫은 다른 묶음이 몫 비율대로 나눠 쓴다."""
+    한 묶음의 후보가 몫보다 적으면 남는 몫은 다른 묶음이 몫 비율대로 나눠 쓴다.
+    regions(source, source_id, region)를 주면 여행지에 배정된 행만 담고, 여행지마다 floors 최소치를 먼저 담는다.
+    생성기는 여행지 반경 안 장소만 검색해 반경 밖 행은 담아도 쓰이지 않는다."""
     shares = shares or DEFAULT_SHARES
     group = f"CASE WHEN role IN ({_sql_list(SIGHT_ROLES)}) THEN 'sight' ELSE role END"
-    sizes = dict(con.execute(f"SELECT {group}, count(*) FROM {value_table} GROUP BY 1").fetchall())
+    if regions:
+        floors = DESTINATION_FLOORS if floors is None else floors
+        floor_group = ("CASE WHEN role IN (" + _sql_list(SIGHT_ROLES) + ") THEN 'sight' "
+                       "WHEN role = 'food' AND kind_class = 'cafe' THEN 'cafe' WHEN role = 'food' THEN 'meal' "
+                       "WHEN kind_class = 'lodging' THEN 'lodging' END")
+        floor_limit = " ".join(f"WHEN '{g}' THEN {n}" for g, n in floors.items())
+        con.execute(f"""
+            CREATE OR REPLACE TEMP TABLE budget_candidates AS
+            SELECT v.*, r.region, {group} AS budget_group, {floor_group} AS floor_group
+            FROM {value_table} v JOIN {regions} r USING (source, source_id)
+        """)
+        con.execute(f"""
+            CREATE OR REPLACE TEMP TABLE budget_floor AS
+            SELECT source, source_id, budget_group FROM budget_candidates
+            WHERE floor_group IS NOT NULL
+            QUALIFY row_number() OVER (PARTITION BY region, floor_group ORDER BY famous DESC, value DESC, hash(source_id))
+                    <= CASE floor_group {floor_limit} ELSE 0 END
+        """)
+    else:
+        con.execute(f"CREATE OR REPLACE TEMP TABLE budget_candidates AS SELECT v.*, {group} AS budget_group FROM {value_table} v")
+        con.execute("CREATE OR REPLACE TEMP TABLE budget_floor AS SELECT source, source_id, budget_group "
+                    "FROM budget_candidates WHERE false")
+    sizes = dict(con.execute("SELECT budget_group, count(*) FROM budget_candidates GROUP BY 1").fetchall())
     quota = _quotas(int(places), shares, sizes)
-    limits = " ".join(f"WHEN '{g}' THEN {n}" for g, n in quota.items())
+    floor_counts = dict(con.execute("SELECT budget_group, count(*) FROM budget_floor GROUP BY 1").fetchall())
+    limits = " ".join(f"WHEN '{g}' THEN {max(0, n - floor_counts.get(g, 0))}" for g, n in quota.items())
     con.execute(f"""
         CREATE OR REPLACE TABLE {table} AS
-        WITH r AS (SELECT source, source_id, {group} AS budget_group,
-                          row_number() OVER (PARTITION BY {group} ORDER BY famous DESC, value DESC, hash(source_id))
-                              AS budget_rank
-                   FROM {value_table})
-        SELECT s.* EXCLUDE (kept), coalesce(r.budget_rank <= CASE r.budget_group {limits} ELSE 0 END, false) AS kept
-        FROM {base} s LEFT JOIN r USING (source, source_id)
+        WITH r AS (SELECT c.source, c.source_id, c.budget_group,
+                          row_number() OVER (PARTITION BY c.budget_group ORDER BY c.famous DESC, c.value DESC,
+                                             hash(c.source_id)) AS budget_rank
+                   FROM budget_candidates c ANTI JOIN budget_floor f USING (source, source_id)),
+        chosen AS (SELECT source, source_id FROM budget_floor
+                   UNION ALL
+                   SELECT source, source_id FROM r WHERE budget_rank <= CASE budget_group {limits} ELSE 0 END)
+        SELECT s.* EXCLUDE (kept), (c.source IS NOT NULL) AS kept
+        FROM {base} s LEFT JOIN chosen c USING (source, source_id)
     """)
     return table
 

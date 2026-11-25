@@ -67,7 +67,9 @@ def _wikidata(con, candidates, wikidata_raw, wikidata_areas):
         identity.wikidata_links(con, "targets", candidates, wikidata_raw, "wikidata_links", wikidata_areas)
         joined = f"""LEFT JOIN wikidata_links l USING (source, source_id)
                      LEFT JOIN {wikidata_raw} w ON w.qid = l.qid"""
-        cols = "l.qid AS wd_qid, w.sitelinks AS wd_sitelinks, w.ko AS wd_name_ko, w.kowiki AS wd_kowiki"
+        # 한국어 라벨 자리에 원어 표기(Zepp, HEP NAVIO)를 그대로 둔 항목이 있다.
+        cols = ("l.qid AS wd_qid, w.sitelinks AS wd_sitelinks, "
+                "CASE WHEN regexp_matches(w.ko::VARCHAR, '[가-힣]') THEN w.ko END AS wd_name_ko, w.kowiki AS wd_kowiki")
     else:
         joined = ""
         cols = ("NULL::VARCHAR AS wd_qid, NULL::INTEGER AS wd_sitelinks, NULL::VARCHAR AS wd_name_ko, "
@@ -115,8 +117,9 @@ def _pool(con, candidates):
 
 def _promote_notable_held(con, candidates, wikidata_raw, wikidata_areas):
     """
-    중복 가능·검토로 보류된 FSQ 행 가운데 풀 어디에도 이어지지 않은 Wikidata 항목에 이어지는 행을 풀에 올린다.
-    Overture에 경내 부속 시설(櫛田神社 中神門)만 있으면 본체 FSQ 행(櫛田神社)이 중복으로 보류되기 때문이다.
+    중복 가능·검토로 보류된 FSQ 행 가운데 풀에서 이름이 정확히 같은 행으로 이어지지 않은 Wikidata 항목에 이어지는 행을 풀에
+    올린다. Overture에 경내 부속 시설(櫛田神社 中神門)만 있으면 본체 FSQ 행(櫛田神社)이 중복으로 보류되고, 항목 이름을
+    품은 부속 시설(大涌谷延命地蔵尊)이 포함 연결로 항목을 가져간다.
     """
     identity.wikidata_links(con, "targets", candidates, wikidata_raw, "pool_wikidata", wikidata_areas)
     con.execute("CREATE OR REPLACE TEMP TABLE held AS SELECT 'fsq' AS source, source_id FROM fsq_only WHERE status <> 'only'")
@@ -125,7 +128,8 @@ def _promote_notable_held(con, candidates, wikidata_raw, wikidata_areas):
         INSERT INTO targets BY NAME
         SELECT c.*, 'fsq_notable' AS pool_basis
         FROM (SELECT source_id FROM held_wikidata
-              WHERE qid NOT IN (SELECT qid FROM pool_wikidata)
+              WHERE rule = 'exact'
+                AND NOT EXISTS (SELECT 1 FROM pool_wikidata p WHERE p.rule = 'exact' AND p.qid = held_wikidata.qid)
               QUALIFY row_number() OVER (PARTITION BY qid ORDER BY meters, source_id) = 1) h
         JOIN {candidates} c ON c.source = 'fsq' AND c.source_id = h.source_id
     """)

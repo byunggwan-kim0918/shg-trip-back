@@ -94,7 +94,8 @@ def main():
         if usd > args.max_usd:
             raise RuntimeError(f"비용 상한 ${args.max_usd}를 넘었다")
     print("HNSW 색인 생성", flush=True)
-    _psql("SET maintenance_work_mem = '2GB'; DROP INDEX IF EXISTS idx_places_embedding_hnsw; "
+    # 컨테이너 /dev/shm(1GB)으로는 병렬 색인 생성이 공유 메모리를 못 잡는다.
+    _psql("SET maintenance_work_mem = '1GB'; SET max_parallel_maintenance_workers = 0; DROP INDEX IF EXISTS idx_places_embedding_hnsw; "
           "CREATE INDEX idx_places_embedding_hnsw ON places USING hnsw (embedding halfvec_cosine_ops) "
           "WITH (m = 16, ef_construction = 64); ANALYZE places;")
     print(f"끝: 토큰 {tokens:,}, ${tokens * USD_PER_MILLION_TOKENS / 1e6:.3f}")

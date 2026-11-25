@@ -43,6 +43,15 @@ class TestFsqLink:
 
 
 class TestPool:
+    def test_other_building_of_the_same_brand_is_not_a_duplicate(self, con):
+        ov(con, "workshop", "北一硝子見学硝子工房", hierarchy=("shopping", "arts_and_crafts"))
+        fs(con, "hall3", "北一硝子 三号館", coord=NEAR, label="Retail > Arts and Crafts Store")
+        fs(con, "same", "北一硝子 見学硝子工房", coord=NEAR, label="Retail > Arts and Crafts Store")
+        run(con)
+        status = dict(con.execute("SELECT source_id, status FROM fsq_only").fetchall())
+        assert status == {"hall3": "only"}
+        assert "same" not in status  # 이름이 같은 Overture 행과 같은 곳이다
+
     def test_unlinked_fsq_row_joins_pool_but_near_similar_name_is_held(self, con):
         ov(con, "o1", "博多一双中洲店", hierarchy=("shopping", "souvenir_store"))
         fs(con, "dup", "博多一双", coord=NEAR, label="Retail > Gift Store")
@@ -143,8 +152,88 @@ class TestWikidataLinks:
         assert dict(con.execute("SELECT source_id, qid FROM wikidata_links").fetchall()) == {
             "senso": "Q615183", "dazaifu": "Q710786"}
 
+    def test_bracketed_alias_links_the_main_row_not_its_sub_building(self, con):
+        ov(con, "main", "鹿苑寺 (金閣寺) (Kinkaku-Ji Temple)", hierarchy=("religious_organization", "buddhist_temple"),
+           coord=NEAR)
+        ov(con, "hall", "鹿苑寺 方丈", hierarchy=("religious_organization", "buddhist_temple"))
+        con.execute("""CREATE TABLE wd AS SELECT * FROM (VALUES
+            ('Q270983', 43.1976, 141.0025, 58, '鹿苑寺', 'Kinkaku-ji Temple', '로쿠온지', true, true))
+            AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
+        candidates.build(con, "ov", "2026-11-18.0", None, None)
+        con.execute("CREATE TABLE rows AS SELECT source, source_id FROM candidates")
+        con.execute("CREATE TABLE areas (qid VARCHAR)")
+        identity.wikidata_links(con, "rows", "candidates", "wd", area_items="areas")
+        assert dict(con.execute("SELECT source_id, qid FROM wikidata_links").fetchall()) == {"main": "Q270983"}
+
+    def test_row_ending_with_the_item_name_takes_it_over_a_nearer_place_named_after_it(self, con):
+        ov(con, "shrine", "京都タワー神社", hierarchy=("religious_organization", "shinto_shrine"))
+        ov(con, "tower", "ニデック京都タワー (Nidec Kyoto Tower)", hierarchy=("attractions_and_activities", "landmark"),
+           coord=(43.1976 + 0.0005, 141.0025))
+        con.execute("""CREATE TABLE wd AS SELECT * FROM (VALUES
+            ('Q1201304', 43.1976, 141.0025, 30, '京都タワー', 'Kyoto Tower', NULL, true, true))
+            AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
+        candidates.build(con, "ov", "2026-11-18.0", None, None)
+        con.execute("CREATE TABLE rows AS SELECT source, source_id FROM candidates")
+        con.execute("CREATE TABLE areas (qid VARCHAR)")
+        identity.wikidata_links(con, "rows", "candidates", "wd", area_items="areas")
+        assert dict(con.execute("SELECT source_id, qid FROM wikidata_links").fetchall()) == {"tower": "Q1201304"}
+
+    def test_shop_named_after_a_landmark_does_not_take_its_item(self, con):
+        ov(con, "garden", "新宿御苑", hierarchy=("attractions_and_activities", "park"))
+        ov(con, "cafe", "新宿御苑", hierarchy=("food_and_drink", "restaurant"), coord=NEAR)
+        ov(con, "brand", "梅光軒", hierarchy=("food_and_drink", "restaurant"), coord=FAR)
+        con.execute("""CREATE TABLE wd AS SELECT * FROM (VALUES
+            ('Q776863', 43.1976, 141.0025, 23, '新宿御苑', 'Shinjuku Gyoen', '신주쿠 교엔', true, true),
+            ('Q5', 43.1976 + 0.01, 141.0025, 3, '梅光軒', NULL, NULL, true, false))
+            AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
+        candidates.build(con, "ov", "2026-11-18.0", None, None)
+        con.execute("CREATE TABLE rows AS SELECT source, source_id FROM candidates")
+        identity.wikidata_links(con, "rows", "candidates", "wd")
+        assert dict(con.execute("SELECT source_id, qid FROM wikidata_links").fetchall()) == {
+            "garden": "Q776863", "brand": "Q5"}
+
+    def test_mall_keeps_its_item_and_lenticular_bracket_alias_links_exactly(self, con):
+        ov(con, "mall", "金沢百番街", hierarchy=("retail", "shopping_mall"))
+        ov(con, "site", "金沢百番街", hierarchy=("attractions_and_activities", "historic_site"), coord=NEAR)
+        ov(con, "street", "国際通り【 Kokusai Street 】", hierarchy=("attractions_and_activities", "landmark"), coord=FAR)
+        ov(con, "karaoke", "カラオケ ビッグエコー国際通り店", hierarchy=("arts_and_entertainment", "music_venue"),
+           coord=(FAR[0] + 0.0002, FAR[1]))
+        con.execute("""CREATE TABLE wd AS SELECT * FROM (VALUES
+            ('Q11647512', 43.1976, 141.0025, 3, '金沢百番街', NULL, NULL, true, false),
+            ('Q4616917', 43.1976 + 0.01 + 0.0002, 141.0025, 8, '国際通り', 'Kokusai-dori', NULL, true, true))
+            AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
+        candidates.build(con, "ov", "2026-11-18.0", None, None)
+        con.execute("CREATE TABLE rows AS SELECT source, source_id FROM candidates")
+        con.execute("CREATE TABLE areas (qid VARCHAR)")
+        identity.wikidata_links(con, "rows", "candidates", "wd", area_items="areas")
+        assert dict(con.execute("SELECT source_id, qid FROM wikidata_links").fetchall()) == {
+            "mall": "Q11647512", "site": "Q11647512", "street": "Q4616917"}
+
+    def test_held_body_is_promoted_over_a_sub_facility_holding_the_item(self, con):
+        ov(con, "jizo", "大涌谷延命地蔵尊", hierarchy=("attractions_and_activities", "park"))
+        ov(con, "station", "大涌谷駅", hierarchy=("travel", "train_station"), coord=NEAR)
+        fs(con, "main", "大涌谷", coord=NEAR, label="Landmarks and Outdoors > Volcano")
+        con.execute("""CREATE TABLE wd AS SELECT * FROM (VALUES
+            ('Q1134429', 43.1977, 141.0025, 14, '大涌谷', 'Ōwakudani', '오와쿠다니', true, true))
+            AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
+        con.execute("CREATE TABLE areas (qid VARCHAR)")
+        candidates.build(con, "ov", "2026-11-18.0", "fs", "test")
+        evidence.build(con, "candidates", "fs", wikidata_raw="wd", wikidata_areas="areas")
+        rows = {r[0]: r[1:] for r in con.execute("SELECT source_id, pool_basis, wd_qid FROM evidence").fetchall()}
+        assert rows["main"] == ("fsq_notable", "Q1134429")
+        assert rows["jizo"][1] is None
+
+    def test_non_hangul_korean_label_is_not_a_korean_name(self, con):
+        ov(con, "zepp", "Zepp Sapporo", hierarchy=("arts_and_entertainment", "music_venue"))
+        con.execute("""CREATE TABLE wd AS SELECT * FROM (VALUES
+            ('Q681144', 43.1976, 141.0025, 14, 'Zepp Sapporo', 'Zepp Sapporo', 'Zepp', true, false))
+            AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
+        candidates.build(con, "ov", "2026-11-18.0", None, None)
+        evidence.build(con, "candidates", None, wikidata_raw="wd")
+        assert con.execute("SELECT wd_qid, wd_name_ko FROM evidence").fetchone() == ("Q681144", None)
+
     def test_held_fsq_row_of_an_unlinked_wikidata_item_is_promoted(self, con):
-        ov(con, "gate", "櫛田神社 中神門", hierarchy=("religious_organization", "shinto_shrine"))
+        ov(con, "gate", "櫛田神社会館", hierarchy=("religious_organization", "shinto_shrine"))
         fs(con, "main", "櫛田神社", coord=NEAR, label="Community and Government > Spiritual Center > Shrine")
         con.execute("""CREATE TABLE wd AS SELECT * FROM (VALUES
             ('Q865839', 43.1977, 141.0025, 7, '櫛田神社', 'Kushida Shrine', NULL, true, false))
