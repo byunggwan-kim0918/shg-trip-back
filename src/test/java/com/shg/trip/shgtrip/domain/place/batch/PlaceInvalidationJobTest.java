@@ -70,6 +70,21 @@ class PlaceInvalidationJobTest {
     }
 
     @Test
+    @DisplayName("나라 이름 태그가 있어도 임베딩 배치와 같은 텍스트로 지문을 계산해 임베딩을 비우지 않는다")
+    void countryTagDoesNotInvalidateEmbedding() {
+        String category = "Dining and Drinking > Restaurant";
+        List<String> tags = List.of("라멘", "일본");
+        String batchFp = PlaceFingerprints.embeddingText(EmbeddingTextBuilder.buildText(Place.builder().name("一蘭")
+                .category(category).region("Fukuoka").country("JP").tags(tags).build()));
+        var row = new PlaceInvalidationJob.Row(1, "一蘭", null, category, "Fukuoka", "JP", LAT, LNG, tags, null,
+                true, true, enrichFp("一蘭", category), batchFp, false, null);
+
+        var d = PlaceInvalidationJob.decide(List.of(row), true);
+
+        assertThat(d.invalidateEmbedding()).isEmpty();
+    }
+
+    @Test
     @DisplayName("변화가 없으면 아무것도 하지 않는다")
     void unchangedRowIsLeftAlone() {
         String category = "Dining and Drinking > Restaurant";

@@ -62,21 +62,24 @@ class ResolveEvalRunner implements CommandLineRunner {
         Files.createDirectories(out);
         Map<String, Integer> counts = new TreeMap<>();
         try (Writer w = Files.newBufferedWriter(out.resolve("resolve.tsv"), StandardCharsets.UTF_8)) {
-            w.write("id\tregions\tname\tkind\tstatus\tmatch\tplace_id\tplace_name\tplace_name_ko\trole\n");
+            w.write("id\tregions\tname\tkind\tstatus\tmatch\tplace_id\tplace_name\tplace_name_ko\trole\tplace_region\n");
             for (JsonNode row : objectMapper.readTree(Path.of(names).toFile())) {
                 List<String> regions = new ArrayList<>();
                 row.path("regions").forEach(r -> regions.add(r.asText()));
                 String name = row.path("name").asText();
                 String kind = row.path("kind").isMissingNode() || row.path("kind").isNull() ? null
                         : row.path("kind").asText();
-                DraftPlaceResolver.Resolution r = resolver.resolve(name, kind, regions, cityNames(regions), null);
+                List<String> locals = new ArrayList<>();
+                row.path("local").forEach(n -> locals.add(n.asText()));
+                DraftPlaceResolver.Resolution r = resolver.resolveNamed(name, locals, kind, regions, cityNames(regions),
+                        null);
                 Place p = r.place();
                 counts.merge(r.status() + (r.match() == null ? "" : "/" + r.match()), 1, Integer::sum);
                 w.write(String.join("\t", row.path("id").asText(), String.join(",", regions), clean(name),
                         Objects.toString(kind, ""), r.status(), Objects.toString(r.match(), ""),
                         p == null ? "" : String.valueOf(p.getId()), p == null ? "" : clean(p.getName()),
-                        p == null ? "" : clean(p.getNameKo()), p == null ? "" : Objects.toString(p.getPlaceRole(), ""))
-                        + "\n");
+                        p == null ? "" : clean(p.getNameKo()), p == null ? "" : Objects.toString(p.getPlaceRole(), ""),
+                        p == null ? "" : Objects.toString(p.getRegion(), "")) + "\n");
             }
         }
         log.info("이름 연결 결과 {}", counts);

@@ -244,6 +244,7 @@ class DraftEvalRunner implements CommandLineRunner {
         List<TripConditions.Want> wants = new ArrayList<>();
         for (TripConditions.Want w : expect.wants()) {
             List<String> satisfy = new ArrayList<>(w.satisfy());
+            List<String> localNames = new ArrayList<>(w.localNames());
             String food = w.food();
             boolean matched = false;
             boolean notFound = true;
@@ -255,6 +256,7 @@ class DraftEvalRunner implements CommandLineRunner {
                 String dk = d.text().replaceAll("\\s", "");
                 if (!dk.contains(k) && !k.contains(dk)) continue;
                 satisfy.addAll(d.satisfy());
+                localNames.addAll(d.localNames());
                 if (food == null && d.food() != null) food = d.food();
                 matched = true;
                 notFound &= d.reach() == TripConditions.Reach.NOT_FOUND;
@@ -264,7 +266,8 @@ class DraftEvalRunner implements CommandLineRunner {
             }
             TripConditions.Reach reach = noSlot ? TripConditions.Reach.NO_SLOT
                     : matched && notFound ? TripConditions.Reach.NOT_FOUND : TripConditions.Reach.PLACEABLE;
-            wants.add(new TripConditions.Want(w.text(), w.timing(), satisfy, food, reach, required, accepted));
+            wants.add(new TripConditions.Want(w.text(), w.timing(), satisfy, food, reach, required, accepted,
+                    localNames));
         }
         return new TripConditions(wants, expect.cityDays(), expect.avoid(), expect.lowMobility(), expect.transport(),
                 expect.arrival(), expect.departure(), designed.pace(), designed.chosenPlaceIds());

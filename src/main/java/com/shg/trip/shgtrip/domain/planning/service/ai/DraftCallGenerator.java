@@ -273,6 +273,8 @@ public class DraftCallGenerator {
     static Tool tool() {
         Map<String, Object> str = Map.of("type", "string");
         Map<String, Object> strOrNull = Map.of("type", List.of("string", "null"));
+        Map<String, Object> localNames = Map.of("type", "array", "items", str, "maxItems", 3,
+                "description", "해외 장소의 현지어 표기 0~3개(현지 지도·간판의 정식 이름). 국내이거나 확실하지 않으면 빈 목록");
         Map<String, Object> want = Map.of(
                 "type", "object",
                 "properties", Map.of(
@@ -283,7 +285,8 @@ public class DraftCallGenerator {
                         "food", strOrNull,
                         "time", Map.of("type", List.of("string", "null"), "enum",
                                 java.util.Arrays.asList("sunrise", "morning", "afternoon", "evening", "night", null)),
-                        "satisfy", Map.of("type", "array", "items", str)),
+                        "satisfy", Map.of("type", "array", "items", str),
+                        "local_names", localNames),
                 "required", List.of("id", "kind", "text", "satisfy"));
         Map<String, Object> item = Map.of(
                 "type", "object",
@@ -298,7 +301,8 @@ public class DraftCallGenerator {
                         "want", Map.of("type", List.of("string", "null"), "description", "채우는 요구 id. 추천이면 null"),
                         "experience", Map.of("type", List.of("string", "null"), "description", "추천한 경험"),
                         "reason", Map.of("type", List.of("string", "null"),
-                                "description", "여행자에게 들려줄 이유 한 문장. 장소 이름·시각 없이")),
+                                "description", "여행자에게 들려줄 이유 한 문장. 장소 이름·시각 없이"),
+                        "local_names", localNames),
                 "required", List.of("slot", "kind", "name", "area", "place_named"));
         Map<String, Object> day = Map.of(
                 "type", "object",

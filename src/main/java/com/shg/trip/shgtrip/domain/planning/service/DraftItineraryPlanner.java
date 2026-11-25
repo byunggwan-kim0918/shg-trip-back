@@ -602,7 +602,7 @@ public class DraftItineraryPlanner {
             }
         }
         return new DraftPlan.Item(slot, kind, item.name(), item.area(), item.placeNamed(), item.want(),
-                item.experience(), item.reason());
+                item.experience(), item.reason(), item.localNames());
     }
 
     /**
@@ -910,8 +910,8 @@ public class DraftItineraryPlanner {
             used.add(picks.get(0));
             return new DayBuilder.Stop(picks.get(0), item.kind(), item.slot(), picks.subList(1, picks.size()), true);
         }
-        DraftPlaceResolver.Resolution r = resolver.resolve(item.name(), item.kind(), input.regions(), req.cityNames(),
-                near);
+        DraftPlaceResolver.Resolution r = resolver.resolveNamed(item.name(), item.localNames(), item.kind(),
+                input.regions(), req.cityNames(), near);
         if (r.place() == null) return null;
         PlaceCandidate place = registry.add(r.place());
         if (exclusions.violatedBy(place) != null) return null;
@@ -1096,7 +1096,7 @@ public class DraftItineraryPlanner {
         if (!"meal".equals(item.kind()) || "lunch".equals(item.slot()) || "dinner".equals(item.slot())) return item;
         String slot = "evening".equals(item.slot()) ? "dinner" : "lunch";
         return new DraftPlan.Item(slot, item.kind(), item.name(), item.area(), item.placeNamed(), item.want(),
-                item.experience(), item.reason());
+                item.experience(), item.reason(), item.localNames());
     }
 
     /** 이름이 밤 일정을 가리키면 저녁 칸으로 옮긴다. 야간 공연·야시장·야경을 낮에 넣으면 볼 것이 없다. */
@@ -1186,14 +1186,16 @@ public class DraftItineraryPlanner {
                 continue;
             }
             if (!isPlaceKind(item) && !item.placeNamed() || isFoodWant(wants.get(item.want()))) continue;
-            DraftPlaceResolver.Resolution r = resolver.resolve(item.name(), item.kind(), input.regions(),
-                    req.cityNames(), anchor);
             DraftPlan.Want want = wants.get(item.want());
+            List<String> locals = new ArrayList<>(item.localNames());
+            if (want != null) want.localNames().stream().filter(l -> !locals.contains(l)).forEach(locals::add);
+            DraftPlaceResolver.Resolution r = resolver.resolveNamed(item.name(), locals, item.kind(),
+                    input.regions(), req.cityNames(), anchor);
             // 초안이 요구를 채울 장소 이름을 데이터에 없는 이름으로 적으면 요구에 쓴 다른 이름으로 다시 찾는다.
             for (String other : want == null ? List.<String>of() : wantNames(want)) {
                 if (r.place() != null) break;
-                if (!other.equals(item.name())) r = resolver.resolve(other, item.kind(), input.regions(),
-                        req.cityNames(), anchor);
+                if (!other.equals(item.name())) r = resolver.resolveNamed(other, locals, item.kind(),
+                        input.regions(), req.cityNames(), anchor);
             }
             if (r.place() != null) {
                 noteLooseLink(item.name(), DraftPlaceResolver.shownName(r.place()), req, notes, day);
@@ -1214,8 +1216,8 @@ public class DraftItineraryPlanner {
     private PlaceCandidate resolveOne(DraftPlan.Item item, VectorEnrichedInput input, Request req, double[] anchor,
                                       Registry registry, List<String> notes, int day) {
         if (!isPlaceKind(item) && !item.placeNamed()) return null;
-        DraftPlaceResolver.Resolution r = resolver.resolve(item.name(), item.kind(), input.regions(),
-                req.cityNames(), anchor);
+        DraftPlaceResolver.Resolution r = resolver.resolveNamed(item.name(), item.localNames(), item.kind(),
+                input.regions(), req.cityNames(), anchor);
         if (r.place() == null) {
             log.debug("초안 이름 미연결 day={} {} ({})", day, item.name(), r.status());
             return null;

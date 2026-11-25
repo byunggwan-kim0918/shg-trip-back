@@ -114,7 +114,7 @@ public class TripSkeletonPlanner {
                 DraftPlan.Want w = wants.get(at);
                 if (u.time() != null && !sameTime(u.time(), w.time())) {
                     wants.set(at, new DraftPlan.Want(w.id(), w.kind(), w.text(), w.place(), w.food(), u.time(),
-                            w.satisfy()));
+                            w.satisfy(), w.localNames()));
                 }
                 if (u.pinned() != null) pinned.put(w.id(), u.pinned());
                 userById.put(w.id(), u);
@@ -221,7 +221,8 @@ public class TripSkeletonPlanner {
                 days.set(i, withItems(days.get(i), nz(days.get(i).items()).stream().filter(x -> x != item).toList()));
                 List<DraftPlan.Item> moved = new ArrayList<>(nz(days.get(at).items()));
                 moved.add(new DraftPlan.Item("evening".equals(t) ? "evening" : "morning", item.kind(), item.name(),
-                        days.get(at).area(), item.placeNamed(), item.want(), item.experience(), item.reason()));
+                        days.get(at).area(), item.placeNamed(), item.want(), item.experience(), item.reason(),
+                        item.localNames()));
                 days.set(at, withItems(days.get(at), moved));
                 notes.add(from + "일차에 시각이 맞지 않아 요구를 " + to + "일차로 옮김: " + item.name());
             }
@@ -272,7 +273,7 @@ public class TripSkeletonPlanner {
         String name = w.place() != null ? w.place() : first != null ? first : w.text();
         String slot = "sunrise".equals(w.time()) || "morning".equals(w.time()) ? "morning"
                 : evening ? "evening" : "afternoon";
-        return new DraftPlan.Item(slot, "sight", name, area, true, w.id(), null, null);
+        return new DraftPlan.Item(slot, "sight", name, area, true, w.id(), null, null, w.localNames());
     }
 
     /** 시각이 있는 요구는 그 시각에 닿을 수 있는 곳에 전날 묵어야 한다. */
@@ -282,7 +283,8 @@ public class TripSkeletonPlanner {
         String time = w.time();
         if (time == null || "food".equals(w.kind())) return;
         String name = w.place() != null ? w.place() : nz(w.satisfy()).stream().findFirst().orElse(null);
-        double[] at = pin != null ? CandidateGeo.coordsOf(pin) : name == null ? null : placeCenter(name, base);
+        double[] at = pin != null ? CandidateGeo.coordsOf(pin)
+                : name == null ? null : placeCenter(name, w.localNames(), base);
         if (at == null) return;
         String transport = Objects.toString(base.input().transportPref(), "any");
         if ("sunrise".equals(time)) {
@@ -407,6 +409,7 @@ public class TripSkeletonPlanner {
                                       Map<String, DraftItineraryPlanner.UserWant> userById, Set<String> infeasible) {
         List<TripConditions.Want> out = new ArrayList<>();
         Map<String, Integer> cityDays = new LinkedHashMap<>();
+        boolean overseas = resolver.overseas(base.input().regions());
         for (DraftPlan.Want w : wants) {
             if ("city".equals(w.kind())) {
                 cityDays.putAll(cityDaysOf(w.text(), cityNames));
@@ -416,11 +419,11 @@ public class TripSkeletonPlanner {
             if (w.place() != null) satisfy.add(w.place());
             String food = "food".equals(w.kind()) ? (w.food() != null ? w.food() : w.text()) : null;
             TripConditions.Reach reach = infeasible.contains(w.id()) ? TripConditions.Reach.NO_SLOT
-                    : food == null && !pinned.containsKey(w.id()) && !inData(w.text(), satisfy, base)
+                    : food == null && !pinned.containsKey(w.id()) && !inData(w.text(), satisfy, w.localNames(), base)
                     ? TripConditions.Reach.NOT_FOUND : TripConditions.Reach.PLACEABLE;
             DraftItineraryPlanner.UserWant user = userById.get(w.id());
             out.add(new TripConditions.Want(w.text(), timing(w.time()), satisfy, food, reach, user != null,
-                    user != null && user.accepted()));
+                    user != null && user.accepted(), overseas ? w.localNames() : List.of()));
         }
         VectorEnrichedInput input = base.input();
         boolean low = input.companionType() == VectorEnrichedInput.CompanionType.SENIOR
@@ -465,21 +468,28 @@ public class TripSkeletonPlanner {
      * 요청한 말이나 이를 채울 장소 이름으로 찾은 곳이 그 요구를 채우면 짓는 쪽이 넣을 수 있는 요구다. 이름이 비슷한 다른
      * 곳만 찾았으면 데이터에 없는 것이다.
      */
-    private boolean inData(String text, List<String> satisfy, DraftItineraryPlanner.Request base) {
-        TripConditions.Want want = new TripConditions.Want(text, null, satisfy, null);
+    private boolean inData(String text, List<String> satisfy, List<String> localNames,
+                           DraftItineraryPlanner.Request base) {
+        TripConditions.Want want = new TripConditions.Want(text, null, satisfy, null, TripConditions.Reach.PLACEABLE,
+                false, false, localNames);
         List<String> names = new ArrayList<>(satisfy);
         names.add(text);
         for (String n : names) {
             if (n == null || n.isBlank()) continue;
-            Place p = resolver.resolve(n, "sight", base.input().regions(), base.cityNames(), null).place();
+            Place p = resolver.resolveNamed(n, localNames, "sight", base.input().regions(), base.cityNames(), null)
+                    .place();
             if (p != null && WantMatcher.matches(want, SavedItineraryFacts.candidateOf(p))) return true;
         }
         return false;
     }
 
     private double[] placeCenter(String name, DraftItineraryPlanner.Request base) {
-        DraftPlaceResolver.Resolution r = resolver.resolve(name, "sight", base.input().regions(), base.cityNames(),
-                null);
+        return placeCenter(name, List.of(), base);
+    }
+
+    private double[] placeCenter(String name, List<String> localNames, DraftItineraryPlanner.Request base) {
+        DraftPlaceResolver.Resolution r = resolver.resolveNamed(name, localNames, "sight", base.input().regions(),
+                base.cityNames(), null);
         Place p = r.place();
         return p == null ? null : DraftPlaceResolver.coords(p);
     }

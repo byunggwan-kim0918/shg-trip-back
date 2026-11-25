@@ -6,8 +6,9 @@ import com.shg.trip.shgtrip.domain.place.catalog.PlaceCatalogPromoter;
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
-import com.shg.trip.shgtrip.domain.place.name.PlaceNames.Match;
+import com.shg.trip.shgtrip.domain.place.name.LocalNameCheck;
 import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames.Match;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -123,13 +125,182 @@ public class DraftPlaceResolver {
     public Resolution resolve(String name, String kind, Collection<String> regions, Collection<String> cityNames,
                               double[] anchor) {
         Resolution found = resolveIn(dbLookup(), name, kind, regions, cityNames, anchor);
-        if (found.place() != null || "ambiguous".equals(found.status()) || !catalog.enabled() || "transit".equals(kind)) {
+        if (strong(found) || "ambiguous".equals(found.status()) || !catalog.enabled() || "transit".equals(kind)) {
             return found;
         }
         CatalogLookup lookup = new CatalogLookup(catalog);
-        Resolution pulled = resolveIn(lookup, name, kind, regions, cityNames, anchor);
-        if (pulled.place() == null) return found;
-        return new Resolution(promoter.promote(lookup.source(pulled.place())), pulled.status(), pulled.match());
+        Resolution pulled = found.place() == null ? resolveIn(lookup, name, kind, regions, cityNames, anchor)
+                : resolveExact(lookup, name, kind, regions, cityNames, anchor);
+        return pulled.place() != null && (found.place() == null || strong(pulled)) ? promoted(lookup, pulled, found) : found;
+    }
+
+    /**
+     * 초안이 이름으로 고른 장소와 요구의 장소. 한국어 이름 → 현지어 이름(localNames) → 카탈로그 → 이웃 여행지 순으로 찾는다.
+     * 현지어 이름과 이웃 여행지는 정확·별칭 일치만 받는다. 모델이 추측한 표기나 경계 밖 지역을 부분 일치로 받으면 이름이
+     * 비슷한 다른 장소로 잇는다.
+     *
+     * @param localNames 현지어 표기. 검색어일 뿐 장소 신원의 근거가 아니다. null이면 없는 것이다
+     */
+    public Resolution resolveNamed(String name, List<String> localNames, String kind, Collection<String> regions,
+                                   Collection<String> cityNames, double[] anchor) {
+        List<String> locals = localNames == null || !overseas(regions) ? List.of() : localNames;
+        Resolution found = bestOf(dbLookup(), name, locals, kind, regions, cityNames, anchor);
+        if (strong(found) || "ambiguous".equals(found.status())) return found;
+        if (catalog.enabled()) {
+            // DB에는 핵심 장소만 있어, DB에서 이름 일부만 맞은 곳(大涌谷自然研究路)보다 카탈로그에서 이름이 정확히 같은 본체가 낫다.
+            CatalogLookup lookup = new CatalogLookup(catalog);
+            Resolution pulled = found.place() == null ? bestOf(lookup, name, locals, kind, regions, cityNames, anchor)
+                    : exactOf(lookup, name, name, locals, kind, regions, cityNames, anchor);
+            if (pulled.place() != null && (found.place() == null || strong(pulled))) return promoted(lookup, pulled, found);
+        }
+        if (found.place() != null) return found;
+        List<String> nearby = neighborRegions(regions);
+        if (nearby.isEmpty()) return found;
+        Resolution near = unlessCommon(exactOf(dbLookup(), name, name, locals, kind, nearby, cityNames, anchor));
+        if (near.place() != null || !catalog.enabled()) return near.place() != null ? near : found;
+        CatalogLookup lookup = new CatalogLookup(catalog);
+        Resolution pulled = unlessCommon(exactOf(lookup, name, name, locals, kind, nearby, cityNames, anchor));
+        return pulled.place() != null ? promoted(lookup, pulled, found) : found;
+    }
+
+    /** 같은 이름이 이만큼 많은 여행지에 있으면 흔한 이름("八幡神社")이다. */
+    private static final int COMMON_NAME_REGIONS = 3;
+
+    /** 이웃 여행지에서는 거리로 요청한 그곳인지 가릴 수 없어, 같은 나라에 흔한 이름이면 다른 곳의 같은 이름일 수 있다. */
+    private Resolution unlessCommon(Resolution r) {
+        if (r.place() == null) return r;
+        String key = PlaceNames.bareKey(r.place().getName());
+        String country = destinations.find(r.place().getRegion()).map(Destination::country).orElse(null);
+        if (country == null || key.length() < 2) return r;
+        List<String> sameCountry = destinations.all().stream().filter(d -> country.equals(d.country()))
+                .map(Destination::name).toList();
+        // DB는 여행지마다 일부 장소만 두어 흔한 이름도 한두 곳에만 있을 수 있다.
+        List<Place> rows = new ArrayList<>(dbLookup().byCompactName(key, key.length(), sameCountry, ANY_VISIT));
+        if (catalog.enabled()) rows.addAll(new CatalogLookup(catalog).byCompactName(key, key.length(), sameCountry, ANY_VISIT));
+        long regionsWithName = rows.stream().filter(p -> PlaceNames.bareKey(p.getName()).equals(key))
+                .map(Place::getRegion).distinct().count();
+        return regionsWithName >= COMMON_NAME_REGIONS ? Resolution.miss("common_name") : r;
+    }
+
+    private Resolution bestOf(Lookup lookup, String name, List<String> locals, String kind, Collection<String> regions,
+                              Collection<String> cityNames, double[] anchor) {
+        Resolution best = resolveIn(lookup, name, kind, regions, cityNames, anchor);
+        if (strong(best) || locals.isEmpty()) return best;
+        Resolution local = exactOf(lookup, null, name, locals, kind, regions, cityNames, anchor);
+        return local.place() != null && (best.place() == null || local.match().ordinal() < best.match().ordinal())
+                ? local : best;
+    }
+
+    /** @param korean 현지어 이름으로 찾은 장소가 같은 곳인지 견줄 초안의 한국어 이름 */
+    private Resolution exactOf(Lookup lookup, String name, String korean, List<String> locals, String kind,
+                               Collection<String> regions, Collection<String> cityNames, double[] anchor) {
+        if (name != null) {
+            Resolution r = resolveExact(lookup, name, kind, regions, cityNames, anchor);
+            if (r.place() != null) return r;
+        }
+        Resolution unconfirmed = Resolution.miss("none");
+        for (String n : locals) {
+            Resolution r = resolveExact(lookup, n, kind, regions, cityNames, anchor);
+            if (r.place() == null) continue;
+            if (sameAsKorean(r.place(), korean, cityNames)) return r;
+            unconfirmed = Resolution.miss("local_unconfirmed");
+        }
+        return unconfirmed;
+    }
+
+    /**
+     * 현지어 이름이 정확히 같은 장소가 초안의 한국어 이름과 같은 곳인지. 모델이 다른 곳의 현지 이름을 적으면 그 이름의 장소가
+     * 있어도 잇지 않는다. 근거는 같은 카탈로그 행의 규칙 읽기다. DB의 한국어 이름은 보강이 지어 틀릴 수 있어 약한 근거다.
+     */
+    private boolean sameAsKorean(Place place, String korean, Collection<String> cityNames) {
+        if (korean == null || korean.isBlank()) return true;
+        CatalogPlace row = catalog.enabled() && place.getLatitude() != null && place.getLongitude() != null
+                ? catalog.twinOf(place.getName(), place.getRegion(), place.getLatitude().doubleValue(),
+                place.getLongitude().doubleValue()) : null;
+        List<String> readings = new ArrayList<>();
+        List<String> latin = List.of();
+        if (row != null) {
+            readings.addAll(row.readings());
+            if (row.nameKo() != null) readings.add(row.nameKo());
+            latin = row.latin();
+        }
+        List<String> weak = place.getNameKo() == null || readings.contains(place.getNameKo()) ? List.of()
+                : List.of(place.getNameKo());
+        Set<String> cities = new LinkedHashSet<>(cityNames == null ? List.of() : cityNames);
+        String country = destinations.find(place.getRegion()).map(Destination::country).orElse(null);
+        destinations.all().stream().filter(d -> country == null || country.equals(d.country()))
+                .map(Destination::nameKo).forEach(cities::add);
+        return LocalNameCheck.confirms(korean, cities, place.getName(), place.getCategory(), readings, weak, latin);
+    }
+
+    /**
+     * 정확·별칭 일치만 받는 단계(현지어 이름·이웃 여행지)는 이름 그대로의 키만 묻는다. 표기 변형·부분 질의는 결과를 받지 않는데도
+     * 이름마다 조회가 열 번 넘게 늘어난다.
+     */
+    private Resolution resolveExact(Lookup lookup, String name, String kind, Collection<String> regions,
+                                    Collection<String> cityNames, double[] anchor) {
+        // 이름이 정확히 같으면 명소로 적은 카페·빵집도 받는 것은 resolveIn의 ANY_VISIT 단계와 같다.
+        List<String> roles = new ArrayList<>(kind == null ? ROLES.get("sight") : ROLES.getOrDefault(kind, ROLES.get("sight")));
+        ANY_VISIT.stream().filter(r -> !roles.contains(r)).forEach(roles::add);
+        Map<String, List<Hit>> fetched = new java.util.HashMap<>();
+        for (String query : new java.util.LinkedHashSet<>(List.of(PlaceNames.exactKey(trimmed(name)),
+                queryKey(name, cityNames)))) {
+            if (query.length() < 2) continue;
+            Resolution hit = resolveKey(lookup, query, roles, regions, anchor, 0, fetched, p -> true);
+            if (strong(hit)) return hit;
+        }
+        return Resolution.miss("none");
+    }
+
+    private static boolean strong(Resolution r) {
+        return r.place() != null && (r.match() == Match.EXACT || r.match() == Match.ALIAS);
+    }
+
+    /** @param fallback 카탈로그 장소가 꺼져 있어 올리지 못하면 대신 돌려줄 DB 결과 */
+    private Resolution promoted(CatalogLookup lookup, Resolution pulled, Resolution fallback) {
+        return promoter.promote(lookup.source(pulled.place()))
+                .map(p -> new Resolution(p, pulled.status(), pulled.match()))
+                .orElseGet(() -> fallback.place() != null ? fallback : Resolution.miss("policy_off"));
+    }
+
+    /**
+     * 해외 여행지 지역인지. 현지어 이름은 해외 장소에만 쓴다. 모델이 국내 장소에 한자·영어 표기를 적어도 국내 연결은 바뀌지
+     * 않아야 한다.
+     */
+    public boolean overseas(Collection<String> regions) {
+        return regions != null && regions.stream().anyMatch(r -> destinations.find(r).isPresent());
+    }
+
+    private volatile Set<String> destinationKeys;
+
+    private Set<String> destinationKeys() {
+        Set<String> keys = destinationKeys;
+        if (keys == null) {
+            Set<String> out = new HashSet<>();
+            for (Destination d : destinations.all()) {
+                out.add(PlaceNames.bareKey(d.name()));
+                if (d.nameKo() != null) out.add(PlaceNames.bareKey(d.nameKo()));
+                if (d.aliases() != null) d.aliases().forEach(a -> out.add(PlaceNames.bareKey(a)));
+            }
+            out.remove("");
+            destinationKeys = keys = Set.copyOf(out);
+        }
+        return keys;
+    }
+
+    /** 이웃 여행지로 보는 중심 거리 여유. 두 반경 밖으로 근교 이동 30분 안팎이다. */
+    private static final double NEIGHBOR_MARGIN_KM = 10;
+
+    /** regions 여행지 반경과 붙어 있는 같은 나라의 다른 여행지. */
+    List<String> neighborRegions(Collection<String> regions) {
+        if (regions == null || regions.isEmpty()) return List.of();
+        List<Destination> own = regions.stream().map(destinations::find).flatMap(java.util.Optional::stream).toList();
+        return destinations.all().stream()
+                .filter(d -> !regions.contains(d.name()))
+                .filter(d -> own.stream().anyMatch(o -> o.country().equals(d.country())
+                        && GeoUtils.haversine(o.lat(), o.lng(), d.lat(), d.lng())
+                        <= o.radiusKm() + d.radiusKm() + NEIGHBOR_MARGIN_KM))
+                .map(Destination::name).toList();
     }
 
     /**
@@ -138,6 +309,11 @@ public class DraftPlaceResolver {
      */
     interface Lookup {
         List<Place> byCompactName(String compact, int minLength, Collection<String> regions, List<String> roles);
+
+        /** 이름·괄호 뗀 이름·한국어 이름 키가 key와 같을 수 있는 행. 정확 일치 단계는 포함 조회가 필요 없다. */
+        default List<Place> byExactKey(String key, Collection<String> regions, List<String> roles) {
+            return byCompactName(key, key.length(), regions, roles);
+        }
 
         List<Place> byNameEdges(String head, String tail, Collection<String> regions, List<String> roles);
     }
@@ -174,6 +350,11 @@ public class DraftPlaceResolver {
         @Override
         public List<Place> byNameEdges(String head, String tail, Collection<String> regions, List<String> roles) {
             return places(catalog.findByNameEdges(head, tail, regions, roles));
+        }
+
+        @Override
+        public List<Place> byExactKey(String key, Collection<String> regions, List<String> roles) {
+            return places(catalog.findByExactKey(key, regions, roles));
         }
 
         private List<Place> places(List<CatalogPlace> rows) {
@@ -355,8 +536,11 @@ public class DraftPlaceResolver {
     private Resolution resolveKey(Lookup lookup, String query, List<String> roles, Collection<String> regions,
                                   double[] anchor, int maxTier, Map<String, List<Hit>> fetched,
                                   java.util.function.Predicate<Hit> accepts) {
-        List<Hit> rows = fetched.computeIfAbsent(roles + "|" + query,
-                k -> hits(lookup.byCompactName(query, MIN_CONTAINED_NAME, regions, roles), roles));
+        List<Hit> rows = maxTier == 0
+                ? fetched.computeIfAbsent("exact|" + roles + "|" + query,
+                        k -> hits(lookup.byExactKey(query, regions, roles), roles))
+                : fetched.computeIfAbsent(roles + "|" + query,
+                        k -> hits(lookup.byCompactName(query, MIN_CONTAINED_NAME, regions, roles), roles));
         if (rows.isEmpty()) return Resolution.miss("none");
 
         // 같은 순위 안에서는 원래 이름으로 맞은 곳, 이름난 곳 순이다. 별칭은 출처마다 붙이는 방식이 달라 덜 믿고,
@@ -378,6 +562,9 @@ public class DraftPlaceResolver {
                 .filter(h -> !NOT_A_PLACE.matcher(h.place().getName()).find() || NOT_A_PLACE.matcher(query).find())
                 .filter(h -> roles.contains("TRANSIT") || h.place().getCategory() == null
                         || !TRANSIT_CATEGORY.matcher(h.place().getCategory()).find())
+                // 이름이 여행지 이름뿐인 행(HAKODATE, Kyoto)은 그 지역 표지라, 더 긴 요청 이름의 일부로 맞으면 다른 곳이다.
+                .filter(h -> tier(h.best(query).key(), query) == 0 || !overseas(regions)
+                        || !destinationKeys().contains(PlaceNames.bareKey(h.place().getName())))
                 .sorted(order).toList();
         if (ranked.isEmpty()) return Resolution.miss("none");
         Hit best = ranked.get(0);
