@@ -170,7 +170,7 @@ public class PlaceInvalidationJob {
     /** EmbeddingTextBuilder가 읽는 필드만 채운 장소. 임베딩 배치와 같은 텍스트를 만들어야 지문이 맞는다. */
     private static Place asPlace(Row r) {
         return Place.builder().name(r.name()).nameKo(r.nameKo()).category(r.category()).tags(r.tags())
-                .description(r.description()).region(r.region()).build();
+                .description(r.description()).region(r.region()).country(r.country()).build();
     }
 
     private static Row row(ResultSet rs, int i) throws SQLException {

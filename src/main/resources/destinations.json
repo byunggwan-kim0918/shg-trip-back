@@ -54,7 +54,7 @@
   {"country": "JP", "name": "Toya", "nameKo": "도야", "lat": 42.564, "lng": 140.82, "radiusKm": 10, "kind": "scenic", "parent": "Sapporo", "aliases": ["Lake Toya"], "gateways": []},
   {"country": "JP", "name": "Niseko", "nameKo": "니세코", "lat": 42.8048, "lng": 140.6874, "radiusKm": 10, "kind": "scenic", "parent": "Sapporo", "aliases": [], "gateways": []},
   {"country": "JP", "name": "Furano", "nameKo": "후라노", "lat": 43.342, "lng": 142.383, "radiusKm": 12, "kind": "scenic", "parent": "Asahikawa", "aliases": [], "gateways": []},
-  {"country": "JP", "name": "Biei", "nameKo": "비에이", "lat": 43.588, "lng": 142.467, "radiusKm": 10, "kind": "scenic", "parent": "Asahikawa", "aliases": [], "gateways": []},
+  {"country": "JP", "name": "Biei", "nameKo": "비에이", "lat": 43.588, "lng": 142.467, "radiusKm": 20, "kind": "scenic", "parent": "Asahikawa", "aliases": [], "gateways": []},
   {"country": "JP", "name": "Asahikawa", "nameKo": "아사히카와", "lat": 43.7706, "lng": 142.365, "radiusKm": 12, "kind": "city", "aliases": [], "gateways": [{"name": "Asahikawa Airport", "lat": 43.6708, "lng": 142.4475}]},
   {"country": "JP", "name": "Hakodate", "nameKo": "하코다테", "lat": 41.7687, "lng": 140.729, "radiusKm": 12, "kind": "city", "aliases": [], "gateways": [{"name": "Hakodate Airport", "lat": 41.77, "lng": 140.8219}]},
   {"country": "JP", "name": "Sendai", "nameKo": "센다이", "lat": 38.2682, "lng": 140.8694, "radiusKm": 15, "kind": "city", "aliases": [], "gateways": [{"name": "Sendai Airport", "lat": 38.1397, "lng": 140.917}]},

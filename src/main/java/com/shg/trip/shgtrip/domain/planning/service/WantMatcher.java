@@ -36,7 +36,9 @@ public final class WantMatcher {
         for (String s : want.satisfy() == null ? List.<String>of() : want.satisfy()) {
             if (matches(s, place)) return true;
         }
-        return false;
+        // 현지어 이름은 모델이 추측한 표기라 일부만 맞으면 이름을 딴 근처 가게("清水寺前 湯豆腐")도 요구를 채운다.
+        String bare = PlaceNames.bareKey(Objects.toString(place.name(), ""));
+        return want.localNames().stream().map(PlaceNames::bareKey).anyMatch(l -> l.length() >= 2 && l.equals(bare));
     }
 
     /** 요청한 곳 안의 장소(엑스포과학공원의 한빛탑)에 갔으면 그곳에 간 것이다. */

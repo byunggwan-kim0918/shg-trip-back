@@ -1,0 +1,71 @@
+# 초안의 한국어 이름과 현지 장소 이름을 대조하는 낱말(LocalNameCheck).
+# generic: 무리 · 한국어 낱말(유형이 어긋나면 막는다) · 현지 발음을 옮긴 낱말(떼어 비교만 한다) · 현지 이름 글자 · 카테고리 키워드 · 영어 낱말
+# word   : 한국어 낱말 · 현지 이름·영어 이름의 같은 뜻 표기. 번역해 부르는 이름(청의 호수 = 青い池)을 맞힌다.
+generic	lookout	전망대		展望	Lookout,Observatory,Tower,Mountain,Hill	observatory,lookout,deck
+generic	shrine	신사,신궁	진자,진구	神社,神宮,宮,大社	Shrine,Spiritual	shrine,jinja
+generic	temple	사찰,절	데라,지,인	寺,院,堂	Temple,Buddhist,Spiritual	temple,ji,dera
+generic	beach	해변	비치,하마	浜,ビーチ,海岸	Beach,Bay,Coast,Waterfront	beach,hama
+generic	falls	폭포	타키,다키	滝	Waterfall,River	falls,waterfall,taki
+generic	park	공원,정원	엔,코엔	公園,園,庭	Park,Garden,Plaza,Nature,Field	park,garden,gardens,koen,en
+generic	museum	박물관,미술관,자료관,기념관	칸,관	館,博物,美術,資料,記念	Museum,Gallery,Art,Historic,Exhibit	museum,gallery,hall,kan
+generic	aquarium	수족관		水族館	Aquarium	aquarium
+generic	market	시장	이치바	市場,市,マーケット,マルシェ	Market,Retail,Food,Shopping	market,ichiba
+generic	street	거리,상점가,골목	도리,가이,스지,코지,고지,요코초	通,街,商店,筋,小路,横丁	Street,Shopping,Plaza,Neighborhood,Retail,Arcade	street,dori,arcade,road
+generic	bridge	다리	바시,하시	橋	Bridge	bridge,bashi,hashi
+generic	castle	성	조	城	Castle,Historic	castle,jo
+generic	river	강변,강	가와	川,河	River,Waterfront,Canal	river,gawa,kawa
+generic	lake	호수,연못	이케	湖,池	Lake,Pond,Reservoir	lake,pond,ike
+generic	mountain	산	야마,다케	山,岳	Mountain,Hill,Volcano,Hiking	mount,mt,mountain,yama,san
+generic	island	섬	시마,지마	島	Island	island,shima,jima
+generic	spring	온천		温泉,湯	Hot Spring,Spa,Bath	onsen,spring,springs
+generic	tower	탑,타워		塔,タワー	Tower,Monument,Observatory,Spiritual	tower,pagoda
+generic	gate	문	몬	門	Gate,Monument,Historic	gate,mon
+generic	village	마을	무라	村,里,町,まち	Village,Historic,Neighborhood,Amusement	village,mura
+generic	church	교회		教会	Church	church,cathedral
+generic	slope	언덕	자카,사카	坂,丘	Street,Hill,Historic,Neighborhood	slope,hill,oka,zaka,saka
+generic	port	항		港	Port,Harbor,Marina,Ferry,Landmarks	port,harbor
+generic	valley	계곡,협곡	쿄	峡,谷	Valley,Gorge,River,Nature	valley,gorge,kyo
+generic	tree	나무		木	Tree,Historic,Nature,Landmark	tree
+generic	checkpoint	관문,관문소	세키쇼	関所	Historic	checkpoint,sekisho
+generic	house		케,가	家,邸	Historic,Museum,House	house,residence
+generic	villa		산소,산장	山荘	Historic,Park,Garden	villa,sanso
+generic	building	빌딩		ビル	Building,Office,Shopping	building
+generic	station	역		駅	Station,Transport	station,eki
+generic	path	산책로,산책길		遊歩道,散策,道,路	Trail,Path,Park,Nature	trail,path,walk
+word	청	青,Blue
+word	파란	青
+word	푸른	青
+word	붉은	赤,Red,red
+word	빨간	赤
+word	노란	黄
+word	흰	白,White
+word	하얀	白
+word	검은	黒
+word	금	金
+word	은	銀
+word	호박	かぼちゃ,南瓜
+word	유리	ガラス,硝子
+word	억새	すすき,芒
+word	숲	森,林,Forest
+word	평원	草原,原
+word	수염	ひげ,髭
+word	구	旧
+word	지점	支店
+word	갤러리	ギャラリー
+word	치즈	チーズ
+word	공방	工房
+word	군락	群落
+word	오층탑	五重塔
+word	민속	民俗
+word	역사	歴史
+word	야자	ヤシ
+word	시립	市立
+word	아침	朝,Morning,morning
+word	벽돌	煉瓦,レンガ,Brick,brick
+word	창고	倉庫,Warehouse,warehouse
+word	지옥	地獄,Jigoku,Hell,hell
+word	나무	木,Tree
+word	대나무	竹,Bamboo
+word	순례	めぐり,巡り,Tour
+word	이에	家
+word	사계	四季

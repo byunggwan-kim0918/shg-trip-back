@@ -44,7 +44,7 @@ class DraftPlaceResolverCatalogTest {
     void setUp() throws Exception {
         try (Connection c = DriverManager.getConnection("jdbc:duckdb:"); Statement s = c.createStatement()) {
             s.execute("""
-                    COPY (SELECT name, name_key, name_ko, name_ko_key, 'Tokyo, Asakusa' AS address,
+                    COPY (SELECT name, name_key, name_key AS bare_key, name_ko, name_ko_key, 'Tokyo, Asakusa' AS address,
                                  35.7114 AS latitude, 139.7966 AS longitude, category, 'Tokyo' AS region,
                                  'JP' AS country, 'overture' AS source, NULL::VARCHAR AS fsq_place_id,
                                  NULL::VARCHAR AS wikidata_id, NULL::INTEGER AS wikidata_sitelinks, place_role,
@@ -72,7 +72,7 @@ class DraftPlaceResolverCatalogTest {
     void pullsMissingPlaceFromCatalog() {
         Place saved = Place.builder().id(77L).name("仲見世商店街").address("Tokyo, Asakusa").category("Retail")
                 .latitude(BigDecimal.ONE).longitude(BigDecimal.ONE).build();
-        given(promoter.promote(any())).willReturn(saved);
+        given(promoter.promote(any())).willReturn(java.util.Optional.of(saved));
 
         DraftPlaceResolver.Resolution r = resolver.resolve("나카미세 상점가", "shop", List.of("Tokyo"), List.of("도쿄"), null);
 
@@ -91,6 +91,45 @@ class DraftPlaceResolverCatalogTest {
 
         assertThat(r.place()).isNull();
         verify(promoter, never()).promote(any());
+    }
+
+    @Test
+    @DisplayName("DB에서 이름 일부만 맞은 곳보다 카탈로그에서 이름이 정확히 같은 곳을 고른다")
+    void exactCatalogRowBeatsPartialDbMatch() {
+        Place partial = Place.builder().id(6L).name("仲見世商店街 休憩所").nameKo("나카미세 상점가 휴게소").address("")
+                .category("Retail > Shopping Mall").placeRole("SHOPPING").latitude(BigDecimal.valueOf(35.71))
+                .longitude(BigDecimal.valueOf(139.79)).active(true).build();
+        given(repository.findActiveByCompactName(anyString(), anyInt(), any(), any())).willReturn(List.of(partial));
+        given(promoter.promote(any())).willReturn(java.util.Optional.of(Place.builder().id(78L).name("仲見世商店街")
+                .address("").category("Retail").latitude(BigDecimal.ONE).longitude(BigDecimal.ONE).build()));
+
+        assertThat(resolver.resolve("나카미세 상점가", "shop", List.of("Tokyo"), List.of("도쿄"), null).place().getId())
+                .isEqualTo(78L);
+    }
+
+    @Test
+    @DisplayName("카탈로그에서 정확히 맞은 곳이 꺼져 있어 올리지 못하면 DB에서 일부만 맞은 곳을 쓴다")
+    void partialDbMatchStaysWhenCatalogRowIsOff() {
+        Place partial = Place.builder().id(6L).name("仲見世商店街 休憩所").nameKo("나카미세 상점가 휴게소").address("")
+                .category("Retail > Shopping Mall").placeRole("SHOPPING").latitude(BigDecimal.valueOf(35.71))
+                .longitude(BigDecimal.valueOf(139.79)).active(true).build();
+        given(repository.findActiveByCompactName(anyString(), anyInt(), any(), any())).willReturn(List.of(partial));
+        given(promoter.promote(any())).willReturn(java.util.Optional.empty());
+
+        assertThat(resolver.resolve("나카미세 상점가", "shop", List.of("Tokyo"), List.of("도쿄"), null).place().getId())
+                .isEqualTo(6L);
+    }
+
+    @Test
+    @DisplayName("이름이 여행지 이름뿐인 행은 더 긴 요청 이름의 일부로 잇지 않는다")
+    void destinationNamedRowIsNotPartialMatch() {
+        Place area = Place.builder().id(7L).name("HAKODATE").nameKo("하코다테").address("")
+                .category("Arts and Entertainment > Exhibit").placeRole("SIGHT").region("Hakodate")
+                .latitude(BigDecimal.valueOf(41.77)).longitude(BigDecimal.valueOf(140.73)).active(true).build();
+        given(repository.findActiveByCompactName(anyString(), anyInt(), any(), any())).willReturn(List.of(area));
+
+        assertThat(resolver.resolve("하코다테야마 전망대", "sight", List.of("Hakodate"), List.of(), null).place()).isNull();
+        assertThat(resolver.resolve("하코다테", "sight", List.of("Hakodate"), List.of(), null).place().getId()).isEqualTo(7L);
     }
 
     @Test

@@ -1,17 +1,28 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.entity.Place;
+import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.dto.DraftPlan;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
+import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
+import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.mock;
 
 class TripSkeletonPlannerTest {
 
@@ -144,5 +155,33 @@ class TripSkeletonPlannerTest {
 
         assertThat(infeasible).containsExactly("w1");
         assertThat(conflicts).singleElement().asString().contains("일출 전에 닿을 수 있는 날이 없어");
+    }
+
+    @Test
+    @DisplayName("현지어 이름은 일부만 맞는 다른 장소로 요구를 채웠다고 보지 않는다")
+    void localNameIsNotLooselyMatchedForWant() {
+        DraftPlaceResolver resolver = mock(DraftPlaceResolver.class);
+        Place izakaya = Place.builder().id(7L).name("居酒屋白川郷").address("").category("Dining and Drinking > Bar")
+                .region("Takayama").latitude(BigDecimal.valueOf(36.14)).longitude(BigDecimal.valueOf(137.25)).build();
+        given(resolver.resolveNamed(anyString(), anyList(), anyString(), any(), any(), any()))
+                .willReturn(new DraftPlaceResolver.Resolution(izakaya, "ok", PlaceNames.Match.FUZZY));
+        DraftPlan.Want want = new DraftPlan.Want("w1", "place", "시라카와고", "시라카와고", null, null,
+                List.of("시라카와고"), List.of("白川郷"));
+        DraftPlan draft = new DraftPlan("다카야마", List.of(want), List.of(new DraftPlan.Day(1, "다카야마", null,
+                List.of(new DraftPlan.Item("morning", "sight", "시라카와고", "시라카와고", true, "w1", null, null)),
+                List.of())));
+        VectorEnrichedInput input = new VectorEnrichedInput("다카야마", List.of("culture"), List.of("attraction"),
+                "normal", "any", new BigDecimal("500000"), LocalDate.of(2027, 5, 1), LocalDate.of(2027, 5, 1),
+                "다카야마 여행", List.of(), "다카야마", "JP", List.of("Takayama"), List.of(), Map.of(), null, null, null,
+                null, Map.of(), VectorEnrichedInput.CompanionType.COUPLE, 2, List.of());
+        DraftItineraryPlanner.Request base = new DraftItineraryPlanner.Request(input, draft,
+                List.of(com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath().find("Takayama")
+                        .orElseThrow()), null, null, null, null, List.of(), List.of(), Map.of(), null, null, Map.of(),
+                Set.of(), List.of());
+
+        TripSkeletonPlanner.Skeleton out = new TripSkeletonPlanner(resolver, mock(TripHubs.class)).build(base);
+
+        assertThat(out.conditions().wants()).singleElement()
+                .satisfies(w -> assertThat(w.reach()).isEqualTo(TripConditions.Reach.NOT_FOUND));
     }
 }
