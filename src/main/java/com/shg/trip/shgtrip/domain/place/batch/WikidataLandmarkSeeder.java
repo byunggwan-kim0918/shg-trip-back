@@ -338,7 +338,7 @@ public class WikidataLandmarkSeeder {
             List<String> names = new ArrayList<>(item.labels().values());
             names.addAll(item.aliases());
             result.add(new Landmark(lm.qid(), item.label(), lm.sitelinks(), lm.lat(), lm.lon(), lm.category(),
-                    country, lm.address(), lm.classRank(), OverseasEnrichment.nameKo(item.koLabel(), item.label()),
+                    country, lm.address(), lm.classRank(), OverseasEnrichment.nameKoText(item.koLabel(), item.label()),
                     List.copyOf(names)));
         }
         return result;

@@ -212,7 +212,7 @@ public class WikidataSitelinksJob {
             for (Assignment a : assignments) {
                 placeRepository.updateWikidataMatch(a.placeId(), a.item().id(), a.item().sitelinks());
                 String nameKo = overseas && a.exact() && a.item().koLabel() != null
-                        ? OverseasEnrichment.nameKo(a.item().koLabel(), a.placeName()) : null;
+                        ? OverseasEnrichment.nameKoText(a.item().koLabel(), a.placeName()) : null;
                 if (nameKo != null) placeRepository.fillNameKo(a.placeId(), nameKo);
             }
         });

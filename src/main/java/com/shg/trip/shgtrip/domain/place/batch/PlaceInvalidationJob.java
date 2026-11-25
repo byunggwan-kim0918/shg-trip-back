@@ -196,7 +196,7 @@ public class PlaceInvalidationJob {
         if (r.nameKo() == null || !OverseasEnrichment.isOverseas(r.country())) return false;
         boolean hangul = r.nameKo().codePoints()
                 .anyMatch(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HANGUL);
-        return hangul && OverseasEnrichment.nameKo(r.nameKo(), r.name()) == null;
+        return hangul && OverseasEnrichment.nameKoText(r.nameKo(), r.name()) == null;
     }
 
     /** EmbeddingTextBuilder가 읽는 필드만 채운 장소. 임베딩 배치와 같은 텍스트를 만들어야 지문이 맞는다. */

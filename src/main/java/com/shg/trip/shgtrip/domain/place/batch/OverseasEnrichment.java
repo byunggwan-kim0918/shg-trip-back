@@ -118,7 +118,8 @@ final class OverseasEnrichment {
      *
      * @param originalName 원문 이름. 한글 밖의 글자·설명 기호는 원문에 있을 때만 이름의 일부로 본다
      */
-    static String nameKo(String value, String originalName) {
+    /** 저장된 이름·Wikidata 라벨을 {@link #nameKo(JsonNode, String)}와 같은 검사로 본다. value가 null이면 null이다. */
+    static String nameKoText(String value, String originalName) {
         return value == null ? null : nameKo(com.fasterxml.jackson.databind.node.TextNode.valueOf(value), originalName);
     }
 
