@@ -94,13 +94,27 @@ public class VectorSearchQueryService {
 
         public List<PlaceCandidate> search(SearchRole role, double[] center, double radiusKm, int limit,
                                            int startIndex) {
+            return search(role, center, radiusKm, limit, startIndex, input.regions());
+        }
+
+        /**
+         * 여행지 지역 밖이어도 반경 안을 찾는다. 출발 공항처럼 여행지 밖에 정해 둔 지점 둘레는 여행지 지역으로 거르면
+         * 아무것도 남지 않는다.
+         */
+        public List<PlaceCandidate> searchAround(SearchRole role, double[] center, double radiusKm, int limit,
+                                                 int startIndex) {
+            return search(role, center, radiusKm, limit, startIndex, null);
+        }
+
+        private List<PlaceCandidate> search(SearchRole role, double[] center, double radiusKm, int limit,
+                                            int startIndex, List<String> regions) {
             if (center == null || limit <= 0) return List.of();
             Prepared p = prepared.computeIfAbsent(role, r -> {
                 SearchSlot slot = slotFor(input, r);
                 return new Prepared(slot, slot == null ? null : embedOne(slot.queryText()));
             });
             if (p.vector() == null) return List.of();
-            return searchNearWith(input, role, p.slot(), p.vector(), center, radiusKm, limit, startIndex);
+            return searchNearWith(input, regions, role, p.slot(), p.vector(), center, radiusKm, limit, startIndex);
         }
     }
 
@@ -124,11 +138,11 @@ public class VectorSearchQueryService {
         return vectors.get(0);
     }
 
-    private List<PlaceCandidate> searchNearWith(VectorEnrichedInput input, SearchRole role, SearchSlot slot,
-                                                float[] vector, double[] center, double radiusKm,
+    private List<PlaceCandidate> searchNearWith(VectorEnrichedInput input, List<String> regions, SearchRole role,
+                                                SearchSlot slot, float[] vector, double[] center, double radiusKm,
                                                 int limit, int startIndex) {
         VectorSearchRequest request = new VectorSearchRequest(
-                vector, input.country(), input.regions(), null, input.searchTags(),
+                vector, input.country(), regions, null, input.searchTags(),
                 input.budgetRange(), overfetchFor(role, limit),
                 PlaceCategoryConstants.excludedCategoryPatterns(role),
                 center, radiusKm, role == SearchRole.ATTRACTION);

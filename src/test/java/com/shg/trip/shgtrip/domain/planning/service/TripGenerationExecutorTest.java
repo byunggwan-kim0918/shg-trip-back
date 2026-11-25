@@ -282,7 +282,7 @@ class TripGenerationExecutorTest {
         List<PlaceCandidate> candidates = List.of(candidate(1, 11L, "해운대 횟집", "Dining and Drinking > Restaurant", "MEAL"),
                 candidate(2, 12L, "부산역", "Travel and Transportation > Rail Station", "TRANSIT"));
         DraftItineraryPlanner.Result result = new DraftItineraryPlanner.Result(steps, candidates, List.of(), List.of(),
-                List.of(), Map.of(11L, "바다를 보며 먹을 수 있어요"));
+                List.of(), Map.of(11L, "바다를 보며 먹을 수 있어요"), List.of());
         TripSkeletonPlanner.Skeleton skeleton = new TripSkeletonPlanner.Skeleton(base, List.of(), List.of(),
                 new TripConditions(List.of(), Map.of(), List.of(), false, "any", null, LocalTime.of(15, 0), "normal"));
         TripPlanner.Built built = new TripPlanner.Built(skeleton, result, TripPlanner.ruleContext(skeleton, result),

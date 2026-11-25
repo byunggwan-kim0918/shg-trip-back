@@ -95,6 +95,39 @@ class TripConditionChecksTest {
     }
 
     @Test
+    @DisplayName("관광 없이 허브로 가는 출발일도 허브에 늦게 닿으면 출발 초과다")
+    void hubOnlyDepartureDayIsChecked() {
+        TripConditions conditions = conditions(List.of(), null, LocalTime.of(10, 0), List.of());
+        StepData station = new StepData(1, 2, "09:29", "09:59",
+                new PlaceData(BUSAN_STATION.name(), null, STATION, "Busan", "KR", null, null, 5L, null), List.of(),
+                "BUS", 189, null, null, null, null);
+        List<StepData> steps = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), station);
+
+        assertThat(evaluate(steps, 2, conditions)).extracting(Violation::rule).contains(Rule.DEPARTURE_MISSED);
+    }
+
+    @Test
+    @DisplayName("도착 허브에서 숙소까지 저녁 늦게 닿는 첫날은 착륙이 이르더라도 빈 날로 세지 않는다")
+    void longTransferArrivalDayIsNotMissing() {
+        StepData station = step(1, 1, "15:00", "16:00", BUSAN_STATION);
+        StepData hotel = new StepData(2, 1, "21:57", "22:27",
+                new PlaceData(HOTEL_SPOT.name(), null, HOTEL, "Busan", "KR", null, null, 4L, null), List.of(),
+                "BUS", 357, null, null, null, null);
+        StepData nearHotel = new StepData(2, 1, "16:40", "17:10",
+                new PlaceData(HOTEL_SPOT.name(), null, HOTEL, "Busan", "KR", null, null, 4L, null), List.of(),
+                "BUS", 40, null, null, null, null);
+        List<StepData> secondDay = List.of(step(3, 2, "10:00", "11:30", BEACH_SPOT));
+        TripConditions conditions = conditions(List.of(), LocalTime.of(15, 0), null, List.of());
+
+        List<StepData> far = new ArrayList<>(List.of(station, hotel));
+        far.addAll(secondDay);
+        List<StepData> near = new ArrayList<>(List.of(station, nearHotel));
+        near.addAll(secondDay);
+        assertThat(evaluate(far, 2, conditions)).extracting(Violation::rule).doesNotContain(Rule.DAY_MISSING);
+        assertThat(evaluate(near, 2, conditions)).extracting(Violation::rule).contains(Rule.DAY_MISSING);
+    }
+
+    @Test
     @DisplayName("피할 조건에 걸린 장소는 지킬 수 없는 위반이고, 읽지 못한 제약 이름은 건너뛴다")
     void avoidIgnoresUnknownRestriction() {
         List<StepData> day = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "12:00", "13:00", SASHIMI));

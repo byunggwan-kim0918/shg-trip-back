@@ -5,6 +5,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
+import com.shg.trip.shgtrip.domain.planning.service.DraftItineraryPlanner.MissCause;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 
 import java.math.BigDecimal;
@@ -74,6 +75,20 @@ final class DayBuilder {
     /** 여유로운 여행에서 한 곳에 머무는 상한. */
     static final int MAX_STAY = 180;
 
+    static final String DEPARTURE_TOO_SOON = "출발 허브까지 시간 부족";
+    static final String CLOSED_DAY = "휴무일";
+    static final String HOLIDAY_CLOSED = "명절 휴관";
+    static final String OUTSIDE_HOURS = "영업시간 밖";
+    static final String LONG_OPENING_WAIT = "개점까지 오래 기다림";
+    static final String LUNCH_PASSED = "점심 시간 지남";
+    static final String SUNRISE_PASSED = "일출 시각 지남";
+    static final String PAST_DAY_END = "하루 끝 시각 초과";
+    static final String LATE_FOR_LODGING = "숙소 도착 늦음";
+    static final String YIELDED = "요청 장소에 자리 양보";
+    static final String AFTER_DARK = "해 진 뒤 야외";
+    static final String NO_ROUTE = "갈 수 없는 구간";
+    static final String NO_COORDS = "위치 모름";
+
     private static final Map<String, Integer> SLOT_ORDER = Map.of(
             "morning", 0, "lunch", 1, "afternoon", 2, "dinner", 3, "evening", 4);
 
@@ -120,23 +135,32 @@ final class DayBuilder {
      * @param stayFactor 체류 시간 배수. 여유롭게는 한 곳에 오래, 빡빡하게는 짧게 머문다
      * @param lastLeg    숙소까지의 이동을 정해 둔 경우(저녁에 하는 도시 간 이동). null이면 거리로 계산한다
      * @param country    여행 나라. 명절 휴관과 입국 시간을 정한다
+     * @param hubDeadline 출발 허브에 닿아야 하는 시각. endIsHub인 날만 쓴다
      */
     record Frame(int dayNumber, LocalDate date, int startMin, int endMin, int lodgingBy, int sunset, int sunrise,
                  PlaceCandidate startAt, PlaceCandidate arrivalHub, PlaceCandidate endAt, boolean endIsHub,
                  boolean hardEnd, TransportLeg firstLeg, boolean slowWalk, String transportPref,
                  List<Stop> spares, List<PlaceCandidate> earlier, int maxSights, double stayFactor,
-                 TransportLeg lastLeg, String country) {
+                 TransportLeg lastLeg, String country, int hubDeadline) {
 
         Frame withLodging(PlaceCandidate newStartAt, PlaceCandidate newEndAt) {
             return new Frame(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, newStartAt, arrivalHub,
                     newEndAt, endIsHub, hardEnd, firstLeg, slowWalk, transportPref, spares, earlier, maxSights,
-                    stayFactor, lastLeg, country);
+                    stayFactor, lastLeg, country, hubDeadline);
         }
 
         Frame withSpares(List<Stop> newSpares, List<PlaceCandidate> newEarlier) {
             return new Frame(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, startAt, arrivalHub,
                     endAt, endIsHub, hardEnd, firstLeg, slowWalk, transportPref, newSpares, newEarlier, maxSights,
-                    stayFactor, lastLeg, country);
+                    stayFactor, lastLeg, country, hubDeadline);
+        }
+
+        /**
+         * 그날 일정이 끝나는 시각. 출발 허브로 끝나는 날의 endMin은 숙소에서 허브로 떠날 시각이라, 검사처럼 허브에 닿는
+         * 시각을 그날 끝으로 봐야 끼니를 기대하는 날이 맞는다.
+         */
+        int dayEnd() {
+            return endIsHub ? hubDeadline : endMin;
         }
 
         /** 도착 허브에서 빠져나오는 시간. 국제선은 입국 심사와 짐 찾기가 더 걸린다. */
@@ -148,7 +172,43 @@ final class DayBuilder {
     }
 
     /** @param placed 그날 넣은 장소(숙소·허브 제외). stops는 같은 순서의 정류지다 */
-    record Built(List<StepData> steps, List<String> dropped, List<PlaceCandidate> placed, List<Stop> stops) {
+    record Built(List<StepData> steps, List<Drop> drops, List<PlaceCandidate> placed, List<Stop> stops) {
+
+        List<String> dropped() {
+            return drops.stream().map(Drop::toString).toList();
+        }
+
+        /** 넣지 못한 요청 장소(끼니 제외)와 이유. 같은 장소가 여러 번 빠졌으면 마지막 이유다. */
+        List<Drop> missed() {
+            Set<Long> kept = new HashSet<>();
+            placed.forEach(p -> kept.add(p.placeId()));
+            Map<Long, Drop> out = new java.util.LinkedHashMap<>();
+            for (Drop d : drops) {
+                Long id = d.stop().place().placeId();
+                if (d.stop().protect() && !d.stop().meal() && id != null && !kept.contains(id)) out.put(id, d);
+            }
+            return List.copyOf(out.values());
+        }
+    }
+
+    /** 그날 넣지 못한 곳과 이유. */
+    record Drop(Stop stop, String reason) {
+        @Override
+        public String toString() {
+            return stop.place().name() + "(" + reason + ")";
+        }
+
+        MissCause cause() {
+            return switch (reason) {
+                case DEPARTURE_TOO_SOON -> MissCause.DEPARTURE;
+                case CLOSED_DAY, HOLIDAY_CLOSED -> MissCause.CLOSED;
+                case OUTSIDE_HOURS, LONG_OPENING_WAIT, LUNCH_PASSED, SUNRISE_PASSED -> MissCause.HOURS;
+                case PAST_DAY_END, LATE_FOR_LODGING, YIELDED -> MissCause.TIME;
+                case AFTER_DARK -> MissCause.DAYLIGHT;
+                case NO_ROUTE, NO_COORDS -> MissCause.ROUTE;
+                default -> MissCause.OTHER;
+            };
+        }
     }
 
     /** 요청 장소를 살리려고 다른 장소를 빼며 다시 짓는 횟수 상한. */
@@ -220,37 +280,43 @@ final class DayBuilder {
      */
     private static Variant buildOrder(Frame f, List<Stop> stops, boolean keepOrder, boolean strictSoft) {
         Set<Long> excluded = new HashSet<>();
-        List<String> finalDropped = new ArrayList<>();
+        List<Drop> finalDropped = new ArrayList<>();
         Attempt best = null;
-        List<String> bestDropped = null;
+        List<Drop> bestDropped = null;
+        int bestLost = 0;
         for (int round = 0; ; round++) {
-            List<String> dropped = new ArrayList<>(finalDropped);
+            List<Drop> dropped = new ArrayList<>(finalDropped);
+            // 늦어서 빼낸 요청 장소도 잃은 것으로 센다. 세지 않으면 자리를 양보시킨 뒤 그 요청 장소마저 뺀 안이 더 나아 보인다.
+            int lostAsVictims = (int) finalDropped.stream().filter(d -> d.stop().protect()).count();
             Attempt a = attempt(f, stops, excluded, dropped, keepOrder, strictSoft);
+            int lost = a.lostProtected.size() + lostAsVictims;
             // 자리를 양보해도 요청 장소가 들어가지 않으면(마지막 날 저녁에 둔 야경) 양보 전 일정을 쓴다.
-            if (a.lateBy <= 0 && (best == null || a.lostProtected.size() < best.lostProtected.size())) {
+            if (a.lateBy <= 0 && (best == null || lost < bestLost)) {
                 best = a;
                 bestDropped = dropped;
+                bestLost = lost;
             }
             Stop victim = null;
             String reason = null;
             if (a.lateBy > 0 && !a.placed.isEmpty()) {
                 victim = lastUnprotected(a.placed);
                 if (victim == null) victim = a.placed.get(a.placed.size() - 1);
-                reason = "숙소 도착 늦음";
+                reason = LATE_FOR_LODGING;
             } else if (!a.lostProtected.isEmpty() && round < MAX_REBUILDS) {
                 victim = lastUnprotected(a.placed.subList(0, a.firstLossAt));
-                reason = "요청 장소에 자리 양보";
+                reason = YIELDED;
             }
             if (victim == null || round >= MAX_REBUILDS + 2) {
                 if (a.lateBy <= 0 && best != null) {
                     a = best;
                     dropped = bestDropped;
+                    lost = bestLost;
                 }
                 return new Variant(new Built(a.steps, dropped, a.placed.stream().map(Stop::place).toList(), a.placed),
-                        a.lostProtected.size(), a.lateBy > 0, 0);
+                        lost, a.lateBy > 0, 0);
             }
             excluded.add(victim.place().placeId());
-            finalDropped.add(victim.place().name() + "(" + reason + ")");
+            finalDropped.add(new Drop(victim, reason));
         }
     }
 
@@ -285,7 +351,7 @@ final class DayBuilder {
                            int firstLossAt) {
     }
 
-    private static Attempt attempt(Frame f, List<Stop> stops, Set<Long> excluded, List<String> dropped,
+    private static Attempt attempt(Frame f, List<Stop> stops, Set<Long> excluded, List<Drop> dropped,
                                    boolean keepOrder, boolean strictSoft) {
         DayState day = new DayState(new SelectionOutput.DayPlan(f.dayNumber(), null, List.of(), null, null));
         DayOfWeek dow = f.date().getDayOfWeek();
@@ -295,7 +361,7 @@ final class DayBuilder {
                 : ordered(stops, f.startAt() != null ? f.startAt() : f.arrivalHub());
         queue.removeIf(s -> excluded.contains(s.place().placeId()));
         // 좌표가 없는 곳은 오가는 시간을 알 수 없어, 넣으면 그 앞뒤 구간이 모두 이동 없이 이어진다.
-        for (Stop s : queue) if (coordsOf(s.place()) == null) dropped.add(s.place().name() + "(위치 모름)");
+        for (Stop s : queue) if (coordsOf(s.place()) == null) dropped.add(new Drop(s, NO_COORDS));
         queue.removeIf(s -> coordsOf(s.place()) == null);
         spares.removeIf(s -> coordsOf(s.place()) == null);
         List<PlaceCandidate> seen = new ArrayList<>(f.earlier() == null ? List.of() : f.earlier());
@@ -321,7 +387,7 @@ final class DayBuilder {
                 Stop alt = stop.meal() ? mealAlternative(f, dow, prev, stop, t, used, excluded, override) : null;
                 if (alt == null) {
                     if (stop.meal()) {
-                        dropped.add(stop.place().name() + "(이미 쓴 식당)");
+                        dropped.add(new Drop(stop, "이미 쓴 식당"));
                         if (stop.protect()) {
                             if (lostProtected.isEmpty()) firstLossAt = placed.size();
                             lostProtected.add(stop);
@@ -334,7 +400,7 @@ final class DayBuilder {
             }
             if (stop.place().placeId() != null) used.add(stop.place().placeId());
             if (!stop.meal() && !stop.protect() && sameSpotAsAny(stop.place(), seen)) {
-                dropped.add(stop.place().name() + "(이미 간 곳)");
+                dropped.add(new Drop(stop, "이미 간 곳"));
                 continue;
             }
             Slot slot = fit(f, dow, prev, stop, t, override, strictSoft);
@@ -352,12 +418,12 @@ final class DayBuilder {
                 String why = whyNot(f, dow, prev, stop, t);
                 log.debug("day={} 못 넣음 {} at {} ({})", f.dayNumber(), stop.place().name(),
                         ScheduleTimes.formatMinutes(t), why);
-                dropped.add(stop.place().name() + "(" + why + ")");
+                dropped.add(new Drop(stop, why));
                 Stop sub = stop.meal() ? mealAlternative(f, dow, prev, stop, t, used, excluded, override)
                         : pickSpare(f, dow, prev, t, spares, used, seen, Integer.MAX_VALUE, override);
                 // 요청한 음식의 대안은 그 음식을 내는 곳만 고르므로 대안이 들어가면 요청을 지킨 것이다.
                 boolean kept = stop.meal() && sub != null;
-                if (stop.protect() && !kept && !"휴무일".equals(why) && !"명절 휴관".equals(why)) {
+                if (stop.protect() && !kept && !CLOSED_DAY.equals(why) && !HOLIDAY_CLOSED.equals(why)) {
                     if (lostProtected.isEmpty()) firstLossAt = placed.size();
                     lostProtected.add(stop);
                 }
@@ -366,15 +432,16 @@ final class DayBuilder {
                 }
                 continue;
             }
-            if (strictSoft && !stop.meal() && !stop.protect() && pushesMealOut(queue, i, slot)) {
-                dropped.add(stop.place().name() + "(끼니 시간 침범)");
+            if (strictSoft && !stop.meal() && !stop.protect() && pushesMealOut(f, queue, i, slot)) {
+                dropped.add(new Drop(stop, "끼니 시간 침범"));
                 continue;
             }
-            if (slot.end() > f.endMin() && (f.hardEnd() || !(stop.meal() && slot.start() <= DINNER_EARLIEST + 60))) {
-                dropped.add(stop.place().name() + "(하루 끝 시각 초과)");
+            if (slot.end() > endLimit(f, stop.place())
+                    && (f.hardEnd() || !(stop.meal() && slot.start() <= DINNER_EARLIEST + 60))) {
+                dropped.add(new Drop(stop, PAST_DAY_END));
                 log.debug("day={} 끝 초과 {} {}~{} end={}", f.dayNumber(), stop.place().name(),
                         ScheduleTimes.formatMinutes(slot.start()), ScheduleTimes.formatMinutes(slot.end()),
-                        ScheduleTimes.formatMinutes(f.endMin()));
+                        ScheduleTimes.formatMinutes(endLimit(f, stop.place())));
                 if (stop.protect()) {
                     if (lostProtected.isEmpty()) firstLossAt = placed.size();
                     lostProtected.add(stop);
@@ -393,11 +460,12 @@ final class DayBuilder {
         }
 
         // 마지막 장소 뒤로 하루 끝까지 시간이 남으면 예비 장소로 채운다. 출발일 오후가 통째로 비는 일정이 된다.
-        while (f.endMin() - t >= FILL_TAIL && t <= DINNER_LATEST_START && sights(placed) < f.maxSights()) {
-            Stop filler = pickSpare(f, dow, prev, t, spares, used, seen, f.endMin(), null);
+        while (endLimit(f, prev) - t >= FILL_TAIL && t <= DINNER_LATEST_START && sights(placed) < f.maxSights()) {
+            Stop filler = pickSpare(f, dow, prev, t, spares, used, seen,
+                    f.endIsHub() ? Integer.MAX_VALUE : f.endMin(), null);
             if (filler == null) break;
             Slot slot = fit(f, dow, prev, filler, t, null);
-            if (slot == null || slot.end() > f.endMin()) break;
+            if (slot == null || slot.end() > endLimit(f, filler.place())) break;
             used.add(filler.place().placeId());
             steps.add(DayTiming.buildStep(day, filler.place(), slot.start(), slot.end(), slot.leg(), List.of()));
             placed.add(filler);
@@ -411,11 +479,10 @@ final class DayBuilder {
             TransportLeg leg = f.lastLeg() != null ? f.lastLeg()
                     : placed.isEmpty() && f.arrivalHub() == null && f.firstLeg() != null ? f.firstLeg()
                     : legOf(prev, f.endAt(), f.transportPref(), f.slowWalk());
-            int arrive = t + (leg == null ? 0 : leg.durationMin());
-            // 그날 끝(endMin)은 허브까지 기본 이동과 그 여유를 뺀 시각이라 실제 구간과 여유로 다시 맞춘다.
-            int limit = f.endIsHub() ? f.endMin() + TripHubs.HUB_TRAVEL_MINUTES
-                    + TripHubs.estimatedLegSlack(TripHubs.HUB_TRAVEL_MINUTES)
-                    - TripHubs.estimatedLegSlack(leg == null ? null : leg.durationMin()) : f.lodgingBy();
+            Integer legMinutes = leg == null ? null : leg.durationMin();
+            // 허브까지 구간을 모르면 0분이 아니라 기본 몫으로 본다. 0분이면 출발 허브에 바로 닿는 일정이 된다.
+            int arrive = t + (legMinutes != null ? legMinutes : f.endIsHub() ? TripHubs.HUB_TRAVEL_MINUTES : 0);
+            int limit = f.endIsHub() ? f.hubDeadline() - TripHubs.estimatedLegSlack(legMinutes) : f.lodgingBy();
             lateBy = arrive - limit;
             int stay = f.endIsHub() ? HUB_MINUTES : LODGING_MINUTES;
             steps.add(DayTiming.buildStep(day, f.endAt(), arrive, arrive + stay, leg, List.of()));
@@ -435,12 +502,14 @@ final class DayBuilder {
      * 뒤에 점심·저녁이 남았는데 이 장소가 끼니 시간 끝을 넘겨 끝나면 이 장소를 뺀다. 관광을 다 넣고 끼니를 빼면
      * 점심 없이 오후를 보내거나 저녁 없이 숙소로 들어간다.
      */
-    private static boolean pushesMealOut(List<Stop> queue, int index, Slot slot) {
+    private static boolean pushesMealOut(Frame f, List<Stop> queue, int index, Slot slot) {
         for (int j = index + 1; j < queue.size(); j++) {
             Stop next = queue.get(j);
             if (!next.meal()) continue;
-            if ("lunch".equals(next.slot()) && slot.end() > LUNCH_LATEST_START) return true;
-            if ("dinner".equals(next.slot()) && slot.end() > DINNER_LATEST_START) return true;
+            // 출발일은 끼니도 그 식당에서 허브로 떠날 시각 전에 끝나야 한다.
+            int mealBy = endLimit(f, next.place()) - MEAL_MINUTES;
+            if ("lunch".equals(next.slot()) && slot.end() > Math.min(LUNCH_LATEST_START, mealBy)) return true;
+            if ("dinner".equals(next.slot()) && slot.end() > Math.min(DINNER_LATEST_START, mealBy)) return true;
             return false;
         }
         return false;
@@ -451,12 +520,30 @@ final class DayBuilder {
     }
 
     /**
-     * 그 시각에 갈 수 있으면 도착·시작·끝 시각, 아니면 null.
+     * 그 시각에 갈 수 있으면 도착·시작·끝 시각, 아니면 null. 출발 허브로 끝나는 날은 그곳에서 허브로 떠나 기한에 닿을
+     * 때만 넣는다.
      *
      * @param strictSoft 개점을 오래 기다려야 하는 장소를 넣지 않는다
      */
     private static Slot fit(Frame f, DayOfWeek dow, PlaceCandidate prev, Stop stop, int t, TransportLeg override,
                             boolean strictSoft) {
+        Slot slot = fitInDay(f, dow, prev, stop, t, override, strictSoft);
+        if (slot == null || !f.endIsHub()) return slot;
+        return slot.end() <= endLimit(f, stop.place()) ? slot : null;
+    }
+
+    /**
+     * 그곳에서 활동을 마쳐야 하는 시각. 출발 허브로 끝나는 날은 그곳에서 허브까지의 구간으로 잰다. 허브까지 기본 몫으로
+     * 잡으면 공항이 먼 곳의 마지막 장소가 출발편을 놓친다.
+     */
+    static int endLimit(Frame f, PlaceCandidate at) {
+        if (!f.endIsHub()) return f.endMin();
+        TransportLeg leg = legOf(at, f.endAt(), f.transportPref(), f.slowWalk());
+        return TripHubs.latestLeave(f.hubDeadline(), leg == null ? null : leg.durationMin());
+    }
+
+    private static Slot fitInDay(Frame f, DayOfWeek dow, PlaceCandidate prev, Stop stop, int t,
+                                 TransportLeg override, boolean strictSoft) {
         PlaceCandidate c = stop.place();
         TransportLeg leg = override != null ? override : legOf(prev, c, f.transportPref(), f.slowWalk());
         if (leg == null && prev != null) return null;
@@ -513,18 +600,20 @@ final class DayBuilder {
 
     private static String whyNot(Frame f, DayOfWeek dow, PlaceCandidate prev, Stop stop, int t) {
         PlaceCandidate c = stop.place();
-        if (prev != null && legOf(prev, c, f.transportPref(), f.slowWalk()) == null) return "갈 수 없는 구간";
-        if (stop.sunrise()) return "일출 시각 지남";
-        if (stop.meal() && "lunch".equals(stop.slot())) return "점심 시간 지남";
+        if (prev != null && legOf(prev, c, f.transportPref(), f.slowWalk()) == null) return NO_ROUTE;
+        Slot inDay = f.endIsHub() ? fitInDay(f, dow, prev, stop, t, null, false) : null;
+        if (inDay != null && inDay.end() > endLimit(f, c)) return DEPARTURE_TOO_SOON;
+        if (stop.sunrise()) return SUNRISE_PASSED;
+        if (stop.meal() && "lunch".equals(stop.slot())) return LUNCH_PASSED;
         if (!stop.evening() && !stop.protect() && isBridge(c)) return "낮에는 다리를 넣지 않음";
         if (TripCalendar.museumsClosed(f.country(), f.date()) && isMuseum(c)) {
-            return "명절 휴관";
+            return HOLIDAY_CLOSED;
         }
         List<int[]> ranges = OpeningHoursText.rangesFor(DayTiming.openingHoursOf(c), dow);
-        if (ranges != null && ranges.isEmpty()) return "휴무일";
-        if (ranges != null && ranges.stream().anyMatch(r -> r[0] > t + MAX_OPENING_WAIT)) return "개점까지 오래 기다림";
-        if (ranges != null) return "영업시간 밖";
-        return "해 진 뒤 야외";
+        if (ranges != null && ranges.isEmpty()) return CLOSED_DAY;
+        if (ranges != null && ranges.stream().anyMatch(r -> r[0] > t + MAX_OPENING_WAIT)) return LONG_OPENING_WAIT;
+        if (ranges != null) return OUTSIDE_HOURS;
+        return AFTER_DARK;
     }
 
     /** 끼니 식당이 그 시각에 맞지 않으면 함께 골라 둔 대안 식당 가운데 들어가는 곳. 없으면 끼니가 빠진다. */

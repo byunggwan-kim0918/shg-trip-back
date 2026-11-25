@@ -11,6 +11,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.DraftPlan;
 import com.shg.trip.shgtrip.domain.planning.dto.TripCities;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
+import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput.CompanionType;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants.SearchRole;
@@ -185,10 +186,19 @@ public class DraftItineraryPlanner {
      * @param frames     날마다 지을 때 쓴 조건. 수정을 반영해 다시 지을 때 그대로 쓴다
      * @param placed     날마다 넣은 정류지(숙소·허브 제외)와 시작 시각
      * @param reasons    장소 id별로 그 경험을 넣은 이유. 일정에 남은 장소의 이유만 여행자에게 보인다
+     * @param omissions  장소는 찾았지만 어느 날에도 넣지 못한 요청 장소
      */
     public record Result(List<StepData> steps, List<PlaceCandidate> candidates, List<String> notes,
-                         List<DayBuilder.Frame> frames, List<List<Placed>> placed, Map<Long, String> reasons) {
+                         List<DayBuilder.Frame> frames, List<List<Placed>> placed, Map<Long, String> reasons,
+                         List<Omission> omissions) {
     }
+
+    /** 요청 장소를 마지막으로 시도한 날과 그날 넣지 못한 이유. */
+    public record Omission(int day, PlaceCandidate place, String reason, MissCause cause) {
+    }
+
+    /** 요청 장소를 넣지 못한 까닭의 갈래. 여행자에게 알릴 말과 평가가 이 갈래로 나눈다. */
+    public enum MissCause { DEPARTURE, CLOSED, HOURS, TIME, DAYLIGHT, ROUTE, OTHER }
 
     record Placed(DayBuilder.Stop stop, int at) {
     }
@@ -285,7 +295,8 @@ public class DraftItineraryPlanner {
     }
 
     public Result plan(Request req) {
-        Registry registry = new Registry(factsReader, req.cityNames(), vectorSearch.nearSearch(req.input()));
+        Registry registry = new Registry(factsReader, req.cityNames(), vectorSearch.nearSearch(req.input()),
+                req.cities());
         List<String> notes = new ArrayList<>();
         Map<Long, String> reasons = new HashMap<>();
         VectorEnrichedInput input = req.input();
@@ -301,6 +312,7 @@ public class DraftItineraryPlanner {
         List<List<DayBuilder.Stop>> stopsByDay = new ArrayList<>();
         List<List<DayBuilder.Stop>> sparesByDay = new ArrayList<>();
         Set<String> tripSights = new HashSet<>();
+        Map<String, DayBuilder.Stop> sightHolders = new HashMap<>();
         List<double[]> anchors = new ArrayList<>();
         MealLedger usedEateries = new MealLedger();
         for (int d = 1; d <= dayCount; d++) {
@@ -358,6 +370,15 @@ public class DraftItineraryPlanner {
                     asked = asked || place != null && requested(req, null, place.displayName());
                     String why = place == null ? "장소를 찾지 못함"
                             : whyNotSight(place, asked, exclusions, registry, tripSights);
+                    if (asked && Registry.ALREADY_VISITED.equals(why)) {
+                        DayBuilder.Stop holder = sightHolders.get(registry.canonical(place));
+                        TripConditions.Want asking = new TripConditions.Want(want != null ? want.text() : item.name(),
+                                null, want != null && want.satisfy() != null ? want.satisfy() : List.of(), null);
+                        if (!servesRequest(holder, asking, holder == null ? null : registry.fact(holder.place()))
+                                && yieldToRequest(holder, place, stopsByDay, stops, notes)) {
+                            why = null;
+                        }
+                    }
                     if (why != null) {
                         notes.add(d + "일차 뺌: " + (place == null ? item.name() : place.name()) + "(" + why + ")");
                         place = asked ? null : sameExperience(item, spareItems, usedSpares, input, req, anchor,
@@ -368,7 +389,13 @@ public class DraftItineraryPlanner {
                     tripSights.add(registry.canonical(place));
                 }
                 if (item.reason() != null && place.placeId() != null) reasons.putIfAbsent(place.placeId(), item.reason());
-                stops.add(new DayBuilder.Stop(place, kindOf(item, place), slotOf(item, place), alternatives, asked));
+                DayBuilder.Stop stop = new DayBuilder.Stop(place, kindOf(item, place), slotOf(item, place),
+                        alternatives, asked);
+                stops.add(stop);
+                if (!isEatery(item) && !isFoodWant(want)) {
+                    sightHolders.merge(registry.canonical(place), stop,
+                            (old, now) -> !old.protect() && now.protect() ? now : old);
+                }
                 last = place;
             }
             dropDuplicateMeals(stops);
@@ -403,9 +430,6 @@ public class DraftItineraryPlanner {
             cityByDay.add(named != null ? named : near);
         }
         moveClosedRequests(stopsByDay, cityByDay, input.startDate(), req, notes);
-        Map<Integer, PlaceCandidate> lodgingByNight = chooseLodging(dayCount, stopsByDay, anchors, cityByDay,
-                transfers, input, registry, req.lodgingNeeds(), exclusions, notes);
-        keepBookedLodging(lodgingByNight, req, cityByDay, transfers, registry);
         PlaceCandidate arrivalHubOf = servesCity(req.arrivalHub(), cityByDay.get(0), cities)
                 ? registry.add(req.arrivalHub())
                 : req.arrival() == null ? null : hubOf(cityByDay.get(0), input, registry);
@@ -415,6 +439,10 @@ public class DraftItineraryPlanner {
                 ? registry.add(req.departureHub())
                 : req.departure() == null || drivesHome ? null
                 : hubOf(cityByDay.get(dayCount - 1), input, registry);
+        registry.useHubs(arrivalHubOf, departureHubOf);
+        Map<Integer, PlaceCandidate> lodgingByNight = chooseLodging(dayCount, stopsByDay, anchors, cityByDay,
+                transfers, input, registry, req.lodgingNeeds(), exclusions, notes);
+        keepBookedLodging(lodgingByNight, req, cityByDay, transfers, registry);
         moveOffShortDepartureDay(stopsByDay, cityByDay, lodgingByNight.get(dayCount - 1), departureHubOf, drivesHome,
                 req, input, notes);
         // 출발일은 출발지 근처에서 마친다. 그날 권역 예비 장소만 두면 출발 허브에서 먼 곳으로 오전을 채운다. 전날 밤을
@@ -440,6 +468,7 @@ public class DraftItineraryPlanner {
         List<PlaceCandidate> earlier = new ArrayList<>();
         List<DayBuilder.Frame> frames = new ArrayList<>();
         List<List<Placed>> placed = new ArrayList<>();
+        List<Omission> omissions = new ArrayList<>();
         for (int d = 1; d <= dayCount; d++) {
             LocalDate date = input.startDate().plusDays(d - 1);
             boolean first = d == 1;
@@ -481,11 +510,15 @@ public class DraftItineraryPlanner {
             }
             PlaceCandidate endAt = lodgingByNight.get(d);
             boolean endIsHub = false;
+            int hubDeadline = 0;
             if (last) {
                 if (req.departure() != null) {
-                    end = TripHubs.departureDeadline(req.departure(), departureHubOf, drivesHome, req.country())
-                            - (drivesHome ? 0 : TripHubs.HUB_TRAVEL_MINUTES
-                            + TripHubs.estimatedLegSlack(TripHubs.HUB_TRAVEL_MINUTES));
+                    hubDeadline = TripHubs.departureDeadline(req.departure(), departureHubOf, drivesHome,
+                            req.country());
+                    TransportLeg toHub = drivesHome ? null : DayBuilder.legOf(first ? null : lodgingByNight.get(d - 1),
+                            departureHubOf, input.transportPref(), slow);
+                    end = drivesHome ? hubDeadline
+                            : TripHubs.latestLeave(hubDeadline, toHub == null ? null : toHub.durationMin());
                     endAt = departureHubOf;
                     endIsHub = endAt != null;
                 } else {
@@ -532,16 +565,45 @@ public class DraftItineraryPlanner {
             DayBuilder.Frame frame = new DayBuilder.Frame(d, date, start, end, lodgingBy, sunset, sunrise, startAt,
                     arrivalHub, endAt, endIsHub, last, transfer, slow, input.transportPref(),
                     sparesNotVisited(sparesByDay.get(d - 1), earlier, registry),
-                    List.copyOf(earlier), maxSights, stayFactor, lastLeg, req.country());
+                    List.copyOf(earlier), maxSights, stayFactor, lastLeg, req.country(), hubDeadline);
             DayBuilder.Built built = DayBuilder.build(frame, stops);
             built.dropped().forEach(x -> notes.add(frame.dayNumber() + "일차 뺌: " + x));
+            for (DayBuilder.Drop miss : built.missed()) {
+                Integer to = miss.cause() == MissCause.ROUTE ? null
+                        : laterDayFor(miss.stop().place(), d, cityByDay, req, dayCount);
+                if (to == null) {
+                    omissions.add(new Omission(d, miss.stop().place(), miss.reason(), miss.cause()));
+                    continue;
+                }
+                stopsByDay.get(to - 1).add(miss.stop());
+                notes.add(d + "일차 " + miss.stop().place().name() + ": 넣지 못해(" + miss.reason() + ") " + to
+                        + "일차로 옮김");
+            }
             earlier.addAll(built.placed());
             steps.addAll(built.steps());
             frames.add(frame);
             placed.add(placedOf(built));
         }
         return new Result(AlternativeBuilder.pruneUsedAndRenumber(steps), registry.list(), notes, frames, placed,
-                reasons);
+                reasons, omissions);
+    }
+
+    /**
+     * 그날 넣지 못한 요청 장소를 다시 놓을 같은 도시의 뒷날. 앞날은 이미 지은 날이라 다시 짓지 않는다. 그 장소가 쉬는 날과
+     * 한 곳을 볼 낮도 없는 날은 건너뛴다.
+     */
+    static Integer laterDayFor(PlaceCandidate place, int day, List<Destination> cityByDay, Request req,
+                               int dayCount) {
+        LocalDate start = req.input().startDate();
+        for (int o = day + 1; o <= dayCount; o++) {
+            if (cityByDay.get(o - 1) != cityByDay.get(day - 1)) continue;
+            if (closedOn(place, start.plusDays(o - 1), req.country())) continue;
+            if (daytimeMinutes(req, o - 1, dayCount) < DayTiming.resolveVisitMinutes(place) + DEPARTURE_DAY_SLACK) {
+                continue;
+            }
+            return o;
+        }
+        return null;
     }
 
     /**
@@ -625,6 +687,33 @@ public class DraftItineraryPlanner {
         if (item.placeNamed()) return new Dish(item.name(), false, false, List.of(), List.of());
         boolean wanted = requested(req, item.name(), null);
         return new Dish(item.name(), wanted, wanted, List.of(), List.of());
+    }
+
+    /** 앞서 넣은 장소가 이미 그 요청을 채우는지. 검사가 요구를 채운 것으로 보는 기준과 같다. */
+    static boolean servesRequest(DayBuilder.Stop holder, TripConditions.Want asking, PlaceFactsReader.PlaceFact fact) {
+        return holder != null && (WantMatcher.matches(asking, holder.place()) || WantMatcher.partOf(asking, fact));
+    }
+
+    /**
+     * 요청 장소가 앞서 넣은 모델 추천 장소와 같은 곳으로 묶이면 추천 장소를 뺀다. 날짜 순서대로 넣으면 앞날의 추천이 뒷날의
+     * 요청을 이미 간 곳으로 밀어낸다.
+     *
+     * @return 요청 장소를 넣어도 되면 true. 앞서 넣은 곳도 요청 장소면 같은 요청이 두 번 온 것이라 false다
+     */
+    static boolean yieldToRequest(DayBuilder.Stop holder, PlaceCandidate asked,
+                                  List<List<DayBuilder.Stop>> stopsByDay, List<DayBuilder.Stop> today,
+                                  List<String> notes) {
+        if (holder == null || holder.protect()) return false;
+        for (int i = 0; i < stopsByDay.size(); i++) {
+            if (stopsByDay.get(i).remove(holder)) {
+                notes.add((i + 1) + "일차 뺌: " + holder.place().name() + "(같은 곳을 요청함: " + asked.name() + ")");
+            }
+        }
+        if (today.remove(holder)) {
+            notes.add((stopsByDay.size() + 1) + "일차 뺌: " + holder.place().name() + "(같은 곳을 요청함: "
+                    + asked.name() + ")");
+        }
+        return true;
     }
 
     /** @return 관광지로 넣지 않을 이유. 넣어도 되면 null */
@@ -712,8 +801,13 @@ public class DraftItineraryPlanner {
      * 채우지 않는다. 다시 지으면 코드의 채우기가 모델이 뺀 장소를 되살린다.
      */
     public Result applyEdits(Request req, Result prior, List<DraftEdit> edits) {
-        Registry registry = new Registry(factsReader, req.cityNames(), vectorSearch.nearSearch(req.input()));
+        Registry registry = new Registry(factsReader, req.cityNames(), vectorSearch.nearSearch(req.input()),
+                req.cities());
         prior.candidates().forEach(registry::add);
+        if (!prior.frames().isEmpty()) {
+            DayBuilder.Frame lastFrame = prior.frames().get(prior.frames().size() - 1);
+            registry.useHubs(prior.frames().get(0).arrivalHub(), lastFrame.endIsHub() ? lastFrame.endAt() : null);
+        }
         List<String> notes = new ArrayList<>(prior.notes());
         TripExclusions exclusions = req.exclusions();
         List<List<Placed>> days = new ArrayList<>();
@@ -737,6 +831,7 @@ public class DraftItineraryPlanner {
         List<PlaceCandidate> earlier = new ArrayList<>();
         List<DayBuilder.Frame> frames = new ArrayList<>();
         List<List<Placed>> placed = new ArrayList<>();
+        List<Omission> omissions = new ArrayList<>();
         for (int d = 0; d < days.size(); d++) {
             DayBuilder.Frame f = fixedFrames.get(d);
             List<Placed> day = days.get(d);
@@ -766,13 +861,21 @@ public class DraftItineraryPlanner {
                     .sorted(Comparator.comparingInt(Placed::at)).map(Placed::stop).toList();
             DayBuilder.Built built = DayBuilder.build(frame, stops, true);
             built.dropped().forEach(x -> notes.add(frame.dayNumber() + "일차 수정 뒤 뺌: " + x));
+            built.missed().forEach(m -> omissions.add(new Omission(dayNumber, m.stop().place(), m.reason(),
+                    m.cause())));
             earlier.addAll(built.placed());
             steps.addAll(built.steps());
             frames.add(frame);
             placed.add(placedOf(built));
         }
+        Set<Long> kept = new HashSet<>();
+        placed.forEach(day -> day.forEach(p -> kept.add(p.stop().place().placeId())));
+        omissions.removeIf(o -> kept.contains(o.place().placeId()));
+        prior.omissions().stream().filter(o -> !kept.contains(o.place().placeId())
+                && omissions.stream().noneMatch(x -> Objects.equals(x.place().placeId(), o.place().placeId())))
+                .forEach(omissions::add);
         return new Result(AlternativeBuilder.pruneUsedAndRenumber(steps), registry.list(), notes, frames, placed,
-                prior.reasons());
+                prior.reasons(), omissions);
     }
 
     /** @return 반영하지 못한 이유. 반영했으면 null */
@@ -1050,10 +1153,9 @@ public class DraftItineraryPlanner {
         if (dayCount < 2 || req.departure() == null) return;
         int last = dayCount - 1;
         TransportLeg toHub = drivesHome ? null : DayBuilder.legOf(lastLodging, hub, input.transportPref(), false);
-        int lead = drivesHome ? 0 : (toHub != null ? toHub.durationMin() : TripHubs.HUB_TRAVEL_MINUTES)
-                + TripHubs.estimatedLegSlack(toHub == null ? null : toHub.durationMin());
-        int window = TripHubs.departureDeadline(req.departure(), hub, drivesHome, req.country()) - lead
-                - minutes(DEFAULT_START);
+        int deadline = TripHubs.departureDeadline(req.departure(), hub, drivesHome, req.country());
+        int leave = drivesHome ? deadline : TripHubs.latestLeave(deadline, toHub == null ? null : toHub.durationMin());
+        int window = leave - minutes(DEFAULT_START);
         for (DayBuilder.Stop stop : List.copyOf(stopsByDay.get(last))) {
             if (!stop.protect() || stop.meal()) continue;
             if (window >= DayTiming.resolveVisitMinutes(stop.place()) + DEPARTURE_DAY_SLACK) continue;
@@ -1075,7 +1177,9 @@ public class DraftItineraryPlanner {
 
     private static int daytimeMinutes(Request req, int dayIndex, int dayCount) {
         int start = dayIndex == 0 && req.arrival() != null ? minutes(req.arrival()) : minutes(DEFAULT_START);
-        int end = dayIndex == dayCount - 1 && req.departure() != null ? minutes(req.departure()) : minutes(LODGING_BY);
+        int end = dayIndex == dayCount - 1 && req.departure() != null
+                ? TripHubs.latestLeave(TripHubs.departureDeadline(req.departure(), null, false, req.country()), null)
+                : minutes(LODGING_BY);
         return end - start;
     }
 
@@ -1279,8 +1383,8 @@ public class DraftItineraryPlanner {
         // 요청한 음식은 동선에서 조금 멀어도 찾아간다.
         double dishRadius = dish.wanted() ? WANTED_DISH_KM * widen : radius * DISH_RADIUS_FACTOR;
         List<PlaceCandidate> pool = new ArrayList<>(dishPool.stream().filter(c -> kmTo(c, near) <= dishRadius).toList());
-        pool.addAll(candidateSupplement.enrichFromDb(registry.near.search(
-                cafe ? SearchRole.CAFE : SearchRole.RESTAURANT, near, radius, SEARCH_LIMIT, 1)));
+        pool.addAll(candidateSupplement.enrichFromDb(registry.around(
+                cafe ? SearchRole.CAFE : SearchRole.RESTAURANT, near, radius, SEARCH_LIMIT)));
         Map<Long, PlaceCandidate> unique = new LinkedHashMap<>();
         pool.forEach(c -> unique.putIfAbsent(c.placeId(), c));
         return registry.withClosures(unique.values()).stream()
@@ -1349,7 +1453,7 @@ public class DraftItineraryPlanner {
                 input.themes() == null ? "" : String.join(",", input.themes().stream().sorted().toList()));
         double radius = "car".equals(input.transportPref()) ? CAR_SEARCH_KM : TRANSIT_SEARCH_KM;
         List<PlaceCandidate> eligible = registry.withClosures(candidateSupplement.enrichFromDb(
-                registry.near.search(SearchRole.ATTRACTION, anchor, radius, SEARCH_LIMIT, 1))).stream()
+                registry.around(SearchRole.ATTRACTION, anchor, radius, SEARCH_LIMIT))).stream()
                 .filter(c -> !TripCalendar.isKorea(c.country()) || HANGUL.matcher(Objects.toString(c.name(), "")).find())
                 .filter(c -> !DraftPlaceResolver.notAVisit(c.name(), c.category()))
                 .filter(c -> {
@@ -1479,7 +1583,7 @@ public class DraftItineraryPlanner {
     private PlaceCandidate pickLodging(Registry registry, double[] center, double radiusKm, int limit,
                                        CompanionType companion, TripExclusions exclusions, boolean preferredOnly) {
         return candidateSupplement.enrichFromDb(
-                        registry.near.search(SearchRole.ACCOMMODATION, center, radiusKm, limit, 1)).stream()
+                        registry.around(SearchRole.ACCOMMODATION, center, radiusKm, limit)).stream()
                 .filter(c -> exclusions.violatedBy(c) == null)
                 .filter(c -> companion == null || !companion.avoidsDormLodging()
                         || !PlaceCategoryConstants.isDormLodging(c.name(), c.category(), c.tags()))
@@ -1536,6 +1640,8 @@ public class DraftItineraryPlanner {
 
     /** 숙소 위치를 정할 때 쓰는 도시 범위. 좌표가 틀린 장소 하나가 숙소를 도시 밖 들판으로 끌고 간다. */
     private static final double CITY_KM = 25;
+    /** 공항 둘레로 보는 거리. 공항 가까이 묵는 숙소를 넓혀 찾는 범위(12km)까지 담는다. */
+    private static final double HUB_AREA_KM = 15;
     private static final double JEJU_KM = 45;
 
     private static double[] lodgingCenter(List<DayBuilder.Stop> today, List<DayBuilder.Stop> tomorrow,
@@ -1683,11 +1789,43 @@ public class DraftItineraryPlanner {
         private final List<String> cityNames;
         /** 이 계획의 근처 검색. 끼니·숙소·빈 시간 후보를 찾을 때마다 질의를 다시 임베딩하지 않는다. */
         final VectorSearchQueryService.NearSearch near;
+        private final List<Destination> cities;
 
-        Registry(PlaceFactsReader factsReader, List<String> cityNames, VectorSearchQueryService.NearSearch near) {
+        Registry(PlaceFactsReader factsReader, List<String> cityNames, VectorSearchQueryService.NearSearch near,
+                 List<Destination> cities) {
             this.factsReader = factsReader;
             this.cityNames = cityNames == null ? List.of() : cityNames;
             this.near = near;
+            this.cities = cities == null ? List.of() : cities;
+        }
+
+        private final List<double[]> hubs = new ArrayList<>();
+
+        /** 이 여행이 들고 나는 공항·역. 그 둘레는 여행지 지역 밖이어도 찾는다. */
+        void useHubs(PlaceCandidate... tripHubs) {
+            for (PlaceCandidate h : tripHubs) {
+                double[] at = h == null ? null : coordsOf(h);
+                if (at != null) hubs.add(at);
+            }
+        }
+
+        /**
+         * 지점 둘레 후보. 여행 도시 범위 밖인 공항·역 둘레(공항 근처 숙소와 그 주변)는 여행지 지역으로 거르면 아무것도
+         * 남지 않아 반경으로만 찾는다. 다른 지점은 잘못 연결된 장소가 만든 엉뚱한 중심일 수 있어 지역으로 거른다.
+         */
+        List<PlaceCandidate> around(SearchRole role, double[] center, double radiusKm, int limit) {
+            return outsideTrip(center) && nearHub(center) ? near.searchAround(role, center, radiusKm, limit, 1)
+                    : near.search(role, center, radiusKm, limit, 1);
+        }
+
+        boolean outsideTrip(double[] at) {
+            return at != null && !cities.isEmpty()
+                    && cities.stream().noneMatch(c -> kmBetween(at, new double[]{c.lat(), c.lng()})
+                    <= cityRangeKm(c, CITY_KM));
+        }
+
+        private boolean nearHub(double[] at) {
+            return hubs.stream().anyMatch(h -> kmBetween(at, h) <= HUB_AREA_KM);
         }
 
         PlaceFactsReader.PlaceFact fact(PlaceCandidate c) {
@@ -1716,6 +1854,8 @@ public class DraftItineraryPlanner {
             return cs.stream().map(this::withClosures).toList();
         }
 
+        static final String ALREADY_VISITED = "이미 간 곳";
+
         /** 같은 곳을 가리키는 이름을 하나로 모은 키. 대표 장소가 있으면 그 이름이고, 괄호·도시 이름은 뗀다. */
         String canonical(PlaceCandidate c) {
             PlaceFactsReader.PlaceFact f = fact(c);
@@ -1728,7 +1868,7 @@ public class DraftItineraryPlanner {
             PlaceFactsReader.PlaceFact f = fact(c);
             if (f != null && Boolean.FALSE.equals(f.reachable())) return "들어갈 수 없는 곳";
             if (f != null && f.notWorthVisiting()) return NOT_A_SIGHT;
-            if (visited.contains(canonical(c))) return "이미 간 곳";
+            if (visited.contains(canonical(c))) return ALREADY_VISITED;
             return null;
         }
 

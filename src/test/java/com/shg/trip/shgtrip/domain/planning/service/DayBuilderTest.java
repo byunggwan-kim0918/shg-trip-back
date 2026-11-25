@@ -35,7 +35,7 @@ class DayBuilderTest {
     private static DayBuilder.Frame frame(LocalDate date, int start, int end, boolean hardEnd,
                                           List<DayBuilder.Stop> spares, List<PlaceCandidate> earlier) {
         return new DayBuilder.Frame(1, date, start, end, 22 * 60, 19 * 60 + 30, 5 * 60 + 15, null, null, null,
-                false, hardEnd, null, false, "walk", spares, earlier, Integer.MAX_VALUE, 1.0, null, "KR");
+                false, hardEnd, null, false, "walk", spares, earlier, Integer.MAX_VALUE, 1.0, null, "KR", 0);
     }
 
     private static DayBuilder.Stop stop(PlaceCandidate p, String kind, String slot) {
@@ -175,7 +175,7 @@ class DayBuilderTest {
         DayBuilder.Frame open = frame(WEDNESDAY, 9 * 60, 21 * 60, false, spares, List.of());
         DayBuilder.Frame capped = new DayBuilder.Frame(open.dayNumber(), open.date(), open.startMin(), open.endMin(),
                 open.lodgingBy(), open.sunset(), open.sunrise(), null, null, null, false, false, null, false, "walk",
-                spares, List.of(), 2, 1.0, null, "KR");
+                spares, List.of(), 2, 1.0, null, "KR", 0);
         List<DayBuilder.Stop> stops = List.of(stop(museum, "sight", "morning"), stop(lunch, "meal", "lunch"),
                 stop(dinner, "meal", "dinner"));
 
@@ -265,5 +265,124 @@ class DayBuilderTest {
                 new DayBuilder.Built(List.of(lunchStep), List.of(), List.of(lunch), List.of(lunchStop)));
 
         assertThat(withoutLunch).isGreaterThan(withoutMuseum);
+    }
+
+    private static final LocalDate KYOTO_DEPARTURE = LocalDate.of(2027, 1, 8);
+    private static final PlaceCandidate KYOTO_HOTEL = kyoto("교토 호텔", "Travel and Transportation > Lodging > Hotel",
+            "LODGING", 35.0037, 135.7728);
+    private static final PlaceCandidate KANSAI_AIRPORT = kyoto("Kansai International Airport",
+            "Travel and Transportation > Transport Hub > Airport", "TRANSIT", 34.432, 135.2304);
+    /** 17:00 국제선 출발에서 수속 120분을 뺀 허브 기한. */
+    private static final int KIX_DEADLINE = 15 * 60;
+
+    private static PlaceCandidate kyoto(String name, String category, String role, double lat, double lng) {
+        return new PlaceCandidate(1, nextId++, name, null, category, List.of(), "Kyoto", "JP",
+                BigDecimal.valueOf(lat), BigDecimal.valueOf(lng), null, null, 0.0, null, null, null, null, false,
+                null, null, null, null, role, null, false, null, null, null, null);
+    }
+
+    private static PlaceCandidate kyotoSight(String name, double lat, double lng) {
+        return kyoto(name, "Landmarks and Outdoors > Garden", "SIGHT", lat, lng);
+    }
+
+    /** 교토 숙소에서 나서 간사이공항으로 끝나는 출발일. endMin은 허브까지 기본 몫으로 잡던 그날 끝이다. */
+    private static DayBuilder.Frame kyotoDepartureDay(int start, List<DayBuilder.Stop> spares) {
+        return new DayBuilder.Frame(3, KYOTO_DEPARTURE, start, TripHubs.latestLeave(KIX_DEADLINE, null), 22 * 60,
+                17 * 60 + 10, 7 * 60 + 5, KYOTO_HOTEL, null, KANSAI_AIRPORT, true, true, null, false, "car", spares,
+                List.of(), 3, 1.25, null, "JP", KIX_DEADLINE);
+    }
+
+    private static void assertReachesHub(DayBuilder.Built built) {
+        StepData hub = built.steps().get(built.steps().size() - 1);
+        assertThat(hub.place().name()).isEqualTo(KANSAI_AIRPORT.name());
+        int arrive = ScheduleTimes.toMinutesOrNull(hub.startTime());
+        assertThat(arrive + TripHubs.estimatedLegSlack(hub.transportationDuration())).isLessThanOrEqualTo(KIX_DEADLINE);
+    }
+
+    @Test
+    @DisplayName("출발일 마지막 장소는 그곳에서 공항까지 실제 구간으로 끝을 잡아, 먼 공항으로 가는 날 출발편을 놓치지 않는다")
+    void departureDayUsesLegToHubFromEachPlace() {
+        PlaceCandidate bamboo = kyotoSight("竹林の小径", 35.0176, 135.6765);
+        PlaceCandidate soba = kyoto("そばしき 嵐山", "Dining and Drinking > Restaurant > Soba Restaurant", "MEAL",
+                35.0144, 135.6775);
+        List<DayBuilder.Stop> spares = List.of(
+                stop(kyotoSight("天龍寺", 35.0158, 135.6738), "sight", "afternoon"),
+                stop(kyotoSight("渡月橋", 35.0129, 135.6777), "sight", "afternoon"),
+                stop(kyotoSight("野宮神社", 35.0177, 135.6744), "sight", "afternoon"),
+                stop(kyotoSight("常寂光寺", 35.0214, 135.6698), "sight", "afternoon"),
+                stop(kyotoSight("大船鉾", 35.0031, 135.7567), "sight", "afternoon"));
+
+        DayBuilder.Built built = DayBuilder.build(kyotoDepartureDay(9 * 60 + 30, spares),
+                List.of(stop(bamboo, "sight", "morning"), stop(soba, "meal", "lunch")));
+
+        assertReachesHub(built);
+        assertThat(names(built)).as("공항으로 떠나기 전 점심").contains("そばしき 嵐山");
+        assertThat(built.dropped()).noneMatch(d -> d.contains("숙소 도착 늦음"));
+    }
+
+    @Test
+    @DisplayName("넣지 못한 요청 장소는 이유와 그 갈래를 남기고, 요청하지 않은 장소는 남기지 않는다")
+    void missedRequestKeepsCause() {
+        PlaceCandidate farTemple = kyotoSight("鞍馬寺", 35.1180, 135.7710);
+        PlaceCandidate farGarden = kyotoSight("貴船神社", 35.1215, 135.7629);
+        DayBuilder.Frame f = kyotoDepartureDay(11 * 60, List.of());
+
+        DayBuilder.Built built = DayBuilder.build(f, List.of(
+                new DayBuilder.Stop(farTemple, "sight", "morning", List.of(), true),
+                stop(farGarden, "sight", "morning")));
+
+        assertReachesHub(built);
+        assertThat(built.missed()).singleElement().satisfies(m -> {
+            assertThat(m.stop().place().name()).isEqualTo("鞍馬寺");
+            assertThat(m.reason()).isEqualTo(DayBuilder.DEPARTURE_TOO_SOON);
+            assertThat(m.cause()).isEqualTo(DraftItineraryPlanner.MissCause.DEPARTURE);
+        });
+    }
+
+    @Test
+    @DisplayName("요청 장소를 살리려고 다른 곳을 뺐는데 요청 장소마저 늦어서 빠지면 뺐던 곳을 되살린다")
+    void yieldIsUndoneWhenRequestIsLostAnyway() {
+        PlaceCandidate haneda = kyoto("Haneda Airport", "Travel and Transportation > Transport Hub > Airport",
+                "TRANSIT", 35.5494, 139.7798);
+        PlaceCandidate airportHotel = kyoto("羽田エクセルホテル東急", "Travel and Transportation > Lodging > Hotel",
+                "LODGING", 35.5490, 139.7865);
+        PlaceCandidate oshino = kyoto("忍野八海", "Landmarks and Outdoors > Historic and Protected Site", "SIGHT",
+                35.4608, 138.8495);
+        PlaceCandidate lookout = kyoto("天上山公園", "Landmarks and Outdoors > Scenic Lookout", "SIGHT", 35.5040,
+                138.7721);
+        PlaceCandidate fujiQ = kyoto("Fuji-Q Highland", "Arts and Entertainment > Amusement Park", "SIGHT", 35.4869,
+                138.7805);
+        PlaceCandidate udon = kyoto("村松うどん店", "Dining and Drinking > Restaurant > Japanese Restaurant", "MEAL",
+                35.5557, 138.9091);
+        PlaceCandidate museum = kyoto("JAL Sky Museum", "Arts and Entertainment > Museum", "SIGHT", 35.5412,
+                139.7891);
+        DayBuilder.Frame arrivalDay = new DayBuilder.Frame(1, LocalDate.of(2027, 3, 7), 15 * 60, 21 * 60 + 30,
+                22 * 60, 17 * 60 + 40, 6 * 60, null, haneda, airportHotel, false, false, null, false, "any",
+                List.of(stop(museum, "sight", "afternoon")), List.of(), 3, 1.0, null, "JP", 0);
+
+        DayBuilder.Built built = DayBuilder.build(arrivalDay, List.of(
+                stop(lookout, "sight", "afternoon"),
+                new DayBuilder.Stop(udon, "meal", "dinner", List.of(), true),
+                stop(fujiQ, "sight", "afternoon"),
+                new DayBuilder.Stop(oshino, "sight", "afternoon", List.of(), true)));
+
+        assertThat(names(built)).contains("JAL Sky Museum").doesNotContain("忍野八海");
+        assertThat(built.missed()).extracting(m -> m.stop().place().name()).containsExactly("忍野八海");
+    }
+
+    @Test
+    @DisplayName("공항 가까운 장소는 숙소에서 공항까지로 잡은 그날 끝보다 늦게 끝나도 넣는다")
+    void placeNearHubMayEndAfterLodgingBasedEnd() {
+        PlaceCandidate nearAirport = kyotoSight("りんくう公園", 34.4096, 135.2969);
+        DayBuilder.Frame f = kyotoDepartureDay(10 * 60 + 30, List.of(stop(nearAirport, "sight", "afternoon")));
+        int lodgingBasedEnd = TripHubs.latestLeave(KIX_DEADLINE,
+                DayBuilder.legOf(KYOTO_HOTEL, KANSAI_AIRPORT, "car", false).durationMin());
+
+        DayBuilder.Built built = DayBuilder.build(f, List.of());
+
+        assertReachesHub(built);
+        StepData park = built.steps().stream().filter(s -> s.place().name().equals("りんくう公園")).findFirst()
+                .orElseThrow();
+        assertThat(ScheduleTimes.toMinutesOrNull(park.endTime())).isGreaterThan(lodgingBasedEnd);
     }
 }

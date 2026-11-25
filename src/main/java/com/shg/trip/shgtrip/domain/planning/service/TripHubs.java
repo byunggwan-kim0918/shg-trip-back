@@ -122,6 +122,18 @@ class TripHubs {
         return Math.max(MIN_ESTIMATED_LEG_SLACK, (int) Math.ceil(leg * ESTIMATED_LEG_SLACK_SHARE));
     }
 
+    /**
+     * 출발 허브까지 legMinutes 걸리는 곳을 떠나야 하는 마지막 시각(분). 출발일의 하루 끝·옮기기·검사가 이 식 하나를 써야
+     * 공항이 먼 도시에서 한쪽만 기본 몫으로 잡지 않는다.
+     *
+     * @param hubDeadline 허브에 닿아야 하는 시각({@link #departureDeadline})
+     * @param legMinutes  그곳에서 허브까지 추정 이동 분. 모르면 null이고 기본 몫으로 본다
+     */
+    static int latestLeave(int hubDeadline, Integer legMinutes) {
+        int leg = legMinutes == null ? HUB_TRAVEL_MINUTES : legMinutes;
+        return hubDeadline - leg - estimatedLegSlack(legMinutes);
+    }
+
     /** 국제선은 출국 수속에 국내선보다 오래 걸린다. */
     static int departureBuffer(boolean airport, String country) {
         if (!airport) return STATION_BUFFER;

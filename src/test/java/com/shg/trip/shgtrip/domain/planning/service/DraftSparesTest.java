@@ -27,7 +27,8 @@ class DraftSparesTest {
     void sparesSkipSamePlaceUnderOtherRow() {
         PlaceFactsReader facts = mock(PlaceFactsReader.class);
         when(facts.find(anyList())).thenReturn(Map.of());
-        DraftItineraryPlanner.Registry registry = new DraftItineraryPlanner.Registry(facts, List.of("여수"), null);
+        DraftItineraryPlanner.Registry registry = new DraftItineraryPlanner.Registry(facts, List.of("여수"), null,
+                List.of());
         PlaceCandidate dayOne = park(1749198, "엑스포공원");
         List<DayBuilder.Stop> spares = List.of(
                 new DayBuilder.Stop(park(1819462, "여수엑스포공원"), "sight", "afternoon", List.of()),

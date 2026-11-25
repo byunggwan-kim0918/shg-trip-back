@@ -90,9 +90,13 @@ final class TripConditionChecks {
             boolean first = d == 1;
             boolean last = d == ctx.dayCount();
             boolean lateArrival = first && conditions.arrival() != null
-                    && conditions.arrival().getHour() >= LATE_ARRIVAL_HOUR;
+                    && readyAfterArrival(conditions, day) >= LATE_ARRIVAL_HOUR * 60;
             boolean earlyDeparture = last && conditions.departure() != null
                     && usableBeforeDeparture(conditions, day, ctx.country()) < MIN_DEPARTURE_DAY_MINUTES;
+            // 관광 없이 허브로 가는 출발일도 허브에 늦게 닿으면 출발편을 놓친다.
+            if (last && conditions.departure() != null && !day.isEmpty()) {
+                departure(day, d, conditions, ctx.country(), out);
+            }
             if (activities(day).isEmpty()) {
                 if (!lateArrival && !earlyDeparture) {
                     out.add(new Violation(Rule.DAY_MISSING, d, d + "일차에 일정이 없음"));
@@ -102,7 +106,6 @@ final class TripConditionChecks {
             mealsBackToBack(day, d, out);
             pace(day, d, first, last, conditions, out);
             movement(day, d, conditions, out);
-            if (last && conditions.departure() != null) departure(day, d, conditions, ctx.country(), out);
         }
         duplicates(days, facts, ctx.cities().stream().map(ItineraryRules.City::nameKo).toList(), out);
         avoid(conditions, days, out);
@@ -116,10 +119,19 @@ final class TripConditionChecks {
         Visit end = lastDay.isEmpty() ? null : lastDay.get(lastDay.size() - 1);
         PlaceCandidate hub = hubOrNull(end == null ? null : end.place());
         boolean drivesHome = drivesHome(hub, conditions);
-        // 허브까지 실제 이동을 알면 그 시간을 뺀다. 시내에서 먼 공항은 기본값보다 오래 걸려 그날 쓸 시간이 없다.
         Integer leg = hub == null ? null : end.step().transportationDuration();
-        int lead = drivesHome ? 0 : (leg != null ? leg : TripHubs.HUB_TRAVEL_MINUTES) + TripHubs.estimatedLegSlack(leg);
-        return TripHubs.departureDeadline(conditions.departure(), hub, drivesHome, country) - lead - DAY_START_MINUTES;
+        int deadline = TripHubs.departureDeadline(conditions.departure(), hub, drivesHome, country);
+        return (drivesHome ? deadline : TripHubs.latestLeave(deadline, leg)) - DAY_START_MINUTES;
+    }
+
+    /**
+     * 도착 허브를 나와 다음 곳에 닿는 시각. 공항이 도시에서 먼 날은 착륙 시각만 보면 쓸 시간이 있는 날로 잘못 본다.
+     */
+    private static int readyAfterArrival(TripConditions conditions, List<Visit> firstDay) {
+        int landed = conditions.arrival().getHour() * 60 + conditions.arrival().getMinute();
+        if (firstDay.size() < 2 || hubOrNull(firstDay.get(0).place()) == null) return landed;
+        Integer leg = firstDay.get(1).step().transportationDuration();
+        return Math.max(landed, firstDay.get(0).end() + (leg == null ? 0 : leg));
     }
 
     private static PlaceCandidate hubOrNull(PlaceCandidate end) {

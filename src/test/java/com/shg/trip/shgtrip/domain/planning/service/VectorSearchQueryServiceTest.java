@@ -78,6 +78,23 @@ class VectorSearchQueryServiceTest {
         assertThat(queries.getValue()).containsExactly(representative);
     }
 
+    @Test
+    @DisplayName("정한 지점 둘레 검색은 여행지 지역으로 거르지 않고, 보통 근처 검색은 여행지 지역으로 거른다")
+    void searchAroundDropsRegionFilter() {
+        VectorEnrichedInput input = inputWith(List.of("food"), List.of("attraction"));
+        given(embeddingService.embedBatch(anyList())).willReturn(List.of(MOCK_VECTOR));
+        given(placeVectorSearchService.search(any(VectorSearchRequest.class))).willReturn(List.of());
+        VectorSearchQueryService.NearSearch near = service.nearSearch(input);
+        double[] haneda = {35.5494, 139.7798};
+
+        near.search(PlaceCategoryConstants.SearchRole.ACCOMMODATION, haneda, 8.0, 5, 1);
+        near.searchAround(PlaceCategoryConstants.SearchRole.ACCOMMODATION, haneda, 8.0, 5, 1);
+
+        verify(placeVectorSearchService, org.mockito.Mockito.times(2)).search(requestCaptor.capture());
+        assertThat(requestCaptor.getAllValues()).extracting(VectorSearchRequest::regions)
+                .containsExactly(List.of("시부야"), null);
+    }
+
     @Nested
     @DisplayName("인기도 랭킹 — 리뷰 수 미상의 중립값은 슬롯 커버리지에 따른다")
     class ProminenceRankingTests {
