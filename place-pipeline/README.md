@@ -53,6 +53,8 @@ FSQ_ACCESS_TOKEN=... .venv/bin/python -m pipeline.cli pilot --areas pilot/areas.
 | 저장 용량 실측 | `bench/pg_storage_bench.py` (운영과 같은 메모리 4GB pgvector 컨테이너에서 장소 수별 표·색인·HNSW 크기, 생성 시간, 검색 지연) |
 | 예산 정책 | `pipeline/budget_policy.py` (장소 수 상한이 있을 때 한계 가치 순으로 고른다. 유명 명소 먼저, 몫은 역할 묶음에만 두고 나라별 몫은 없다) |
 | 예산 정책 실험 | `bench/budget_policies.py` (상한별로 기준 선별과 같은 지표 비교) · 카탈로그 조회 실측 `bench/parquet_tail_bench.py` |
+| 좌표 틀린 동명 행 | `pipeline/mislocated.py` (유명 항목과 이름이 같은데 1.5km 넘게 떨어진 행 가운데, 주소 동네가 제자리 행과 같은 것만 중복으로 뺀다) |
+| 한국어 표기 규칙 | `pipeline/korean_names.py` (가나·헵번식 로마자 → 한글, 신사·공원 같은 일반어만 번역. 한자 읽기는 Wikidata 가나 이름(P1814)·로마자 라벨이 있을 때만) |
 | 일정 재생 | `bench/replay_places.py`(별도 컨테이너 적재·정책 전환·카탈로그 Parquet 내보내기) · `bench/replay_embed.py` · `bench/run_replays.sh` · `bench/replay_score.py` |
 | 여행지 후보 | `pipeline/geonames.py` (인구로 거르지 않는다. 개별 장소·시가지 일부는 넣지 않는다) |
 

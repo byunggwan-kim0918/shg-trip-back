@@ -68,3 +68,24 @@ def test_rows_outside_baseline_never_kept():
     place(con, "in", "店A", 43.0)
     place(con, "out", "店B", 43.0, kept=False)
     assert kept(con, 10, budget_policy.DEFAULT_SHARES) == {"in"}
+
+
+def test_small_destination_gets_floor_and_rows_outside_destinations_are_dropped():
+    con = setup()
+    for i in range(20):
+        place(con, f"city{i}", f"都会ラーメン{i}", 43.0 + i * 0.001, quality=0.9)
+        place(con, f"sight{i}", f"名所{i}", 43.0 + i * 0.001, role="destination",
+              category="Landmarks and Outdoors > Park")
+    place(con, "town_meal", "村の食堂", 44.0, quality=0.4)
+    place(con, "town_sight", "村の滝", 44.0, role="destination", category="Landmarks and Outdoors > Waterfall")
+    place(con, "nowhere", "山奥の茶屋", 45.0, quality=0.95)
+    con.execute("CREATE TABLE dest (name VARCHAR, lat DOUBLE, lon DOUBLE, km DOUBLE)")
+    con.execute("INSERT INTO dest VALUES ('City', 43.0, 141.0, 10), ('Town', 44.0, 141.0, 5)")
+    budget_policy.values(con, "base", "evidence", "wikivoyage", "settlements", "wikidata")
+    budget_policy.assign_destinations(con, "base", "dest", "regions")
+    budget_policy.build(con, "base", "budget_values", 6, "out", {"sight": 0.5, "food": 0.5, "support": 0},
+                        regions="regions", floors={"sight": 1, "meal": 1, "cafe": 0, "lodging": 0})
+    kept = {r[0] for r in con.execute("SELECT source_id FROM out WHERE kept").fetchall()}
+    assert {"town_meal", "town_sight"} <= kept
+    assert "nowhere" not in kept
+    assert len(kept) == 6

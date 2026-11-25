@@ -34,6 +34,11 @@ WIKIDATA_MAX_METERS = 2000
 CONTAINED_MAX_METERS = 150
 CONTAINED_MIN_CHARS = 3
 CONTAINED_MIN_SITELINKS = 3
+# 명소 이름을 딴 가게(新宿御苑 앞 식당)가 많은 분류. 같은 항목에 이름이 정확히 같은 명소 행이 있으면 그쪽에 잇는다.
+NAMESAKE_STORE_CATEGORIES = ("Dining and Drinking", "Retail")
+# 몰·백화점·시장은 이름을 딴 가게가 아니라 그 이름의 장소 자체다.
+NAMESAKE_STORE_EXCEPTIONS = ("Retail > Shopping Mall", "Retail > Shopping Plaza", "Retail > Department Store",
+                             "Retail > Market")
 CONTAINED_IGNORED_CATEGORIES = ("Dining and Drinking", "Retail", "Business and Professional Services",
                                 "Travel and Transportation")
 _WIKI_CELL = 0.03
@@ -120,50 +125,106 @@ def build_links(con, candidates="candidates", table="source_links"):
     return table
 
 
+# 괄호 안·" / " 뒤는 다른 표기(로마자·정식 이름)거나 위치 설명이라 본 이름과 따로 비교한다.
+_ALIAS = "[(（\\[［【「]([^)）\\]］】」]*)[)）\\]］】」]"
+_ALIAS_SPLIT = "\\s+/\\s+"
+# 공급처마다 빵집·과자점·식품점을 식음료와 소매로 엇갈려 분류한다.
+SHOP_MAJORS = ("Dining and Drinking", "Retail")
+# 짧은 이름이 긴 이름의 철자 변형(글자 빠짐)으로 보려면 긴 이름 글자의 이만큼은 짧은 이름에 있어야 한다.
+VARIANT_MIN_RATIO = 0.7
+# 한 FSQ 행의 이름을 품거나 거기 들어가는 Overture 이웃이 이보다 많으면 그 이름은 몰·역·지명이다.
+CONTAINS_MAX_PARTNERS = 2
+
+
+def _latin_fold(k):
+    return f"(CASE WHEN regexp_matches(strip_accents({k}), '^[a-z0-9]+$') THEN strip_accents({k}) ELSE {k} END)"
+
+
+def _name_keys(table, rows):
+    """행마다 본 이름 키(is_core)와 별칭 키. 키가 같으면 하나만 남긴다."""
+    bare = f"regexp_split_to_array(regexp_replace(name, '{_literal(_ALIAS)}', ' ', 'g'), '{_ALIAS_SPLIT}')"
+    core = f"name_key({bare}[1])"
+    return f"""
+        {table} AS (
+            SELECT * FROM (
+                SELECT source_id, lat, lon, category, country, name,
+                       {_latin_fold(f"CASE WHEN length({core}) >= 2 THEN {core} ELSE name_key END")} AS k, true AS is_core
+                FROM {rows}
+                UNION ALL
+                SELECT source_id, lat, lon, category, country, name, {_latin_fold('name_key(x)')}, false
+                FROM {rows}, unnest(regexp_extract_all(name, '{_literal(_ALIAS)}', 1) || {bare}[2:]) AS t(x)
+            ) WHERE length(k) >= 2
+            QUALIFY row_number() OVER (PARTITION BY source_id, k ORDER BY is_core DESC) = 1
+        )"""
+
+
 def fsq_only(con, candidates="candidates", links="source_links", table="fsq_only"):
     """
     Overture와 이어지지 않은 FSQ 적재 적합 행과 상태. 열: source_id, status.
-      only               : 어떤 연결도 없고 가까이 이름이 겹치는 Overture 행도 없다. 후보로 쓴다.
+      only               : 어떤 연결도 없고 가까이 같은 곳으로 볼 Overture 행도 없다. 후보로 쓴다.
       review             : REVIEW 연결만 있다. 같은 장소일 수 있어 쓰지 않는다.
-      possible_duplicate : 앞 세 글자가 같은 Overture 행이 DUPLICATE_MAX_METERS 안에, 또는 한쪽 이름이 다른 쪽을 품는
-                           행이 CONTAINS_MAX_METERS 안에 있다. 쓰지 않는다.
-    같은 가게가 두 번 들어가는 쪽이 몇 곳 놓치는 쪽보다 해롭다.
+      possible_duplicate : DUPLICATE_MAX_METERS 안 Overture 행과 이름 키가 같거나, 분류가 맞고 한쪽 이름이 다른 쪽의 앞·뒤에
+                           붙은 이름(나머지가 부속 표지·지점명이 아님)이거나 글자가 빠진 변형이다. 포함하는 이웃이
+                           CONTAINS_MAX_PARTNERS보다 많으면 그 이름은 몰·역·지명이라 중복으로 보지 않는다. 쓰지 않는다.
+    앞 세 글자만 보면 같은 브랜드의 다른 건물(北一硝子 三号館·見学硝子工房)을 같은 곳으로 지운다.
     """
+    rules = load_name_rules()
+    short = "(CASE WHEN length(a.k) <= length(b.k) THEN a.k ELSE b.k END)"
+    long = "(CASE WHEN length(a.k) <= length(b.k) THEN b.k ELSE a.k END)"
+    rest = (f"(CASE WHEN starts_with({long}, {short}) THEN substr({long}, length({short}) + 1) "
+            f"ELSE left({long}, length({long}) - length({short})) END)")
+    branch = " OR ".join(
+        f"({short} = name_key(regexp_extract({n}, '{_literal(p)}'))"
+        + ("" if region == "*" else f" AND b.country = '{_literal(region)}'") + ")"
+        for n in ("a.name", "b.name") for region, p in rules["branch_suffix"].items()) or "false"
+    am, bm = "split_part(coalesce(a.category, ''), ' > ', 1)", "split_part(coalesce(b.category, ''), ' > ', 1)"
+    unknown = f"('', '{policy.REVIEW_LABEL}')"
+    shop = ", ".join(f"'{m}'" for m in SHOP_MAJORS)
+    compatible = f"({am} = {bm} OR {am} IN {unknown} OR {bm} IN {unknown} OR ({am} IN ({shop}) AND {bm} IN ({shop})))"
+    generic = match_sql(short, "b.country", rules["generic"])
+    contained = (f"(starts_with({long}, {short}) OR ends_with({long}, {short})) "
+                 f"AND length({short}) >= CASE WHEN regexp_matches({short}, '^[a-z0-9]+$') "
+                 f"THEN {CONTAINS_MIN_LATIN_LENGTH} ELSE 2 END "
+                 f"AND NOT {generic} AND NOT {match_sql(rest, 'b.country', rules['part_marker'])} AND NOT coalesce({branch}, false)")
+    variant = (f"a.is_core AND b.is_core AND left(a.k, 3) = left(b.k, 3) AND length({short}) >= 3 AND NOT {generic} "
+               f"AND length({short}) >= {VARIANT_MIN_RATIO} * length({long}) "
+               f"AND regexp_matches({long}, array_to_string(string_split({short}, ''), '.*'))")
     con.execute(f"""
         CREATE OR REPLACE TABLE {table} AS
-        WITH b AS (
+        WITH fsq AS (
             SELECT f.* FROM {candidates} f
             WHERE f.source = 'fsq' AND f.exclusion IS NULL
               AND NOT EXISTS (SELECT 1 FROM {links} l WHERE l.b_id = f.source_id AND l.decision = 'AUTO')
         ),
         reviewed AS (SELECT DISTINCT b_id FROM {links} WHERE decision = 'REVIEW'),
-        a AS (
-            SELECT source_id, name_key, lat, lon, left(name_key, 3) AS prefix,
-                   floor(lat / {_CELL_LAT})::BIGINT AS cy, floor(lon / {_CELL_LON})::BIGINT AS cx
-            FROM {candidates} WHERE source = 'overture' AND {_LINKABLE} AND length(name_key) >= 2
+        ov AS (SELECT * FROM {candidates} c WHERE source = 'overture' AND {_LINKABLE} AND length(name_key) >= 2),
+        {_name_keys('ov_keys', 'ov')},
+        {_name_keys('fsq_keys', 'fsq')},
+        a_cells AS (SELECT *, floor(lat / {_CELL_LAT})::BIGINT AS cy, floor(lon / {_CELL_LON})::BIGINT AS cx FROM ov_keys),
+        b_cells AS (
+            SELECT k.*, floor(lat / {_CELL_LAT})::BIGINT + dy AS cy, floor(lon / {_CELL_LON})::BIGINT + dx AS cx
+            FROM fsq_keys k, (SELECT unnest([-2, -1, 0, 1, 2]) AS dy), (SELECT unnest([-2, -1, 0, 1, 2]) AS dx)
         ),
-        b_near AS (
-            SELECT b.source_id, b.name_key, b.lat, b.lon, left(b.name_key, 3) AS prefix, dy, dx,
-                   floor(b.lat / {_CELL_LAT})::BIGINT + dy AS cy, floor(b.lon / {_CELL_LON})::BIGINT + dx AS cx
-            FROM b, (SELECT unnest([-2, -1, 0, 1, 2]) AS dy), (SELECT unnest([-2, -1, 0, 1, 2]) AS dx)
-            WHERE length(b.name_key) >= 2
-        ),
-        same_prefix AS (
-            SELECT DISTINCT b.source_id FROM b_near b JOIN a USING (prefix, cy, cx)
+        -- 같음·앞뒤 포함·앞 세 글자가 같은 변형은 모두 앞 두 글자나 끝 두 글자가 같다.
+        near AS (
+            SELECT b.source_id AS b_id, a.source_id AS a_id, a.k = b.k AND a.is_core AND b.is_core AS same,
+                   (a.k = b.k AND a.is_core AND b.is_core)
+                   OR ({compatible} AND (a.k = b.k OR ({contained}) OR ({variant}))) AS hit
+            FROM b_cells b JOIN a_cells a ON a.cy = b.cy AND a.cx = b.cx
+             AND (left(a.k, 2) = left(b.k, 2) OR right(a.k, 2) = right(b.k, 2)) AND (a.is_core OR b.is_core)
             WHERE {_HAVERSINE_M} <= {DUPLICATE_MAX_METERS}
         ),
-        containing AS (
-            SELECT DISTINCT b.source_id FROM b_near b JOIN a USING (cy, cx)
-            WHERE abs(b.dy) <= 1 AND abs(b.dx) <= 1
-              AND (contains(a.name_key, b.name_key) OR contains(b.name_key, a.name_key))
-              AND {_HAVERSINE_M} <= {CONTAINS_MAX_METERS}
-        ),
-        near AS (SELECT source_id FROM same_prefix UNION SELECT source_id FROM containing)
-        SELECT b.source_id,
-               CASE WHEN b.source_id IN (SELECT b_id FROM reviewed) THEN 'review'
-                    WHEN b.source_id IN (SELECT source_id FROM near) THEN 'possible_duplicate'
+        hits AS (SELECT DISTINCT b_id, a_id, same FROM near WHERE hit),
+        duplicate AS (
+            SELECT b_id FROM hits
+            QUALIFY bool_or(same) OVER (PARTITION BY b_id)
+                 OR (count(DISTINCT a_id) OVER (PARTITION BY b_id) <= {CONTAINS_MAX_PARTNERS})
+        )
+        SELECT fsq.source_id,
+               CASE WHEN fsq.source_id IN (SELECT b_id FROM reviewed) THEN 'review'
+                    WHEN fsq.source_id IN (SELECT b_id FROM duplicate) THEN 'possible_duplicate'
                     ELSE 'only' END AS status
-        FROM b
+        FROM fsq
     """)
     return table
 
@@ -172,12 +233,16 @@ def wikidata_links(con, rows, candidates, wikidata_raw, table="wikidata_links", 
     """
     rows(키: source, source_id)마다 Wikidata 항목 하나. 열: source, source_id, qid, meters, rule.
       exact    : 이름 정확 키(악센트 접음)가 같은 가장 가까운 항목. 같은 이름의 신사·사찰이 흔해 가까운 것 하나만 남긴다.
+                 괄호 병기를 뗀 이름도 본다(鹿苑寺 (金閣寺) → 鹿苑寺). 같은 항목에 명소 행이 이어지면 이름을 딴 가게·식당 행은 잇지 않는다.
       contains : 정확 키로 이어진 행이 없는 항목은 CONTAINED_MAX_METERS 안에서 이름에 항목 이름을 품은 가장 가까운 행 하나에 잇는다.
                  정식 이름이 길게 붙은 명소(浅草観音金龍山浅草寺)를 잡고, 지명을 단 가게·식당과 부속 표지(中神門)는 잇지 않는다.
+                 이름이 항목 이름으로 끝나는 행을 먼저 고른다. 끝 낱말이 장소 종류라 京都タワー神社는 타워가 아니라 그 안의 신사다.
                  area_items(열 qid)에 든 지명 항목(市·町)은 시설 이름에 흔히 들어가서 포함 연결에 쓰지 않는다. 없으면 포함 연결을 하지 않는다.
     """
     areas = f"AND qid NOT IN (SELECT qid FROM {area_items})" if area_items else "AND false"
     shops = " OR ".join(f"starts_with(c.category, '{p}')" for p in CONTAINED_IGNORED_CATEGORIES)
+    stores = " OR ".join(f"starts_with(c.category, '{p}')" for p in NAMESAKE_STORE_CATEGORIES)
+    stores = f"({stores}) AND NOT (" + " OR ".join(f"starts_with(c.category, '{p}')" for p in NAMESAKE_STORE_EXCEPTIONS) + ")"
     part = match_sql("replace(a.k, b.k, '')", "a.country", load_name_rules()["part_marker"])
     con.execute(f"""
         CREATE OR REPLACE TABLE {table} AS
@@ -188,18 +253,23 @@ def wikidata_links(con, rows, candidates, wikidata_raw, table="wikidata_links", 
             WHERE label IS NOT NULL
         ),
         names AS (
-            SELECT DISTINCT r.source, r.source_id, c.lat, c.lon, c.country, strip_accents(name_key(n.value)) AS k,
-                   coalesce({shops}, false) AS shop,
+            SELECT DISTINCT r.source, r.source_id, c.lat, c.lon, c.country, strip_accents(name_key(v.value)) AS k,
+                   coalesce({shops}, false) AS shop, coalesce({stores}, false) AS store,
                    floor(c.lat / {_WIKI_CELL})::BIGINT + dy AS cy, floor(c.lon / {_WIKI_CELL})::BIGINT + dx AS cx
             FROM {rows} r JOIN {candidates} c USING (source, source_id), unnest(c.names) AS u(n),
+                 unnest(list_distinct([n.value, trim(regexp_replace(n.value, '[[:space:]]*[（(【［][^）)】］]*[）)】］]', ' ', 'g'))])) AS v(value),
                  (SELECT unnest([-1, 0, 1]) AS dy), (SELECT unnest([-1, 0, 1]) AS dx)
         ),
-        exact AS (
-            SELECT a.source, a.source_id, b.qid, {_HAVERSINE_M} AS meters
+        exact_any AS (
+            SELECT a.source, a.source_id, b.qid, a.store, {_HAVERSINE_M} AS meters
             FROM names a JOIN w b USING (k, cy, cx)
             WHERE length(a.k) >= 2
             QUALIFY row_number() OVER (PARTITION BY a.source, a.source_id ORDER BY meters, b.qid) = 1
                 AND meters <= {WIKIDATA_MAX_METERS}
+        ),
+        exact AS (
+            SELECT source, source_id, qid, meters FROM exact_any e
+            WHERE NOT (e.store AND e.qid IN (SELECT qid FROM exact_any WHERE NOT store))
         ),
         wc AS (
             SELECT qid, lat, lon, k, floor(lat / {_CONTAINED_CELL})::BIGINT AS cy, floor(lon / {_CONTAINED_CELL})::BIGINT AS cx
@@ -215,14 +285,14 @@ def wikidata_links(con, rows, candidates, wikidata_raw, table="wikidata_links", 
                  (SELECT unnest([-1, 0, 1]) AS dy), (SELECT unnest([-1, 0, 1]) AS dx)
         ),
         contained AS (
-            SELECT a.source, a.source_id, b.qid, {_HAVERSINE_M} AS meters
+            SELECT a.source, a.source_id, b.qid, {_HAVERSINE_M} AS meters, ends_with(a.k, b.k) AS head
             FROM nc a JOIN wc b USING (cy, cx)
             WHERE a.k <> b.k AND contains(a.k, b.k) AND NOT {part}
               AND NOT EXISTS (SELECT 1 FROM exact e WHERE e.source = a.source AND e.source_id = a.source_id)
         ),
         nearest_contained AS (
-            SELECT * FROM contained WHERE meters <= {CONTAINED_MAX_METERS}
-            QUALIFY row_number() OVER (PARTITION BY qid ORDER BY meters, source, source_id) = 1
+            SELECT * EXCLUDE (head) FROM contained WHERE meters <= {CONTAINED_MAX_METERS}
+            QUALIFY row_number() OVER (PARTITION BY qid ORDER BY head DESC, meters, source, source_id) = 1
         )
         SELECT * FROM (
             SELECT source, source_id, qid, meters, 'exact' AS rule FROM exact

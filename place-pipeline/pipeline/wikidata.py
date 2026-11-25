@@ -94,6 +94,53 @@ def write_area_qids(qids, out_path, fetch=None):
     return manifest
 
 
+# 가나 표기 이름(P1814). 한자 이름의 읽기라 한국어 표기를 규칙으로 만들 수 있다.
+_KANA_QUERY = """
+SELECT ?item ?kana WHERE {{
+  VALUES ?item {{ {items} }}
+  ?item wdt:P1814 ?kana .
+}}
+"""
+
+
+def kana_names(qids, fetch=None):
+    """qids 가운데 가나 표기 이름이 있는 항목 → 첫 가나 이름. 시간 초과한 묶음은 반으로 나눠 다시 묻는다."""
+    fetch = fetch or _Fetcher().run
+    qids = sorted(set(qids))
+    queue = [qids[i:i + AREA_BATCH] for i in range(0, len(qids), AREA_BATCH)]
+    found = {}
+    while queue:
+        batch = queue.pop()
+        try:
+            rows = fetch(_KANA_QUERY.format(items=" ".join(f"wd:{q}" for q in batch)))
+        except TileTooLarge:
+            if len(batch) == 1:
+                raise
+            queue += [batch[:len(batch) // 2], batch[len(batch) // 2:]]
+            continue
+        for b in rows:
+            found.setdefault(b["item"]["value"].rsplit("/", 1)[-1], b["kana"]["value"])
+    return found
+
+
+def write_kana_names(qids, out_path, fetch=None):
+    """kana_names 결과를 Parquet(열 qid, kana)과 manifest로 쓴다. 반환은 manifest."""
+    import duckdb
+
+    snapshot._check_path(out_path)
+    found = kana_names(qids, fetch)
+    con = duckdb.connect()
+    con.execute("CREATE TABLE k (qid VARCHAR, kana VARCHAR)")
+    con.executemany("INSERT INTO k VALUES (?, ?)", sorted(found.items()))
+    con.execute(f"COPY k TO '{out_path}' (FORMAT parquet)")
+    manifest = {"source": "wikidata", "license": "CC0-1.0", "property": "P1814", "asked": len(set(qids)),
+                "rows": len(found), "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "sha256": snapshot.sha256(out_path)}
+    with open(out_path + ".manifest.json", "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    return manifest
+
+
 class TileTooLarge(Exception):
     """칸 결과가 시간 안에 오지 않았다. 나눠서 다시 받는다."""
 

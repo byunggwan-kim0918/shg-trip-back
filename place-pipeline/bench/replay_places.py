@@ -18,7 +18,7 @@ import sys
 import duckdb
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from pipeline import candidates  # noqa: E402
+from pipeline import budget_policy, candidates, korean_names  # noqa: E402
 from pipeline.metrics import _HAVERSINE  # noqa: E402
 
 CONTAINER = "shg-budget-replay"
@@ -33,7 +33,7 @@ COLUMNS = ("id", "name", "address", "latitude", "longitude", "category", "region
            "wikidata_id", "wikidata_sitelinks") + ENRICHED
 
 
-def _replay_out(budget_db, country_db, gold_tsv, enriched_csv):
+def _replay_out(budget_db, country_db, gold_tsv, enriched_csv, gold_names=True, rule_names=False):
     """재생 여행지 반경 안의 기준 선별 행(replay_out). id는 (source, source_id) 순서라 같은 입력이면 같다."""
     con = duckdb.connect(budget_db, read_only=True)
     candidates.register_functions(con)
@@ -46,7 +46,7 @@ def _replay_out(budget_db, country_db, gold_tsv, enriched_csv):
     con.executemany("INSERT INTO gold_ko VALUES (?, ?)", list(gold.items()))
     near = _HAVERSINE.replace("a.", "d.").replace("b.", "s.")
     con.execute(f"""
-        CREATE TEMP TABLE replay_rows AS
+        CREATE OR REPLACE TEMP TABLE replay_rows AS
         WITH s AS (
             SELECT s.source, s.source_id, s.name, s.lat, s.lon, s.pool_category,
                    d.name AS region, {near} / 1000 AS km_from, d.km
@@ -56,6 +56,8 @@ def _replay_out(budget_db, country_db, gold_tsv, enriched_csv):
         SELECT * EXCLUDE (km_from, km) FROM s WHERE km_from <= km
         QUALIFY row_number() OVER (PARTITION BY source, source_id ORDER BY km_from / km) = 1
     """)
+    if rule_names:
+        _rule_names(con)
     con.execute(f"""
         CREATE TEMP TABLE replay_out AS
         SELECT row_number() OVER (ORDER BY r.source, r.source_id) AS id, r.source, r.source_id,
@@ -63,7 +65,8 @@ def _replay_out(budget_db, country_db, gold_tsv, enriched_csv):
                coalesce(r.pool_category, 'Unknown') AS category, r.region,
                CASE WHEN r.source = 'fsq' THEN r.source_id END AS fsq_place_id,
                e.wd_qid AS wikidata_id, e.wd_sitelinks AS wikidata_sitelinks,
-               coalesce(p.name_ko, g.ko, e.wd_name_ko) AS name_ko,
+               coalesce(p.name_ko, {"g.ko" if gold_names else "NULL"}, e.wd_name_ko, {"rn.rule_ko" if rule_names else "NULL"})
+                   AS name_ko,
                p.* EXCLUDE (fsq_place_id, name_ko)
         FROM replay_rows r
         LEFT JOIN jp.candidates c USING (source, source_id)
@@ -73,8 +76,44 @@ def _replay_out(budget_db, country_db, gold_tsv, enriched_csv):
                                      ELSE list_filter(c.links, l -> l.source = 'fsq')[1].id END
         LEFT JOIN (SELECT d.source, d.source_id, any_value(k.ko) AS ko FROM draft_places d JOIN gold_ko k USING (place_key)
                    GROUP BY ALL) g USING (source, source_id)
+        {"LEFT JOIN rule_names rn USING (source, source_id)" if rule_names else ""}
     """)
     return con
+
+
+WIKIDATA = "build/country/raw/wikidata/japan.parquet"
+AREA_QIDS = "build/country/raw/wikidata/japan-area-qids.parquet"
+KANA = "build/country/raw/wikidata/japan-kana-replay.parquet"
+
+
+def _rule_names(con, rows="replay_rows", kana=None):
+    """재생 행마다 규칙 한국어 이름(rule_names). Wikidata 대표 항목의 가나 이름(P1814) → 영어 라벨 → 출처 영어 이름
+    → 괄호 병기 → 이름 자체 순으로 옮기고, 없으면 가나 이름을 옮긴다."""
+    con.create_function("ko_kana", korean_names.from_kana, ["VARCHAR"], "VARCHAR", null_handling="special")
+    con.create_function("ko_romaji", korean_names.from_romaji, ["VARCHAR"], "VARCHAR", null_handling="special")
+    kana = kana or KANA
+    con.execute(f"CREATE OR REPLACE TEMP TABLE rr AS SELECT b.* FROM base b JOIN {rows} USING (source, source_id)")
+    budget_policy.item_fame(con, "rr", f"read_parquet('{WIKIDATA}')", f"(SELECT qid FROM read_parquet('{AREA_QIDS}'))")
+    con.execute(f"""
+        CREATE OR REPLACE TEMP TABLE rule_names AS
+        WITH wd AS (SELECT f.source, f.source_id, any_value(w.en) AS wd_en, any_value(k.kana) AS wd_kana
+                    FROM budget_item_fame f
+                    JOIN read_parquet('{WIKIDATA}') w USING (qid) JOIN rr r USING (source, source_id)
+                    LEFT JOIN read_parquet('{kana}') k USING (qid)
+                    -- 식음료·매장 행은 브랜드·회사 항목과 이름이 같아 회사 이름을 받는다.
+                    WHERE f.best AND r.role IN ('destination', 'experience', 'general')
+                      AND NOT starts_with(coalesce(r.pool_category, ''), 'Retail') GROUP BY ALL),
+        src AS (SELECT r.source, r.source_id, r.name, wd.wd_en, wd.wd_kana,
+                       list_filter(c.names, n -> n.lang = 'en')[1].value AS en_name,
+                       nullif(regexp_extract(r.name, '[(（]([A-Za-z][^)）]*)[)）]', 1), '') AS paren
+                FROM rr r LEFT JOIN wd USING (source, source_id)
+                LEFT JOIN jp.candidates c USING (source, source_id))
+        SELECT source, source_id,
+               coalesce(ko_kana(wd_kana), ko_romaji(wd_en), ko_romaji(en_name), ko_romaji(paren),
+                        CASE WHEN regexp_matches(name, '^[A-Za-z][A-Za-z\s\-.''’ōūāēī]*$') THEN ko_romaji(name) END,
+                        ko_kana(name)) AS rule_ko
+        FROM src
+    """)
 
 
 def policies(budget_db, country_db, gold_tsv, names, work):
@@ -106,6 +145,18 @@ def _psql_with_copy(path, before, target, after):
     return done.stdout.strip().splitlines()[-1]
 
 
+def names(budget_db, country_db, gold_tsv, work, gold_names, rule_names=False):
+    """적재한 행의 한국어 이름만 다시 정한다(정답 표 이름을 넣거나 뺀다). 바뀐 행은 임베딩 문장이 달라져 임베딩을 비운다."""
+    con = _replay_out(budget_db, country_db, gold_tsv, os.path.join(work, "prodcopy-enriched.csv"), gold_names,
+                      rule_names)
+    path = os.path.join(work, "replay-names-ko.csv")
+    con.execute(f"COPY (SELECT id, name, name_ko FROM replay_out) TO '{path}' (HEADER, DELIMITER ',')")
+    return _psql_with_copy(path, "CREATE TEMP TABLE c (id BIGINT, name TEXT, name_ko TEXT);", "c (id, name, name_ko)",
+                           "WITH u AS (UPDATE places p SET name_ko = c.name_ko, embedding = NULL FROM c "
+                           "WHERE p.id = c.id AND p.name = c.name AND p.name_ko IS DISTINCT FROM c.name_ko RETURNING 1) "
+                           "SELECT count(*) FROM u")
+
+
 def load(budget_db, country_db, gold_tsv, policies, work):
     os.makedirs(work, exist_ok=True)
     enriched_csv = os.path.join(work, "prodcopy-enriched.csv")
@@ -129,6 +180,18 @@ def load(budget_db, country_db, gold_tsv, policies, work):
     _copy(ids_csv, "replay_policy (place_id, policy)")
     _psql("SELECT setval('places_id_seq', (SELECT max(id) FROM places)); ANALYZE places;")
     return counts
+
+
+def exclude(budget_db, country_db, gold_tsv, work, table):
+    """budget_db의 table(source, source_id) 행을 모든 정책·카탈로그에서 뺀다(꺼진 행으로 둔다)."""
+    con = _replay_out(budget_db, country_db, gold_tsv, os.path.join(work, "prodcopy-enriched.csv"))
+    path = os.path.join(work, "replay-exclude.csv")
+    con.execute(f"COPY (SELECT o.id, o.name FROM replay_out o JOIN {table} t USING (source, source_id)) TO '{path}' (HEADER)")
+    return _psql_with_copy(path, "CREATE TEMP TABLE c (id BIGINT, name TEXT);", "c (id, name)",
+                           "WITH d AS (DELETE FROM replay_policy r USING c, places p WHERE r.place_id = c.id "
+                           "AND p.id = c.id AND p.name = c.name RETURNING r.place_id), "
+                           "u AS (UPDATE places SET active = false WHERE id IN (SELECT id FROM c) RETURNING 1) "
+                           "SELECT (SELECT count(DISTINCT place_id) FROM d) || ' rows'")
 
 
 def catalog(work, out_dir):
@@ -158,15 +221,11 @@ def catalog(work, out_dir):
 
 
 def activate(policy):
-    """policy 행과 적재 밖 행(관문 등)만 켠다. policy가 all이면 적재한 행을 모두 켠다."""
-    if policy == "all":
-        sql = "UPDATE places SET active = true WHERE NOT active"
-    else:
-        sql = (f"UPDATE places p SET active = (p.id IN (SELECT place_id FROM replay_policy WHERE policy = '{policy}') "
-               f"OR p.id NOT IN (SELECT place_id FROM replay_policy)) "
-               f"WHERE active IS DISTINCT FROM (p.id IN (SELECT place_id FROM replay_policy WHERE policy = '{policy}') "
-               f"OR p.id NOT IN (SELECT place_id FROM replay_policy))")
-    _psql(sql + "; ANALYZE places;")
+    """policy 행과 관문(source='gateway')만 켠다. policy가 all이면 기준 선별 행(base)과 관문을 켠다.
+    정책 목록에서 뺀 행(exclude)은 어느 정책에서도 켜지지 않는다."""
+    chosen = "base" if policy == "all" else policy
+    on = f"(p.source = 'gateway' OR p.id IN (SELECT place_id FROM replay_policy WHERE policy = '{chosen}'))"
+    _psql(f"UPDATE places p SET active = {on} WHERE p.active IS DISTINCT FROM {on}; ANALYZE places;")
     return _psql("SELECT region || ':' || count(*) FROM places WHERE active GROUP BY region ORDER BY 1")
 
 
@@ -218,6 +277,19 @@ def main():
     q.add_argument("--gold", default="eval/jp-draft-places.tsv")
     q.add_argument("--policies", required=True)
     q.add_argument("--work", default="build/replay")
+    n = sub.add_parser("names")
+    n.add_argument("--budget-db", default="build/budget/budget.duckdb")
+    n.add_argument("--country-db", default="build/country/japan.duckdb")
+    n.add_argument("--gold", default="eval/jp-draft-places.tsv")
+    n.add_argument("--work", default="build/replay")
+    n.add_argument("--without-gold", action="store_true", help="정답 표 한국어 이름을 넣지 않는다")
+    n.add_argument("--rule-names", action="store_true", help="이름이 없는 행에 규칙 한국어 이름(korean_names)을 넣는다")
+    x = sub.add_parser("exclude")
+    x.add_argument("--budget-db", default="build/budget/budget.duckdb")
+    x.add_argument("--country-db", default="build/country/japan.duckdb")
+    x.add_argument("--gold", default="eval/jp-draft-places.tsv")
+    x.add_argument("--work", default="build/replay")
+    x.add_argument("--table", required=True)
     k = sub.add_parser("catalog")
     k.add_argument("--work", default="build/replay")
     k.add_argument("--out", default="build/replay/catalog")
@@ -228,6 +300,10 @@ def main():
         print(load(args.budget_db, args.country_db, args.gold, args.policies.split(","), args.work))
     elif args.command == "policies":
         print(policies(args.budget_db, args.country_db, args.gold, args.policies.split(","), args.work))
+    elif args.command == "names":
+        print(names(args.budget_db, args.country_db, args.gold, args.work, not args.without_gold, args.rule_names))
+    elif args.command == "exclude":
+        print(exclude(args.budget_db, args.country_db, args.gold, args.work, args.table))
     elif args.command == "catalog":
         print(catalog(args.work, args.out))
     else:
