@@ -114,4 +114,38 @@ class PlaceInvalidationJobTest {
         assertThat(PlaceFingerprints.factsInput("大濠公園 日本庭園", category, new BigDecimal("33.58601"),
                 new BigDecimal("130.37601"))).isNotEqualTo(facts);
     }
+
+    private static PlaceInvalidationJob.Row named(long id, String name, String nameKo, String country) {
+        String category = "Community and Government > Spiritual Center > Shinto Shrine";
+        String enrichFp = PlaceFingerprints.enrichInput(name, category, "Fukuoka", country);
+        String textFp = PlaceFingerprints.embeddingText(EmbeddingTextBuilder.buildText(Place.builder().name(name)
+                .nameKo(nameKo).category(category).region("Fukuoka").build()));
+        return new PlaceInvalidationJob.Row(id, name, nameKo, category, "Fukuoka", country, LAT, LNG, null, null,
+                true, true, enrichFp, textFp, false, null);
+    }
+
+    @Test
+    @DisplayName("해외 한국어 이름이 깨졌으면 보강과 이름만 비워 다시 묻게 하고(사실·묶음은 남긴다), 맞는 이름은 그대로 둔다")
+    void brokenNameKoIsClearedForReEnrichment() {
+        var broken = named(1, "六甲八幡神社", "로ккō 하치만 신사", "JP");
+        var good = named(2, "諏訪神社", "스와 신사", "JP");
+        var englishLabel = named(3, "The Okura Tokyo", "The Okura Tokyo", "JP");
+        var korean = named(4, "카페 소honke", "카페 소honke", "KR");
+
+        var d = PlaceInvalidationJob.decide(List.of(broken, good, englishLabel, korean), true);
+
+        assertThat(d.reaskNameKo()).containsExactly(1L);
+        assertThat(d.invalidateEnrich()).isEmpty();
+        assertThat(d.invalidateEmbedding()).isEmpty();
+        assertThat(d.invalidateFacts()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("적재 전(adopt)에는 깨진 이름도 비우지 않는다")
+    void adoptLeavesBrokenNameKo() {
+        var d = PlaceInvalidationJob.decide(List.of(named(1, "六甲八幡神社", "로ккō 하치만 신사", "JP")), false);
+
+        assertThat(d.invalidateEnrich()).isEmpty();
+        assertThat(d.reaskNameKo()).isEmpty();
+    }
 }

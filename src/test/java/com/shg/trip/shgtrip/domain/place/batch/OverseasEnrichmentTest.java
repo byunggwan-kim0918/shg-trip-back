@@ -52,18 +52,63 @@ class OverseasEnrichmentTest {
     @Test
     @DisplayName("한국어 이름만 받는다: 괄호 병기는 떼고, 한자·가나가 남거나 이름이 아닌 말·자리표시자는 버린다")
     void nameKoValidation() {
-        assertThat(OverseasEnrichment.nameKo(new TextNode(" 기요미즈데라 "))).isEqualTo("기요미즈데라");
-        assertThat(OverseasEnrichment.nameKo(new TextNode("\"스린 야시장\""))).isEqualTo("스린 야시장");
-        assertThat(OverseasEnrichment.nameKo(new TextNode("센소지(浅草寺)"))).isEqualTo("센소지");
-        assertThat(OverseasEnrichment.nameKo(new TextNode("타이베이 101"))).isEqualTo("타이베이 101");
-        assertThat(OverseasEnrichment.nameKo(new TextNode("센소지 浅草寺"))).isNull();
-        assertThat(OverseasEnrichment.nameKo(new TextNode("清水寺"))).isNull();
-        assertThat(OverseasEnrichment.nameKo(new TextNode("한국어 이름"))).isNull();
-        assertThat(OverseasEnrichment.nameKo(new TextNode("없음"))).isNull();
-        assertThat(OverseasEnrichment.nameKo(new TextNode("알 수 없음"))).isNull();
-        assertThat(OverseasEnrichment.nameKo(new TextNode("..."))).isNull();
-        assertThat(OverseasEnrichment.nameKo(new TextNode("가".repeat(61)))).isNull();
-        assertThat(OverseasEnrichment.nameKo(null)).isNull();
+        assertThat(OverseasEnrichment.nameKo(new TextNode(" 기요미즈데라 "), null)).isEqualTo("기요미즈데라");
+        assertThat(OverseasEnrichment.nameKo(new TextNode("\"스린 야시장\""), null)).isEqualTo("스린 야시장");
+        assertThat(OverseasEnrichment.nameKo(new TextNode("센소지(浅草寺)"), null)).isEqualTo("센소지");
+        assertThat(OverseasEnrichment.nameKo(new TextNode("타이베이 101"), null)).isEqualTo("타이베이 101");
+        assertThat(OverseasEnrichment.nameKo(new TextNode("센소지 浅草寺"), null)).isNull();
+        assertThat(OverseasEnrichment.nameKo(new TextNode("清水寺"), null)).isNull();
+        assertThat(OverseasEnrichment.nameKo(new TextNode("한국어 이름"), null)).isNull();
+        assertThat(OverseasEnrichment.nameKo(new TextNode("없음"), null)).isNull();
+        assertThat(OverseasEnrichment.nameKo(new TextNode("알 수 없음"), null)).isNull();
+        assertThat(OverseasEnrichment.nameKo(new TextNode("..."), null)).isNull();
+        assertThat(OverseasEnrichment.nameKo(new TextNode("가".repeat(61)), null)).isNull();
+        assertThat(OverseasEnrichment.nameKo(null, null)).isNull();
+    }
+
+    private static String nameKo(String modelName, String originalName) {
+        return OverseasEnrichment.nameKo(new TextNode(modelName), originalName);
+    }
+
+    @Test
+    @DisplayName("원문에 없는 외국 글자가 섞인 이름은 버린다(모델 출력이 깨진 것이다)")
+    void nameKoRejectsCorruptedLetters() {
+        assertThat(nameKo("로ккō 하치만 신사", "六甲八幡神社")).isNull();
+        assertThat(nameKo("고마쓰안 소honke", "小松庵総本家")).isNull();
+        assertThat(nameKo("부processing", "仏眼寺")).isNull();
+        assertThat(nameKo("사न", "粲")).isNull();
+        assertThat(nameKo("카shō 산젠 마쓰시마 테라마치코지점", "菓匠三全 松島寺町小路店")).isNull();
+        assertThat(nameKo("joban 온천", "常磐湯")).isNull();
+    }
+
+    @Test
+    @DisplayName("원문에 있는 로마자·기호와 가타카나 약어는 이름의 일부로 받는다")
+    void nameKoKeepsLettersFromOriginal() {
+        assertThat(nameKo("PokéPark 간토", "PokéPark Kanto")).isEqualTo("PokéPark 간토");
+        assertThat(nameKo("ØL 라 카비나", "ØL La Cabina")).isEqualTo("ØL 라 카비나");
+        assertThat(nameKo("스튜디오 π 유리 공방", "Studio π glass factory")).isEqualTo("스튜디오 π 유리 공방");
+        assertThat(nameKo("JA 교류광장", "ＪＡ交流ひろば")).isEqualTo("JA 교류광장");
+        assertThat(nameKo("DI 아사히카와", "ディーアイあさひかわ")).isEqualTo("DI 아사히카와");
+        assertThat(nameKo("골프5 고쿠라 히가시 IC점", "ゴルフ５小倉東インター店")).isEqualTo("골프5 고쿠라 히가시 IC점");
+        assertThat(nameKo("덴진 주오 공원", "天神中央公園")).isEqualTo("덴진 주오 공원");
+    }
+
+    @Test
+    @DisplayName("이름 칸에 붙은 설명(줄표·쌍점)은 원문에 그런 기호가 없으면 버린다")
+    void nameKoRejectsRemarks() {
+        assertThat(nameKo("본점 아님 — 본문: 범승도도점", "凡僧都島店")).isNull();
+        assertThat(nameKo("카:로노타키", "甘露の滝")).isNull();
+        assertThat(nameKo("워너 브라더스 스튜디오 투어 도쿄 – 메이킹 오브 해리 포터",
+                "ワーナー ブラザース スタジオツアー東京 - メイキング・オブ・ハリー・ポッター"))
+                .isEqualTo("워너 브라더스 스튜디오 투어 도쿄 – 메이킹 오브 해리 포터");
+    }
+
+    @Test
+    @DisplayName("원문 괄호를 옮긴 한글 괄호는 부속 시설 이름이라 남기고, 모델이 붙인 구분 괄호는 뗀다")
+    void nameKoKeepsTranslatedBracketOfOriginal() {
+        assertThat(nameKo("이모세노타키 (오타키)", "妹背の滝（雄滝）")).isEqualTo("이모세노타키 오타키");
+        assertThat(nameKo("나카노 역 (도쿄 도)", "中野駅")).isEqualTo("나카노 역");
+        assertThat(nameKo("센소지(浅草寺)", "浅草寺 (Senso-ji)")).isEqualTo("센소지");
     }
 
     @Test

@@ -951,7 +951,7 @@ public class BatchEnrichScheduler {
                     : DiningEnrichment.cuisineOf(dining.tags(), place.getCategory());
             place.assignRole(dining.placeRole(), cuisine);
             place.rateFame(fame);
-            if (overseas) place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko")));
+            if (overseas) place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko"), place.getName()));
             return true;
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             log.warn("보강 데이터 파싱 실패 - placeId={}, error={}", place.getId(), e.getMessage());

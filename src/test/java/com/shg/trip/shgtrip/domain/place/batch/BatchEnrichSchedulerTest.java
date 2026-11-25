@@ -787,6 +787,19 @@ class BatchEnrichSchedulerTest {
     }
 
     @Test
+    @DisplayName("해외 결과의 부속 시설 이름은 괄호를 떼고 남겨 큰 장소 이름을 받지 않고, 깨진 이름은 저장하지 않는다")
+    void applyEnrichment_overseasNameKoChecksOriginal() {
+        Place fall = overseas("妹背の滝（雄滝）", TEMPLE, null);
+        Place shrine = overseas("六甲八幡神社", TEMPLE, null);
+
+        scheduler.applyEnrichment(fall, "{\"name_ko\":\"이모세노타키 (오타키)\",\"tags\":[\"폭포\"]}");
+        scheduler.applyEnrichment(shrine, "{\"name_ko\":\"로ккō 하치만 신사\",\"tags\":[\"신사\"]}");
+
+        assertThat(fall.getNameKo()).isEqualTo("이모세노타키 오타키");
+        assertThat(shrine.getNameKo()).isNull();
+    }
+
+    @Test
     @DisplayName("해외 식당 결과: 요리 이름으로 음식 종류를 정하고 name_ko를 채운다")
     void applyEnrichment_overseasDining() {
         Place place = overseas("一蘭 祇園店", RAMEN, null);

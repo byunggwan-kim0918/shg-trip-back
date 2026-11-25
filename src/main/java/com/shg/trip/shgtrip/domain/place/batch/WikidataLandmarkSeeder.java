@@ -41,7 +41,8 @@ import java.util.Set;
  * <p>클래스는 확실한 것만 둔다. 상위 클래스로 넓게 잡으면(예: 건축물) 아파트·관공서가 같이 들어온다.
  *
  * <p>해외는 {@link Destinations}의 여행지마다 반경 안을 조회하고, 추출기와 같은 규칙으로 가장 가까운 여행지에만
- * 넣는다. 이름은 현지 라벨, {@code name_ko}는 한국어 라벨이다. 도시·행정구역 항목, 국가(P17)가 여행지 나라와
+ * 넣는다. 이름은 현지 라벨, {@code name_ko}는 이름 검사({@link OverseasEnrichment#nameKo})를 거친 한국어 라벨이다.
+ * 도시·행정구역 항목, 국가(P17)가 여행지 나라와
  * 다른 항목(샤먼 반경의 진먼 섬), 홍콩·마카오 항목은 뺀다.
  */
 @Slf4j
@@ -337,7 +338,8 @@ public class WikidataLandmarkSeeder {
             List<String> names = new ArrayList<>(item.labels().values());
             names.addAll(item.aliases());
             result.add(new Landmark(lm.qid(), item.label(), lm.sitelinks(), lm.lat(), lm.lon(), lm.category(),
-                    country, lm.address(), lm.classRank(), item.koLabel(), List.copyOf(names)));
+                    country, lm.address(), lm.classRank(), OverseasEnrichment.nameKo(item.koLabel(), item.label()),
+                    List.copyOf(names)));
         }
         return result;
     }

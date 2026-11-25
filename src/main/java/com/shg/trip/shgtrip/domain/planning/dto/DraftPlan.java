@@ -27,20 +27,48 @@ public record DraftPlan(String concept, List<Want> wants, List<Day> days) {
      * @param time    sunrise·morning·afternoon·evening·night. 시각이 상관없으면 null
      * @param satisfy 이 요구를 채우는 실제 장소·식당 이름. 메뉴 정보가 있는 식당은 메뉴로 다시 확인한다
      * @param localNames place의 현지어 표기(東茶屋街). 장소를 찾는 검색어일 뿐 신원 근거가 아니다. 없으면 빈 목록
+     * @param foodAliases food와 같은 음식의 다른 표기(현지어 "明太子", 한국에서 부르는 "명란"). 없으면 빈 목록
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Want(String id, String kind, String text, String place, String food, String time,
                        List<String> satisfy,
                        @JsonProperty("local_names") @JsonFormat(with = JsonFormat.Feature.ACCEPT_SINGLE_VALUE_AS_ARRAY)
-                       List<String> localNames) {
+                       List<String> localNames,
+                       @JsonProperty("food_aliases") @JsonFormat(with = JsonFormat.Feature.ACCEPT_SINGLE_VALUE_AS_ARRAY)
+                       List<String> foodAliases) {
+
+        /** 표기마다 근처 식당을 한 번씩 찾아, 모델이 많이 내면 질의가 그만큼 는다. */
+        static final int MAX_FOOD_ALIASES = 4;
+        /** 20자를 넘는 표기는 설명문이라 식당 이름·메뉴에 들어 있지 않다. */
+        static final int MAX_FOOD_ALIAS_CHARS = 20;
 
         public Want {
             localNames = cleanLocalNames(place, localNames);
+            foodAliases = foodAliases(food == null || food.isBlank() ? text : food, foodAliases);
         }
 
         public Want(String id, String kind, String text, String place, String food, String time,
                     List<String> satisfy) {
-            this(id, kind, text, place, food, time, satisfy, List.of());
+            this(id, kind, text, place, food, time, satisfy, List.of(), List.of());
+        }
+
+        /**
+         * 식당 이름·메뉴 비교 키가 같은 표기는 하나만 남긴다. 음식 이름에 들어 있는 표기("돈코츠 라멘"의 "라멘")는 더 넓은 말이라
+         * 그 종류의 식당이 모두 요청 음식을 내는 것이 된다. food가 비면 짓기가 요청 문장으로 음식을 찾으므로 문장과 비교한다.
+         */
+        private static List<String> foodAliases(String food, List<String> aliases) {
+            if (aliases == null) return List.of();
+            String foodKey = PlaceNames.exactKey(food);
+            Set<String> seen = new HashSet<>();
+            return aliases.stream()
+                    .filter(a -> a != null && !a.isBlank())
+                    .map(String::strip)
+                    .filter(a -> a.length() <= MAX_FOOD_ALIAS_CHARS)
+                    .filter(a -> {
+                        String key = PlaceNames.exactKey(a);
+                        return key.length() >= 2 && !foodKey.contains(key) && seen.add(key);
+                    })
+                    .limit(MAX_FOOD_ALIASES).toList();
         }
     }
 

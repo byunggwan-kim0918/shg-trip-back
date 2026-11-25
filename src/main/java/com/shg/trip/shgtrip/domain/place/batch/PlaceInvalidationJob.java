@@ -29,6 +29,8 @@ import java.util.List;
  *   빈 행은 scripts/eval/place-facts.py를 손으로 돌려 운영에 복사할 때까지 사실 없이 생성된다.</li>
  * </ul>
  * 지문이 비어 있는 행은 지금 값으로 채운다. 옛 보강 설명과 새 이름이 섞인 임베딩을 만들지 않으려고 보강을 비울 때 설명·태그도 비운다.
+ * 해외 한국어 이름이 이름 검사({@link OverseasEnrichment#nameKo})를 통과하지 못하면 이름만 비우고 보강을 다시 묻는다.
+ * 원문은 그대로라 역할·태그·장소 사실·같은 장소 묶음은 남긴다.
  */
 @Slf4j
 @Component
@@ -46,11 +48,12 @@ public class PlaceInvalidationJob {
     private final NamedParameterJdbcTemplate namedJdbc;
     private final TransactionTemplate transactionTemplate;
 
-    record Counts(int stamped, int enrichInvalidated, int embeddingInvalidated, int factsInvalidated, int unmerged) {
+    record Counts(int stamped, int enrichInvalidated, int embeddingInvalidated, int factsInvalidated, int unmerged,
+                  int nameKoReasked) {
         Counts plus(Counts o) {
             return new Counts(stamped + o.stamped, enrichInvalidated + o.enrichInvalidated,
                     embeddingInvalidated + o.embeddingInvalidated, factsInvalidated + o.factsInvalidated,
-                    unmerged + o.unmerged);
+                    unmerged + o.unmerged, nameKoReasked + o.nameKoReasked);
         }
     }
 
@@ -63,14 +66,14 @@ public class PlaceInvalidationJob {
 
     public Counts run() {
         Counts total = sweep(true);
-        log.info("[PlaceInvalidation] 지문 채움 {}건, 보강 다시 {}건, 임베딩 다시 {}건, 장소 사실 다시 {}건, 묶음 풀림 {}건",
-                total.stamped(), total.enrichInvalidated(), total.embeddingInvalidated(), total.factsInvalidated(),
-                total.unmerged());
+        log.info("[PlaceInvalidation] 지문 채움 {}건, 보강 다시 {}건, 깨진 한국어 이름 다시 묻기 {}건, 임베딩 다시 {}건, "
+                        + "장소 사실 다시 {}건, 묶음 풀림 {}건", total.stamped(), total.enrichInvalidated(),
+                total.nameKoReasked(), total.embeddingInvalidated(), total.factsInvalidated(), total.unmerged());
         return total;
     }
 
     private Counts sweep(boolean invalidate) {
-        Counts total = new Counts(0, 0, 0, 0, 0);
+        Counts total = new Counts(0, 0, 0, 0, 0, 0);
         long afterId = 0;
         while (true) {
             List<Row> rows = jdbcTemplate.query("""
@@ -92,13 +95,18 @@ public class PlaceInvalidationJob {
                BigDecimal latitude, BigDecimal longitude, List<String> tags, String description, boolean enriched,
                boolean embedded, String enrichFp, String textFp, boolean hasFacts, String factsFp) {}
 
-    /** 한 페이지의 판정. 계산과 쓰기를 나눠 판정 규칙만 단위 테스트로 본다. */
+    /**
+     * 한 페이지의 판정. 계산과 쓰기를 나눠 판정 규칙만 단위 테스트로 본다.
+     *
+     * @param reaskNameKo 한국어 이름을 비우고 보강을 다시 물을 행(깨진 이름)
+     */
     record Decisions(List<Object[]> stampEnrich, List<Object[]> stampText, List<Object[]> stampFacts,
-                     List<Long> invalidateEnrich, List<Long> invalidateEmbedding, List<Long> invalidateFacts) {}
+                     List<Long> invalidateEnrich, List<Long> invalidateEmbedding, List<Long> invalidateFacts,
+                     List<Long> reaskNameKo) {}
 
     static Decisions decide(List<Row> rows, boolean invalidate) {
         Decisions d = new Decisions(new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(),
-                new ArrayList<>(), new ArrayList<>());
+                new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
         for (Row r : rows) {
             String enrichFp = PlaceFingerprints.enrichInput(r.name(), r.category(), r.region(), r.country());
             boolean enrichChanged = false;
@@ -107,6 +115,9 @@ public class PlaceInvalidationJob {
                     d.stampEnrich().add(new Object[]{enrichFp, r.id()});
                 } else if (invalidate && !r.enrichFp().equals(enrichFp)) {
                     d.invalidateEnrich().add(r.id());
+                    enrichChanged = true;
+                } else if (invalidate && brokenNameKo(r)) {
+                    d.reaskNameKo().add(r.id());
                     enrichChanged = true;
                 }
             }
@@ -154,6 +165,16 @@ public class PlaceInvalidationJob {
                     """, ids);
             factsDeleted += namedJdbc.update("DELETE FROM place_facts WHERE place_id IN (:ids)", ids);
         }
+        if (!d.reaskNameKo().isEmpty()) {
+            // 역할을 비우면 다시 보강되기 전까지 같은 장소 판정 쌍에서 빠져 묶음이 풀린다. 비방문 행은 보강 대상이 아니다.
+            namedJdbc.update("""
+                    UPDATE places SET name_ko = NULL, enrich_attempts = 0,
+                        enriched_at = CASE WHEN place_role = 'NOT_VISITABLE' THEN enriched_at END,
+                        enrich_input_fp = CASE WHEN place_role = 'NOT_VISITABLE' THEN enrich_input_fp END,
+                        embedding = NULL, embedding_text_fp = NULL, updated_at = now()
+                    WHERE id IN (:ids)
+                    """, new MapSqlParameterSource("ids", d.reaskNameKo()));
+        }
         if (!d.invalidateEmbedding().isEmpty()) {
             namedJdbc.update("UPDATE places SET embedding = NULL, embedding_text_fp = NULL WHERE id IN (:ids)",
                     new MapSqlParameterSource("ids", d.invalidateEmbedding()));
@@ -164,7 +185,18 @@ public class PlaceInvalidationJob {
         }
         int stamped = d.stampEnrich().size() + d.stampText().size() + d.stampFacts().size();
         return new Counts(stamped, d.invalidateEnrich().size(), d.invalidateEmbedding().size(), factsDeleted,
-                unmerged);
+                unmerged, d.reaskNameKo().size());
+    }
+
+    /**
+     * 저장된 한국어 이름이 지금 검사로는 받지 않을 값인지. 한글이 없는 이름(Wikidata 영어 라벨 "The Okura Tokyo")은
+     * 보지 않는다. 다시 채우는 모델 이름·Wikidata 라벨도 같은 검사를 거치므로 같은 행을 매번 다시 묻지 않는다.
+     */
+    static boolean brokenNameKo(Row r) {
+        if (r.nameKo() == null || !OverseasEnrichment.isOverseas(r.country())) return false;
+        boolean hangul = r.nameKo().codePoints()
+                .anyMatch(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HANGUL);
+        return hangul && OverseasEnrichment.nameKo(r.nameKo(), r.name()) == null;
     }
 
     /** EmbeddingTextBuilder가 읽는 필드만 채운 장소. 임베딩 배치와 같은 텍스트를 만들어야 지문이 맞는다. */

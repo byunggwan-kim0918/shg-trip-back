@@ -53,18 +53,20 @@ public record TripConditions(List<Want> wants, Map<String, Integer> cityDays, Li
      * @param required 사용자가 꼭 갈 곳·꼭 할 경험으로 직접 정한 요구인지. 초안이 요청 문장에서 읽은 요구는 false다
      * @param accepted 넣지 못한다는 것을 대화에서 듣고도 그대로 진행하기로 했는지
      * @param localNames 채우는 장소의 현지어 표기. 장소 원래 이름과 정확히 같을 때만 채운 것으로 본다
+     * @param foodAliases food와 같은 음식의 다른 표기. 식당 이름·메뉴에 이 중 하나가 있어도 채운 것으로 본다
      */
     public record Want(String text, String timing, List<String> satisfy, String food, Reach reach,
-                       boolean required, boolean accepted, List<String> localNames) {
+                       boolean required, boolean accepted, List<String> localNames, List<String> foodAliases) {
 
         public Want {
             reach = reach == null ? Reach.PLACEABLE : reach;
             localNames = localNames == null ? List.of() : List.copyOf(localNames);
+            foodAliases = foodAliases == null ? List.of() : List.copyOf(foodAliases);
         }
 
         public Want(String text, String timing, List<String> satisfy, String food, Reach reach,
                     boolean required, boolean accepted) {
-            this(text, timing, satisfy, food, reach, required, accepted, List.of());
+            this(text, timing, satisfy, food, reach, required, accepted, List.of(), List.of());
         }
 
         public Want(String text, String timing, List<String> satisfy, String food) {

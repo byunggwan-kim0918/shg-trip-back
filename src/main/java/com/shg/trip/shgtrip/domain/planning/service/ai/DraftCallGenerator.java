@@ -286,7 +286,9 @@ public class DraftCallGenerator {
                         "time", Map.of("type", List.of("string", "null"), "enum",
                                 java.util.Arrays.asList("sunrise", "morning", "afternoon", "evening", "night", null)),
                         "satisfy", Map.of("type", "array", "items", str),
-                        "local_names", localNames),
+                        "local_names", localNames,
+                        "food_aliases", Map.of("type", "array", "items", str,
+                                "description", "food와 같은 음식의 다른 표기. 현지어 표기와 한국에서 부르는 다른 이름")),
                 "required", List.of("id", "kind", "text", "satisfy"));
         Map<String, Object> item = Map.of(
                 "type", "object",

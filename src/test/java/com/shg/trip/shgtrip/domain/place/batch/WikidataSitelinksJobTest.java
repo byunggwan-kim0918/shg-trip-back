@@ -710,9 +710,28 @@ class WikidataSitelinksJobTest {
                 mock(PlatformTransactionManager.class), Destinations.fromClasspath());
 
         private Assignment assignment(long placeId, String koLabel, boolean exact) {
+            return assignment(placeId, "x", koLabel, exact);
+        }
+
+        private Assignment assignment(long placeId, String placeName, String koLabel, boolean exact) {
             var item = new WikidataItem("Q" + placeId, "x", List.of(), 10, List.of(new WikidataSitelinksJob.Point(0, 0)),
                     false, koLabel == null ? Map.of() : Map.of("ko", koLabel), false, java.util.Set.of());
-            return new Assignment(placeId, item, exact);
+            return new Assignment(placeId, placeName, item, exact);
+        }
+
+        @Test
+        @DisplayName("한국어 라벨도 모델 이름과 같은 검사를 거쳐 구분 괄호를 떼고, 원문에 없는 외국 글자·한글 없는 라벨은 쓰지 않는다")
+        void koLabelPassesNameCheck() {
+            scoped.writeAssignments("Tokyo", List.of(
+                    assignment(1, "中野駅", "나카노 역 (도쿄 도)", true),
+                    assignment(2, "ザ ロイヤルパークホテル アイコニック 東京汐留", "The 로얄파크호텔 Iconic 도쿄시오도메", true),
+                    assignment(3, "ガーラタウン", "ガーラタウン", true)), true);
+
+            org.mockito.Mockito.verify(repository).fillNameKo(1L, "나카노 역");
+            org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).fillNameKo(
+                    org.mockito.ArgumentMatchers.eq(2L), org.mockito.ArgumentMatchers.anyString());
+            org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).fillNameKo(
+                    org.mockito.ArgumentMatchers.eq(3L), org.mockito.ArgumentMatchers.anyString());
         }
 
         @Test

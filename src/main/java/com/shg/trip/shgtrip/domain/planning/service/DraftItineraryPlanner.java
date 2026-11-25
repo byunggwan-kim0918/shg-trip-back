@@ -611,19 +611,20 @@ public class DraftItineraryPlanner {
      * @param wanted   요청한 음식이라 동선에서 조금 멀어도 찾아간다
      * @param required 이름·메뉴로 그 음식을 내는 것이 확인된 식당만 쓴다
      * @param named    그 음식으로 이름난 식당. 메뉴가 맞을 때만 쓴다
+     * @param aliases  같은 음식의 다른 표기(현지어·한국에서 부르는 이름)
      */
-    private record Dish(String text, boolean wanted, boolean required, List<String> named) {
-        static final Dish NONE = new Dish("", false, false, List.of());
+    private record Dish(String text, boolean wanted, boolean required, List<String> named, List<String> aliases) {
+        static final Dish NONE = new Dish("", false, false, List.of(), List.of());
     }
 
     private static Dish dishOf(DraftPlan.Item item, DraftPlan.Want want, Request req) {
         if (isFoodWant(want)) {
             String food = want.food() != null && !want.food().isBlank() ? want.food() : item.name();
-            return new Dish(food, true, true, want.satisfy() == null ? List.of() : want.satisfy());
+            return new Dish(food, true, true, want.satisfy() == null ? List.of() : want.satisfy(), want.foodAliases());
         }
-        if (item.placeNamed()) return new Dish(item.name(), false, false, List.of());
+        if (item.placeNamed()) return new Dish(item.name(), false, false, List.of(), List.of());
         boolean wanted = requested(req, item.name(), null);
-        return new Dish(item.name(), wanted, wanted, List.of());
+        return new Dish(item.name(), wanted, wanted, List.of(), List.of());
     }
 
     /** @return 관광지로 넣지 않을 이유. 넣어도 되면 null */
@@ -904,8 +905,8 @@ public class DraftItineraryPlanner {
         VectorEnrichedInput input = req.input();
         if (isEatery(item) && !item.placeNamed()) {
             boolean wanted = requested(req, item.name(), null);
-            List<PlaceCandidate> picks = pickEatery(item.kind(), new Dish(item.name(), wanted, wanted, List.of()),
-                    input, req, near, exclusions, used, registry);
+            Dish dish = new Dish(item.name(), wanted, wanted, List.of(), List.of());
+            List<PlaceCandidate> picks = pickEatery(item.kind(), dish, input, req, near, exclusions, used, registry);
             if (picks.isEmpty()) return null;
             used.add(picks.get(0));
             return new DayBuilder.Stop(picks.get(0), item.kind(), item.slot(), picks.subList(1, picks.size()), true);
@@ -1252,7 +1253,7 @@ public class DraftItineraryPlanner {
         boolean cafe = "cafe".equals(kind);
         List<PlaceCandidate> dishPool = new ArrayList<>();
         if (!cafe) {
-            for (String token : dishTokens(dish.text())) {
+            for (String token : dishWords(dish.text(), dish.aliases())) {
                 resolver.findMealsByDish(token, input.regions(), near).forEach(p -> dishPool.add(PlaceCandidates.of(p, 0)));
             }
         }
@@ -1274,7 +1275,7 @@ public class DraftItineraryPlanner {
                                                   VectorEnrichedInput input, Request req, double[] near, double radius,
                                                   int widen, TripExclusions exclusions, MealLedger used,
                                                   Registry registry) {
-        List<String> tokens = dishTokens(dish.text());
+        List<String> tokens = dishWords(dish.text(), dish.aliases());
         // 요청한 음식은 동선에서 조금 멀어도 찾아간다.
         double dishRadius = dish.wanted() ? WANTED_DISH_KM * widen : radius * DISH_RADIUS_FACTOR;
         List<PlaceCandidate> pool = new ArrayList<>(dishPool.stream().filter(c -> kmTo(c, near) <= dishRadius).toList());
@@ -1295,7 +1296,7 @@ public class DraftItineraryPlanner {
                 .filter(c -> !DraftPlaceResolver.notAVisit(c.name(), c.category()))
                 .filter(c -> !namesOtherCity(c.name(), req))
                 .filter(c -> !GENERIC_NAMES.contains(PlaceNames.exactKey(c.name())))
-                .filter(c -> !dish.required() || WantMatcher.serves(dish.text(), dish.named(), c))
+                .filter(c -> !dish.required() || WantMatcher.serves(dish.text(), dish.aliases(), dish.named(), c))
                 .filter(c -> cafe || dish.required() || !SNACK_SHOP.matcher(Objects.toString(c.displayName(), "")).find())
                 .sorted(Comparator.comparing((PlaceCandidate c) -> used.date != null
                                 && closedOn(c, used.date, req.country()))
@@ -1569,6 +1570,13 @@ public class DraftItineraryPlanner {
     /** 끼니·카페가 아닌 항목. 모델이 이름 여부를 false로 적어도 장소를 가리키므로 연결을 시도한다. */
     private static boolean isPlaceKind(DraftPlan.Item item) {
         return item.kind() != null && !"meal".equals(item.kind()) && !"cafe".equals(item.kind());
+    }
+
+    /** 다른 표기는 통째로만 찾는다. "めんたいこ"의 앞 두 글자 "めん"은 면 요리 전체에 걸린다. */
+    static List<String> dishWords(String dish, List<String> aliases) {
+        List<String> out = new ArrayList<>(dishTokens(dish));
+        aliases.forEach(a -> out.add(a.toLowerCase(Locale.ROOT)));
+        return out.stream().distinct().toList();
     }
 
     private static List<String> dishTokens(String dish) {

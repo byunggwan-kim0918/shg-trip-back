@@ -136,7 +136,7 @@ final class AttractionEnrichment {
             OverseasEnrichment.Currency currency = OverseasEnrichment.currencyOf(place.getCountry());
             place.recordAdmissionLocal(OverseasEnrichment.admissionLocal(root.get("admission_fee_local"), currency),
                     currency.code());
-            place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko")));
+            place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko"), place.getName()));
         }
         return true;
     }
