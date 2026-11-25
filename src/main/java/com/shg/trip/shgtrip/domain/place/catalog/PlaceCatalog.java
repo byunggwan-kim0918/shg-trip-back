@@ -3,8 +3,6 @@ package com.shg.trip.shgtrip.domain.place.catalog;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.duckdb.DuckDBConnection;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -22,14 +20,13 @@ import java.util.List;
 /**
  * 운영 DB 밖 장소 카탈로그. 나라별 Parquet 파일(place-pipeline 기준 선별 전체)을 DuckDB로 읽는다.
  * 운영 DB에는 장소 수 상한이 있어 핵심 장소만 두고, 초안이 고른 장소가 DB에 없을 때 여기서 찾아 DB로 올린다.
- * {@code place.catalog.path}가 비어 있으면 꺼져 있고 조회는 빈 결과다.
+ * 경로가 비어 있으면 꺼져 있고 조회는 빈 결과다. 빈은 {@link PlaceCatalogConfig}가 만든다.
  *
  * <p>파일 열: name·name_key·name_ko·name_ko_key·address·latitude·longitude·category·region·country·source·
  * fsq_place_id·wikidata_id·wikidata_sitelinks·place_role·cuisine·description·tags·embedding, 있으면 bare_key·readings·latin.
  * 이름 키는 DB {@code place_name_key}로 만든 값이라 {@code PlaceRepository} 이름 조회와 같은 규칙으로 맞춘다.
  */
 @Slf4j
-@Component
 public class PlaceCatalog implements AutoCloseable {
 
     private static final int COMPACT_LIMIT = 200;
@@ -48,7 +45,7 @@ public class PlaceCatalog implements AutoCloseable {
     /** 행 하나가 설명·태그를 합쳐 1KB 안팎이라 캐시를 수십 MB 안에 둔다. */
     private static final int CACHE_MAX_ROWS = 50_000;
 
-    public PlaceCatalog(@Value("${place.catalog.path:}") String path) {
+    public PlaceCatalog(String path) {
         this.connection = path == null || path.isBlank() ? null : open(path);
         this.hasBareKey = hasColumn("bare_key");
         this.twinColumns = BASE_COLUMNS + (hasColumn("readings") ? ", readings" : ", []::VARCHAR[] AS readings")
@@ -104,6 +101,9 @@ public class PlaceCatalog implements AutoCloseable {
 
     /** DB에 적재할 때 좌표를 그대로 옮기므로 같은 행은 사실상 같은 좌표다. */
     private static final double TWIN_METERS = 50;
+    /** 이름 조회는 열 몇 개만 읽어 수십 MB면 되고, 운영 컨테이너는 2GB를 JVM과 나눈다. */
+    private static final String MEMORY_LIMIT = "256MB";
+    private static final int THREADS = 2;
 
     private static DuckDBConnection open(String path) {
         if (!Files.isDirectory(Path.of(path))) {
@@ -114,6 +114,9 @@ public class PlaceCatalog implements AutoCloseable {
             try (Statement s = c.createStatement()) {
                 // 이름 조회마다 Parquet 메타데이터를 다시 읽지 않게 한다. 파일은 실행 중에 바뀌지 않는다.
                 s.execute("SET GLOBAL parquet_metadata_cache = true");
+                // DuckDB는 기본으로 기기 메모리의 80%·전체 코어를 잡아 같은 컨테이너의 JVM과 다툰다.
+                s.execute("SET memory_limit = '" + MEMORY_LIMIT + "'");
+                s.execute("SET threads = " + THREADS);
                 // 나라마다 다른 때 만든 파일은 열이 다를 수 있어, 없는 열은 NULL로 읽는다.
                 s.execute("CREATE VIEW catalog AS SELECT * FROM read_parquet('"
                         + Path.of(path).resolve("*.parquet").toString().replace("'", "''") + "', union_by_name = true)");
