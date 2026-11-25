@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""일정 생성 평가용 요청 세트를 만든다. --scope overseas면 해외(일본 위주) 세트다.
+"""일정 생성 평가용 요청 세트를 만든다. --scope overseas면 해외(일본 위주) 세트, japan이면 일본 지방까지 고른 세트다.
 
 대화 입력(TripRequestMapper)이 만드는 요청과 같은 모양으로 만든다. 설명은 " / "로 이은 조각이다.
 같은 시드면 같은 세트가 나오고, 홀드아웃은 개발 중에 열어 보지 않는다.
@@ -119,6 +119,55 @@ OVERSEAS_CITIES = {
         themes=["ocean", "food", "healing"], walkable=False),
 }
 
+# 일본 지방·소도시까지 고르게 보는 세트(--scope japan). 압축한 장소 데이터가 대도시 밖에서도 버티는지 본다.
+JAPAN_CITIES = {
+    "교토": dict(sights=["기요미즈데라", "후시미 이나리 신사", "긴카쿠지", "아라시야마 대나무숲", "니조성", "기온"],
+               foods=["유도후", "니신 소바", "말차 디저트"], night=[], dawn=[],
+               themes=["culture", "photo", "healing"], walkable=True),
+    "오사카": dict(sights=["오사카성", "도톤보리", "구로몬 시장", "신세카이", "우메다 스카이 빌딩", "유니버설 스튜디오 재팬"],
+                foods=["타코야키", "오코노미야키", "쿠시카츠"], night=["우메다 스카이 빌딩 야경"], dawn=[],
+                themes=["food", "shopping", "nightview"], walkable=True),
+    "가나자와": dict(sights=["겐로쿠엔", "히가시차야가이", "오미초 시장", "가나자와성 공원", "21세기 미술관"],
+                 foods=["해산물 덮밥", "노도구로", "금박 아이스크림"], night=[], dawn=[],
+                 themes=["culture", "art", "food"], walkable=True),
+    "다카야마": dict(sights=["다카야마 진야", "산마치 거리", "미야가와 아침시장", "히다 민속촌", "시라카와고"],
+                 foods=["히다규", "다카야마 라멘", "미타라시 당고"], night=[], dawn=[],
+                 themes=["culture", "local", "food"], walkable=True),
+    "하코네": dict(sights=["오와쿠다니", "하코네 신사", "아시노호 해적선", "하코네 조각의 숲 미술관", "하코네유모토 온천가"],
+                foods=["구로타마고", "소바", "온천 만주"], night=[], dawn=[],
+                themes=["healing", "nature", "art"], walkable=False),
+    "가와구치코": dict(sights=["가와구치코", "아라쿠라야마 센겐 공원", "오시노 핫카이", "후지산 파노라마 로프웨이"],
+                  foods=["호토", "요시다 우동"], night=[], dawn=["가와구치코 일출"],
+                  themes=["nature", "photo", "healing"], walkable=False),
+    "오타루": dict(sights=["오타루 운하", "사카이마치 거리", "오타루 오르골당", "기타이치 글라스", "덴구야마 로프웨이"],
+                foods=["해산물 덮밥", "스시", "르타오 치즈케이크"], night=["오타루 운하 야경"], dawn=[],
+                themes=["photo", "food", "healing"], walkable=True),
+    "하코다테": dict(sights=["하코다테산", "고료카쿠", "하코다테 아침시장", "가네모리 붉은 벽돌 창고", "모토마치"],
+                 foods=["오징어회", "시오 라멘", "해산물 덮밥"], night=["하코다테산 야경"], dawn=[],
+                 themes=["nightview", "food", "photo"], walkable=True),
+    "히로시마": dict(sights=["평화기념공원", "원폭 돔", "이쓰쿠시마 신사", "히로시마성", "슈케이엔"],
+                 foods=["오코노미야키", "굴", "모미지 만주"], night=[], dawn=[],
+                 themes=["culture", "food", "healing"], walkable=True),
+    "나가사키": dict(sights=["글로버 정원", "오우라 천주당", "평화공원", "데지마", "이나사야마 전망대"],
+                 foods=["나가사키 짬뽕", "사라우동", "카스텔라"], night=["이나사야마 야경"], dawn=[],
+                 themes=["culture", "nightview", "food"], walkable=True),
+    "유후인": dict(sights=["긴린코 호수", "유노쓰보 거리", "유후인 플로럴 빌리지", "벳푸 지옥 순례"],
+                foods=["분고규", "지옥찜", "롤케이크"], night=[], dawn=["긴린코 아침 물안개"],
+                themes=["healing", "nature", "food"], walkable=False),
+    "야쿠시마": dict(sights=["시라타니운스이쿄", "야쿠스기 랜드", "오코노타키", "나가타 이나카하마"],
+                 foods=["날치 튀김", "고등어 회"], night=[], dawn=[],
+                 themes=["nature", "healing"], walkable=False),
+    "나오시마": dict(sights=["지추 미술관", "베네세 하우스 뮤지엄", "노란 호박", "이에 프로젝트"],
+                 foods=["사누키 우동", "해산물 정식"], night=[], dawn=[],
+                 themes=["art", "healing"], walkable=False),
+    "비에이": dict(sights=["청의 호수", "패치워크의 길", "흰수염 폭포", "시키사이노오카", "팜 도미타"],
+                foods=["카레 우동", "징기스칸"], night=[], dawn=[],
+                themes=["nature", "photo"], walkable=False),
+    "이시가키": dict(sights=["가비라만", "이시가키 공설시장", "다마토리자키 전망대", "다케토미섬", "요네하라 해변"],
+                 foods=["이시가키규", "야에야마 소바"], night=[], dawn=[],
+                 themes=["ocean", "nature", "healing"], walkable=False),
+}
+
 # 해외는 일본 여행이 대부분이라 일본 여행지를 더 자주 고른다.
 OVERSEAS_WEIGHTS = [("도쿄", .25), ("오사카", .25), ("후쿠오카", .15), ("삿포로", .1), ("오키나와", .1),
                     ("타이베이", .08), ("다낭", .07)]
@@ -173,14 +222,17 @@ def companion_detail(rng, companion):
     return (1 if companion == "solo" else 2), None, {}
 
 
-def build(rng, idx, today, overseas=False):
-    table = OVERSEAS_CITIES if overseas else CITIES
-    multi = rng.random() < .06
+def build(rng, idx, today, overseas=False, japan=False):
+    table = JAPAN_CITIES if japan else OVERSEAS_CITIES if overseas else CITIES
+    overseas = overseas or japan
+    multi = not japan and rng.random() < .06
     nights = pick(rng, NIGHTS)
-    if multi:
+    if japan:
+        cities = [rng.choice(list(JAPAN_CITIES))]
+    elif multi:
         nights = max(nights, 3)
         cities = list(rng.choice(OVERSEAS_MULTI if overseas else MULTI))
-    else:
+    if not japan and not multi:
         cities = [pick(rng, OVERSEAS_WEIGHTS) if overseas else rng.choice(list(CITIES))]
     city = cities[0]
     companion = pick(rng, COMPANIONS)
@@ -279,15 +331,16 @@ def main():
     ap.add_argument("--seed", type=int, default=20261117)
     ap.add_argument("--today", default="2026-11-17")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--scope", choices=["domestic", "overseas"], default="domestic")
+    ap.add_argument("--scope", choices=["domestic", "overseas", "japan"], default="domestic")
     args = ap.parse_args()
     overseas = args.scope == "overseas"
+    japan = args.scope == "japan"
     rng = random.Random(args.seed)
     today = dt.date.fromisoformat(args.today)
     with open(args.out, "w", encoding="utf-8") as f:
         for i in range(1, args.count + 1):
-            case_id = f"{'o' if overseas else 'g'}{i:04d}"
-            request, expect = build(rng, i, today, overseas)
+            case_id = f"{'j' if japan else 'o' if overseas else 'g'}{i:04d}"
+            request, expect = build(rng, i, today, overseas, japan)
             f.write(json.dumps({"id": case_id, "split": split_of(case_id, args.seed),
                                 "request": request, "expect": expect}, ensure_ascii=False) + "\n")
 

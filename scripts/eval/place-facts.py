@@ -1,6 +1,6 @@
 """관광 장소의 여행자용 사실을 Haiku로 채워 place_facts에 넣는다.
 
-사용: set -a; . ./.env; set +a; python scripts/eval/place-facts.py --db trip_prodcopy [--scope overseas] [--limit N] [--threads 8]
+사용: set -a; . ./.env; set +a; python scripts/eval/place-facts.py --db trip_prodcopy [--port 5432] [--scope overseas] [--limit N] [--threads 8]
 이미 채운 장소는 건너뛰므로 끊겨도 다시 실행하면 이어서 한다. --count는 모델을 부르지 않고 대상 수와 예상 비용만 낸다.
 """
 import argparse
@@ -119,6 +119,7 @@ def work(client, dsn, rows, system):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True)
+    ap.add_argument("--port", type=int, default=5432)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--scope", choices=["domestic", "overseas"], default="domestic")
@@ -130,7 +131,7 @@ def main():
     system = OVERSEAS_INTRO + SYSTEM.split("\n", 1)[1] if overseas else SYSTEM
     if args.db == "trip":
         sys.exit("trip DB에는 쓰지 않는다. 복사본을 지정한다.")
-    dsn = f"host=localhost port=5432 dbname={args.db} user=weShg password={os.environ['DB_PASSWORD']}"
+    dsn = f"host=localhost port={args.port} dbname={args.db} user=weShg password={os.environ['DB_PASSWORD']}"
     with psycopg.connect(dsn, autocommit=True) as conn:
         rows = targets(conn, args.limit, regions)
     print(f"대상 {len(rows)}건, 예상 약 ${len(rows) * COST_PER_PLACE:.2f}", flush=True)
