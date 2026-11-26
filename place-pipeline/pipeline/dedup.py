@@ -6,7 +6,8 @@
   PART_OF: 긴 이름 = 짧은 이름 + 부속 표지(name_rules part_marker), 또는 짧은 쪽이 몰·역처럼 다른 시설을 품는 분류
   전화·도메인을 함께 쓰는데 분류가 다르면 판단하지 않는다(공원 안 체육관, 한 신직이 맡은 여러 신사, 지역명 붙은 같은 시설).
 이름만 같다는 이유로는 합치지 않는다. 연쇄로 커진 묶음(MAX_CLUSTER_SIZE·MAX_CLUSTER_METERS 초과)과
-서로 다른 Wikidata 항목이 섞인 묶음은 합치지 않고 REVIEW로 둔다.
+서로 다른 Wikidata 항목이 섞인 묶음은 합치지 않고 REVIEW로 둔다. 구성원 모두가 한 항목에 이어진 묶음은 넓은 장소(마을·역·공원)의
+출처별 좌표가 수백 m 벌어져서 거리 상한을 Wikidata 연결 반경(identity.WIKIDATA_MAX_METERS)으로 둔다.
 결과: dedup_pairs(쌍·관계·근거), place_clusters(묶음·구성원·대표, run_id), place_relations(PART_OF), evidence_dedup.
 place_clusters의 한 run_id 행을 지우면 그 병합은 되돌아간다.
 """
@@ -27,7 +28,8 @@ CONTAINS_METERS = 100
 # 이 전화번호를 쓰는 풀 행이 이보다 많으면 대표번호(백화점·역)라 같은 장소 근거로 쓰지 않는다.
 SHARED_PHONE_MAX_ROWS = 3
 ADDRESS_MIN_LENGTH = 6
-MAX_CLUSTER_SIZE = 10
+# PlaceLinkResolver.MAX_SAME_GROUP과 같다. 크면 장소 연결 배치가 그 묶음을 합치지 않고 푼다.
+MAX_CLUSTER_SIZE = 8
 MAX_CLUSTER_METERS = 500
 # 같은 이름 후보를 찾는 격자(도). 위도 0.002도는 약 220m로 같은 이름 거리 상한을 이웃 칸이 덮는다.
 _NAME_CELL = 0.002
@@ -73,7 +75,7 @@ def _rows(con, evidence, candidates, roles):
         SELECT row_number() OVER (ORDER BY e.source, e.source_id) AS rid, e.source, e.source_id, e.pool_basis,
                e.pool_category, c.name, c.name_key, c.names, c.lat, c.lon, c.country, c.phones,
                CASE WHEN length(name_key(c.address)) >= {ADDRESS_MIN_LENGTH} THEN name_key(c.address) END AS address_key,
-               CASE WHEN e.web_kind = 'own' THEN e.web_host END AS own_host, e.wd_qid, s.role,
+               CASE WHEN e.web_kind = 'own' THEN e.web_host END AS own_host, e.wd_qid, e.wd_meters, s.role,
                {large} AS large_feature, {container} AS container,
                (CASE WHEN e.independent_confirm THEN 4 ELSE 0 END + CASE WHEN e.wd_qid IS NOT NULL THEN 3 ELSE 0 END
                 + CASE WHEN e.web_kind = 'own' THEN 1 ELSE 0 END + CASE WHEN e.fsq_basis IS NOT NULL THEN 1 ELSE 0 END)
@@ -189,9 +191,9 @@ def _pairs(con, rules):
 
 def _clusters(con):
     """SAME 쌍의 연결 요소. 너무 크거나 넓은 묶음은 합치지 않는다."""
-    rows = {rid: (lat, lon, info, basis, qid)
-            for rid, lat, lon, info, basis, qid in con.execute(
-                f"SELECT rid, lat, lon, info_rank, {_BASIS_RANK}, wd_qid FROM dd_rows "
+    rows = {rid: (lat, lon, info, basis, qid, meters)
+            for rid, lat, lon, info, basis, qid, meters in con.execute(
+                f"SELECT rid, lat, lon, info_rank, {_BASIS_RANK}, wd_qid, wd_meters FROM dd_rows "
                 "WHERE rid IN (SELECT a_rid FROM dedup_pairs WHERE relation = 'SAME' "
                 "UNION SELECT b_rid FROM dedup_pairs WHERE relation = 'SAME')").fetchall()}
     parent = {rid: rid for rid in rows}
@@ -216,13 +218,19 @@ def _clusters(con):
         lats = [rows[m][0] for m in members]
         lons = [rows[m][1] for m in members]
         span = _meters(min(lats), min(lons), max(lats), max(lons))
-        if len(members) > MAX_CLUSTER_SIZE or span > MAX_CLUSTER_METERS:
-            clusters.append((members, None, "too_large"))
-            continue
-        if len({rows[m][4] for m in members if rows[m][4]}) > 1:
+        qids = {rows[m][4] for m in members}
+        if len(qids - {None}) > 1:
             clusters.append((members, None, "conflicting_ids"))
             continue
+        # 한 항목의 행만 모인 묶음은 그 항목의 출처별 사본이라 항목 연결 반경까지 합친다.
+        max_span = identity.WIKIDATA_MAX_METERS if None not in qids else MAX_CLUSTER_METERS
+        if len(members) > MAX_CLUSTER_SIZE or span > max_span:
+            clusters.append((members, None, "too_large"))
+            continue
         representative = min(members, key=lambda m: (-rows[m][2], rows[m][3], m))
+        if span > MAX_CLUSTER_METERS:
+            # 넓게 퍼진 한 항목 묶음의 먼 행은 주소로 좌표를 찍은 사본이라 대표가 되면 장소 좌표가 틀어진다.
+            representative = min(members, key=lambda m: (rows[m][5] is None, rows[m][5] or 0, m))
         clusters.append((members, representative, "merged"))
     return clusters
 

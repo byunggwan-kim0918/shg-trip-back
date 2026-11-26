@@ -163,6 +163,11 @@ public class PlaceInvalidationJob {
                     UPDATE places SET merged_into_id = NULL, merge_relation = NULL
                     WHERE merged_into_id IS NOT NULL AND (id IN (:ids) OR merged_into_id IN (:ids))
                     """, ids);
+            // 파이프라인 판정은 장소 연결 배치가 지문을 보지 않고 쓰므로, 보강 입력(이름·분류)이 바뀐 행의 판정은 여기서 거둔다.
+            namedJdbc.update("""
+                    DELETE FROM place_pair_verdicts
+                    WHERE basis = 'PIPELINE' AND (low_id IN (:ids) OR high_id IN (:ids))
+                    """, ids);
             factsDeleted += namedJdbc.update("DELETE FROM place_facts WHERE place_id IN (:ids)", ids);
         }
         if (!d.reaskNameKo().isEmpty()) {

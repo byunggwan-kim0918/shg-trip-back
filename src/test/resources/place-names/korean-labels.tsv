@@ -1,0 +1,33 @@
+# 한국어 표시 이름 검사 계약. Java OverseasEnrichment.nameKoText·WikidataSitelinksJob.koreanLabel과 place-pipeline names가 같은 결과를 내야 한다.
+# 종류<TAB>값<TAB>원문 이름<TAB>기대 이름(비어 있으면 버린다). name은 nameKoText·korean_label(보강이 지은 이름·저장된 이름),
+# wikidata는 koreanLabel·wikidata_korean_label(Wikidata 한국어 라벨, 끝의 위키백과 구분 괄호를 먼저 뗀다)이다.
+name	오와쿠다니	大涌谷 (Ōwakudani)	오와쿠다니
+name	영빈관 (일본)	迎賓館赤坂離宮	영빈관
+name	평화공원 (나가사키 시)	平和公園	평화공원
+name	아소 역 (고치 현)	安居駅	아소 역
+name	이모세노타키 (오타키)	妹背の滝（雄滝）	이모세노타키 오타키
+name	레스토 松井山手 가게	レスト 松井山手店	
+name	미츠이 가든 호텔 긴자五초메	三井ガーデンホテル銀座五丁目	
+name	Zepp	Zepp Sapporo	
+name	HEP 파이브	HEP FIVE	HEP 파이브
+name	JR 타워	JRタワー	JR 타워
+name	ANA 크라운 플라자 호텔 교토	ANAクラウンプラザホテル京都	ANA 크라운 플라자 호텔 교토
+name	임페리얼 호텔, 오사카	帝国ホテル大阪	임페리얼 호텔, 오사카
+name	로ккō	ろっこう	
+name	소honke	総本家	
+name	없음	大涌谷	
+name	"센소지"	浅草寺	센소지
+name	DI 센터	ディーアイセンター	DI 센터
+name	본점 아님 — 본문: 우메다	梅田店	
+wikidata	가마타 역 (도쿄 도)	蒲田駅 (Kamata Sta.)	가마타 역
+wikidata	가모 역 (니가타 현)	加茂駅 (新潟県)	가모 역
+wikidata	영빈관 (일본)	迎賓館赤坂離宮	영빈관
+wikidata	하치만오하시 (도료코코)역	八幡大橋（東陵高校）駅	하치만오하시 도료코코역
+wikidata	오와쿠다니	大涌谷 (Ōwakudani)	오와쿠다니
+wikidata	Zepp	Zepp Sapporo	
+wikidata	레스토 松井山手 가게	フレスト松井山手店	
+name	이즈・미토 씨 파라다이스	伊豆・三津シーパラダイス	이즈・미토 씨 파라다이스
+name	사사키々	佐々木	
+name	센소지　본당	浅草寺本堂	센소지　본당
+name	호텔 Ⅱ	ホテルⅡ	호텔 Ⅱ
+name	㈜한국	株式会社韓国	㈜한국

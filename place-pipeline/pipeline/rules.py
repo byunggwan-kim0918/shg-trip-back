@@ -4,9 +4,11 @@ import os
 import re
 
 _NAME_RULES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "name_rules.tsv")
+_ITEM_KINDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "item_kinds.tsv")
+_QID = re.compile(r"^Q[0-9]+$")
 COMMON = "*"
 USES = ("all", "non_food", "transit", "sight", "review", "branch_suffix", "generic", "sight_notable", "sight_general",
-        "part_marker", "flagship", "flagship_suffix")
+        "part_marker", "flagship", "flagship_suffix", "same_kind", "tail_filler", "place_preposition", "operator_prefix")
 
 
 def load_name_rules(path=_NAME_RULES_FILE):
@@ -18,6 +20,18 @@ def load_name_rules(path=_NAME_RULES_FILE):
             patterns[row["use"]].setdefault(row["region"], []).append(row["pattern"])
     return {use: {region: "(?i)(" + "|".join(p) + ")" for region, p in by_region.items()}
             for use, by_region in patterns.items()}
+
+
+def load_item_kinds(path=_ITEM_KINDS_FILE):
+    """[(종류, 행 분류 접두어, (Wikidata 분류 QID, ...))]. 한 종류는 한 줄이다."""
+    with open(path, encoding="utf-8") as f:
+        rows = [(r["kind"], r["category_prefix"], tuple(r["classes"].split()))
+                for r in csv.DictReader((line for line in f if not line.startswith("#")), delimiter="\t")]
+    kinds = [k for k, _, _ in rows]
+    bad = [c for _, _, classes in rows for c in classes if not _QID.match(c)]
+    if len(set(kinds)) != len(kinds) or bad or any(not classes for _, _, classes in rows):
+        raise ValueError(f"item_kinds 오류: 중복 {kinds}, QID 아님 {bad}")
+    return rows
 
 
 def match_sql(text, country, rule):

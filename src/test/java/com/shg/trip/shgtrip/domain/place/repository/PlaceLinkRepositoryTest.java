@@ -141,6 +141,20 @@ class PlaceLinkRepositoryTest {
     }
 
     @Test
+    @DisplayName("지역 경계를 넘는 판정은 양쪽 지역에서 읽혀 어느 지역을 처리해도 합침을 풀지 않는다")
+    void crossRegionVerdictIsReadFromBothRegions() {
+        Place here = place("호수", "SIGHT", 0, "tourapi", true);
+        Place there = place("호수 남쪽", "SIGHT", 0.0001, "foursquare", false);
+        em.createNativeQuery("UPDATE places SET region = 'ZZ_LINK_OTHER' WHERE id = ?")
+                .setParameter(1, there.getId()).executeUpdate();
+        long[] pair = ids(here, there);
+        links.upsertVerdicts(List.of(new VerdictRow(pair[0], pair[1], "SAME", "PIPELINE", "run")));
+
+        assertThat(links.findVerdicts(REGION)).hasSize(1);
+        assertThat(links.findVerdicts("ZZ_LINK_OTHER")).hasSize(1);
+    }
+
+    @Test
     @DisplayName("합침 관계는 SAME·PART만 들어간다")
     void mergeRelationValues() {
         Place a = place("가", "SIGHT", 0, "tourapi", true);
@@ -194,12 +208,14 @@ class PlaceLinkRepositoryTest {
     }
 
     @Test
-    @DisplayName("판정 출처는 RULE·LLM만 들어간다")
+    @DisplayName("판정 출처는 RULE·LLM·PIPELINE만 들어간다")
     void verdictBasisConstraint() {
         Place a = place("가", "SIGHT", 0, "tourapi", true);
         Place b = place("나", "SIGHT", 0.0001, "tourapi", true);
         long[] pair = ids(a, b);
 
+        links.upsertVerdicts(List.of(new VerdictRow(pair[0], pair[1], "SAME", "PIPELINE", "run-a")));
+        assertThat(links.findVerdicts(REGION)).extracting(VerdictRow::basis).containsExactly("PIPELINE");
         assertThatThrownBy(() -> links.upsertVerdicts(List.of(new VerdictRow(pair[0], pair[1], "SAME", "GUESS", "k"))))
                 .hasStackTraceContaining("chk_place_pair_basis");
     }

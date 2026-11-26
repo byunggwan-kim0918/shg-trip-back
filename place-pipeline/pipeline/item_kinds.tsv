@@ -1,0 +1,4 @@
+# 행 분류가 category_prefix로 시작하면 별칭으로는 P31이 한 단계 안에서 classes(공백으로 나눈 QID)에 닿는 항목에만 잇는다.
+# 별칭에 붙은 다른 시설 이름이 섞여서다. 공원은 Wikidata에서 성터·신사 경내로도 실려 행 분류와 뜻이 갈리지 않아 넣지 않는다.
+kind	category_prefix	classes
+rest_area	Travel and Transportation > Rest Area	Q786014 Q785979

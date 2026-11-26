@@ -6,7 +6,7 @@
   독립 확인 : FSQ가 아닌 출처에서 온 Overture 행이 FSQ 행과 이어졌다. Overture가 FSQ 레코드를 옮겨 온 행은 아니다.
   체인     : 브랜드·체인 매장 공급처·공유 호스트(상업 분류만)와 참고용 같은 이름 수를 근거별로 따로 둔다. 체인이라고 빼지 않는다.
   웹사이트 : 가게 고유 도메인(own)과 플랫폼·SNS·백과·체인 본사(shared)를 나눈다.
-  Wikidata : 이름이 같은 가장 가까운 항목의 위키백과 언어판 수(지명도)와 한국어 이름.
+  Wikidata : 이름이 같은 가장 가까운 항목의 위키백과 언어판 수(지명도)와 한국어 이름, 항목 좌표까지 거리(wd_meters).
 """
 import csv
 import os
@@ -35,18 +35,26 @@ SHARED_HOST_MIN_PLACES = 5
 CHAIN_MIN_SHARED_HOST = 15
 
 
-def build(con, candidates="candidates", fsq_raw=None, table="evidence", wikidata_raw=None, wikidata_areas=None):
+def build(con, candidates="candidates", fsq_raw=None, table="evidence", wikidata_raw=None, wikidata_areas=None,
+          wikidata_brands=None, wikidata_businesses=None, wikidata_kinds=None):
     """풀의 행마다 증거 한 줄(키: source, source_id). fsq_raw·wikidata_raw가 없으면 그 열은 NULL이다.
-    wikidata_areas(열 qid)는 지명 항목 목록이다. 주면 이름을 품은 행으로도 항목을 잇는다(identity.wikidata_links)."""
+    wikidata_areas(열 qid)는 지명 항목 목록이다. 주면 이름을 품은 행으로도 항목을 잇는다(identity.wikidata_links).
+    wikidata_brands(열 qid)는 브랜드·체인 항목 목록이다(wikidata.brand_qids). 그 항목은 잇지 않는다.
+    wikidata_businesses(열 qid)는 사업체 항목 목록이다(wikidata.business_qids). 가게·숙소 행은 그 밖의 항목에 가까이서만 잇는다.
+    wikidata_kinds(열 qid, kind)는 종류별 항목 목록이다(wikidata.kind_qids). 휴게소 행은 별칭으로 휴게소 항목에만 잇는다.
+    wikidata_raw를 주면 네 목록도 줘야 한다. 빠지면 지명·브랜드 항목이 가게·지점에 붙고 이름을 딴 가게가 먼 명소에 붙는다."""
+    if wikidata_raw and None in (wikidata_areas, wikidata_brands, wikidata_businesses, wikidata_kinds):
+        raise ValueError("Wikidata를 이으려면 wikidata_areas·wikidata_brands·wikidata_businesses·wikidata_kinds 표가 있어야 한다")
+    lists = (wikidata_areas, wikidata_brands, wikidata_businesses, wikidata_kinds)
     identity.build_links(con, candidates, "source_links")
     identity.fsq_only(con, candidates, "source_links", "fsq_only")
     _pool(con, candidates)
     if wikidata_raw:
-        _promote_notable_held(con, candidates, wikidata_raw, wikidata_areas)
+        _promote_notable_held(con, candidates, wikidata_raw, lists)
     _fsq_evidence(con, fsq_raw)
     _websites(con)
     _chain(con)
-    _wikidata(con, candidates, wikidata_raw, wikidata_areas)
+    _wikidata(con, candidates, wikidata_raw, lists)
     con.execute(f"""
         CREATE OR REPLACE TABLE {table} AS
         SELECT t.source, t.source_id, t.pool_basis, t.category AS pool_category, t.exclusion AS source_exclusion,
@@ -61,19 +69,19 @@ def build(con, candidates="candidates", fsq_raw=None, table="evidence", wikidata
     return table
 
 
-def _wikidata(con, candidates, wikidata_raw, wikidata_areas):
+def _wikidata(con, candidates, wikidata_raw, lists):
     """지명도(위키백과 언어판 수)와 한국어 이름. 항목이 없으면 NULL이다."""
     if wikidata_raw:
-        identity.wikidata_links(con, "targets", candidates, wikidata_raw, "wikidata_links", wikidata_areas)
+        identity.wikidata_links(con, "targets", candidates, wikidata_raw, "wikidata_links", *lists)
         joined = f"""LEFT JOIN wikidata_links l USING (source, source_id)
                      LEFT JOIN {wikidata_raw} w ON w.qid = l.qid"""
-        # 한국어 라벨 자리에 원어 표기(Zepp, HEP NAVIO)를 그대로 둔 항목이 있다.
+        # 한국어 라벨 자리에 원어 표기(Zepp, HEP NAVIO)나 위키백과 구분 괄호(영빈관 (일본))를 둔 항목이 있다.
         cols = ("l.qid AS wd_qid, w.sitelinks AS wd_sitelinks, "
-                "CASE WHEN regexp_matches(w.ko::VARCHAR, '[가-힣]') THEN w.ko END AS wd_name_ko, w.kowiki AS wd_kowiki")
+                "wikidata_korean_label(w.ko::VARCHAR, t.name) AS wd_name_ko, w.kowiki AS wd_kowiki, l.meters AS wd_meters")
     else:
         joined = ""
         cols = ("NULL::VARCHAR AS wd_qid, NULL::INTEGER AS wd_sitelinks, NULL::VARCHAR AS wd_name_ko, "
-                "NULL::BOOLEAN AS wd_kowiki")
+                "NULL::BOOLEAN AS wd_kowiki, NULL::DOUBLE AS wd_meters")
     con.execute(f"""
         CREATE OR REPLACE TEMP TABLE wikidata_evidence AS
         SELECT t.source, t.source_id, {cols} FROM targets t {joined}
@@ -115,15 +123,15 @@ def _pool(con, candidates):
     """)
 
 
-def _promote_notable_held(con, candidates, wikidata_raw, wikidata_areas):
+def _promote_notable_held(con, candidates, wikidata_raw, lists):
     """
     중복 가능·검토로 보류된 FSQ 행 가운데 풀에서 이름이 정확히 같은 행으로 이어지지 않은 Wikidata 항목에 이어지는 행을 풀에
     올린다. Overture에 경내 부속 시설(櫛田神社 中神門)만 있으면 본체 FSQ 행(櫛田神社)이 중복으로 보류되고, 항목 이름을
     품은 부속 시설(大涌谷延命地蔵尊)이 포함 연결로 항목을 가져간다.
     """
-    identity.wikidata_links(con, "targets", candidates, wikidata_raw, "pool_wikidata", wikidata_areas)
+    identity.wikidata_links(con, "targets", candidates, wikidata_raw, "pool_wikidata", *lists)
     con.execute("CREATE OR REPLACE TEMP TABLE held AS SELECT 'fsq' AS source, source_id FROM fsq_only WHERE status <> 'only'")
-    identity.wikidata_links(con, "held", candidates, wikidata_raw, "held_wikidata", wikidata_areas)
+    identity.wikidata_links(con, "held", candidates, wikidata_raw, "held_wikidata", *lists)
     con.execute(f"""
         INSERT INTO targets BY NAME
         SELECT c.*, 'fsq_notable' AS pool_basis

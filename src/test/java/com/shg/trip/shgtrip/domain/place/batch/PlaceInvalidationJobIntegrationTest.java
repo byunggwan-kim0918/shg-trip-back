@@ -57,7 +57,7 @@ class PlaceInvalidationJobIntegrationTest {
     }
 
     @Test
-    @DisplayName("이름이 바뀐 보강 행은 보강·임베딩·장소 사실·묶음을 비우고, 그대로인 행은 둔다")
+    @DisplayName("이름이 바뀐 보강 행은 보강·임베딩·장소 사실·묶음·파이프라인 판정을 비우고, 그대로인 행과 LLM 판정은 둔다")
     void renamedRowLosesDerivedData() {
         Place renamed = enriched("一蘭");
         Place same = enriched("一風堂");
@@ -65,6 +65,11 @@ class PlaceInvalidationJobIntegrationTest {
         jdbcTemplate.update("UPDATE places SET merged_into_id = ?, merge_relation = 'SAME' WHERE id = ?",
                 renamed.getId(), member.getId());
         jdbcTemplate.update("INSERT INTO place_facts (place_id, facts, model) VALUES (?, '{}', 'test')", renamed.getId());
+        long[] pipelinePair = {Math.min(renamed.getId(), member.getId()), Math.max(renamed.getId(), member.getId())};
+        long[] llmPair = {Math.min(renamed.getId(), same.getId()), Math.max(renamed.getId(), same.getId())};
+        jdbcTemplate.update("INSERT INTO place_pair_verdicts (low_id, high_id, relation, basis, input_key) "
+                + "VALUES (?, ?, 'SAME', 'PIPELINE', 'run'), (?, ?, 'DIFFERENT', 'LLM', 'k')",
+                pipelinePair[0], pipelinePair[1], llmPair[0], llmPair[1]);
         PlaceInvalidationJob job = new PlaceInvalidationJob(jdbcTemplate, namedJdbc, transactionTemplate);
 
         job.adopt();
@@ -85,6 +90,8 @@ class PlaceInvalidationJobIntegrationTest {
                 renamed.getId())).isZero();
         assertThat(jdbcTemplate.queryForObject("SELECT merged_into_id FROM places WHERE id = ?", Long.class,
                 member.getId())).isNull();
+        assertThat(jdbcTemplate.queryForList("SELECT basis FROM place_pair_verdicts WHERE ? IN (low_id, high_id)",
+                String.class, renamed.getId())).containsExactly("LLM");
         assertThat(jdbcTemplate.queryForObject("SELECT enriched_at IS NOT NULL FROM places WHERE id = ?",
                 Boolean.class, same.getId())).isTrue();
         assertThat(counts.enrichInvalidated()).isGreaterThanOrEqualTo(1);

@@ -1,0 +1,27 @@
+# Wikidata 신원 연결 전 국가 검증 범위. 파일럿 범위(areas.tsv)에 없는 언어권·문자(한국 도심·중국어·태국어·프랑스어·독일어·히브리어·아랍어·키릴·조지아·데바나가리·스페인어·포르투갈어)와 남미·아프리카 범위다.
+name	lon0	lon1	lat0	lat1	country
+otaru_canal	140.98	141.02	43.185	43.205	JP
+osaka_namba	135.49	135.51	34.660	34.675	JP
+jeju_seongsan	126.90	126.95	33.440	33.470	KR
+seoul_jongno	126.970	126.990	37.570	37.585	KR
+taipei_zhongzheng	121.505	121.525	25.030	25.045	TW
+shanghai_bund	121.480	121.495	31.225	31.245	CN
+bangkok_rattanakosin	100.485	100.500	13.740	13.755	TH
+hoian_oldtown	108.320	108.340	15.870	15.885	VN
+paris_louvre	2.325	2.345	48.855	48.866	FR
+berlin_mitte	13.375	13.405	52.512	52.522	DE
+hallstatt_at	13.635	13.660	47.550	47.570	AT
+monaco	7.405	7.440	43.725	43.752	MC
+reunion_cilaos	55.45	55.50	-21.16	-21.11	RE
+manhattan_mid	-73.990	-73.975	40.750	40.760	US
+yellowstone_of	-110.85	-110.80	44.440	44.480	US
+moab_ut	-109.565	-109.535	38.560	38.590	US
+jerusalem_oldcity	35.226	35.238	31.772	31.782	IL
+marrakech_medina	-7.995	-7.980	31.620	31.632	MA
+cairo_downtown	31.230	31.245	30.040	30.052	EG
+spb_center	30.300	30.330	59.932	59.942	RU
+tbilisi_oldtown	44.800	44.815	41.687	41.697	GE
+delhi_central	77.205	77.225	28.625	28.640	IN
+cusco_centro	-71.985	-71.970	-13.522	-13.512	PE
+rio_centro	-43.185	-43.170	-22.912	-22.900	BR
+capetown_waterfront	18.410	18.425	-33.910	-33.900	ZA

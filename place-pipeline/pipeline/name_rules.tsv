@@ -11,6 +11,11 @@
 # flagship_suffix는 브랜드명 바로 뒤에 붙는 본점 접미어다. 브랜드명을 뗀 나머지 전체에 맞춘다(정확 키 기준).
 # 브랜드명 자체가 本店으로 끝나는 체인(山本屋本店)은 모든 지점이 그 이름이라 본점으로 보지 않는다.
 # part_marker는 한 이름이 다른 이름에 붙어 그 장소의 일부(문·본전·입구·별관)를 가리키는 남은 부분이다(dedup.py). 남은 부분 전체에 맞춘다.
+# same_kind는 Wikidata 항목 이름에 붙어도 같은 장소를 가리키는 남은 부분이다(identity.wikidata_links). 종류를 다시 말하거나(Temple)
+# 터를 뜻한다(城跡·사지). 정확 키 기준 남은 부분 전체에 맞춘다. 그 안의 다른 시설이 될 수 있는 낱말(museum·park·tower·売店)은 넣지 않는다.
+# tail_filler는 " - "·쉼표 뒤에 붙어도 장소를 바꾸지 않는 군말(공식 표기)이다. 꼬리 조각의 정확 키 전체에 맞춘다.
+# place_preposition은 항목 이름 뒤 지명 앞에 오는 전치사(Russisches Haus in Berlin)다. 남은 부분 맨 앞에 맞춘다.
+# operator_prefix는 역 이름 앞에 붙는 운영사·노선 이름(JR 新宿駅)이다. 이것만 남은 교통 행은 그 역 항목에 포함 연결한다.
 region	use	pattern
 # 교통 시설의 승강장·개찰구·출구·탑승구, 식음료 외 주차장
 JP	transit	番線
@@ -141,3 +146,22 @@ JP	flagship	本舗$
 JP	flagship	総本家$
 *	flagship_suffix	^(flagship|main store)$
 JP	flagship_suffix	^(総)?本店$
+# 항목 이름에 붙어도 같은 장소인 남은 이름
+*	same_kind	^(the|(the)?(temple|shrine|castle|castleruins|ruins|site|historicsite|building|geyser|falls|waterfall|lake|island|river|beach))$
+FR	same_kind	^(le|la|les|l)$
+BE	same_kind	^(le|la|les|l|de|het)$
+DE	same_kind	^(der|die|das)$
+AT	same_kind	^(der|die|das)$
+CH	same_kind	^(der|die|das|le|la|les|l)$
+ES	same_kind	^(el|la|los|las)$
+IT	same_kind	^(il|lo|la|i|gli|le|l)$
+JP	same_kind	^(跡|址|趾|跡地|遺跡|旧跡)$
+KR	same_kind	^(터|지|유적|유적지)$
+CN	same_kind	^(遗址|遺址|旧址|舊址)$
+TW	same_kind	^(遺址|舊址)$
+# " - "·쉼표 뒤에 붙어도 같은 장소인 꼬리말
+*	tail_filler	^(official|officiel|officielle|offiziell|oficial|ufficiale|officialsite|siteofficiel)$
+# 항목 이름과 그 뒤 지명 사이의 전치사(긴 것부터)
+*	place_preposition	^(des|del|dei|della|du|de|di|da|do|in|im|at|en|au|aux|a|à|of)
+# 역 이름 앞 운영사·노선(정확 키 전체)
+JP	operator_prefix	^(jr|jr東日本|jr西日本|jr東海|jr九州|jr北海道|jr四国|東京メトロ|都営|都営地下鉄|京王|京王電鉄|小田急|西武|東武|東急|京急|京成|相鉄|近鉄|阪急|阪神|南海|京阪|名鉄|西鉄|大阪メトロ|osakametro|市営地下鉄|地下鉄)(線)?$

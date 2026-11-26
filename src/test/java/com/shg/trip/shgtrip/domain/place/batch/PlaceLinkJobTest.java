@@ -210,6 +210,23 @@ class PlaceLinkJobTest {
     }
 
     @Test
+    @DisplayName("파이프라인 판정은 근처 쌍에 없거나 입력 지문이 달라도 대표 행 계산에 쓰고 다시 묻지 않는다")
+    void pipelineVerdictsSurviveRelinking() {
+        attractionPairs("Busan", new PairRow(1, 2, 17));
+        when(links.findVerdicts("Busan")).thenReturn(List.of(
+                new VerdictRow(1, 2, "SAME", PlaceLinkJob.BASIS_PIPELINE, "run-a"),
+                new VerdictRow(5, 6, "SAME", PlaceLinkJob.BASIS_PIPELINE, "run-a")));
+
+        job.run();
+
+        verify(client, never()).submit(anyList());
+        verify(links, never()).upsertVerdicts(anyList());
+        ArgumentCaptor<Collection<LinkRow>> written = ArgumentCaptor.forClass(Collection.class);
+        verify(links).replaceLinks(eq("Busan"), written.capture());
+        assertThat(written.getValue()).containsExactlyInAnyOrder(new LinkRow(2, 1, "SAME"), new LinkRow(6, 5, "SAME"));
+    }
+
+    @Test
     @DisplayName("상한이 1보다 작으면 묻지 않은 채 조용히 끝나지 않고 실패한다")
     void rejectsNonPositiveCap() {
         ReflectionTestUtils.setField(job, "maxPairs", 0);

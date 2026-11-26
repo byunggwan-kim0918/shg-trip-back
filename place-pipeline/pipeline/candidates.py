@@ -11,7 +11,7 @@ from . import identity, policy
 from .rules import literal as _literal
 from .rules import load_name_rules, match_sql
 from .categories import load_overture_map, overture_label
-from .names import exact_key
+from .names import exact_key, korean_label, wikidata_korean_label
 
 COMMON_COLUMNS = ("source, source_id, release, name, name_key, names, lat, lon, country, address, locality, "
                   "category_raw, category, refreshed_at, closed, flagged, flagged_review, brand, links, datasets, websites, "
@@ -24,6 +24,9 @@ def register_functions(con, mapping=None):
         return
     mapping = mapping if mapping is not None else load_overture_map()
     con.create_function("name_key", exact_key, [VARCHAR], VARCHAR)
+    con.create_function("korean_label", korean_label, [VARCHAR, VARCHAR], VARCHAR, null_handling="special")
+    con.create_function("wikidata_korean_label", wikidata_korean_label, [VARCHAR, VARCHAR], VARCHAR,
+                        null_handling="special")
 
     def label(hierarchy, primary):
         found, _ = overture_label(hierarchy, primary, mapping)

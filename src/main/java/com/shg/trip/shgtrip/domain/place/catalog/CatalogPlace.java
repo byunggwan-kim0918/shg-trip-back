@@ -11,16 +11,18 @@ import java.util.List;
  * @param embedding halfvec 문자열("[0.1,...]"). 이름 대조 결과에는 읽지 않아 null이다
  * @param readings  이름의 규칙 한글 읽기(place-pipeline readings). 초안 이름과 같은 곳인지 대조하는 근거이고 신원은 아니다
  * @param latin     로마자로 읽히지 않는 영어 낱말
+ * @param sourceRefs 원천 행 id("overture:…"·"fsq:…"). 첫 값이 이 행이고 나머지는 같은 장소로 합쳐진 원천 행이다. 없으면 빈 목록
  */
 public record CatalogPlace(String name, String nameKo, String address, double latitude, double longitude,
                            String category, String region, String country, String source, String fsqPlaceId,
                            String wikidataId, Integer wikidataSitelinks, String placeRole, String cuisine,
                            String description, List<String> tags, String embedding, List<String> readings,
-                           List<String> latin) {
+                           List<String> latin, List<String> sourceRefs) {
 
     public CatalogPlace {
         readings = readings == null ? List.of() : List.copyOf(readings);
         latin = latin == null ? List.of() : List.copyOf(latin);
+        sourceRefs = sourceRefs == null ? List.of() : List.copyOf(sourceRefs);
     }
 
     public CatalogPlace(String name, String nameKo, String address, double latitude, double longitude,
@@ -28,12 +30,12 @@ public record CatalogPlace(String name, String nameKo, String address, double la
                         String wikidataId, Integer wikidataSitelinks, String placeRole, String cuisine,
                         String description, List<String> tags, String embedding) {
         this(name, nameKo, address, latitude, longitude, category, region, country, source, fsqPlaceId, wikidataId,
-                wikidataSitelinks, placeRole, cuisine, description, tags, embedding, List.of(), List.of());
+                wikidataSitelinks, placeRole, cuisine, description, tags, embedding, List.of(), List.of(), List.of());
     }
 
     public CatalogPlace withEmbedding(String value) {
         return new CatalogPlace(name, nameKo, address, latitude, longitude, category, region, country, source, fsqPlaceId,
-                wikidataId, wikidataSitelinks, placeRole, cuisine, description, tags, value, readings, latin);
+                wikidataId, wikidataSitelinks, placeRole, cuisine, description, tags, value, readings, latin, sourceRefs);
     }
 
     /** 이름 해석 규칙에 넣을 저장 전 장소. id는 같은 해석 안에서만 쓰는 음수 자리표다. */
