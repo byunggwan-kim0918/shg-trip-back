@@ -95,7 +95,7 @@ class TripConditionChecksTest {
     }
 
     @Test
-    @DisplayName("관광 없이 허브로 가는 출발일도 허브에 늦게 닿으면 출발 초과다")
+    @DisplayName("관광 없이 허브로 가는 출발일이 늦으면 편집으로 고칠 수 없는 출발 초과다")
     void hubOnlyDepartureDayIsChecked() {
         TripConditions conditions = conditions(List.of(), null, LocalTime.of(10, 0), List.of());
         StepData station = new StepData(1, 2, "09:29", "09:59",
@@ -103,7 +103,9 @@ class TripConditionChecksTest {
                 "BUS", 189, null, null, null, null);
         List<StepData> steps = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), station);
 
-        assertThat(evaluate(steps, 2, conditions)).extracting(Violation::rule).contains(Rule.DEPARTURE_MISSED);
+        assertThat(evaluate(steps, 2, conditions)).extracting(Violation::rule)
+                .contains(Rule.DEPARTURE_UNREACHABLE).doesNotContain(Rule.DEPARTURE_MISSED);
+        assertThat(Rule.DEPARTURE_UNREACHABLE.fromRequest).isTrue();
     }
 
     @Test
@@ -194,15 +196,134 @@ class TripConditionChecksTest {
                 });
     }
 
+    private static final TripConditions.Area BUSAN_AREA = new TripConditions.Area("부산", 35.18, 129.08, 20, 25);
+    private static final TripConditions.Area GYEONGJU_AREA = new TripConditions.Area("경주", 35.84, 129.21, 15, 25);
+
+    @Test
+    @DisplayName("들르기로 한 지역에 활동이 하나도 없으면 지킬 수 없는 위반이고 편집 대상이다")
+    void visitAreaWithoutActivityIsHard() {
+        PlaceCandidate bulguksa = candidateAt(6, "불국사", BEACH, "SIGHT", 35.79, 129.33);
+        List<StepData> busanOnly = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "12:00", "13:00", LUNCH));
+        List<StepData> both = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "12:00", "13:00", LUNCH),
+                step(3, 1, "15:00", "16:30", bulguksa));
+        TripConditions conditions = layoutConditions(
+                new TripConditions.Layout(List.of(BUSAN_AREA, GYEONGJU_AREA), Map.of(), List.of()));
+        List<PlaceCandidate> candidates = withAll(bulguksa);
+
+        assertThat(evaluate(busanOnly, 1, conditions, candidates)).filteredOn(v -> v.rule() == Rule.AREA_MISSING)
+                .singleElement()
+                .satisfies(v -> assertThat(v.severity()).isEqualTo(Severity.HARD))
+                .extracting(Violation::evidence).asList().containsExactly("경주");
+        assertThat(Rule.AREA_MISSING.fromRequest).isFalse();
+        assertThat(evaluate(both, 1, conditions, candidates)).extracting(Violation::rule)
+                .doesNotContain(Rule.AREA_MISSING);
+    }
+
+    @Test
+    @DisplayName("밤 숙소가 묵기로 한 도시 범위 밖이면 편집으로 고칠 수 없는 지킬 수 없는 위반이다")
+    void lodgingOutsidePlannedCityIsHard() {
+        PlaceCandidate gyeongjuHotel = candidateAt(7, "경주호텔", HOTEL, "LODGING", 35.83, 129.22);
+        TripConditions conditions = layoutConditions(new TripConditions.Layout(List.of(),
+                Map.of(1, GYEONGJU_AREA, 2, BUSAN_AREA), List.of()));
+        List<PlaceCandidate> candidates = withAll(gyeongjuHotel);
+        List<StepData> busanNight = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "21:00", "21:00",
+                HOTEL_SPOT));
+        List<StepData> gyeongjuNight = List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "21:00", "21:00",
+                gyeongjuHotel));
+
+        assertThat(evaluate(busanNight, 3, conditions, candidates)).filteredOn(v -> v.rule() == Rule.STAY_MISMATCH)
+                .singleElement()
+                .satisfies(v -> assertThat(v.severity()).isEqualTo(Severity.HARD))
+                .extracting(Violation::evidence).asList().containsExactly("경주", "해운대호텔");
+        assertThat(Rule.STAY_MISMATCH.fromRequest).isTrue();
+        assertThat(evaluate(gyeongjuNight, 3, conditions, candidates)).extracting(Violation::rule)
+                .doesNotContain(Rule.STAY_MISMATCH);
+        TripConditions booked = new TripConditions(List.of(), Map.of(), List.of(), false, "transit", null, null, "normal",
+                java.util.Set.of(HOTEL_SPOT.placeId()), conditions.layout());
+        assertThat(evaluate(busanNight, 3, booked, candidates)).as("예약한 숙소는 저장 관문에서도 id로 따른다")
+                .extracting(Violation::rule).doesNotContain(Rule.STAY_MISMATCH);
+    }
+
+    @Test
+    @DisplayName("렌터카와 버스·택시를 숙소·역이 아닌 곳에서 바꾸면 안내하고, 숙소에서 바꾸거나 걸어서 잇는 것은 그대로 둔다")
+    void rentalHandoffAtOrdinaryPlace() {
+        PlaceCandidate lake = candidateAt(8, "아오이이케", BEACH, "SIGHT", 35.30, 129.20);
+        List<PlaceCandidate> candidates = withAll(lake);
+        TripConditions conditions = conditions(List.of(), null, null, List.of());
+        List<StepData> handoff = List.of(step(1, 1, "09:00", "09:00", HOTEL_SPOT),
+                legStep(2, "10:00", "11:00", lake, "CAR", 50, 30), legStep(3, "12:00", "13:00", LUNCH, "BUS", 50, 30),
+                legStep(4, "14:00", "15:00", BEACH_SPOT, "TAXI", 10, 3));
+        List<StepData> fromHotel = List.of(step(1, 1, "09:00", "09:00", HOTEL_SPOT),
+                legStep(2, "10:00", "11:00", lake, "CAR", 50, 30), legStep(3, "11:10", "12:00", BEACH_SPOT, "WALK", 5, 0.3),
+                legStep(4, "12:30", "13:30", LUNCH, "CAR", 40, 30));
+
+        assertThat(evaluate(handoff, 1, conditions, candidates)).filteredOn(v -> v.rule() == Rule.RENTAL_HANDOFF)
+                .singleElement().extracting(Violation::evidence).asList().containsExactly("아오이이케");
+        assertThat(evaluate(fromHotel, 1, conditions, candidates)).extracting(Violation::rule)
+                .doesNotContain(Rule.RENTAL_HANDOFF);
+        List<StepData> driveOn = List.of(step(1, 1, "09:00", "09:00", HOTEL_SPOT),
+                legStep(2, "10:00", "11:00", lake, "CAR", 50, 30), legStep(3, "13:00", "14:00", LUNCH, "DRIVE", 90, 100));
+        assertThat(evaluate(driveOn, 1, conditions, candidates)).as("도시 간 자동차 구간").extracting(Violation::rule)
+                .doesNotContain(Rule.RENTAL_HANDOFF);
+    }
+
+    @Test
+    @DisplayName("렌터카 지역에서 떠나는 구간은 여행 전체의 대중교통 상한이 아니라 차 상한으로 잰다")
+    void carAreaLegUsesCarCap() {
+        PlaceCandidate farm = candidateAt(9, "팜도미타", BEACH, "SIGHT", 35.84, 129.21);
+        PlaceCandidate lake = candidateAt(10, "아오이이케", BEACH, "SIGHT", 35.84, 129.56);
+        List<PlaceCandidate> candidates = new ArrayList<>(withAll(farm));
+        candidates.add(lake);
+        List<StepData> day = List.of(step(1, 1, "10:00", "11:00", farm),
+                legStep(2, "12:00", "13:00", lake, "CAR", 40, 32 * 1.3));
+        TripConditions.Layout carInGyeongju = new TripConditions.Layout(List.of(), Map.of(),
+                List.of(new TripConditions.AreaMode(GYEONGJU_AREA, "car")));
+
+        assertThat(evaluate(day, 1, conditions(List.of(), null, null, List.of()), candidates))
+                .extracting(Violation::rule).contains(Rule.LEG_OVER_CAP);
+        assertThat(evaluate(day, 1, layoutConditions(carInGyeongju), candidates))
+                .extracting(Violation::rule).doesNotContain(Rule.LEG_OVER_CAP);
+    }
+
+    private static StepData legStep(int order, String start, String end, PlaceCandidate c, String mode, int minutes,
+                                    double roadKm) {
+        return new StepData(order, 1, start, end,
+                new PlaceData(c.name(), null, c.category(), c.region(), "KR", null, null, c.placeId(), null),
+                List.of(), mode, minutes, BigDecimal.valueOf(roadKm), null, null, null);
+    }
+
+    private static TripConditions layoutConditions(TripConditions.Layout layout) {
+        return new TripConditions(List.of(), Map.of(), List.of(), false, "transit", null, null, "normal",
+                java.util.Set.of(), layout);
+    }
+
+    private static List<PlaceCandidate> withAll(PlaceCandidate extra) {
+        List<PlaceCandidate> out = new ArrayList<>(ALL);
+        out.add(extra);
+        return out;
+    }
+
+    private static PlaceCandidate candidateAt(long id, String name, String category, String role, double lat,
+                                              double lng) {
+        return new PlaceCandidate((int) id, id, name, null, category, List.of(), "Gyeongju", "KR",
+                BigDecimal.valueOf(lat), BigDecimal.valueOf(lng), null, null, 0.0, null, null, null, null, false,
+                null, null, null, null, role, null, false, null, null, null, null);
+    }
+
     private List<StepData> lastDayAt(String stationStart) {
         return List.of(step(1, 1, "10:00", "11:30", BEACH_SPOT), step(2, 1, "12:00", "13:00", LUNCH),
                 step(3, 1, stationStart, stationStart, BUSAN_STATION));
     }
 
     private List<Violation> evaluate(List<StepData> steps, int days, TripConditions conditions) {
+        return evaluate(steps, days, conditions, ALL);
+    }
+
+    private List<Violation> evaluate(List<StepData> steps, int days, TripConditions conditions,
+                                     List<PlaceCandidate> candidates) {
         ItineraryRules.Context ctx = new ItineraryRules.Context("normal", "any", START, days, null, Map.of(),
                 conditions, "KR", List.of(new ItineraryRules.City("부산", 35.18, 129.08)));
-        return rules.evaluate(steps, ALL, ctx, Map.of()).violations();
+        return rules.evaluate(steps, candidates, ctx, Map.of()).violations();
     }
 
     private static TripConditions conditions(List<TripConditions.Want> wants, LocalTime arrival, LocalTime departure,

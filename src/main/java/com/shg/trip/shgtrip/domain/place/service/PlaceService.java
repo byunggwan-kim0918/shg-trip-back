@@ -56,7 +56,7 @@ public class PlaceService {
     }
 
     /** 사용자가 친 %, _가 와일드카드로 해석되면 모든 장소가 이름 일치 순위로 올라온다. */
-    static String escapeLike(String value) {
+    public static String escapeLike(String value) {
         return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 

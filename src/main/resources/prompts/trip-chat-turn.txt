@@ -81,7 +81,8 @@ remove의 value는 <conditions>에 적힌 값을 글자 그대로 쓴다. 서버
 <fields>
 | field | value |
 |---|---|
-| DESTINATION | 여행자가 말한 지명 그대로. 예: "부산", "해운대", "제주". 지역 하나만 말하면 그대로 넣는다. 도시와 그 안의 장소·거리를 함께 말하면("목포 근대역사관 가고 싶어요", "경주 황리단길 가요") 도시만 넣고 장소는 MUST_VISIT에 넣는다. 장소는 MUST_VISIT에 있어야 일정 생성이 꼭 넣을 곳으로 다룬다. 실제로 갈 수 있는 지명이 아니면(행성, 지어낸 나라) 넣지 않고 followUp reason vague로 실제 도시나 지역을 되묻는다 |
+| DESTINATION | 여행자가 말한 지명 그대로. 여러 도시를 돌면 그 도시들을 묶는 지역(말한 그대로, 예: "홋카이도", "부산·경주")이고 도시 하나하나는 VISIT_AREAS에 넣는다. 예: "부산", "해운대", "제주". 지역 하나만 말하면 그대로 넣는다. 도시와 그 안의 장소·거리를 함께 말하면("목포 근대역사관 가고 싶어요", "경주 황리단길 가요") 도시만 넣고 장소는 MUST_VISIT에 넣는다. 장소는 MUST_VISIT에 있어야 일정 생성이 꼭 넣을 곳으로 다룬다. 실제로 갈 수 있는 지명이 아니면(행성, 지어낸 나라) 넣지 않고 followUp reason vague로 실제 도시나 지역을 되묻는다 |
+| VISIT_AREAS (목록) | 여행 중 들르겠다고 한 도시·지역 이름 하나씩. 어느 질문에 답하다 나왔든 넣는다(이동·숙소를 말하다 "경주는 렌터카로"처럼 나와도 들를 곳이다). 여행지 하나만 말했으면 넣지 않는다. 명소 이름은 MUST_VISIT이다 |
 | START_DATE, END_DATE | "YYYY-MM-DD". 날짜를 특정했을 때만. "11월 20일부터 25일까지"면 둘 다. "이번 주말"처럼 오늘 기준으로 하나로 정해지는 표현은 계산한다. 연도를 말하지 않았으면 오늘 이후 가장 가까운 날짜. 지난 날짜를 말하면 미래로 옮기지 말고 그대로 넣는다 |
 | DATE_APPROX | 날짜를 특정하지 않은 시기. "월\|구간", 구간은 early(초)·mid(중순)·late(말)·whole(그 달 전체). 연도를 말했을 때만 "YYYY-월\|구간". 예: "11월 중순쯤" → "11\|mid" |
 | NIGHTS | 박 수 정수. "2박 3일" → "2", "사흘" → "2" |
@@ -92,9 +93,11 @@ remove의 value는 <conditions>에 적힌 값을 글자 그대로 쓴다. 서버
 | CATEGORIES (목록) | attraction restaurant cafe accommodation experience shopping nightlife nature museum theme_park spa market beach temple street_food viewpoint trail 중 직접 이어지는 0~4개. 항상 inferred |
 | PACE | tight(알차게·많이)·normal·relaxed(느긋하게·쉬면서) |
 | TRANSPORT | car(자동차·렌터카)·walk(걸어서)·walk_transit(걷다가 멀면 택시·버스)·transit(대중교통, "차 없이"·"뚜벅이")·taxi·mixed·any(상관없음). 걷겠다고 말하지 않았으면 walk·walk_transit으로 보지 않는다 |
+| AREA_TRANSPORT (목록) | 지역마다 다른 이동 방법을 말했을 때 "지역\|값" 하나씩. 값은 TRANSPORT와 같다. 이때 TRANSPORT는 mixed다. 예: "부산은 지하철, 경주는 렌터카" → "부산\|transit", "경주\|car" |
 | WALKING | 활동량·걷기 부담. 예: "오래 걷기 힘들어요" |
 | LODGING_STATE | booked(예약했다고 말함)·wish(자고 싶은 곳·지역)·none(숙소 아직 없음) |
-| LODGING | 숙소 이름 또는 지역. 여러 곳이면 첫 곳만, 나머지는 NOTES에 "숙소: …" |
+| LODGING | 숙소 이름 또는 지역. 여러 곳이면 첫 곳만, 나머지는 NOTES에 "숙소: …". 묵는 지역의 순서와 박 수는 STAYS에도 넣는다 |
+| STAYS | 묵는 지역과 박 수를 말했을 때 숙박 순서 전체를 "지역\|박 수"를 쉼표로 이어 한 번 set. 같은 지역에 다시 묵으면 그 자리에 다시 쓴다. 순서나 박 수를 고치면 전체를 다시 set한다. 예: "서울 1박, 부산 1박 하고 다시 서울 1박" → "서울\|1,부산\|1,서울\|1". 박 수를 말하지 않은 지역은 넣지 않는다 |
 | MUST_VISIT (목록) | 꼭 가고 싶다고 한 특정 장소 이름(고유명사). 방문 희망이지 예약이 아니다. "야시장", "박물관"처럼 종류만 말하면 PRIORITIES나 NOTES에 넣는다 |
 | BOOKED (목록) | 예약했다고 말한 체험·식당·공연·교통편. date "YYYY-MM-DD", time "HH:mm"은 말했을 때만 |
 | BUDGET | 원 단위 정수. "50만원" → "500000" |
@@ -159,6 +162,32 @@ reply "12월 4일부터 이틀, 친구 셋이서 군산 근대거리 걷는 여�
 출력: kind "answer", slotOutcome "answered",
 updates [TRANSPORT set "transit"(user, raw "버스로 다닐게요"), PRIORITIES remove "호수 보며 산책하기"(user, raw "산책은 소양강 쪽이면 좋겠어요"), PRIORITIES add "소양강 쪽 호수 산책"(user, 같은 raw)],
 reply "버스로 다니고, 산책은 소양강 쪽으로 기억해둘게요.", followUp needed=false
+</example>
+
+<example>
+<question>TRANSPORT 기본 "여행지에서는 어떻게 이동하나요?"</question>
+<conditions>
+- DESTINATION: 부산·경주 (user, 1번 답 "부산이랑 경주 갈 거예요")
+- VISIT_AREAS: 부산 (user, 1번 답 "부산이랑 경주 갈 거예요")
+- VISIT_AREAS: 경주 (user, 1번 답 "부산이랑 경주 갈 거예요")
+</conditions>
+<answer>"부산이랑 울산은 지하철이랑 버스, 경주는 렌터카로 다닐래요"</answer>
+판단: answer. 지역마다 이동 방법이 다르다. 울산은 처음 나온 들를 곳이라 VISIT_AREAS에도 덧붙인다.
+출력: kind "answer", slotOutcome "answered",
+updates [TRANSPORT set "mixed"(user, raw "부산이랑 울산은 지하철이랑 버스, 경주는 렌터카로 다닐래요"), AREA_TRANSPORT add "부산|transit"(user, raw "부산이랑 울산은 지하철이랑 버스"), AREA_TRANSPORT add "울산|transit"(user, 같은 raw), AREA_TRANSPORT add "경주|car"(user, raw "경주는 렌터카로 다닐래요"), VISIT_AREAS add "울산"(user, raw "부산이랑 울산은 지하철이랑 버스")],
+reply "부산·울산은 대중교통, 경주는 렌터카로 다니는 걸로 기억해둘게요.", followUp needed=false
+</example>
+
+<example>
+<question>ANCHORS 기본 "이미 정해둔 게 있나요?"</question>
+<conditions>
+- DESTINATION: 부산·경주 (user, 1번 답 "부산이랑 경주 갈 거예요")
+</conditions>
+<answer>"정해둔 곳은 없는데 경주 1박 하고 부산 2박 할 거예요"</answer>
+판단: answer. 묵는 순서와 박 수를 말했다. 꼭 갈 곳은 없다.
+출력: kind "answer", slotOutcome "answered",
+updates [STAYS set "경주|1,부산|2"(user, raw "경주 1박 하고 부산 2박")],
+reply "경주에서 1박, 부산에서 2박 하는 순서로 기억해둘게요.", followUp needed=false
 </example>
 
 <example>

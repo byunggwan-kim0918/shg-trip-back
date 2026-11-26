@@ -16,6 +16,8 @@ public final class WizardOptionIds {
                     + "|theme_park|spa|market|beach|temple|street_food|viewpoint|trail";
     public static final String PACE_PATTERN = "tight|normal|relaxed";
     public static final String TRANSPORT_PATTERN = "walk|car|any";
+    /** 지역별 이동 방법. 지역 하나에서는 택시와 대중교통을 나눠 구간 수단을 정한다. */
+    public static final String AREA_TRANSPORT_PATTERN = "walk|car|transit|taxi|any";
 
     public static final Set<String> THEMES = Set.of(THEME_PATTERN.split("\\|"));
     public static final Set<String> CATEGORIES = Set.of(CATEGORY_PATTERN.split("\\|"));

@@ -21,6 +21,7 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Optional;
 import java.util.Map;
 import java.util.Set;
 
@@ -44,6 +45,11 @@ public class PlaceMatcher {
     private final Destinations destinations;
     private final PlaceFactsReader factsReader;
 
+    /** 여행자가 말한 지역 이름을 그 나라 여행지로. 생성의 지역 해석과 같은 판정이다. */
+    public Optional<Destination> areaOf(String name, String country) {
+        return destinations.resolveArea(name, country);
+    }
+
     /** {@link #suggestions}에서 여행지 밖에는 있는 장소의 표시. */
     public static final String ELSEWHERE = "";
 
@@ -52,9 +58,19 @@ public class PlaceMatcher {
     }
 
     /** 다시 맞출지 판단하는 값. 여행지나 정해둔 것이 바뀔 때만 DB를 조회한다. */
+    /**
+     * 장소를 찾을 여행지. 묶음 여행지("홋카이도")는 목록에 없어 그 이름만으로는 찾을 지역이 없으므로 들를 지역을 함께 쓴다.
+     */
+    public static String scope(Draft draft) {
+        String destination = draft.value(DraftField.DESTINATION);
+        List<String> areas = TripRequestMapper.visitAreas(draft);
+        if (areas.isEmpty()) return destination;
+        return destination == null ? String.join("·", areas) : destination + "·" + String.join("·", areas);
+    }
+
     public static String signature(Draft draft) {
         List<String> parts = new ArrayList<>();
-        parts.add(String.valueOf(draft.value(DraftField.DESTINATION)));
+        parts.add(String.valueOf(scope(draft)));
         parts.add(String.valueOf(TripRequestMapper.userValue(draft, DraftField.LODGING_STATE)));
         parts.add(String.valueOf(TripRequestMapper.userValue(draft, DraftField.LODGING)));
         TripRequestMapper.userItems(draft, DraftField.MUST_VISIT).forEach(i -> parts.add("m:" + i.text()));
@@ -66,7 +82,7 @@ public class PlaceMatcher {
     /** 사용자가 말한 이름만 맞춘다. 모델이 추론한 장소는 일정에 고정하지 않는다. */
     public Map<String, PlaceMatch> match(Draft draft) {
         Map<String, PlaceMatch> out = new LinkedHashMap<>();
-        String destination = draft.value(DraftField.DESTINATION);
+        String destination = scope(draft);
         String lodging = TripRequestMapper.userValue(draft, DraftField.LODGING);
         if (lodging != null && "booked".equals(TripRequestMapper.userValue(draft, DraftField.LODGING_STATE))) {
             find(lodging, destination).ifPresent(m -> out.put(key(DraftField.LODGING, lodging), m));
@@ -92,7 +108,7 @@ public class PlaceMatcher {
      */
     public Map<String, String> suggestions(Draft draft, Map<String, PlaceMatch> matched) {
         Map<String, String> out = new LinkedHashMap<>();
-        String destination = draft.value(DraftField.DESTINATION);
+        String destination = scope(draft);
         Set<String> regions = destination == null ? Set.of() : destinationRegions(destination);
         if (regions.isEmpty()) return out;
         for (Item item : TripRequestMapper.userItems(draft, DraftField.MUST_VISIT)) {

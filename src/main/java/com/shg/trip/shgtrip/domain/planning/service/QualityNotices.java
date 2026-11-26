@@ -35,8 +35,11 @@ public final class QualityNotices {
         return switch (v.rule()) {
             case DAY_MISSING -> d + "일차 일정이 비어 있어요.";
             case CLOSED_DAY -> d + "일차 " + quoted(v, 0) + "은(는) 휴무일이에요. 다른 곳으로 바꿔 주세요.";
-            case DEPARTURE_MISSED -> d + "일차 출발 시각에 맞추기 어려워요. 출발 시간을 다시 확인해 주세요.";
+            case DEPARTURE_MISSED, DEPARTURE_UNREACHABLE -> d + "일차 출발 시각에 맞추기 어려워요. 출발 시간을 다시 확인해 주세요.";
+            case AREA_MISSING -> "들르기로 한 " + quoted(v, 0) + "에 가는 일정이 없어요.";
+            case STAY_MISMATCH -> d + "일차 밤 숙소가 묵기로 한 " + quoted(v, 0) + "이(가) 아니에요.";
             case LUNCH_MISSING -> d + "일차에 점심 식사가 없어요.";
+            case RENTAL_HANDOFF -> d + "일차 " + quoted(v, 0) + "에서 렌터카와 다른 교통편을 바꿔 타요. 차를 빌리고 반납할 곳을 확인해 주세요.";
             case DINNER_MISSING -> d + "일차에 저녁 식사가 없어요.";
             // 숙소·출발 허브는 편집으로 자리와 시각이 바뀌지 않아 할 일을 붙이지 않는다.
             case NOT_ENDING_AT_LODGING -> d + "일차 일정이 숙소에서 끝나지 않아요.";
@@ -99,7 +102,7 @@ public final class QualityNotices {
 
     // 여행 조건이 없는 옛 판정 입력은 출발이 일러 빈 마지막 날도 날짜 누락으로 판정한다. 조건이 있으면 그날은 판정에서 빠진다.
     private static boolean causedByDeparture(Violation v, ItineraryRules.Context ctx) {
-        return v.rule() == ItineraryRules.Rule.DEPARTURE_MISSED
+        return v.rule() == ItineraryRules.Rule.DEPARTURE_MISSED || v.rule() == ItineraryRules.Rule.DEPARTURE_UNREACHABLE
                 || (v.rule() == ItineraryRules.Rule.DAY_MISSING && ctx != null && ctx.conditions() == null
                 && ctx.lastDayHubDeadline() != null && ctx.dayCount() > 0 && v.day() == ctx.dayCount());
     }
@@ -112,6 +115,12 @@ public final class QualityNotices {
         return switch (v.rule()) {
             case DEPARTURE_MISSED -> new Rejection("마지막 날 출발 시각까지 공항·역에 닿는 일정을 만들 수 없어 저장하지 않았어요.",
                     checkDeparture);
+            case DEPARTURE_UNREACHABLE -> new Rejection("숙소에서 바로 가도 마지막 날 출발 시각까지 공항·역에 닿지 못해 "
+                    + "저장하지 않았어요.", "출발 시각을 늦춰 다시 만들어 주세요.");
+            case STAY_MISMATCH -> new Rejection(v.day() + "일차 밤을 묵기로 한 " + quoted(v, 0) + "에서 묵을 숙소를 찾지 못해 "
+                    + "저장하지 않았어요.", "숙박 계획을 바꿔 다시 만들어 주세요.");
+            case AREA_MISSING -> new Rejection("들르기로 한 " + quoted(v, 0) + "을(를) 일정에 넣지 못해 저장하지 않았어요.",
+                    changeRequest);
             case DAY_MISSING -> causedByDeparture(v, ctx)
                     ? new Rejection("마지막 날 출발 시각이 일러 그날 일정을 넣지 못해 저장하지 않았어요.", checkDeparture)
                     : new Rejection(v.day() + "일차 일정을 채우지 못해 저장하지 않았어요.", retry);
@@ -134,7 +143,7 @@ public final class QualityNotices {
                     + "을(를) 넣을 시간이 있는 날이 없어 저장하지 않았어요.", changeRequest);
             case LUNCH_MISSING, DINNER_MISSING, MEALS_BACK_TO_BACK, DEPARTURE_LATE, SAME_DAY_MEAL_KIND,
                  MEAL_KIND_REPEATED, CAFE_PER_DAY, NO_NON_FOOD_ACTIVITY, ADDRESS_REGION_MISMATCH, WANT_FOOD_MISSING,
-                 WANT_NOT_FOUND, WANT_NO_SLOT, WANT_ACCEPTED_UNMET, HOURS_UNKNOWN,
+                 WANT_NOT_FOUND, WANT_NO_SLOT, WANT_ACCEPTED_UNMET, HOURS_UNKNOWN, RENTAL_HANDOFF,
                  PACE_SHORT, LONG_GAP, LONG_LEG, DAILY_TRANSIT, STRENUOUS, DUPLICATE, EARLY_FINISH, LEG_OVER_CAP,
                  DAY_DISTANCE_OVER_CAP, CONSECUTIVE_MEAL_KIND, SAME_DAY_MEAL_GROUP, MEAL_GROUP_REPEATED -> null;
         };

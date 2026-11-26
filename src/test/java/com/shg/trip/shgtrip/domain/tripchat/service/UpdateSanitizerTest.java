@@ -41,6 +41,23 @@ class UpdateSanitizerTest {
     }
 
     @Test
+    @DisplayName("지역별 이동·숙박은 '지역|값' 형식만 받고 값이 어휘·범위를 벗어난 쌍은 버린다")
+    void layoutPairsAreValidated() {
+        String answer = "삿포로 2박 하고 후라노는 렌터카";
+        List<DraftEvent> events = run(answer, "answered",
+                u("STAYS", "set", " 삿포로 | 2 ,후라노|40, 오타루", "user", "삿포로 2박"),
+                u("AREA_TRANSPORT", "add", "후라노|car", "user", "후라노는 렌터카"),
+                u("AREA_TRANSPORT", "add", "후라노|helicopter", "user", "후라노는 렌터카"),
+                u("AREA_TRANSPORT", "add", "렌터카", "user", "렌터카"),
+                u("VISIT_AREAS", "add", "후라노", "user", "후라노"));
+
+        assertThat(events).extracting(DraftEvent::field, DraftEvent::value).containsExactly(
+                org.assertj.core.groups.Tuple.tuple(DraftField.STAYS, "삿포로|2"),
+                org.assertj.core.groups.Tuple.tuple(DraftField.AREA_TRANSPORT, "후라노|car"),
+                org.assertj.core.groups.Tuple.tuple(DraftField.VISIT_AREAS, "후라노"));
+    }
+
+    @Test
     @DisplayName("원문 비교는 띄어쓰기·문장부호를 무시한다")
     void evidenceIgnoresSpacing() {
         List<DraftEvent> events = run("블루라인 파크 가고 싶어!", "answered",

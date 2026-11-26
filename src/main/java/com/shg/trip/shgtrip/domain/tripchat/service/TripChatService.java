@@ -41,6 +41,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -356,6 +357,7 @@ public class TripChatService {
         if (!it.isAnswer()) return List.of();
         AtomicLong probeSeq = new AtomicLong();
         List<DraftEvent> probe = UpdateSanitizer.toEvents(it, q.slot(), text, probeSeq::incrementAndGet);
+        if (changesDestination(DraftFolder.fold(st.getEvents()), probe)) clearLayout(st);
         if (q.kind() == QuestionKind.EDIT && probe.stream().anyMatch(e -> e.slot() == q.slot())) {
             clearSlot(st, q.slot());
         }
@@ -396,6 +398,7 @@ public class TripChatService {
         if (closed.isPresent()) {
             // 나머지 질문을 다 받고 확인 단계에서야 막히지 않게 여행지를 지우고 바로 다시 묻는다.
             clearSlot(st, Slot.CITY);
+            clearLayout(st);
             st.setResume(null);
             open(st, QuestionBank.base(Slot.CITY, DraftFolder.fold(st.getEvents()), today(), closed.get()));
             save(session, TripChatStatus.ASKING, st);
@@ -403,15 +406,19 @@ public class TripChatService {
         }
         if (matches != null && matches.signature().equals(PlaceMatcher.signature(draft))) {
             st.setMatches(new LinkedHashMap<>(matches.byKey()));
+            st.setMatchSuggestions(new LinkedHashMap<>(matches.suggestions()));
             st.setMatchSignature(matches.signature());
         }
-        boolean freshMatches = matches != null && matches.signature().equals(PlaceMatcher.signature(draft));
+        // 맞춘 결과가 지금 상태의 것이면 이번 턴에 다시 맞추지 않았어도 쓴다. 못 찾은 곳 여럿을 한 턴에 하나씩 묻는다.
+        boolean currentMatches = PlaceMatcher.signature(draft).equals(st.getMatchSignature());
         // 모델이 부딪힘을 되묻자고 했으면 그것을 먼저 묻는다(여행지를 바꾸자 앞 도시의 꼭 갈 곳이 남은 경우).
         boolean modelFirst = NextStepPolicy.modelAsksCritical(it);
+        String country = planningCountries.countryOf(draft.value(DraftField.DESTINATION),
+                TripRequestMapper.visitAreas(draft));
         OpenQuestion infeasible = modelFirst ? null : TripFeasibilityQuestions.next(draft,
-                freshMatches ? st.getMatches() : null, freshMatches ? matches.suggestions() : null,
-                st.getAskedKeys(), planningCountries.countryOf(draft.value(DraftField.DESTINATION)),
-                placeMatcher.cityOf(draft.value(DraftField.DESTINATION)).orElse(null));
+                currentMatches ? st.getMatches() : null, currentMatches ? st.getMatchSuggestions() : null,
+                st.getAskedKeys(), country, placeMatcher.cityOf(PlaceMatcher.scope(draft)).orElse(null),
+                name -> placeMatcher.areaOf(name, country));
         if (infeasible != null) {
             st.setResume(null);
             open(st, infeasible);
@@ -436,6 +443,12 @@ public class TripChatService {
         if (NextStepPolicy.conflictUnasked(it, d)) {
             String answer = st.getTurns().getLast().answer();
             addNote(st, unresolvedNote(it, answer), answer);
+        }
+        OpenQuestion flight = d.review() ? FlightTimesQuestion.next(draft, st.getAskedKeys(), country) : null;
+        if (flight != null) {
+            open(st, flight);
+            save(session, TripChatStatus.ASKING, st);
+            return;
         }
         if (d.review()) {
             st.setOpenQuestion(null);
@@ -494,7 +507,8 @@ public class TripChatService {
     }
 
     private Optional<String> closedDestination(Draft draft) {
-        return planningCountries.closedDestinationMessage(draft.value(DraftField.DESTINATION));
+        return planningCountries.closedDestinationMessage(draft.value(DraftField.DESTINATION),
+                TripRequestMapper.visitAreas(draft));
     }
 
     private static void clearSlot(ChatState st, Slot slot) {
@@ -502,6 +516,22 @@ public class TripChatService {
         for (DraftField f : DraftField.values()) {
             if (f.slot() == slot) st.getEvents().add(DraftEvent.clearField(st.nextSeq(), f));
         }
+    }
+
+    /** 여행지 안의 지역 이름을 담는 항목. 여행지가 바뀐 뒤 남기면 앞 여행지의 숙박·이동 계획이 새 여행지에 적용된다. */
+    static final Set<DraftField> LAYOUT_FIELDS = EnumSet.of(DraftField.VISIT_AREAS, DraftField.STAYS,
+            DraftField.AREA_TRANSPORT);
+
+    /** 새 답이 이미 정한 여행지를 다른 곳으로 바꾸면 true. 같은 여행지에 지역만 더한 답은 계획을 지우지 않는다. */
+    static boolean changesDestination(Draft before, List<DraftEvent> incoming) {
+        String was = before.value(DraftField.DESTINATION);
+        if (was == null) return false;
+        return incoming.stream().filter(e -> e.field() == DraftField.DESTINATION && e.op() == EventOp.SET)
+                .anyMatch(e -> !TextNormalizer.key(e.value()).equals(TextNormalizer.key(was)));
+    }
+
+    private static void clearLayout(ChatState st) {
+        LAYOUT_FIELDS.forEach(f -> st.getEvents().add(DraftEvent.clearField(st.nextSeq(), f)));
     }
 
     private void recordTurn(ChatState st, OpenQuestion q, String answer, String kind, String clientTurnId) {

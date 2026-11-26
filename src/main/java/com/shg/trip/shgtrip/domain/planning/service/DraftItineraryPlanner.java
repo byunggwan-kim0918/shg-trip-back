@@ -23,16 +23,22 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static com.shg.trip.shgtrip.domain.planning.service.CandidateGeo.coordsOf;
 
@@ -114,15 +120,26 @@ public class DraftItineraryPlanner {
      * @param bookedLodging    예약한 숙소. 그 도시의 밤은 모두 여기서 묵는다. 없으면 null
      * @param lodgingNeeds     밤(1부터)마다 숙소가 있어야 하는 곳. 시각이 있는 요구에서 나온다
      * @param eveningTransfers 저녁에 다음 도시로 옮겨 그 도시에서 자는 날(1부터)
+     * @param layout           사용자가 말한 방문 지역·숙박 순서·지역별 이동 방법
      */
     public record Request(VectorEnrichedInput input, DraftPlan draft, List<Destination> cities,
                           LocalTime arrival, LocalTime departure, PlaceCandidate arrivalHub,
                           PlaceCandidate departureHub, List<String> mustDo, List<UserWant> userWants,
                           Map<String, PlaceCandidate> pinned, PlaceCandidate bookedLodging, TripExclusions exclusions,
                           Map<Integer, LodgingNeed> lodgingNeeds, Set<Integer> eveningTransfers,
-                          List<String> avoidPlaceNames) {
+                          List<String> avoidPlaceNames, Layout layout) {
+
+        public Request(VectorEnrichedInput input, DraftPlan draft, List<Destination> cities, LocalTime arrival,
+                       LocalTime departure, PlaceCandidate arrivalHub, PlaceCandidate departureHub, List<String> mustDo,
+                       List<UserWant> userWants, Map<String, PlaceCandidate> pinned, PlaceCandidate bookedLodging,
+                       TripExclusions exclusions, Map<Integer, LodgingNeed> lodgingNeeds,
+                       Set<Integer> eveningTransfers, List<String> avoidPlaceNames) {
+            this(input, draft, cities, arrival, departure, arrivalHub, departureHub, mustDo, userWants, pinned,
+                    bookedLodging, exclusions, lodgingNeeds, eveningTransfers, avoidPlaceNames, Layout.NONE);
+        }
 
         public Request {
+            layout = layout == null ? Layout.NONE : layout;
             if (cities == null || cities.isEmpty()) throw new IllegalArgumentException("여행 도시가 없다");
             cities = List.copyOf(cities);
             mustDo = mustDo == null ? List.of() : List.copyOf(mustDo);
@@ -136,13 +153,14 @@ public class DraftItineraryPlanner {
 
         public Request withDraft(DraftPlan newDraft) {
             return new Request(input, newDraft, cities, arrival, departure, arrivalHub, departureHub, mustDo,
-                    userWants, pinned, bookedLodging, exclusions, lodgingNeeds, eveningTransfers, avoidPlaceNames);
+                    userWants, pinned, bookedLodging, exclusions, lodgingNeeds, eveningTransfers, avoidPlaceNames,
+                    layout);
         }
 
         public Request with(DraftPlan newDraft, Map<String, PlaceCandidate> newPinned,
                             Map<Integer, LodgingNeed> needs, Set<Integer> transfers) {
             return new Request(input, newDraft, cities, arrival, departure, arrivalHub, departureHub, mustDo,
-                    userWants, newPinned, bookedLodging, exclusions, needs, transfers, avoidPlaceNames);
+                    userWants, newPinned, bookedLodging, exclusions, needs, transfers, avoidPlaceNames, layout);
         }
 
         /** 도시 한국어 이름. 초안 이름 앞의 도시명을 떼는 데 쓴다. */
@@ -171,6 +189,71 @@ public class DraftItineraryPlanner {
 
         public UserWant(String text, String place, String time, PlaceCandidate pinned) {
             this(text, place, time, pinned, false);
+        }
+    }
+
+    /**
+     * 사용자가 말한 여행 뼈대를 여행지 목록의 도시로 옮긴 것.
+     *
+     * @param visitAreas 들를 지역. 모두 활동이 하나 이상 있어야 한다
+     * @param nights     밤(1부터)마다 묵을 도시. 계획이 없는 밤은 빠져 있다
+     * @param modes      말한 지역마다 이동 방법(walk·car·transit·taxi·any)
+     * @param areaModes  modes를 검사와 같은 지역 범위로 옮긴 것
+     * @param areas      말한 지역 전부(들를 곳·묵을 곳·이동 방법을 말한 곳)와 그 범위
+     */
+    public record Layout(List<Destination> visitAreas, Map<Integer, Destination> nights,
+                         Map<Destination, String> modes, List<TripConditions.AreaMode> areaModes,
+                         Map<Destination, TripConditions.Area> areas) {
+        public static final Layout NONE = new Layout(List.of(), Map.of(), Map.of());
+
+        /** 구간마다 부르는 판정이라 지역 범위를 만들 때 한 번 계산해 둔다. */
+        public Layout(List<Destination> visitAreas, Map<Integer, Destination> nights, Map<Destination, String> modes) {
+            this(copy(visitAreas), sortedNights(nights), ordered(modes), null, null);
+        }
+
+        public Layout {
+            visitAreas = copy(visitAreas);
+            nights = sortedNights(nights);
+            modes = ordered(modes);
+            areaModes = modes.entrySet().stream()
+                    .map(e -> new TripConditions.AreaMode(areaOf(e.getKey()), e.getValue())).toList();
+            Map<Destination, TripConditions.Area> all = new LinkedHashMap<>();
+            visitAreas.forEach(d -> all.put(d, areaOf(d)));
+            nights.values().forEach(d -> all.putIfAbsent(d, areaOf(d)));
+            modes.keySet().forEach(d -> all.putIfAbsent(d, areaOf(d)));
+            areas = Collections.unmodifiableMap(all);
+        }
+
+        private static List<Destination> copy(List<Destination> list) {
+            return list == null ? List.of() : List.copyOf(list);
+        }
+
+        private static Map<Integer, Destination> sortedNights(Map<Integer, Destination> nights) {
+            return nights == null ? Map.of() : Collections.unmodifiableMap(new TreeMap<>(nights));
+        }
+
+        // 프롬프트에 말한 순서대로 적는다.
+        private static Map<Destination, String> ordered(Map<Destination, String> modes) {
+            return modes == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(modes));
+        }
+
+        public String modeAt(double[] at, String fallback) {
+            return TripConditions.modeAt(areaModes, at, fallback);
+        }
+
+        /** 좌표가 든 말한 지역 가운데 가장 가까운 곳. 어디에도 들지 않으면 null이다. */
+        public Destination areaAt(double[] at) {
+            if (at == null) return null;
+            Destination best = null;
+            double bestKm = Double.MAX_VALUE;
+            for (Map.Entry<Destination, TripConditions.Area> e : areas.entrySet()) {
+                double km = e.getValue().kmTo(at);
+                if (km <= e.getValue().rangeKm() && km < bestKm) {
+                    best = e.getKey();
+                    bestKm = km;
+                }
+            }
+            return best;
         }
     }
 
@@ -243,6 +326,7 @@ public class DraftItineraryPlanner {
         if (mix != null) sb.append("장소 성향: ").append(mix).append('\n');
         sb.append("이동: ").append(TRANSPORT_LABELS.getOrDefault(Objects.toString(input.transportPref(), ""),
                 "대중교통 또는 상관없음")).append('\n');
+        layoutLines(req.layout(), sb);
         if (arrival != null) sb.append("첫날 도착: ").append(arrival).append('\n');
         if (departure != null) sb.append("마지막 날 출발: ").append(departure).append('\n');
         if (input.description() != null && !input.description().isBlank()) {
@@ -259,6 +343,40 @@ public class DraftItineraryPlanner {
         for (String m : req.mustDo()) sb.append("꼭 할 것: ").append(m).append('\n');
         return sb.toString();
     }
+
+    /** 사용자가 말한 여행 뼈대. 초안이 이 줄대로 날마다 권역과 숙소를 정한다. */
+    static void layoutLines(Layout layout, StringBuilder sb) {
+        if (!layout.visitAreas().isEmpty()) {
+            sb.append("들를 지역: ").append(String.join(", ", layout.visitAreas().stream().map(Destination::nameKo)
+                    .toList())).append('\n');
+        }
+        if (!layout.nights().isEmpty()) {
+            List<String> parts = new ArrayList<>();
+            Destination run = null;
+            int from = 0;
+            int lastNight = layout.nights().keySet().stream().max(Integer::compare).orElse(0);
+            for (int n = 1; n <= lastNight + 1; n++) {
+                Destination city = layout.nights().get(n);
+                if (run != null && city != run) {
+                    parts.add(run.nameKo() + " " + (n - from) + "박");
+                    run = null;
+                }
+                if (city != null && run == null) {
+                    run = city;
+                    from = n;
+                }
+            }
+            sb.append("숙박: ").append(String.join(" → ", parts)).append('\n');
+        }
+        if (!layout.modes().isEmpty()) {
+            List<String> parts = new ArrayList<>();
+            layout.modes().forEach((city, mode) -> parts.add(city.nameKo() + " " + MODE_LABELS.getOrDefault(mode, mode)));
+            sb.append("지역별 이동: ").append(String.join(", ", parts)).append('\n');
+        }
+    }
+
+    private static final Map<String, String> MODE_LABELS = Map.of("car", "자동차", "walk", "도보", "transit", "대중교통",
+            "taxi", "택시", "any", "대중교통·택시");
 
     /** 수정 단계가 읽는 시간표. 줄마다 시각, 장소, 분류, 앞 장소에서의 이동이다. */
     public static String timeline(Result result) {
@@ -413,7 +531,7 @@ public class DraftItineraryPlanner {
                 String reason = reasonOfExperience(items, spare);
                 if (reason != null && place.placeId() != null) reasons.putIfAbsent(place.placeId(), reason);
             }
-            spares.addAll(knownSightsNear(input, anchor, registry, exclusions, input.startDate().plusDays(d - 1),
+            spares.addAll(knownSightsNear(req, anchor, registry, exclusions, input.startDate().plusDays(d - 1),
                     req.country(), fillDirection(input, stops)));
             sparesByDay.add(spares);
         }
@@ -432,6 +550,7 @@ public class DraftItineraryPlanner {
             cityByDay.add(named != null ? named : near);
         }
         moveClosedRequests(stopsByDay, cityByDay, input.startDate(), req, notes);
+        coverVisitAreas(req, stopsByDay, sparesByDay, anchors, cityByDay, tripSights, usedEateries, registry, notes);
         PlaceCandidate arrivalHubOf = servesCity(req.arrivalHub(), cityByDay.get(0), cities)
                 ? registry.add(req.arrivalHub())
                 : req.arrival() == null ? null : hubOf(cityByDay.get(0), input, registry);
@@ -442,8 +561,10 @@ public class DraftItineraryPlanner {
                 : req.departure() == null || drivesHome ? null
                 : hubOf(cityByDay.get(dayCount - 1), input, registry);
         registry.useHubs(arrivalHubOf, departureHubOf);
+        Map<Integer, LodgingNeed> needs = withinPlannedCities(req.lodgingNeeds(), req.layout().nights(), notes);
         Map<Integer, PlaceCandidate> lodgingByNight = chooseLodging(dayCount, stopsByDay, anchors, cityByDay,
-                transfers, input, registry, req.lodgingNeeds(), exclusions, notes);
+                transfers, input, registry, needs, req.layout().nights(), exclusions, notes);
+        keepPlannedNights(lodgingByNight, req, needs, registry, notes);
         keepBookedLodging(lodgingByNight, req, cityByDay, transfers, registry);
         moveOffShortDepartureDay(stopsByDay, cityByDay, lodgingByNight.get(dayCount - 1), departureHubOf, drivesHome,
                 req, input, notes);
@@ -455,7 +576,7 @@ public class DraftItineraryPlanner {
             PlaceCandidate lastNight = dayCount > 1 ? lodgingByNight.get(dayCount - 1) : null;
             for (PlaceCandidate from : lastNight == null ? List.of(departureHubOf) : List.of(departureHubOf, lastNight)) {
                 if (coordsOf(from) == null) continue;
-                for (DayBuilder.Stop near : knownSightsNear(input, coordsOf(from), registry, exclusions,
+                for (DayBuilder.Stop near : knownSightsNear(req, coordsOf(from), registry, exclusions,
                         input.startDate().plusDays(dayCount - 1), req.country(), MIN_THIN_DAY_FILL_VALUE,
                         fillDirection(input, stopsByDay.get(dayCount - 1)))) {
                     if (registry.whyNotVisit(near.place(), seen) == null && seen.add(registry.canonical(near.place()))) {
@@ -475,6 +596,7 @@ public class DraftItineraryPlanner {
             LocalDate date = input.startDate().plusDays(d - 1);
             boolean first = d == 1;
             boolean last = d == dayCount;
+            String dayMode = cityMode(req, cityByDay.get(d - 1));
             double[] anchor = anchors.get(d - 1);
             int sunset = SolarClock.sunset(date, anchor[0], anchor[1], req.country());
             int sunrise = SolarClock.sunrise(date, anchor[0], anchor[1], req.country());
@@ -517,8 +639,9 @@ public class DraftItineraryPlanner {
                 if (req.departure() != null) {
                     hubDeadline = TripHubs.departureDeadline(req.departure(), departureHubOf, drivesHome,
                             req.country());
-                    TransportLeg toHub = drivesHome ? null : DayBuilder.legOf(first ? null : lodgingByNight.get(d - 1),
-                            departureHubOf, input.transportPref(), slow);
+                    PlaceCandidate lastNight = first ? null : lodgingByNight.get(d - 1);
+                    TransportLeg toHub = drivesHome ? null : hubLeg(req, lastNight, departureHubOf,
+                            cityByDay.get(d - 1), slow);
                     end = drivesHome ? hubDeadline
                             : TripHubs.latestLeave(hubDeadline, toHub == null ? null : toHub.durationMin());
                     endAt = departureHubOf;
@@ -554,7 +677,7 @@ public class DraftItineraryPlanner {
                         && coordsOf(x.place()) != null && kmBetween(coordsOf(x.place()), at) > FAR_LODGING_KM);
                 Set<String> seen = new HashSet<>(tripSights);
                 sparesByDay.get(d - 1).forEach(x -> seen.add(registry.canonical(x.place())));
-                for (DayBuilder.Stop near : knownSightsNear(input, lodging, registry, exclusions, date, req.country(),
+                for (DayBuilder.Stop near : knownSightsNear(req, lodging, registry, exclusions, date, req.country(),
                         fillDirection(input, stops))) {
                     if (registry.whyNotVisit(near.place(), seen) == null && seen.add(registry.canonical(near.place()))) {
                         sparesByDay.get(d - 1).add(near);
@@ -565,13 +688,13 @@ public class DraftItineraryPlanner {
                     usedEateries, registry);
             PlaceCandidate startAt = first ? null : lodgingByNight.get(d - 1);
             DayBuilder.Frame planned = new DayBuilder.Frame(d, date, start, end, lodgingBy, sunset, sunrise, startAt,
-                    arrivalHub, endAt, endIsHub, last, transfer, slow, input.transportPref(),
+                    arrivalHub, endAt, endIsHub, last, transfer, slow, dayMode,
                     sparesNotVisited(sparesByDay.get(d - 1), earlier, registry),
-                    List.copyOf(earlier), maxSights, stayFactor, lastLeg, req.country(), hubDeadline);
+                    List.copyOf(earlier), maxSights, stayFactor, lastLeg, req.country(), hubDeadline, req.layout());
             DayBuilder.Built built = DayBuilder.build(planned, stops);
             if (onlyEateries(stops) && onlyEateries(built.stops())) {
                 List<DayBuilder.Stop> wider = new ArrayList<>(planned.spares());
-                knownSightsNear(input, anchor, registry, exclusions, date, req.country(), MIN_THIN_DAY_FILL_VALUE,
+                knownSightsNear(req, anchor, registry, exclusions, date, req.country(), MIN_THIN_DAY_FILL_VALUE,
                         fillDirection(input, stops)).stream()
                         .filter(x -> registry.whyNotVisit(x.place(), tripSights) == null).forEach(wider::add);
                 DayBuilder.Frame widened = planned.withSpares(sparesNotVisited(wider, earlier, registry),
@@ -1168,7 +1291,7 @@ public class DraftItineraryPlanner {
         int dayCount = stopsByDay.size();
         if (dayCount < 2 || req.departure() == null) return;
         int last = dayCount - 1;
-        TransportLeg toHub = drivesHome ? null : DayBuilder.legOf(lastLodging, hub, input.transportPref(), false);
+        TransportLeg toHub = drivesHome ? null : hubLeg(req, lastLodging, hub, cityByDay.get(dayCount - 1), false);
         int deadline = TripHubs.departureDeadline(req.departure(), hub, drivesHome, req.country());
         int leave = drivesHome ? deadline : TripHubs.latestLeave(deadline, toHub == null ? null : toHub.durationMin());
         int window = leave - minutes(DEFAULT_START);
@@ -1183,6 +1306,151 @@ public class DraftItineraryPlanner {
             stopsByDay.get(to.get()).add(stop);
             notes.add(dayCount + "일차 " + stop.place().name() + ": 출발 전 시간이 모자라 " + (to.get() + 1) + "일차로 옮김");
         }
+    }
+
+    /**
+     * 초안이 들를 지역에 하루도 두지 않았으면 그 지역과 가까운 도시의 날 하나를 그 지역 관광으로 바꾼다. 프롬프트로만
+     * 맡기면 모델이 빠뜨린 지역이 일정에서 조용히 사라진다. 도시 안의 구역(스스키노)은 그날을 바꾸지 않고 한 곳을 더한다.
+     */
+    private void coverVisitAreas(Request req, List<List<DayBuilder.Stop>> stopsByDay,
+                                 List<List<DayBuilder.Stop>> sparesByDay, List<double[]> anchors,
+                                 List<Destination> cityByDay, Set<String> tripSights, MealLedger usedEateries,
+                                 Registry registry, List<String> notes) {
+        Set<Integer> taken = new HashSet<>();
+        for (Destination visit : req.layout().visitAreas()) {
+            TripConditions.Area area = areaOf(visit);
+            if (!daysCovering(stopsByDay, area).isEmpty()) continue;
+            double[] center = {area.lat(), area.lng()};
+            boolean district = DraftRequestFactory.isDistrict(visit);
+            Set<Integer> keep = new HashSet<>(taken);
+            if (!district) keep.addAll(onlyDaysOfOtherAreas(stopsByDay, req.layout().visitAreas(), visit));
+            Integer day = dayForArea(stopsByDay, cityByDay, nearestCity(req.cities(), center), keep, district);
+            if (day == null) {
+                notes.add("들를 지역 " + visit.nameKo() + ": 바꿀 수 있는 날이 없음");
+                continue;
+            }
+            Set<String> seen = new HashSet<>(tripSights);
+            List<DayBuilder.Stop> near = knownSightsNear(req, center, registry, req.exclusions(),
+                    req.input().startDate().plusDays(day), req.country(), MIN_THIN_DAY_FILL_VALUE,
+                    fillDirection(req.input(), List.of())).stream()
+                    .filter(s -> area.kmTo(coordsOf(s.place())) <= area.radiusKm())
+                    .filter(s -> registry.whyNotVisit(s.place(), seen) == null && seen.add(registry.canonical(s.place())))
+                    .toList();
+            int planned = district ? 1 : ScheduleTuning.sightsPerDay(req.input().pace())[0];
+            List<DayBuilder.Stop> stops = stopsByDay.get(day);
+            if (district) {
+                usedEateries.on(day + 1, req.input().startDate().plusDays(day));
+                DayBuilder.Stop stop = near.isEmpty() ? districtDinner(req, center, area, usedEateries, registry)
+                        : new DayBuilder.Stop(near.get(0).place(), near.get(0).kind(), near.get(0).slot(), List.of());
+                if (stop == null) {
+                    notes.add("들를 구역 " + visit.nameKo() + ": 구역 안 관광지·식당을 찾지 못함");
+                    continue;
+                }
+                if (stop.meal()) stops.removeIf(s -> s.meal() && "dinner".equals(s.slot()) && !s.protect());
+                stops.add(stop);
+                tripSights.add(registry.canonical(stop.place()));
+                taken.add(day);
+                notes.add((day + 1) + "일차에 들를 구역 " + visit.nameKo() + "의 " + stop.place().name() + " 더함");
+                continue;
+            }
+            if (near.isEmpty()) {
+                notes.add("들를 지역 " + visit.nameKo() + ": 근처 관광지를 찾지 못함");
+                continue;
+            }
+            stops.removeIf(s -> !s.protect());
+            near.stream().limit(planned).forEach(s -> {
+                stops.add(s);
+                tripSights.add(registry.canonical(s.place()));
+            });
+            sparesByDay.set(day, new ArrayList<>(near.stream().skip(planned).toList()));
+            anchors.set(day, center);
+            taken.add(day);
+            notes.add((day + 1) + "일차를 들를 지역 " + visit.nameKo() + " 관광으로 바꿈");
+        }
+    }
+
+    /** 구역 안에서 저녁을 먹을 식당. 관광지가 없는 번화가는 저녁 식당이 그 구역에 간 것이다. */
+    private DayBuilder.Stop districtDinner(Request req, double[] center, TripConditions.Area area, MealLedger used,
+                                           Registry registry) {
+        PlaceCandidate pick = pickEatery("meal", Dish.NONE, req.input(), req, center, req.exclusions(), used, registry)
+                .stream().filter(c -> area.kmTo(coordsOf(c)) <= area.radiusKm()).findFirst().orElse(null);
+        if (pick == null) return null;
+        used.add(pick);
+        return new DayBuilder.Stop(pick, "meal", "dinner", List.of());
+    }
+
+    private static Set<Integer> daysCovering(List<List<DayBuilder.Stop>> stopsByDay, TripConditions.Area area) {
+        return IntStream.range(0, stopsByDay.size()).filter(d -> stopsByDay.get(d).stream()
+                .anyMatch(s -> area.kmTo(coordsOf(s.place())) <= area.radiusKm())).boxed().collect(Collectors.toSet());
+    }
+
+    /** 다른 들를 지역을 그날만 들르는 날. 그날을 바꾸면 이미 들른 지역이 일정에서 빠진다. */
+    static Set<Integer> onlyDaysOfOtherAreas(List<List<DayBuilder.Stop>> stopsByDay, List<Destination> visits,
+                                                    Destination except) {
+        Set<Integer> out = new HashSet<>();
+        for (Destination other : visits) {
+            if (other.equals(except)) continue;
+            Set<Integer> days = daysCovering(stopsByDay, areaOf(other));
+            if (days.size() == 1) out.addAll(days);
+        }
+        return out;
+    }
+
+    /**
+     * 그 도시에 배정된 날 가운데 장소가 가장 적은 날. 날을 통째로 바꾸면 여행자가 정한 장소가 있는 날은 고르지 않는다.
+     * 첫날·마지막 날은 다른 날이 없을 때만 쓴다.
+     */
+    static Integer dayForArea(List<List<DayBuilder.Stop>> stopsByDay, List<Destination> cityByDay,
+                                      Destination base, Set<Integer> taken, boolean adding) {
+        int dayCount = stopsByDay.size();
+        Comparator<Integer> order = Comparator.comparing((Integer d) -> d == 0 || d == dayCount - 1)
+                .thenComparingInt(d -> stopsByDay.get(d).size());
+        return IntStream.range(0, dayCount).boxed()
+                .filter(d -> !taken.contains(d) && cityByDay.get(d) == base)
+                .filter(d -> adding || stopsByDay.get(d).stream().noneMatch(DayBuilder.Stop::protect))
+                .min(order).orElse(null);
+    }
+
+    /**
+     * 일출·출발 전날 숙소 자리를 여행자가 묵기로 한 도시 안 어디에서도 지킬 수 없으면 그 조건을 버린다. 여행자가 정한
+     * 숙박 도시가 코드가 고른 숙소 자리보다 앞선다.
+     */
+    static Map<Integer, LodgingNeed> withinPlannedCities(Map<Integer, LodgingNeed> needs,
+                                                                 Map<Integer, Destination> plannedNights,
+                                                                 List<String> notes) {
+        if (plannedNights.isEmpty()) return needs;
+        Map<Integer, LodgingNeed> out = new HashMap<>(needs);
+        needs.forEach((night, need) -> {
+            Destination planned = plannedNights.get(night);
+            if (planned != null && !TripFeasibility.withinReach(need.center(), areaOf(planned), need.maxKm())) {
+                out.remove(night);
+                notes.add(night + "일차 밤: 묵기로 한 " + planned.nameKo() + "에 묵어 " + need.reason() + " 숙소 자리를 따르지 않음");
+            }
+        });
+        return out;
+    }
+
+    /** 그 도시에 머무는 날의 이동 방법. 지역별로 말하지 않았으면 여행 전체의 방법이다. */
+    private static String cityMode(Request req, Destination city) {
+        return city == null ? req.input().transportPref() : modeNear(req, new double[]{city.lat(), city.lng()});
+    }
+
+    /** 그 좌표 둘레에서 다니는 방법. 차로 다니는 지역은 식당·관광지를 더 넓게 찾는다. */
+    private static String modeNear(Request req, double[] at) {
+        return req.layout().modeAt(at, req.input().transportPref());
+    }
+
+    /** 여행지 목록 도시를 검사·짓기 공용 지역으로. 반경이 없는 국내 도시는 도시 범위를 반경으로, 도시 안 구역은 구역 반경을 범위로 쓴다. */
+    static TripConditions.Area areaOf(Destination d) {
+        double range = DraftRequestFactory.isDistrict(d) ? d.radiusKm() : cityRangeKm(d, CITY_KM);
+        return new TripConditions.Area(d.nameKo(), d.lat(), d.lng(), d.radiusKm() > 0 ? d.radiusKm() : range, range);
+    }
+
+    /** 출발일 시간 판단과 그날 짓기가 같은 식으로 허브 구간을 재야 출발 전 쓸 시간이 맞는다. */
+    private static TransportLeg hubLeg(Request req, PlaceCandidate lastLodging, PlaceCandidate hub,
+                                       Destination lastDayCity, boolean slow) {
+        String mode = req.layout().modeAt(coordsOf(lastLodging), cityMode(req, lastDayCity));
+        return DayBuilder.layoutLeg(req.layout(), lastLodging, hub, mode, slow);
     }
 
     /** 숙소에서 첫 장소까지 가는 한 구간만큼의 여유. */
@@ -1315,7 +1583,7 @@ public class DraftItineraryPlanner {
                 com.shg.trip.shgtrip.global.util.GeoUtils.haversine(at, new double[]{c.lat(), c.lng()}))).orElse(null);
     }
 
-    private static TripCities.City city(Destination d) {
+    static TripCities.City city(Destination d) {
         return new TripCities.City(d.name(), d.nameKo(), d.country(), d.lat(), d.lng());
     }
 
@@ -1343,7 +1611,9 @@ public class DraftItineraryPlanner {
                 if (!other.equals(item.name())) r = resolver.resolveNamed(other, locals, item.kind(),
                         input.regions(), req.cityNames(), anchor);
             }
-            if (r.place() != null) {
+            if (r.place() != null && namesOnlyArea(r.place(), item.name(), req)) {
+                notes.add(day + "일차 '" + item.name() + "': 지역 이름뿐인 장소 '" + r.place().getName() + "'에는 잇지 않음");
+            } else if (r.place() != null) {
                 noteLooseLink(item.name(), DraftPlaceResolver.shownName(r.place()), req, notes, day);
                 out.put(item, registry.add(r.place()));
             }
@@ -1364,12 +1634,30 @@ public class DraftItineraryPlanner {
         if (!isPlaceKind(item) && !item.placeNamed()) return null;
         DraftPlaceResolver.Resolution r = resolver.resolveNamed(item.name(), item.localNames(), item.kind(),
                 input.regions(), req.cityNames(), anchor);
-        if (r.place() == null) {
+        if (r.place() == null || namesOnlyArea(r.place(), item.name(), req)) {
             log.debug("초안 이름 미연결 day={} {} ({})", day, item.name(), r.status());
             return null;
         }
         noteLooseLink(item.name(), DraftPlaceResolver.shownName(r.place()), req, notes, day);
         return registry.add(r.place());
+    }
+
+    /**
+     * 연결된 장소 이름이 여행 도시·말한 지역 이름 그 자체이고 초안 이름은 그보다 구체적인지. "오타루 덴구야마 로프웨이"를
+     * "오타루"라는 이름의 지점에 이으면 그 지역 어딘가의 엉뚱한 좌표로 간다.
+     */
+    static boolean namesOnlyArea(Place place, String asked, Request req) {
+        Set<String> areas = new HashSet<>();
+        req.cityNames().forEach(n -> areas.add(PlaceNames.exactKey(n)));
+        if (req.input().regions() != null) req.input().regions().forEach(n -> areas.add(PlaceNames.exactKey(n)));
+        req.layout().areas().keySet().forEach(d -> {
+            areas.add(PlaceNames.exactKey(d.name()));
+            areas.add(PlaceNames.exactKey(d.nameKo()));
+        });
+        areas.remove("");
+        String askedKey = PlaceNames.exactKey(asked);
+        return java.util.stream.Stream.of(place.getName(), place.getNameKo()).map(PlaceNames::exactKey)
+                .anyMatch(k -> areas.contains(k) && askedKey.length() > k.length());
     }
 
     /** 초안 이름과 연결된 장소 이름이 다르면 수정 단계가 정식 이름으로 다시 쓰거나 다른 장소로 바꾸게 알린다. */
@@ -1390,7 +1678,7 @@ public class DraftItineraryPlanner {
                                             double[] near, TripExclusions exclusions, MealLedger used,
                                             Registry registry) {
         if (near == null) return List.of();
-        double radius = switch (input.transportPref() == null ? "any" : input.transportPref()) {
+        double radius = switch (Objects.toString(modeNear(req, near), "any")) {
             case "walk" -> WALK_SEARCH_KM;
             case "car" -> CAR_SEARCH_KM;
             default -> TRANSIT_SEARCH_KM;
@@ -1488,21 +1776,22 @@ public class DraftItineraryPlanner {
      * 빈 시간을 채울 근처 명소. 방문 가치 판정이 없으면 언어판이나 알려진 정도가 있는 곳만 쓴다. 장소 정보가 빈약한
      * 곳으로 채우면 관공서·운동장이 관광지로 들어간다.
      */
-    private List<DayBuilder.Stop> knownSightsNear(VectorEnrichedInput input, double[] anchor, Registry registry,
+    private List<DayBuilder.Stop> knownSightsNear(Request req, double[] anchor, Registry registry,
                                                   TripExclusions exclusions, LocalDate date, String country,
                                                   double direction) {
-        return knownSightsNear(input, anchor, registry, exclusions, date, country, MIN_FILL_VALUE, direction);
+        return knownSightsNear(req, anchor, registry, exclusions, date, country, MIN_FILL_VALUE, direction);
     }
 
     /** @param direction {@link FameMix#fillDirection} */
-    private List<DayBuilder.Stop> knownSightsNear(VectorEnrichedInput input, double[] anchor, Registry registry,
+    private List<DayBuilder.Stop> knownSightsNear(Request req, double[] anchor, Registry registry,
                                                   TripExclusions exclusions, LocalDate date, String country,
                                                   int minValue, double direction) {
         if (anchor == null) return List.of();
+        VectorEnrichedInput input = req.input();
         long seed = FameMix.seedOf(input.destination(), String.valueOf(date),
                 input.companionType() == null ? "" : input.companionType().name(),
                 input.themes() == null ? "" : String.join(",", input.themes().stream().sorted().toList()));
-        double radius = "car".equals(input.transportPref()) ? CAR_SEARCH_KM : TRANSIT_SEARCH_KM;
+        double radius = "car".equals(modeNear(req, anchor)) ? CAR_SEARCH_KM : TRANSIT_SEARCH_KM;
         List<PlaceCandidate> eligible = registry.withClosures(candidateSupplement.enrichFromDb(
                 registry.around(SearchRole.ATTRACTION, anchor, radius, SEARCH_LIMIT))).stream()
                 .filter(c -> !TripCalendar.isKorea(c.country()) || HANGUL.matcher(Objects.toString(c.name(), "")).find())
@@ -1536,11 +1825,15 @@ public class DraftItineraryPlanner {
                                                        List<double[]> anchors, List<Destination> cityByDay,
                                                        Set<Integer> transfers, VectorEnrichedInput input,
                                                        Registry registry, Map<Integer, LodgingNeed> needs,
+                                                       Map<Integer, Destination> plannedNights,
                                                        TripExclusions exclusions, List<String> notes) {
         double splitKm = "car".equals(input.transportPref()) ? CAR_LODGING_SPLIT_KM : LODGING_SPLIT_KM;
         // 저녁에 도시를 옮기는 밤은 다음 도시에서 잔다.
         List<Destination> nightCity = new ArrayList<>();
-        for (int d = 1; d < dayCount; d++) nightCity.add(transfers.contains(d) ? cityByDay.get(d) : cityByDay.get(d - 1));
+        for (int d = 1; d < dayCount; d++) {
+            Destination planned = plannedNights.get(d);
+            nightCity.add(planned != null ? planned : transfers.contains(d) ? cityByDay.get(d) : cityByDay.get(d - 1));
+        }
         List<List<Integer>> groups = new ArrayList<>();
         List<double[]> centers = new ArrayList<>();
         for (int d = 1; d < dayCount; d++) {
@@ -1550,6 +1843,11 @@ public class DraftItineraryPlanner {
                     cityByDay.get(d - 1) == cityByDay.get(d), cityByDay.get(d - 1));
             LodgingNeed need = needs.get(d);
             if (need != null) c = need.center();
+            // 동선 끝 가까이에서만 고르면 계획한 도시가 아닌 곳에 묵는다.
+            Destination planned = plannedNights.get(d);
+            if (need == null && planned != null && !areaOf(planned).covers(c)) {
+                c = new double[]{planned.lat(), planned.lng()};
+            }
             centers.add(c);
             List<Integer> group = groups.isEmpty() ? null : groups.get(groups.size() - 1);
             // 조건이 있는 밤은 다른 밤과 묶지 않는다. 묶음 중심으로 옮기면 그 조건을 못 지킨다.
@@ -1579,7 +1877,10 @@ public class DraftItineraryPlanner {
             LodgingNeed need = needs.get(group.get(0));
             PlaceCandidate pick;
             if (need != null) {
-                pick = pickLodging(registry, center, need.maxKm(), 4 * LODGING_LIMIT, companion, exclusions);
+                Destination plannedCity = plannedNights.get(group.get(0));
+                // 묵기로 한 밤은 숙소 자리 조건과 그 도시 범위를 함께 지키는 숙소만 받는다.
+                pick = pickLodging(registry, center, need.maxKm(), 4 * LODGING_LIMIT, companion, exclusions, true,
+                        plannedCity == null ? c -> true : areaOf(plannedCity)::coversPlace);
                 if (pick != null && kmTo(pick, center) > need.maxKm()) pick = null;
                 if (pick == null && need.hard()) {
                     notes.add(group.get(0) + "일차 숙소 조건 불가: " + need.reason() + " 범위(" + need.maxKm()
@@ -1611,6 +1912,26 @@ public class DraftItineraryPlanner {
         return byNight;
     }
 
+    /**
+     * 묵기로 한 밤의 숙소가 그 도시 범위 밖이면(숙소를 넓게 찾다 이웃 도시에서 고른 경우) 그 도시 안에서 다시 찾는다.
+     * 범위 안에도 없으면 그대로 두고 검사가 숙박 계획을 지키지 못했다고 알린다.
+     */
+    private void keepPlannedNights(Map<Integer, PlaceCandidate> byNight, Request req, Map<Integer, LodgingNeed> needs,
+                                   Registry registry, List<String> notes) {
+        req.layout().nights().forEach((night, city) -> {
+            TripConditions.Area area = areaOf(city);
+            PlaceCandidate chosen = byNight.get(night);
+            // 숙소 자리 조건이 있는 밤은 짓는 쪽이 이미 두 조건을 함께 보고 골랐다. 여기서 바꾸면 그 조건이 깨진다.
+            if (chosen != null && area.covers(coordsOf(chosen)) || needs.containsKey(night)) return;
+            PlaceCandidate inCity = pickLodging(registry, new double[]{city.lat(), city.lng()}, area.rangeKm(),
+                    4 * LODGING_LIMIT, req.input().companionType(), req.exclusions(), false, area::coversPlace);
+            if (inCity != null) {
+                byNight.put(night, inCity);
+                notes.add(night + "일차 밤: 묵기로 한 " + city.nameKo() + " 안 숙소로 바꿈(" + inCity.name() + ")");
+            }
+        });
+    }
+
     /** 예약한 숙소가 있는 도시의 밤은 모두 그 숙소다. 동선에 맞춰 고른 숙소보다 사용자의 예약이 먼저다. */
     private static void keepBookedLodging(Map<Integer, PlaceCandidate> byNight, Request req,
                                           List<Destination> cityByDay, Set<Integer> transfers, Registry registry) {
@@ -1633,8 +1954,15 @@ public class DraftItineraryPlanner {
     /** @param preferredOnly 외딴 숙소·숙박 밀집 동네 이름을 거른다 */
     private PlaceCandidate pickLodging(Registry registry, double[] center, double radiusKm, int limit,
                                        CompanionType companion, TripExclusions exclusions, boolean preferredOnly) {
+        return pickLodging(registry, center, radiusKm, limit, companion, exclusions, preferredOnly, c -> true);
+    }
+
+    private PlaceCandidate pickLodging(Registry registry, double[] center, double radiusKm, int limit,
+                                       CompanionType companion, TripExclusions exclusions, boolean preferredOnly,
+                                       Predicate<PlaceCandidate> accept) {
         return candidateSupplement.enrichFromDb(
                         registry.around(SearchRole.ACCOMMODATION, center, radiusKm, limit)).stream()
+                .filter(accept)
                 .filter(c -> exclusions.violatedBy(c) == null)
                 .filter(c -> companion == null || !companion.avoidsDormLodging()
                         || !PlaceCategoryConstants.isDormLodging(c.name(), c.category(), c.tags()))

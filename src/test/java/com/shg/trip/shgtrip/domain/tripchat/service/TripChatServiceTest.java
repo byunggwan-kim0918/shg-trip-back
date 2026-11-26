@@ -11,6 +11,9 @@ import com.shg.trip.shgtrip.domain.planning.service.TravelPlannerService;
 import com.shg.trip.shgtrip.domain.tripchat.dto.TripChatAnswerRequest;
 import com.shg.trip.shgtrip.domain.tripchat.dto.TripChatResponse;
 import com.shg.trip.shgtrip.domain.tripchat.entity.TripChatSession;
+import com.shg.trip.shgtrip.domain.tripchat.model.Draft;
+import com.shg.trip.shgtrip.domain.tripchat.model.DraftEvent;
+import com.shg.trip.shgtrip.domain.tripchat.model.DraftField;
 import com.shg.trip.shgtrip.domain.tripchat.model.Interpretation;
 import com.shg.trip.shgtrip.domain.tripchat.model.Slot;
 import com.shg.trip.shgtrip.domain.tripchat.repository.TripChatSessionRepository;
@@ -683,6 +686,43 @@ class TripChatServiceTest {
         assertThat(captor.getValue().acceptedUnmet()).containsExactly("나카스 야타이");
     }
 
+    @Test
+    @DisplayName("찾지 못한 꼭 갈 곳이 여럿이면 다음 턴에 다시 맞추지 않아도 남은 곳을 하나씩 묻고 모두 그대로 둘 요청으로 넘긴다")
+    void everyMissingPlaceIsAsked() {
+        TripChatResponse start = service.create(USER, "req-1");
+        String text = "부산 11월 20일부터 25일까지 둘이, 차로 가고 나카스 야타이랑 흰여울 폭포는 꼭 가고 싶어. 정해둔 건 없어";
+        given(interpreter.interpret(anyString(), eq(text))).willReturn(result(new Interpretation(List.of(
+                upd("DESTINATION", "부산", "user", "부산"),
+                upd("START_DATE", "2026-11-20", "user", "11월 20일부터 25일까지"),
+                upd("END_DATE", "2026-11-25", "user", "11월 20일부터 25일까지"),
+                upd("COMPANION", "couple", "user", "둘이"),
+                add("PRIORITIES", "맛집 다니기", "user", "맛집"),
+                upd("TRANSPORT", "car", "user", "차로 가고"),
+                add("MUST_VISIT", "나카스 야타이", "user", "나카스 야타이랑"),
+                add("MUST_VISIT", "흰여울 폭포", "user", "흰여울 폭포는 꼭 가고 싶어"),
+                new Interpretation.Update("LODGING_STATE", "set", "", "none", "user", "정해둔 건 없어", "", "")),
+                "answered", null, "answer", null)));
+        given(interpreter.interpret(anyString(), eq("그대로 둘게")))
+                .willReturn(result(new Interpretation(List.of(), "answered", null, "answer", null)));
+        given(interpreter.interpret(anyString(), eq(ENOUGH)))
+                .willReturn(result(new Interpretation(List.of(), "none", null, "answer", null)));
+
+        TripChatResponse next = answer(start, text);
+        List<String> askedLeads = new ArrayList<>();
+        while ("ASKING".equals(next.status())) {
+            boolean missing = "다른 곳으로 갈까요?".equals(next.question().title());
+            if (missing) askedLeads.add(next.question().lead());
+            next = answer(next, missing ? "그대로 둘게" : ENOUGH);
+        }
+        given(travelPlannerService.startGeneration(any(), eq(USER))).willReturn(new GenerateJobResponse("job-1"));
+        service.confirm(USER, id(next), next.version());
+
+        assertThat(askedLeads).hasSize(2);
+        ArgumentCaptor<ItineraryGenerateRequest> captor = ArgumentCaptor.forClass(ItineraryGenerateRequest.class);
+        verify(travelPlannerService).startGeneration(captor.capture(), eq(USER));
+        assertThat(captor.getValue().acceptedUnmet()).containsExactlyInAnyOrder("나카스 야타이", "흰여울 폭포");
+    }
+
     // ---- 도우미 ----
 
     private TripChatResponse toReview() {
@@ -758,5 +798,23 @@ class TripChatServiceTest {
         @Override protected void doBegin(Object transaction, TransactionDefinition definition) { }
         @Override protected void doCommit(DefaultTransactionStatus status) { }
         @Override protected void doRollback(DefaultTransactionStatus status) { }
+    }
+
+    @Test
+    @DisplayName("이미 정한 여행지를 다른 곳으로 바꾸는 답만 앞 여행지의 들를 지역·숙박·지역별 이동을 지운다")
+    void layoutClearedOnlyWhenDestinationChanges() {
+        Draft busan = Events.busanTrip().draft();
+        List<DraftEvent> yeosu = Events.of()
+                .user(DraftField.DESTINATION, "여수").list();
+        List<DraftEvent> sameCity = Events.of()
+                .user(DraftField.DESTINATION, " 부산 ")
+                .user(DraftField.VISIT_AREAS, "울산").list();
+
+        assertThat(TripChatService.changesDestination(busan, yeosu)).isTrue();
+        assertThat(TripChatService.changesDestination(busan, sameCity)).isFalse();
+        assertThat(TripChatService.changesDestination(Events.of().draft(), yeosu)).as("처음 정하는 여행지").isFalse();
+        assertThat(TripChatService.LAYOUT_FIELDS).contains(
+                DraftField.STAYS,
+                DraftField.AREA_TRANSPORT);
     }
 }

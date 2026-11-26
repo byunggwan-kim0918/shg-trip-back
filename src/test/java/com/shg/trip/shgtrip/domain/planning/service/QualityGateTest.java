@@ -54,6 +54,26 @@ class QualityGateTest {
     }
 
     @Test
+    @DisplayName("저장한 판정 입력은 들를 지역·밤마다 묵을 도시·지역별 이동을 그대로 되읽어 편집 재판정이 같은 조건을 본다")
+    void planContextKeepsLayout() throws Exception {
+        TripConditions.Area sapporo = new TripConditions.Area("삿포로", 43.06, 141.35, 20, 25);
+        TripConditions.Area furano = new TripConditions.Area("후라노", 43.34, 142.38, 12, 25);
+        TripConditions.Layout layout = new TripConditions.Layout(List.of(sapporo, furano), Map.of(1, sapporo, 3, furano),
+                List.of(new TripConditions.AreaMode(furano, "car"), new TripConditions.AreaMode(sapporo, "transit")));
+        TripConditions conditions = new TripConditions(List.of(), Map.of(), List.of(), false, "any", null, null,
+                "normal", java.util.Set.of(7L), layout);
+        QualityGate.PlanContext ctx = new QualityGate.PlanContext(new ItineraryRules.Context("normal", "any",
+                LocalDate.of(2027, 7, 15), 5, null, Map.of(), conditions, "JP", List.of()), List.of());
+
+        QualityGate.PlanContext back = objectMapper.readValue(objectMapper.writeValueAsString(ctx),
+                QualityGate.PlanContext.class);
+
+        assertThat(back.rules().conditions().layout()).isEqualTo(layout);
+        assertThat(back.rules().conditions().chosenPlaceIds()).containsExactly(7L);
+        assertThat(back.rules().conditions().layout().modeAt(new double[]{43.35, 142.39}, "any")).isEqualTo("car");
+    }
+
+    @Test
     @DisplayName("덜 좋은 일정은 저장하고 고칠 수 있는 일차 안내를 고정 안내 앞에 둔다")
     void savesSoftViolationWithNotice() {
         Itinerary itinerary = itinerary(withoutLunch(), null);

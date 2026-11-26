@@ -12,10 +12,13 @@ import com.shg.trip.shgtrip.domain.tripchat.model.Slot;
 
 import java.time.LocalTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * 답한 그 턴에 되물을 지킬 수 없는 요청. 확인 화면이나 생성에서야 막히면 여행자는 대화를 다시 해야 한다. 판정 기준은
@@ -38,10 +41,13 @@ final class TripFeasibilityQuestions {
      * @param suggestions 데이터에서 찾지 못한 꼭 갈 곳마다 비슷한 관광지
      * @param country     여행지 나라. 모르면 null
      * @param city        해 뜨고 지는 시각을 볼 여행 도시. 모르면 null이고 시각 판정을 하지 않는다
+     * @param areaOf      여행자가 말한 지역 이름을 여행지로. 찾지 못하면 비어 있다
      */
     static OpenQuestion next(Draft draft, Map<String, PlaceMatch> matches, Map<String, String> suggestions,
-                             Set<String> asked, String country, Destination city) {
+                             Set<String> asked, String country, Destination city,
+                             Function<String, Optional<Destination>> areaOf) {
         OpenQuestion q = foodConflict(draft, asked);
+        if (q == null) q = areaOverload(draft, asked, areaOf);
         if (q == null && matches != null) q = missingPlace(draft, matches, suggestions, asked);
         if (q == null && matches != null) q = closedWholeTrip(draft, matches, asked);
         if (q == null && city != null) q = noTimeOfDay(draft, asked, city);
@@ -166,6 +172,39 @@ final class TripFeasibilityQuestions {
 
     private static boolean sunrise(String text) {
         return text != null && (text.contains("일출") || text.contains("해돋이"));
+    }
+
+    /**
+     * 들를 지역이 기간에 비해 많다. 지역 수가 아니라 묵는 곳에서 오가는 시간과 지역마다 볼 시간으로 판정하고, 막지 않고
+     * 빼거나 묵을 곳을 바꾸는 안을 낸다. 그대로 두면 생성이 넣지 못한 지역을 알린다.
+     */
+    private static OpenQuestion areaOverload(Draft draft, Set<String> asked,
+                                             Function<String, Optional<Destination>> areaOf) {
+        List<String> names = TripRequestMapper.visitAreas(draft);
+        TripRequestMapper.DateRange range = TripRequestMapper.dates(draft);
+        if (names.size() < 2 || range.start() == null || range.end() == null) return null;
+        List<Destination> areas = names.stream().map(areaOf).flatMap(Optional::stream).distinct().toList();
+        String staysValue = TripRequestMapper.userValue(draft, DraftField.STAYS);
+        List<Destination> stays = staysValue == null ? List.of() : Arrays.stream(staysValue.split(","))
+                .map(s -> s.split("\\|", 2)[0]).map(areaOf).flatMap(Optional::stream).distinct().toList();
+        String transport = GeneratorSupport.transportPref(TripRequestMapper.userValue(draft, DraftField.TRANSPORT), false);
+        Optional<TripFeasibility.AreaOverload> overload = TripFeasibility.areaOverload(areas, stays, range.start(),
+                range.end(), TripRequestMapper.clock(draft, DraftField.ARRIVAL_TIME),
+                TripRequestMapper.clock(draft, DraftField.DEPARTURE_TIME), transport);
+        if (overload.isEmpty()) return null;
+        Destination first = overload.get().unlikely().get(0);
+        String key = PREFIX + "areas:" + TextNormalizer.key(String.join(",",
+                overload.get().unlikely().stream().map(Destination::nameKo).toList()));
+        if (asked.contains(key)) return null;
+        boolean far = overload.get().far().contains(first);
+        String why = far
+                ? first.nameKo() + "은(는) 묵는 곳에서 편도 3시간이 넘어 당일로 다녀오기 어려워요."
+                : "지역마다 3시간쯤 보고 오가려면 약 " + overload.get().needMinutes() / 60 + "시간이 필요한데, 일정에서 쓸 수 있는 "
+                + "시간은 약 " + overload.get().haveMinutes() / 60 + "시간이에요.";
+        String alternative = far ? first.nameKo() + "에서 1박 할게" : "하루 더 늘릴게";
+        return QuestionBank.followUp(Slot.CITY, key, "들를 곳이 일정에 비해 많아요.", "어떻게 조정할까요?",
+                why + " 그대로 두면 넣지 못한 곳을 알려 드릴게요.", "예: " + first.nameKo() + "는 빼줘",
+                List.of(first.nameKo() + "는 빼줘", alternative, KEEP));
     }
 
     private static OpenQuestion drivingAbroad(Draft draft, Set<String> asked, String country) {

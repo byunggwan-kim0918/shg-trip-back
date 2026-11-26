@@ -40,8 +40,19 @@ public class PlanningCountries {
 
     /** 여행지 이름의 나라. 해외 목록에 없으면 국내로 보고, 이름이 없으면 null이다. */
     public String countryOf(String destination) {
+        return countryOf(destination, List.of());
+    }
+
+    /**
+     * 여행지가 묶음 이름("홋카이도")이라 목록에 없으면 들를 지역의 나라로 본다. 묶음 이름만 보면 해외 여행이 국내가 되어
+     * 해외 운전·항공편 질문이 꺼진다.
+     */
+    public String countryOf(String destination, List<String> visitAreas) {
         if (destination == null || destination.isBlank()) return null;
-        return destinations.resolve(destination).map(Destination::country).orElse("KR");
+        return destinations.resolve(destination).map(Destination::country)
+                .or(() -> visitAreas.stream().map(a -> destinations.resolveArea(a, null)).flatMap(Optional::stream)
+                        .map(Destination::country).findFirst())
+                .orElse("KR");
     }
 
     /**
@@ -49,8 +60,14 @@ public class PlanningCountries {
      * 생성 단계의 국가 확인이 막는다.
      */
     public Optional<String> closedDestinationMessage(String destination) {
-        return destinations.resolve(destination)
-                .map(Destination::country)
+        return closedDestinationMessage(destination, List.of());
+    }
+
+    /** 묶음 여행지("방콕·푸켓")는 들를 지역의 나라로 본다. */
+    public Optional<String> closedDestinationMessage(String destination, List<String> visitAreas) {
+        return destinations.resolve(destination).map(Destination::country)
+                .or(() -> visitAreas.stream().map(a -> destinations.resolveArea(a, null)).flatMap(Optional::stream)
+                        .map(Destination::country).findFirst())
                 .filter(country -> !isEnabled(country))
                 .map(this::notEnabledMessage);
     }

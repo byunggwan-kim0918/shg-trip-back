@@ -12,6 +12,7 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 /** 확인 화면·답변 모아보기의 요약 행. 사용자 말은 사용자 말 그대로, 추론은 보조 줄에 (제안)으로 둔다. */
 public final class SummaryBuilder {
@@ -41,7 +42,7 @@ public final class SummaryBuilder {
 
     static String value(Slot slot, Draft draft, LocalDate today) {
         String v = switch (slot) {
-            case CITY -> draft.value(DraftField.DESTINATION);
+            case CITY -> city(draft);
             case DATES -> dates(draft, today);
             case COMPANY -> company(draft);
             case MOOD -> joined(draft.items(DraftField.PRIORITIES));
@@ -50,6 +51,22 @@ public final class SummaryBuilder {
             case EXTRAS -> extras(draft);
         };
         return v != null ? v : statusLabel(draft.slotStatus(slot));
+    }
+
+    private static String city(Draft draft) {
+        String destination = draft.value(DraftField.DESTINATION);
+        List<String> areas = TripRequestMapper.visitAreas(draft);
+        if (areas.isEmpty()) return destination;
+        String joined = String.join("·", areas);
+        return destination == null ? joined : destination + " (" + joined + ")";
+    }
+
+    /** "지역|값"들을 "지역 값"으로 잇는다. */
+    private static String pairs(List<String> values, String separator, UnaryOperator<String> label) {
+        return String.join(separator, values.stream().map(v -> {
+            String[] pair = v.split("\\|", 2);
+            return pair.length < 2 ? v : pair[0] + " " + label.apply(pair[1]);
+        }).toList());
     }
 
     private static String statusLabel(FieldStatus status) {
@@ -103,6 +120,12 @@ public final class SummaryBuilder {
         String mode = draft.fact(DraftField.TRANSPORT).map(f -> f.source() == FieldSource.TENTATIVE
                 ? "도보를 생각 중 · 확정 전"
                 : GeneratorSupport.TRANSPORT_LABELS.getOrDefault(f.value(), f.value())).orElse(null);
+        List<Item> byArea = TripRequestMapper.userItems(draft, DraftField.AREA_TRANSPORT);
+        if (!byArea.isEmpty()) {
+            String areas = pairs(byArea.stream().map(Item::text).toList(), ", ",
+                    m -> GeneratorSupport.TRANSPORT_LABELS.getOrDefault(m, m));
+            mode = mode == null ? areas : mode + " · " + areas;
+        }
         if (mode == null) return walking;
         return walking != null ? mode + " · " + walking : mode;
     }
@@ -114,6 +137,8 @@ public final class SummaryBuilder {
         if ("booked".equals(state) && lodging != null) parts.add("숙소 예약: " + lodging);
         else if ("wish".equals(state) && lodging != null) parts.add("숙소는 " + lodging + " 쪽");
         else if ("none".equals(state)) parts.add("숙소는 아직 없음");
+        String stays = TripRequestMapper.userValue(draft, DraftField.STAYS);
+        if (stays != null) parts.add("숙박: " + pairs(List.of(stays.split(",")), " → ", n -> n + "박"));
         List<Item> visits = TripRequestMapper.userItems(draft, DraftField.MUST_VISIT);
         if (!visits.isEmpty()) parts.add("꼭 갈 곳: " + String.join(", ", visits.stream().map(Item::text).toList()));
         for (Item b : TripRequestMapper.userItems(draft, DraftField.BOOKED)) {

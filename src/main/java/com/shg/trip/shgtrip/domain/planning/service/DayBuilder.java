@@ -1,9 +1,11 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 import com.shg.trip.shgtrip.domain.planning.dto.AlternativeData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.SelectionOutput;
+import com.shg.trip.shgtrip.domain.planning.dto.TripCities;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
 import com.shg.trip.shgtrip.domain.planning.service.DraftItineraryPlanner.MissCause;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
@@ -141,18 +143,45 @@ final class DayBuilder {
                  PlaceCandidate startAt, PlaceCandidate arrivalHub, PlaceCandidate endAt, boolean endIsHub,
                  boolean hardEnd, TransportLeg firstLeg, boolean slowWalk, String transportPref,
                  List<Stop> spares, List<PlaceCandidate> earlier, int maxSights, double stayFactor,
-                 TransportLeg lastLeg, String country, int hubDeadline) {
+                 TransportLeg lastLeg, String country, int hubDeadline, DraftItineraryPlanner.Layout layout) {
+
+        Frame {
+            layout = layout == null ? DraftItineraryPlanner.Layout.NONE : layout;
+        }
+
+        Frame(int dayNumber, LocalDate date, int startMin, int endMin, int lodgingBy, int sunset, int sunrise,
+              PlaceCandidate startAt, PlaceCandidate arrivalHub, PlaceCandidate endAt, boolean endIsHub,
+              boolean hardEnd, TransportLeg firstLeg, boolean slowWalk, String transportPref,
+              List<Stop> spares, List<PlaceCandidate> earlier, int maxSights, double stayFactor,
+              TransportLeg lastLeg, String country, int hubDeadline) {
+            this(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, startAt, arrivalHub, endAt, endIsHub,
+                    hardEnd, firstLeg, slowWalk, transportPref, spares, earlier, maxSights, stayFactor, lastLeg,
+                    country, hubDeadline, DraftItineraryPlanner.Layout.NONE);
+        }
 
         Frame withLodging(PlaceCandidate newStartAt, PlaceCandidate newEndAt) {
             return new Frame(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, newStartAt, arrivalHub,
                     newEndAt, endIsHub, hardEnd, firstLeg, slowWalk, transportPref, spares, earlier, maxSights,
-                    stayFactor, lastLeg, country, hubDeadline);
+                    stayFactor, lastLeg, country, hubDeadline, layout);
         }
 
         Frame withSpares(List<Stop> newSpares, List<PlaceCandidate> newEarlier) {
             return new Frame(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, startAt, arrivalHub,
                     endAt, endIsHub, hardEnd, firstLeg, slowWalk, transportPref, newSpares, newEarlier, maxSights,
-                    stayFactor, lastLeg, country, hubDeadline);
+                    stayFactor, lastLeg, country, hubDeadline, layout);
+        }
+
+        /** 구간을 떠나는 곳이 든 지역의 이동 방법. 같은 날에도 렌터카 지역과 대중교통 지역이 섞인다. */
+        String modeFrom(PlaceCandidate origin) {
+            return origin == null ? transportPref : layout.modeAt(coordsOf(origin), transportPref);
+        }
+
+        /**
+         * 두 곳 사이 구간. 말한 지역 둘 사이를 차 없이 오가면 도시 간 이동으로 잰다. 시내 버스 속도로 재면 당일치기
+         * (삿포로에서 오타루)가 실제의 두 배 가까이 걸린다.
+         */
+        TransportLeg leg(PlaceCandidate from, PlaceCandidate to) {
+            return layoutLeg(layout, from, to, modeFrom(from), slowWalk);
         }
 
         /**
@@ -482,7 +511,7 @@ final class DayBuilder {
         if (f.endAt() != null) {
             TransportLeg leg = f.lastLeg() != null ? f.lastLeg()
                     : !crossed ? f.firstLeg()
-                    : legOf(prev, f.endAt(), f.transportPref(), f.slowWalk());
+                    : f.leg(prev, f.endAt());
             Integer legMinutes = leg == null ? null : leg.durationMin();
             // 허브까지 구간을 모르면 0분이 아니라 기본 몫으로 본다. 0분이면 출발 허브에 바로 닿는 일정이 된다.
             int arrive = t + (legMinutes != null ? legMinutes : f.endIsHub() ? TripHubs.HUB_TRAVEL_MINUTES : 0);
@@ -542,7 +571,7 @@ final class DayBuilder {
      */
     static int endLimit(Frame f, PlaceCandidate at) {
         if (!f.endIsHub()) return f.endMin();
-        TransportLeg leg = legOf(at, f.endAt(), f.transportPref(), f.slowWalk());
+        TransportLeg leg = f.leg(at, f.endAt());
         return TripHubs.latestLeave(f.hubDeadline(), leg == null ? null : leg.durationMin());
     }
 
@@ -559,7 +588,7 @@ final class DayBuilder {
                                  TransportLeg override, boolean strictSoft) {
         PlaceCandidate c = stop.place();
         TransportLeg leg = override != null && towardNewCity(f, c) ? override
-                : legOf(prev, c, f.transportPref(), f.slowWalk());
+                : f.leg(prev, c);
         if (leg == null && prev != null) return null;
         int arrive = t + (leg == null ? 0 : leg.durationMin());
         int start = arrive;
@@ -614,7 +643,7 @@ final class DayBuilder {
 
     private static String whyNot(Frame f, DayOfWeek dow, PlaceCandidate prev, Stop stop, int t) {
         PlaceCandidate c = stop.place();
-        if (prev != null && legOf(prev, c, f.transportPref(), f.slowWalk()) == null) return NO_ROUTE;
+        if (prev != null && f.leg(prev, c) == null) return NO_ROUTE;
         Slot inDay = f.endIsHub() ? fitInDay(f, dow, prev, stop, t, null, false) : null;
         if (inDay != null && inDay.end() > endLimit(f, c)) return DEPARTURE_TOO_SOON;
         if (stop.sunrise()) return SUNRISE_PASSED;
@@ -721,6 +750,27 @@ final class DayBuilder {
      *
      * @return 좌표가 없거나 하루 안에 오갈 거리가 아니면 null. 도시를 옮기는 구간은 {@link IntercityLegs}가 잰다
      */
+    /**
+     * 말한 지역 둘 사이를 차 없이 오가는 구간은 도시 간 이동으로 잰다. 시내 버스 속도로 재면 당일치기(삿포로에서 오타루)가
+     * 실제의 두 배 가까이 걸린다. 도시 안 구역(스스키노)이 낀 구간은 시내 구간이다.
+     */
+    static TransportLeg layoutLeg(DraftItineraryPlanner.Layout layout, PlaceCandidate from, PlaceCandidate to,
+                                  String mode, boolean slowWalk) {
+        TransportLeg local = legOf(from, to, mode, slowWalk);
+        if (local == null || !"BUS".equals(local.mode())) return local;
+        double[] a = coordsOf(from);
+        double[] b = coordsOf(to);
+        Destination fromArea = layout.areaAt(a);
+        Destination toArea = layout.areaAt(b);
+        if (fromArea == null || toArea == null || fromArea.equals(toArea)
+                || DraftRequestFactory.isDistrict(fromArea) || DraftRequestFactory.isDistrict(toArea)) return local;
+        IntercityLegs.IntercityLeg between = IntercityLegs.legBetween(
+                new TripCities.City(fromArea.name(), fromArea.nameKo(), fromArea.country(), a[0], a[1]),
+                new TripCities.City(toArea.name(), toArea.nameKo(), toArea.country(), b[0], b[1]), mode);
+        return between.minutes() >= local.durationMin() ? local
+                : new TransportLeg(between.mode(), between.minutes(), local.distanceKm(), between.costWon());
+    }
+
     static TransportLeg legOf(PlaceCandidate from, PlaceCandidate to, String transportPref, boolean slowWalk) {
         if (from == null || to == null) return null;
         double[] a = coordsOf(from);
@@ -733,7 +783,7 @@ final class DayBuilder {
         String pref = transportPref == null ? "any" : transportPref;
         double walkLimit = switch (pref) {
             case "walk" -> slowWalk ? SLOW_WALK_KM : 2.0;
-            case "car" -> 0.8;
+            case "car", "taxi" -> 0.8;
             default -> slowWalk ? SLOW_WALK_KM : 1.2;
         };
         BigDecimal distance = BigDecimal.valueOf(km).setScale(2, RoundingMode.HALF_UP);
@@ -745,7 +795,8 @@ final class DayBuilder {
             return new TransportLeg("CAR", (int) Math.ceil(10 + hours * 60), distance,
                     BigDecimal.valueOf(Math.round(km * 300)));
         }
-        if (km <= TAXI_KM) {
+        // 대중교통으로만 다니는 지역은 가까운 구간도 택시로 잇지 않는다. 택시로 다니는 지역은 먼 구간도 택시다.
+        if ("taxi".equals(pref) || km <= TAXI_KM && !"transit".equals(pref)) {
             return new TransportLeg("TAXI", (int) Math.ceil(5 + km / 25 * 60), distance,
                     BigDecimal.valueOf(4800 + Math.round(Math.max(0, km - 1.6) * 800)));
         }

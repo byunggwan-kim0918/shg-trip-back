@@ -9,6 +9,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 import com.shg.trip.shgtrip.domain.planning.dto.TripCities;
 import com.shg.trip.shgtrip.domain.planning.dto.TripConditions;
 import com.shg.trip.shgtrip.domain.planning.dto.VectorEnrichedInput;
+import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -74,9 +75,11 @@ public class TripSkeletonPlanner {
         Map<String, PlaceCandidate> pinned = new HashMap<>(base.pinned());
         Set<String> infeasible = new HashSet<>();
         Map<String, DraftItineraryPlanner.UserWant> userById = new HashMap<>();
-        DraftPlan draft = withTimedWantsOnFeasibleDays(withAllWants(withUserWants(base.draft(), base.userWants(),
-                pinned, userById, notes), dayCount, base.cityNames(), notes), base, dayCount, notes, conflicts,
-                infeasible);
+        DraftPlan withUser = withUserWants(base.draft(), base.userWants(), pinned, userById, notes);
+        Map<String, double[]> spots = wantSpots(withUser, pinned, base);
+        DraftPlan withWants = withAllWants(withUser, dayCount, base.cityNames(), notes, spots, dayAreas(base));
+        DraftPlan draft = withTimedWantsOnFeasibleDays(withWants, base, dayCount, notes, conflicts, infeasible,
+                base.layout().nights().isEmpty() ? Map.of() : spots);
 
         Map<Integer, DraftItineraryPlanner.LodgingNeed> needs = new HashMap<>();
         Map<String, DraftPlan.Want> wants = new LinkedHashMap<>();
@@ -87,6 +90,7 @@ public class TripSkeletonPlanner {
                 if (w != null) timeNeed(base, w, pinned.get(w.id()), day.day(), needs, conflicts, infeasible);
             }
         }
+        draft = withPlannedStays(draft, base.layout().nights(), dayCount);
         Set<Integer> transfers = eveningTransfers(base, draft, dayCount, conflicts);
         departureNeed(base, draft, dayCount, needs);
         return new Skeleton(base.with(draft, pinned, needs, transfers), conflicts, notes,
@@ -156,6 +160,21 @@ public class TripSkeletonPlanner {
         return -1;
     }
 
+    /**
+     * 사용자가 말한 숙박 순서대로 날마다 숙소 권역을 바꾼다. 초안이 다른 도시에 묵게 적어도 저녁 도시 이동과 숙소 고르기가
+     * 이 권역을 따른다.
+     */
+    static DraftPlan withPlannedStays(DraftPlan draft, Map<Integer, Destination> nights, int dayCount) {
+        if (nights.isEmpty()) return draft;
+        List<DraftPlan.Day> days = new ArrayList<>();
+        for (DraftPlan.Day day : nz(draft.days())) {
+            Destination city = day.day() < dayCount ? nights.get(day.day()) : null;
+            days.add(city == null ? day
+                    : new DraftPlan.Day(day.day(), day.area(), city.nameKo(), day.items(), day.spares()));
+        }
+        return new DraftPlan(draft.concept(), draft.wants(), days);
+    }
+
     /** 일출·아침과 저녁·밤은 같은 때로 본다. */
     private static boolean sameTime(String a, String b) {
         if (b == null) return false;
@@ -164,6 +183,15 @@ public class TripSkeletonPlanner {
 
     /** 초안이 어느 날에도 두지 않은 요구를 그 도시의 첫 온전한 날에 넣는다. 빠뜨린 요구는 일정에서 조용히 사라진다. */
     static DraftPlan withAllWants(DraftPlan draft, int dayCount, List<String> cityNames, List<String> notes) {
+        return withAllWants(draft, dayCount, cityNames, notes, Map.of(), List.of());
+    }
+
+    /**
+     * @param spots    요구마다 그 장소 좌표. 있으면 그곳과 가까운 권역의 날에 넣는다
+     * @param dayAreas 날 권역 이름으로 알아볼 도시·말한 지역
+     */
+    static DraftPlan withAllWants(DraftPlan draft, int dayCount, List<String> cityNames, List<String> notes,
+                                  Map<String, double[]> spots, List<Destination> dayAreas) {
         Set<String> placed = new HashSet<>();
         for (DraftPlan.Day day : nz(draft.days())) {
             for (DraftPlan.Item item : nz(day.items())) if (item.want() != null) placed.add(item.want());
@@ -171,7 +199,8 @@ public class TripSkeletonPlanner {
         List<DraftPlan.Day> days = new ArrayList<>(nz(draft.days()));
         for (DraftPlan.Want w : nz(draft.wants())) {
             if (w.id() == null || "city".equals(w.kind()) || placed.contains(w.id())) continue;
-            int at = dayFor(w, days, dayCount, cityNames);
+            Integer near = namesCity(w, cityNames) ? null : nearestDay(spots.get(w.id()), days, dayCount, dayAreas);
+            int at = near != null ? near : dayFor(w, days, dayCount, cityNames);
             DraftPlan.Day day = days.stream().filter(x -> x.day() == at).findFirst().orElse(null);
             if (day == null) continue;
             List<DraftPlan.Item> items = new ArrayList<>(nz(day.items()));
@@ -192,6 +221,13 @@ public class TripSkeletonPlanner {
      */
     static DraftPlan withTimedWantsOnFeasibleDays(DraftPlan draft, DraftItineraryPlanner.Request base, int dayCount,
                                                   List<String> notes, List<String> conflicts, Set<String> infeasible) {
+        return withTimedWantsOnFeasibleDays(draft, base, dayCount, notes, conflicts, infeasible, Map.of());
+    }
+
+    /** @param spots 일출 요구마다 그 장소 좌표. 모르면 빠져 있고 숙박 계획과의 충돌을 보지 않는다 */
+    static DraftPlan withTimedWantsOnFeasibleDays(DraftPlan draft, DraftItineraryPlanner.Request base, int dayCount,
+                                                  List<String> notes, List<String> conflicts, Set<String> infeasible,
+                                                  Map<String, double[]> spots) {
         Map<String, String> timed = new HashMap<>();
         for (DraftPlan.Want w : nz(draft.wants())) {
             String t = timing(w.time());
@@ -203,16 +239,23 @@ public class TripSkeletonPlanner {
             DraftPlan.Day day = days.get(i);
             for (DraftPlan.Item item : List.copyOf(nz(day.items()))) {
                 String t = item.want() == null ? null : timed.get(item.want());
-                if (t == null || fitsTiming(base, t, day.day(), dayCount)) continue;
+                if (t == null) continue;
+                double[] spot = spots.get(item.want());
+                if (fitsTiming(base, t, day.day(), dayCount, spot)) continue;
                 int from = day.day();
-                Integer to = days.stream().map(DraftPlan.Day::day).filter(d -> fitsTiming(base, t, d, dayCount))
+                Integer to = days.stream().map(DraftPlan.Day::day).filter(d -> fitsTiming(base, t, d, dayCount, spot))
                         .min(Comparator.comparingInt((Integer d) -> Math.abs(d - from)).thenComparingInt(d -> d))
                         .orElse(null);
                 if (to == null) {
                     infeasible.add(item.want());
+                    // 넣을 날이 없는 항목을 날에 두면 짓는 쪽이 그날을 새벽부터 시작한다.
+                    days.set(i, withItems(days.get(i), nz(days.get(i).items()).stream().filter(x -> x != item).toList()));
                     conflicts.add("evening".equals(t)
                             ? "'" + item.name() + "'은(는) 해 진 뒤 시간이 남는 날이 없어 넣지 못했어요. "
                                     + "출발 시각을 늦추거나 날짜를 늘려 다시 만들어 주세요."
+                            : spot != null && !base.layout().nights().isEmpty()
+                            ? "'" + item.name() + "'은(는) 묵기로 한 도시에서 일출 전에 닿을 수 있는 날이 없어 넣지 못했어요. "
+                                    + "일출 전날 밤을 그 가까이 묵도록 숙박 계획을 바꾸거나 일출을 빼고 다시 만들어 주세요."
                             : "'" + item.name() + "'은(는) 일출 전에 닿을 수 있는 날이 없어 넣지 못했어요. "
                                     + "하루 더 묵거나 도착 시각을 앞당겨 다시 만들어 주세요.");
                     continue;
@@ -230,13 +273,19 @@ public class TripSkeletonPlanner {
         return new DraftPlan(draft.concept(), draft.wants(), days);
     }
 
-    /** 첫 도시의 해 뜨고 지는 시각으로 본다. 둘째 날부터의 일출은 전날 밤 숙소를 근처에 두면 닿는다. */
-    private static boolean fitsTiming(DraftItineraryPlanner.Request base, String timing, int d, int dayCount) {
+    /**
+     * 첫 도시의 해 뜨고 지는 시각으로 본다. 둘째 날부터의 일출은 전날 밤 숙소를 근처에 두면 닿는다. 전날 밤 묵을 도시를
+     * 여행자가 정했으면 그 도시 안 숙소에서 닿아야 한다.
+     */
+    private static boolean fitsTiming(DraftItineraryPlanner.Request base, String timing, int d, int dayCount,
+                                      double[] spot) {
         Destination city = base.cities().get(0);
         LocalDate date = base.input().startDate().plusDays(d - 1L);
         if ("sunrise".equals(timing)) {
-            return d > 1 || TripFeasibility.sunriseOnFirstDay(date, city.lat(), city.lng(), base.country(),
+            if (d == 1) return TripFeasibility.sunriseOnFirstDay(date, city.lat(), city.lng(), base.country(),
                     base.arrival());
+            Destination stay = base.layout().nights().get(d - 1);
+            return spot == null || stay == null || reachesBeforeSunrise(base, spot, stay, date);
         }
         return TripFeasibility.hasEvening(date, city.lat(), city.lng(), base.country(), d == 1, d == dayCount,
                 base.arrival(), base.departure());
@@ -249,6 +298,52 @@ public class TripSkeletonPlanner {
 
     private static DraftPlan.Day withItems(DraftPlan.Day day, List<DraftPlan.Item> items) {
         return new DraftPlan.Day(day.day(), day.area(), day.lodgingArea(), items, day.spares());
+    }
+
+    /**
+     * 장소와 가장 가까운 권역의 온전한 날. 요구 문장에 도시 이름이 없으면(팜 도미타) 이름으로는 날을 고를 수 없어 다른
+     * 도시의 날에 들어가 하루에 먼 곳을 오간다. 권역을 알아볼 수 없는 날은 고르지 않는다.
+     */
+    private static Integer nearestDay(double[] spot, List<DraftPlan.Day> days, int dayCount, List<Destination> areas) {
+        if (spot == null || areas.isEmpty()) return null;
+        Integer best = null;
+        double bestKm = Double.MAX_VALUE;
+        for (DraftPlan.Day day : days) {
+            boolean full = day.day() > 1 && day.day() < dayCount || dayCount <= 2;
+            if (!full) continue;
+            // 날 권역을 도시로만 적고 항목은 근교에 둔 날(권역 삿포로, 항목 비에이)도 그 근교의 날이다.
+            List<String> named = new ArrayList<>();
+            named.add(day.area());
+            nz(day.items()).forEach(i -> named.add(i.area()));
+            for (String text : named) {
+                Destination area = areaNamed(areas, text);
+                if (area == null) continue;
+                double km = GeoUtils.haversine(spot, new double[]{area.lat(), area.lng()});
+                if (km < bestKm) {
+                    best = day.day();
+                    bestKm = km;
+                }
+            }
+        }
+        return best;
+    }
+
+    /** 날 권역 이름에 든 도시·지역 가운데 가장 긴 이름. "비에이 청의 호수"는 비에이다. */
+    private static Destination areaNamed(List<Destination> areas, String text) {
+        if (text == null) return null;
+        return areas.stream().filter(d -> text.contains(d.nameKo()))
+                .max(Comparator.comparingInt(d -> d.nameKo().length())).orElse(null);
+    }
+
+    private static List<Destination> dayAreas(DraftItineraryPlanner.Request base) {
+        List<Destination> out = new ArrayList<>(base.cities());
+        base.layout().areas().keySet().stream().filter(d -> !out.contains(d)).forEach(out::add);
+        return out;
+    }
+
+    private static boolean namesCity(DraftPlan.Want w, List<String> cityNames) {
+        String text = Objects.toString(w.text(), "") + " " + Objects.toString(w.place(), "");
+        return cityNames.stream().anyMatch(text::contains);
     }
 
     private static int dayFor(DraftPlan.Want w, List<DraftPlan.Day> days, int dayCount, List<String> cityNames) {
@@ -276,12 +371,49 @@ public class TripSkeletonPlanner {
         return new DraftPlan.Item(slot, "sight", name, area, true, w.id(), null, null, w.localNames());
     }
 
+    /**
+     * 장소 요구마다 그 장소 좌표. 이름으로는 초안이 날에 두지 않은 요구와, 숙박 계획이 있을 때 일출 요구만 찾는다.
+     */
+    private Map<String, double[]> wantSpots(DraftPlan draft, Map<String, PlaceCandidate> pinned,
+                                            DraftItineraryPlanner.Request base) {
+        Set<String> placed = new HashSet<>();
+        for (DraftPlan.Day day : nz(draft.days())) {
+            for (DraftPlan.Item item : nz(day.items())) if (item.want() != null) placed.add(item.want());
+        }
+        Map<String, double[]> out = new HashMap<>();
+        for (DraftPlan.Want w : nz(draft.wants())) {
+            if (w.id() == null || "food".equals(w.kind()) || "city".equals(w.kind())) continue;
+            boolean sunrise = "sunrise".equals(timing(w.time())) && !base.layout().nights().isEmpty();
+            if (!sunrise && placed.contains(w.id()) && !pinned.containsKey(w.id())) continue;
+            String name = w.place() != null ? w.place() : nz(w.satisfy()).stream().findFirst().orElse(null);
+            PlaceCandidate pin = pinned.get(w.id());
+            double[] at = pin != null ? CandidateGeo.coordsOf(pin)
+                    : name == null ? null : placeCenter(name, w.localNames(), base);
+            if (at != null) out.put(w.id(), at);
+        }
+        return out;
+    }
+
+    /** 묵기로 한 도시 안 숙소에서 그 도시의 이동 방법으로 일출 전에 그곳에 닿는지. */
+    static boolean reachesBeforeSunrise(DraftItineraryPlanner.Request base, double[] spot, Destination stay,
+                                        LocalDate date) {
+        int sunrise = SolarClock.sunrise(date, spot[0], spot[1], base.country());
+        String mode = base.layout().modeAt(new double[]{stay.lat(), stay.lng()}, base.input().transportPref());
+        return TripFeasibility.withinReach(spot, DraftItineraryPlanner.areaOf(stay), sunriseReachKm(mode, sunrise));
+    }
+
+    /** 일출 전에 숙소에서 닿을 거리. 차·택시는 새벽에도 다니고, 대중교통은 첫차가 일출 전이어야 탄다. */
+    static double sunriseReachKm(String mode, int sunrise) {
+        if ("car".equals(mode) || "taxi".equals(mode)) return SUNRISE_CAR_KM;
+        return sunrise - SUNRISE_LEAD >= FIRST_BUS + 30 ? SUNRISE_BUS_KM : SUNRISE_WALK_KM;
+    }
+
     /** 시각이 있는 요구는 그 시각에 닿을 수 있는 곳에 전날 묵어야 한다. */
     private void timeNeed(DraftItineraryPlanner.Request base, DraftPlan.Want w, PlaceCandidate pin, int d,
                           Map<Integer, DraftItineraryPlanner.LodgingNeed> needs, List<String> conflicts,
                           Set<String> infeasible) {
         String time = w.time();
-        if (time == null || "food".equals(w.kind())) return;
+        if (time == null || "food".equals(w.kind()) || infeasible.contains(w.id())) return;
         String name = w.place() != null ? w.place() : nz(w.satisfy()).stream().findFirst().orElse(null);
         double[] at = pin != null ? CandidateGeo.coordsOf(pin)
                 : name == null ? null : placeCenter(name, w.localNames(), base);
@@ -300,18 +432,19 @@ public class TripSkeletonPlanner {
                 }
                 return;
             }
-            double maxKm;
-            String reason;
-            if ("car".equals(transport)) {
-                maxKm = SUNRISE_CAR_KM;
-                reason = "일출 전 차로 닿을 거리";
-            } else if (sunrise - SUNRISE_LEAD >= FIRST_BUS + 30) {
-                maxKm = SUNRISE_BUS_KM;
-                reason = "첫차로 일출 전에 닿을 거리";
-            } else {
-                maxKm = SUNRISE_WALK_KM;
-                reason = "일출(" + ScheduleTimes.formatMinutes(sunrise) + ")이 첫차 전이라 걸어서 닿을 거리";
+            Destination stay = base.layout().nights().get(d - 1);
+            if (stay != null) transport = base.layout().modeAt(new double[]{stay.lat(), stay.lng()}, transport);
+            if (stay != null && !reachesBeforeSunrise(base, at, stay, date)) {
+                infeasible.add(w.id());
+                conflicts.add("'" + w.text() + "'은(는) " + (d - 1) + "일차 밤을 묵기로 한 " + stay.nameKo()
+                        + "에서 일출(" + ScheduleTimes.formatMinutes(sunrise) + ") 전에 닿기 어려워요. "
+                        + "그 밤을 가까이 묵도록 숙박 계획을 바꾸거나 일출을 빼고 다시 만들어 주세요.");
+                return;
             }
+            double maxKm = sunriseReachKm(transport, sunrise);
+            String reason = maxKm == SUNRISE_CAR_KM ? "일출 전 차로 닿을 거리"
+                    : maxKm == SUNRISE_BUS_KM ? "첫차로 일출 전에 닿을 거리"
+                    : "일출(" + ScheduleTimes.formatMinutes(sunrise) + ")이 첫차 전이라 걸어서 닿을 거리";
             needs.put(d - 1, new DraftItineraryPlanner.LodgingNeed(at, maxKm, true, "'" + w.text() + "' " + reason));
         } else if (("evening".equals(time) || "night".equals(time)) && !"car".equals(transport)
                 && !needs.containsKey(d)) {
@@ -434,8 +567,18 @@ public class TripSkeletonPlanner {
         pinned.values().forEach(p -> {
             if (p.placeId() != null) chosen.add(p.placeId());
         });
+        if (base.bookedLodging() != null && base.bookedLodging().placeId() != null) {
+            chosen.add(base.bookedLodging().placeId());
+        }
         return new TripConditions(out, cityDays, avoid, low, transportOf(input), base.arrival(), base.departure(),
-                input.pace(), chosen);
+                input.pace(), chosen, layoutConditions(base.layout()));
+    }
+
+    static TripConditions.Layout layoutConditions(DraftItineraryPlanner.Layout layout) {
+        Map<Integer, TripConditions.Area> nights = new LinkedHashMap<>();
+        layout.nights().forEach((n, city) -> nights.put(n, DraftItineraryPlanner.areaOf(city)));
+        return new TripConditions.Layout(layout.visitAreas().stream().map(DraftItineraryPlanner::areaOf).toList(),
+                nights, layout.areaModes());
     }
 
     /** "서울 1일, 전주 3일"에서 도시별 날 수. 숫자가 없는 도시는 정하지 않은 것으로 본다. */

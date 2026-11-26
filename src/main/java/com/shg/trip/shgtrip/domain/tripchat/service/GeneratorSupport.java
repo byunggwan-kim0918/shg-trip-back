@@ -69,6 +69,15 @@ public final class GeneratorSupport {
         };
     }
 
+    /** 지역 하나의 이동 방법. 여행 전체 값과 달리 택시와 대중교통을 나눈다. 섞어 다니면 any다. */
+    public static String areaTransport(String mode) {
+        if (mode == null) return "any";
+        return switch (mode) {
+            case "car", "walk", "transit", "taxi" -> mode;
+            default -> "any";
+        };
+    }
+
     /** 생성기는 이동 구간을 1km 미만 도보, 그 외 시속 40km 차로 추정하고 노선·시간표를 모른다. */
     public static String transportNote(String mode, boolean tentative) {
         if (tentative) return "걷는 쪽으로 생각 중이라 이동 수단을 정하지 않고 짜요.";
@@ -105,6 +114,11 @@ public final class GeneratorSupport {
     public static final String AVOID_PLACES_FULL = "피할 곳은 10곳까지만 뺄 수 있어요.";
     public static final String CONDITIONS_REFERENCE = "좋아하는 음식이나 기타 요청은 장소를 고를 때 참고만 해요.";
     public static final String APPROX_TIME = "대략적인 시간은 참고만 해요.";
+    public static final String VISIT_AREAS_INCLUDED = "모두 일정에 넣어요. 장소 정보가 없는 곳은 일정을 만든 뒤 알려줘요.";
+    public static final String STAYS_FOLLOWED = "이 순서대로 숙소를 잡아요.";
+    public static final String STAYS_MISMATCH = "숙박 계획의 박 수가 여행 날짜와 달라 앞에서부터 맞춰 잡아요.";
+    public static final String AREA_TRANSPORT_FOLLOWED = "그 지역에 머무는 날은 이 방법으로 다니는 기준으로 짜요.";
+    public static final String MUST_VISIT_TRIMMED = "꼭 갈 곳이 많아 앞의 10곳만 꼭 넣고 나머지는 참고로 넘겨요.";
     public static final String PRIORITIES_TRIMMED = "하고 싶은 게 많아 최근에 말한 것 위주로 반영해요.";
     public static final String FOOD_EXCLUDED = "이 음식을 주로 파는 식당은 빼요. 다른 메뉴에 들어 있을 수는 있어요.";
     public static final String BAR_EXCLUDED = "술집은 일정과 대안에서 빼요.";
