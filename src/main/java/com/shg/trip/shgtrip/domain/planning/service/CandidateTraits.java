@@ -79,6 +79,14 @@ final class CandidateTraits {
         return isHikeOfAtLeast(c, LONG_HIKE_MIN_MINUTES);
     }
 
+    private static final PlaceRestrictions THEME_PARKS =
+            PlaceRestrictions.of(List.of(com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction.THEME_PARK));
+
+    /** 테마파크. 놀이공원을 피하는 조건과 같은 판정이다. */
+    static boolean isThemePark(PlaceCandidate c) {
+        return c != null && THEME_PARKS.violatedBy(c) != null;
+    }
+
     static boolean isHikeOfAtLeast(PlaceCandidate c, int minMinutes) {
         if (c == null || !PlaceCategoryConstants.isHikingPlace(c.attributes(), c.name(), c.tags())) return false;
         Integer recommended = c.recommendedDurationMinutes();

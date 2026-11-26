@@ -114,4 +114,19 @@ class RequestedPlacePriorityTest {
         assertThat(TripPlanner.missedWhy(new TripConditions.Want("하코네 신사", null, List.of(), null), result))
                 .isEmpty();
     }
+
+    @Test
+    @DisplayName("초안의 관광과 예비 장소가 하나도 연결되지 않은 날은 밤 일정이 카페로 연결됐어도 끼니·카페만 남은 날이다")
+    void thinDayLowersFillValue() {
+        DayBuilder.Stop lunch = new DayBuilder.Stop(sight("타이 카페", null), "meal", "lunch", List.of());
+        PlaceCandidate bicerin = new PlaceCandidate(1, nextId++, "Bicerin Midland Square", null,
+                "Dining and Drinking > Cafe", List.of(), "Nagoya", "JP", BigDecimal.valueOf(35.17),
+                BigDecimal.valueOf(136.885), null, null, 0.0, null, null, null, null, false, null, null, null, null,
+                "CAFE", null, false, null, null, null, null);
+        DayBuilder.Stop cafe = new DayBuilder.Stop(bicerin, "night", "evening", List.of());
+        DayBuilder.Stop sight = stop(sight("아쓰타 신궁", null), false);
+
+        assertThat(DraftItineraryPlanner.onlyEateries(List.of(lunch, cafe))).isTrue();
+        assertThat(DraftItineraryPlanner.onlyEateries(List.of(lunch, sight))).isFalse();
+    }
 }

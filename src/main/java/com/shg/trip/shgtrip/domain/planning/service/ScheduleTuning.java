@@ -67,6 +67,8 @@ public final class ScheduleTuning {
     static final int MORNING_ONLY_HIKE_MIN_MINUTES = 240;
     /** 긴 등산의 체류 상한. 일반 장소(180분)보다 길게 허용하되 하루를 통째로 먹지 않게 자른다. */
     static final int LONG_HIKE_MAX_MINUTES = 300;
+    /** 테마파크의 체류 상한. 일반 장소 상한(180분)으로 자르면 하루를 쓰는 테마파크에서 반나절 전에 나온다. 도쿄 디즈니씨 권장 체류다. */
+    static final int THEME_PARK_MAX_MINUTES = 480;
 
     // ── 대안(스왑 후보) 점수 ────────────────────────────────────────────────
 

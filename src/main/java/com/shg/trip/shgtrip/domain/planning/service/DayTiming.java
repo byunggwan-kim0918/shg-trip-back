@@ -100,14 +100,16 @@ final class DayTiming {
     }
 
     /**
-     * 관광 스텝 체류시간(분). 권장 체류시간이 있으면 30~180(긴 등산은 LONG_HIKE_MAX_MINUTES)으로 클램프하고,
+     * 관광 스텝 체류시간(분). 권장 체류시간이 있으면 30~180(긴 등산은 LONG_HIKE_MAX_MINUTES, 테마파크는
+     * THEME_PARK_MAX_MINUTES)으로 클램프하고,
      * 없으면 {@link PlaceCategoryConstants#heuristicVisitMinutes}를 쓴다. 일괄 90분이면 등산형 오름과 해변 산책이 구분되지 않는다.
      */
     static int resolveVisitMinutes(PlaceCandidate cand) {
         if (cand == null) return DEFAULT_VISIT_MINUTES;
         Integer recommended = cand.recommendedDurationMinutes();
         if (recommended != null && recommended > 0) {
-            int max = isLongHike(cand) ? LONG_HIKE_MAX_MINUTES : 180;
+            int max = isLongHike(cand) ? LONG_HIKE_MAX_MINUTES
+                    : CandidateTraits.isThemePark(cand) ? THEME_PARK_MAX_MINUTES : 180;
             return Math.max(30, Math.min(max, recommended));
         }
         return PlaceCategoryConstants.heuristicVisitMinutes(cand.name(), cand.category());
