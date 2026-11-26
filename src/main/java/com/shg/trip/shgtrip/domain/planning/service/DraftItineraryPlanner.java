@@ -24,6 +24,7 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -345,7 +346,8 @@ public class DraftItineraryPlanner {
                         place = null;
                     }
                     if (place == null) {
-                        double[] near = last != null ? coordsOf(last) : anchor;
+                        double[] near = mealNear(cities, areaPoint(item.area(), req),
+                                last != null ? coordsOf(last) : anchor);
                         Dish dish = dishOf(item, want, req);
                         String kind = isFoodWant(want) ? "meal" : item.kind();
                         List<PlaceCandidate> picks = pickEatery(kind, dish, input, req, near, exclusions,
@@ -454,7 +456,7 @@ public class DraftItineraryPlanner {
             for (PlaceCandidate from : lastNight == null ? List.of(departureHubOf) : List.of(departureHubOf, lastNight)) {
                 if (coordsOf(from) == null) continue;
                 for (DayBuilder.Stop near : knownSightsNear(input, coordsOf(from), registry, exclusions,
-                        input.startDate().plusDays(dayCount - 1), req.country(), MIN_DEPARTURE_FILL_VALUE,
+                        input.startDate().plusDays(dayCount - 1), req.country(), MIN_THIN_DAY_FILL_VALUE,
                         fillDirection(input, stopsByDay.get(dayCount - 1)))) {
                     if (registry.whyNotVisit(near.place(), seen) == null && seen.add(registry.canonical(near.place()))) {
                         sparesByDay.get(dayCount - 1).add(near);
@@ -562,11 +564,25 @@ public class DraftItineraryPlanner {
             stops = withMeals(stops, start, end, input, req, anchor, farLodging ? lodging : null, exclusions,
                     usedEateries, registry);
             PlaceCandidate startAt = first ? null : lodgingByNight.get(d - 1);
-            DayBuilder.Frame frame = new DayBuilder.Frame(d, date, start, end, lodgingBy, sunset, sunrise, startAt,
+            DayBuilder.Frame planned = new DayBuilder.Frame(d, date, start, end, lodgingBy, sunset, sunrise, startAt,
                     arrivalHub, endAt, endIsHub, last, transfer, slow, input.transportPref(),
                     sparesNotVisited(sparesByDay.get(d - 1), earlier, registry),
                     List.copyOf(earlier), maxSights, stayFactor, lastLeg, req.country(), hubDeadline);
-            DayBuilder.Built built = DayBuilder.build(frame, stops);
+            DayBuilder.Built built = DayBuilder.build(planned, stops);
+            if (onlyEateries(stops) && onlyEateries(built.stops())) {
+                List<DayBuilder.Stop> wider = new ArrayList<>(planned.spares());
+                knownSightsNear(input, anchor, registry, exclusions, date, req.country(), MIN_THIN_DAY_FILL_VALUE,
+                        fillDirection(input, stops)).stream()
+                        .filter(x -> registry.whyNotVisit(x.place(), tripSights) == null).forEach(wider::add);
+                DayBuilder.Frame widened = planned.withSpares(sparesNotVisited(wider, earlier, registry),
+                        planned.earlier());
+                DayBuilder.Built retry = DayBuilder.build(widened, stops);
+                if (!onlyEateries(retry.stops())) {
+                    planned = widened;
+                    built = retry;
+                }
+            }
+            DayBuilder.Frame frame = planned;
             built.dropped().forEach(x -> notes.add(frame.dayNumber() + "일차 뺌: " + x));
             for (DayBuilder.Drop miss : built.missed()) {
                 Integer to = miss.cause() == MissCause.ROUTE ? null
@@ -1265,8 +1281,33 @@ public class DraftItineraryPlanner {
 
     /** 초안이 그날 권역에 적은 도시. 여러 도시 여행에서만 뜻이 있다. */
     private static Destination cityNamed(List<Destination> cities, DraftPlan.Day day) {
-        if (cities.size() < 2 || day == null || day.area() == null) return null;
-        return cities.stream().filter(c -> day.area().contains(c.nameKo())).findFirst().orElse(null);
+        return day == null ? null : cityNamed(cities, day.area());
+    }
+
+    private static Destination cityNamed(List<Destination> cities, String area) {
+        if (cities.size() < 2 || area == null) return null;
+        return cities.stream().filter(c -> area.contains(c.nameKo())).findFirst().orElse(null);
+    }
+
+    /** 여러 도시 여행에서 초안이 칸에 적은 구역의 좌표. 도시 이름이면 그 도시 중심, 동네 이름이면 그 동네다. */
+    private double[] areaPoint(String area, Request req) {
+        if (req.cities().size() < 2 || area == null) return null;
+        Destination named = cityNamed(req.cities(), area);
+        double[] at = areaAnchor(area, req);
+        // 도시 이름을 뗀 동네 이름("한옥마을")은 다른 도시의 같은 이름으로 연결될 수 있어 적힌 도시 안일 때만 쓴다.
+        if (named == null) return at;
+        return at != null && nearestCity(req.cities(), at) == named ? at : new double[]{named.lat(), named.lng()};
+    }
+
+    /**
+     * 끼니를 찾을 지점. 끼니 칸이 앞 장소와 다른 여행 도시의 구역을 적었으면 그 구역이다. 도시를 옮기는 날 앞 장소 근처에서
+     * 찾으면 옛 도시에서 저녁을 먹고 밤에야 새 도시로 옮긴다.
+     */
+    static double[] mealNear(List<Destination> cities, double[] areaPoint, double[] near) {
+        if (areaPoint == null || near == null || nearestCity(cities, near) == nearestCity(cities, areaPoint)) {
+            return near;
+        }
+        return areaPoint;
     }
 
     private static Destination nearestCity(List<Destination> cities, double[] at) {
@@ -1428,8 +1469,18 @@ public class DraftItineraryPlanner {
 
     /** 코드가 빈 시간을 채울 때 쓰는 최소 방문 가치. 근처에 있으면 들를 만한 곳(1)으로 채우면 채우기용 장소가 된다. */
     private static final int MIN_FILL_VALUE = 2;
-    /** 출발일 오전은 숙소·출발 허브 근처에서만 보낼 수 있어 근처에 있으면 들를 만한 곳(1)도 채운다. */
-    private static final int MIN_DEPARTURE_FILL_VALUE = 1;
+    /**
+     * 출발일 오전과, 초안의 관광이 연결되지 않아 명소로 채워도 끼니만 남는 날은 근처에 있으면 들를 만한 곳(1)도 채운다.
+     * 채우지 않으면 그날은 끼니만 남는다.
+     */
+    private static final int MIN_THIN_DAY_FILL_VALUE = 1;
+    private static final Set<CandidatePolicy.Role> EATERY_ROLES = EnumSet.of(CandidatePolicy.Role.MEAL,
+            CandidatePolicy.Role.CAFE, CandidatePolicy.Role.BAR);
+
+    /** 끼니·카페뿐인 정류지. 초안의 관광이 하나도 연결되지 않은 날이나 관광 없이 지어진 날이다. */
+    static boolean onlyEateries(List<DayBuilder.Stop> stops) {
+        return stops.stream().allMatch(x -> x.meal() || EATERY_ROLES.contains(CandidatePolicy.roleOf(x.place())));
+    }
     /** 빈 시간 후보 수. 일정에 이미 든 곳과 겹치는 것을 빼고도 오후를 채울 만큼 둔다. */
     private static final int KNOWN_SIGHTS_LIMIT = 8;
 
@@ -1597,8 +1648,12 @@ public class DraftItineraryPlanner {
 
     /** 초안이 그날 권역에 적은 동네의 좌표. 도시 이름만 적었거나 다른 도시의 같은 이름이면 null이다. */
     private double[] areaAnchor(DraftPlan.Day day, Request req) {
-        if (day == null || day.area() == null) return null;
-        String area = day.area();
+        return day == null ? null : areaAnchor(day.area(), req);
+    }
+
+    private double[] areaAnchor(String areaName, Request req) {
+        if (areaName == null) return null;
+        String area = areaName;
         for (String city : req.cityNames()) area = area.replace(city, " ");
         area = area.replaceAll("근처|주변|인근|일대|권역|시내|도심", " ").trim();
         if (area.length() < 2) return null;

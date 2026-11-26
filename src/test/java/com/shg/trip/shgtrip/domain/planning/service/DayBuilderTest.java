@@ -385,4 +385,49 @@ class DayBuilderTest {
                 .orElseThrow();
         assertThat(ScheduleTimes.toMinutesOrNull(park.endTime())).isGreaterThan(lodgingBasedEnd);
     }
+
+    @Test
+    @DisplayName("아침에 도시를 옮기는 날은 옛 도시 쪽 장소를 먼저 들르고, 새 도시 쪽으로 넘어가는 구간에 도시 간 이동을 붙인다")
+    void transferLegAppliesWhenCrossingToNewCity() {
+        PlaceCandidate furanoPension = kyoto("ペンションジェイくらぶ", "Travel and Transportation > Lodging > Hotel",
+                "LODGING", 43.3426, 142.3834);
+        PlaceCandidate sapporoHotel = kyoto("グランドメルキュール札幌大通公園", "Travel and Transportation > Lodging > Hotel",
+                "LODGING", 43.0590, 141.3480);
+        PlaceCandidate aoiIke = kyoto("青い池", "Landmarks and Outdoors > Lake", "SIGHT", 43.4935, 142.6144);
+        PlaceCandidate tvTower = kyoto("さっぽろテレビ塔", "Landmarks and Outdoors > Tower", "SIGHT", 43.0611, 141.3564);
+        TransportLeg train = new TransportLeg("TRAIN", 79, BigDecimal.valueOf(150), BigDecimal.ZERO);
+        DayBuilder.Frame transferDay = new DayBuilder.Frame(4, LocalDate.of(2027, 7, 18), 9 * 60 + 30, 21 * 60 + 30,
+                22 * 60, 19 * 60 + 11, 4 * 60, furanoPension, null, sapporoHotel, false, false, train, false, "car",
+                List.of(), List.of(), 3, 1.25, null, "JP", 0);
+
+        DayBuilder.Built built = DayBuilder.build(transferDay,
+                List.of(stop(aoiIke, "sight", "morning"), stop(tvTower, "sight", "afternoon")));
+
+        assertThat(names(built)).containsSubsequence("青い池", "さっぽろテレビ塔");
+        StepData lake = built.steps().stream().filter(x -> x.place().name().equals("青い池")).findFirst().orElseThrow();
+        StepData tower = built.steps().stream().filter(x -> x.place().name().equals("さっぽろテレビ塔")).findFirst()
+                .orElseThrow();
+        assertThat(lake.transportationMode()).isNotEqualTo("TRAIN");
+        assertThat(tower.transportationMode()).isEqualTo("TRAIN");
+    }
+
+    private static PlaceCandidate withStay(String name, String category, String role, int minutes) {
+        return new PlaceCandidate(1, nextId++, name, null, category, List.of(), "Tokyo", "JP",
+                BigDecimal.valueOf(35.63), BigDecimal.valueOf(139.88), null, null, 0.0, null, null, null, minutes,
+                false, null, null, null, null, role, null, false, null, null, null, null);
+    }
+
+    @Test
+    @DisplayName("테마파크는 일반 관광 상한과 페이스 배수 없이 장소 데이터의 권장 체류를 따르고, 작은 테마 시설은 짧게 머문다")
+    void themeParkFollowsRecommendedStay() {
+        PlaceCandidate disneySea = withStay("東京ディズニーシー", "Arts and Entertainment > Amusement Park", "ACTIVITY",
+                480);
+        PlaceCandidate floralVillage = withStay("湯布院フローラルビレッジ", "Arts and Entertainment > Amusement Park",
+                "SIGHT", 90);
+        PlaceCandidate garden = withStay("浜離宮恩賜庭園", "Landmarks and Outdoors > Garden", "SIGHT", 240);
+
+        assertThat(DayBuilder.minutesOf(stop(disneySea, "experience", "morning"), 1.25)).isEqualTo(480);
+        assertThat(DayBuilder.minutesOf(stop(floralVillage, "sight", "afternoon"), 1.25)).isEqualTo(90);
+        assertThat(DayBuilder.minutesOf(stop(garden, "sight", "morning"), 1.25)).isEqualTo(DayBuilder.MAX_STAY);
+    }
 }

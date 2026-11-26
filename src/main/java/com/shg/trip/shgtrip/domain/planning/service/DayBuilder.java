@@ -128,7 +128,7 @@ final class DayBuilder {
      * @param arrivalHub 도착 허브. 있으면 첫 스텝으로 넣는다
      * @param endAt      그날 밤 숙소 또는 출발 허브. 마지막 스텝으로 넣는다
      * @param hardEnd    endMin을 끼니도 넘을 수 없는 날(출발일)
-     * @param firstLeg   첫 장소까지의 이동을 정해 둔 경우(도시 간 이동). null이면 거리로 계산한다
+     * @param firstLeg   새 도시 쪽으로 넘어가는 구간을 정해 둔 경우(아침 도시 간 이동). null이면 거리로 계산한다
      * @param slowWalk   걷기 힘든 동행. 걷는 구간을 짧게 잡는다
      * @param earlier    앞선 날에 넣은 장소. 같은 곳을 다시 넣지 않는다
      * @param maxSights  빈 시간을 채워 넣을 수 있는 하루 관광 수 상한. 페이스가 정한다
@@ -374,6 +374,7 @@ final class DayBuilder {
         int firstLossAt = -1;
         int t = f.startMin();
         PlaceCandidate prev = f.startAt();
+        boolean crossed = f.firstLeg() == null || f.arrivalHub() != null;
         if (f.arrivalHub() != null) {
             steps.add(DayTiming.buildStep(day, f.arrivalHub(), t, t + f.arrivalHubMinutes(), null, List.of()));
             t += f.arrivalHubMinutes();
@@ -381,7 +382,7 @@ final class DayBuilder {
         }
         for (int i = 0; i < queue.size(); i++) {
             Stop stop = queue.get(i);
-            TransportLeg override = placed.isEmpty() && f.arrivalHub() == null ? f.firstLeg() : null;
+            TransportLeg override = crossed ? null : f.firstLeg();
             if (stop.place().placeId() != null && used.contains(stop.place().placeId())) {
                 // 앞 끼니의 대안이나 앞날에 쓴 식당이 다시 끼니로 오면 대안으로 바꾼다. 그냥 넘기면 끼니가 기록 없이 빠진다.
                 Stop alt = stop.meal() ? mealAlternative(f, dow, prev, stop, t, used, excluded, override) : null;
@@ -457,14 +458,16 @@ final class DayBuilder {
             seen.add(stop.place());
             t = slot.end();
             prev = stop.place();
+            crossed |= towardNewCity(f, stop.place());
         }
 
         // 마지막 장소 뒤로 하루 끝까지 시간이 남으면 예비 장소로 채운다. 출발일 오후가 통째로 비는 일정이 된다.
         while (endLimit(f, prev) - t >= FILL_TAIL && t <= DINNER_LATEST_START && sights(placed) < f.maxSights()) {
+            TransportLeg override = crossed ? null : f.firstLeg();
             Stop filler = pickSpare(f, dow, prev, t, spares, used, seen,
-                    f.endIsHub() ? Integer.MAX_VALUE : f.endMin(), null);
+                    f.endIsHub() ? Integer.MAX_VALUE : f.endMin(), override);
             if (filler == null) break;
-            Slot slot = fit(f, dow, prev, filler, t, null);
+            Slot slot = fit(f, dow, prev, filler, t, override);
             if (slot == null || slot.end() > endLimit(f, filler.place())) break;
             used.add(filler.place().placeId());
             steps.add(DayTiming.buildStep(day, filler.place(), slot.start(), slot.end(), slot.leg(), List.of()));
@@ -472,12 +475,13 @@ final class DayBuilder {
             seen.add(filler.place());
             t = slot.end();
             prev = filler.place();
+            crossed |= towardNewCity(f, filler.place());
         }
 
         int lateBy = 0;
         if (f.endAt() != null) {
             TransportLeg leg = f.lastLeg() != null ? f.lastLeg()
-                    : placed.isEmpty() && f.arrivalHub() == null && f.firstLeg() != null ? f.firstLeg()
+                    : !crossed ? f.firstLeg()
                     : legOf(prev, f.endAt(), f.transportPref(), f.slowWalk());
             Integer legMinutes = leg == null ? null : leg.durationMin();
             // 허브까지 구간을 모르면 0분이 아니라 기본 몫으로 본다. 0분이면 출발 허브에 바로 닿는 일정이 된다.
@@ -542,10 +546,20 @@ final class DayBuilder {
         return TripHubs.latestLeave(f.hubDeadline(), leg == null ? null : leg.durationMin());
     }
 
+    /**
+     * 아침에 도시를 옮기는 날 그곳이 새 도시 쪽인지. 옛 도시 쪽 장소(가는 길의 명소·점심)까지는 하루 구간으로 가고, 새 도시
+     * 쪽으로 넘어가는 첫 구간이 도시 간 이동이다. 첫 장소에 도시 간 이동을 붙이면 옛 도시 쪽 장소가 빠진다.
+     */
+    static boolean towardNewCity(Frame f, PlaceCandidate c) {
+        if (f.startAt() == null || f.endAt() == null) return true;
+        return distanceKm(c, f.endAt()) <= distanceKm(c, f.startAt());
+    }
+
     private static Slot fitInDay(Frame f, DayOfWeek dow, PlaceCandidate prev, Stop stop, int t,
                                  TransportLeg override, boolean strictSoft) {
         PlaceCandidate c = stop.place();
-        TransportLeg leg = override != null ? override : legOf(prev, c, f.transportPref(), f.slowWalk());
+        TransportLeg leg = override != null && towardNewCity(f, c) ? override
+                : legOf(prev, c, f.transportPref(), f.slowWalk());
         if (leg == null && prev != null) return null;
         int arrive = t + (leg == null ? 0 : leg.durationMin());
         int start = arrive;
@@ -681,7 +695,8 @@ final class DayBuilder {
             case "cafe" -> CAFE_MINUTES;
             case "night" -> NIGHT_MINUTES;
             case "market", "shop" -> (int) Math.round(60 * stayFactor);
-            default -> Math.max(45, Math.min(MAX_STAY,
+            default -> CandidateTraits.isThemePark(stop.place()) ? DayTiming.resolveVisitMinutes(stop.place())
+                    : Math.max(45, Math.min(MAX_STAY,
                     (int) Math.round(Math.min(150, DayTiming.resolveVisitMinutes(stop.place())) * stayFactor)));
         };
     }
