@@ -35,6 +35,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -201,6 +202,26 @@ class ItineraryServiceTest {
         assertThat(reordered.get(21L).transportationMode()).isEqualTo("DRIVE");
         assertThat(reordered.get(21L).transportationDuration()).isEqualTo(206);
         assertThat(reordered.get(20L).transportationMode()).isNotEqualTo("DRIVE");
+    }
+
+    @Test
+    @DisplayName("이야기 상태는 일정 확정·장소 보강 대기와 따로 내려간다")
+    void storyStatusIsIndependentOfItineraryStatusAndEnrichment() {
+        itinerary.complete();
+        mockFind();
+        when(placeEnricher.pendingAmong(anyList())).thenReturn(List.of(100L));
+
+        ItineraryResponse pending = itineraryService.getItinerary(ITINERARY_ID, USER_ID);
+        assertThat(pending.status()).isEqualTo("FINALIZED");
+        assertThat(pending.storyStatus()).isEqualTo("PENDING");
+        assertThat(pending.enrichingPlaceIds()).containsExactly(100L);
+
+        when(placeEnricher.pendingAmong(anyList())).thenReturn(List.of());
+        ReflectionTestUtils.setField(itinerary, "storyStatus", Itinerary.StoryStatus.DONE);
+        assertThat(itineraryService.getItinerary(ITINERARY_ID, USER_ID).storyStatus()).isEqualTo("DONE");
+
+        ReflectionTestUtils.setField(itinerary, "storyStatus", null);
+        assertThat(itineraryService.getItinerary(ITINERARY_ID, USER_ID).storyStatus()).isNull();
     }
 
     @Test

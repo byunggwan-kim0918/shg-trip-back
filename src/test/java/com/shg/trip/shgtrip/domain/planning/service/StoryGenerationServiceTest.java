@@ -25,6 +25,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -60,14 +61,15 @@ class StoryGenerationServiceTest {
     }
 
     @Test
-    @DisplayName("취소된 job이면 Haiku 호출/저장 없이 emitter만 닫고 종료한다")
+    @DisplayName("취소된 job이면 Haiku 호출/저장 없이 이야기를 실패로 남기고 emitter를 닫는다")
     void generateAndAttach_cancelledJob_skipsLlmCallAndSave() {
         when(cancellationRegistry.isCancelled("job-1")).thenReturn(true);
 
         service.generateAndAttach("job-1", emitter, 42L, fixedSteps, "제주 3박 4일", enrichedInput, "concept");
 
         verifyNoInteractions(assemblyCallGenerator);
-        verifyNoInteractions(storySaveHelper);
+        verify(storySaveHelper).markFailed(42L);
+        verifyNoMoreInteractions(storySaveHelper);
         verify(emitter).complete();
     }
 
@@ -85,6 +87,7 @@ class StoryGenerationServiceTest {
         // concept은 구조 저장 시점의 임시 제목이므로 그대로 넘어가야 한다 (조건부 제목 교체의 기준값)
         // 교체 비교 기준은 실제 저장된 임시 제목이어야 한다(concept이 아니다)
         verify(storySaveHelper).saveStory(42L, fixedSteps, storyOutput, "제주 3박 4일");
+        verify(storySaveHelper, never()).markFailed(any());
         verify(emitter).send(any(SseEmitter.SseEventBuilder.class));
         verify(emitter).complete();
     }
@@ -98,8 +101,29 @@ class StoryGenerationServiceTest {
 
         service.generateAndAttach("job-1", emitter, 42L, fixedSteps, "제주 3박 4일", enrichedInput, "concept");
 
-        verifyNoInteractions(storySaveHelper);
+        verify(storySaveHelper).markFailed(42L);
+        verifyNoMoreInteractions(storySaveHelper);
         verify(emitter).complete();
+    }
+
+    @Test
+    @DisplayName("이야기 저장이 롤백돼도 실패 상태는 따로 기록하고 story-failed를 보낸다")
+    void generateAndAttach_saveRollsBack_marksFailedSeparately() throws java.io.IOException {
+        when(cancellationRegistry.isCancelled("job-1")).thenReturn(false);
+        AssemblyItineraryOutput storyOutput = new AssemblyItineraryOutput(
+                "제목", List.of(), List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기")));
+        when(assemblyCallGenerator.assembleItinerary(any(), any(), any())).thenReturn(storyOutput);
+        doThrow(new org.springframework.dao.CannotAcquireLockException("lock timeout"))
+                .when(storySaveHelper).saveStory(42L, fixedSteps, storyOutput, "제주 3박 4일");
+
+        service.generateAndAttach("job-1", emitter, 42L, fixedSteps, "제주 3박 4일", enrichedInput, "concept");
+
+        var order = inOrder(storySaveHelper, emitter);
+        order.verify(storySaveHelper).saveStory(42L, fixedSteps, storyOutput, "제주 3박 4일");
+        order.verify(storySaveHelper).markFailed(42L);
+        order.verify(emitter).send(argThat((SseEmitter.SseEventBuilder e) -> e.build().stream()
+                .anyMatch(d -> String.valueOf(d.getData()).contains("story-failed"))));
+        order.verify(emitter).complete();
     }
 
     @Test
@@ -173,6 +197,7 @@ class StoryGenerationServiceTest {
         service.generateAndAttach("job-1", emitter, 42L, List.of(osuStep()), "나고야 1박 2일", enrichedInput, "concept");
 
         verifyNoInteractions(assemblyCallGenerator);
+        verify(storySaveHelper).markFailed(42L);
         verify(emitter).complete();
     }
 
@@ -210,6 +235,7 @@ class StoryGenerationServiceTest {
         service.generateAndAttach("job-1", emitter, 42L, List.of(promoted), "나고야 1박 2일", enrichedInput, "concept");
 
         verifyNoInteractions(assemblyCallGenerator);
+        verify(storySaveHelper).markFailed(42L);
         verify(emitter).complete();
     }
 }

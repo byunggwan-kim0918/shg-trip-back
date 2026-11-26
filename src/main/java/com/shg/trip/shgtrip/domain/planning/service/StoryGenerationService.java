@@ -51,7 +51,7 @@ public class StoryGenerationService {
     }
 
     /**
-     * notes 컬럼만 직접 UPDATE해 Itinerary.@Version과 동시 편집이 충돌하지 않는다.
+     * notes·제목·이야기 상태만 직접 UPDATE해 Itinerary.@Version과 동시 편집이 충돌하지 않는다.
      * 성공·실패 모두 story-ready를 보낸 뒤 emitter를 닫아야 누수가 없다.
      * <p>
      * job 취소로 자동 중단되지 않으므로 LLM 호출 직전에 취소 여부를 다시 확인해 비용을 아낀다.
@@ -61,6 +61,7 @@ public class StoryGenerationService {
                                    String draftTitle, VectorEnrichedInput enrichedInput, String concept) {
         if (cancellationRegistry.isCancelled(jobId)) {
             log.info("Story 생성 스킵 - 취소된 job (jobId={}, itineraryId={})", jobId, itineraryId);
+            storySaveHelper.markFailed(itineraryId);
             emitter.complete();
             return;
         }
@@ -68,6 +69,7 @@ public class StoryGenerationService {
             List<StepData> steps = withEnrichedPlaces(fixedSteps);
             if (cancellationRegistry.isCancelled(jobId)) {
                 log.info("Story 생성 스킵 - 보강을 기다리는 사이 취소됨 (jobId={}, itineraryId={})", jobId, itineraryId);
+                storySaveHelper.markFailed(itineraryId);
                 emitter.complete();
                 return;
             }
@@ -81,6 +83,7 @@ public class StoryGenerationService {
             sendStoryReady(emitter, itineraryId);
         } catch (Exception e) {
             log.error("비동기 story 생성 실패 (jobId={}, itineraryId={}): 구조 일정은 이미 저장됨", jobId, itineraryId, e);
+            storySaveHelper.markFailed(itineraryId);
             sendStoryFailed(emitter, itineraryId);
         }
     }
