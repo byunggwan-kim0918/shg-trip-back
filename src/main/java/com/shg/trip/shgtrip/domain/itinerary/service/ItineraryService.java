@@ -8,6 +8,7 @@ import com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep;
 import com.shg.trip.shgtrip.domain.itinerary.repository.GenerationTraceRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryEditEventRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
+import com.shg.trip.shgtrip.domain.place.enrich.PromotedPlaceEnricher;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.service.OpeningCheck;
@@ -50,6 +51,7 @@ public class ItineraryService {
 
     private final ItineraryRepository itineraryRepository;
     private final PlaceRepository placeRepository;
+    private final PromotedPlaceEnricher placeEnricher;
     private final GenerationTraceRepository generationTraceRepository;
     private final ItineraryEditEventRepository editEventRepository;
     private final QualityGate qualityGate;
@@ -87,15 +89,21 @@ public class ItineraryService {
                 i, i.getCoverPlaceId() != null ? coverById.get(i.getCoverPlaceId()) : null));
     }
 
-    /** 표지 장소가 스텝 밖(여행지 대표 사진)이면 따로 읽는다. */
     private ItineraryResponse toResponse(Itinerary itinerary) {
+        List<Long> placeIds = itinerary.getSteps().stream().map(ItineraryStep::getPlace).filter(Objects::nonNull)
+                .map(Place::getId).distinct().toList();
+        return toResponse(itinerary, placeEnricher.pendingAmong(placeIds));
+    }
+
+    /** 표지 장소가 스텝 밖(여행지 대표 사진)이면 따로 읽는다. */
+    private ItineraryResponse toResponse(Itinerary itinerary, List<Long> enrichingPlaceIds) {
         Long coverId = itinerary.getCoverPlaceId();
         Place cover = coverId == null ? null : itinerary.getSteps().stream()
                 .map(ItineraryStep::getPlace)
                 .filter(p -> p != null && coverId.equals(p.getId()))
                 .findFirst()
                 .orElseGet(() -> placeRepository.findById(coverId).orElse(null));
-        return ItineraryResponse.from(itinerary, cover);
+        return ItineraryResponse.from(itinerary, cover, enrichingPlaceIds);
     }
 
     @Transactional
@@ -154,7 +162,7 @@ public class ItineraryService {
                 && itinerary.getShareExpiresAt().isBefore(OffsetDateTime.now())) {
             throw new BusinessException(ErrorCode.ITINERARY_NOT_FOUND, "만료된 공유 링크입니다.");
         }
-        return toResponse(itinerary).forSharing();
+        return toResponse(itinerary, List.of()).forSharing();
     }
 
     /**

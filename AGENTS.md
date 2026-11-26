@@ -20,7 +20,8 @@ docker compose up -d                 # PostgreSQL(pgvector) · Valkey · LocalSt
 
 - `domain/planning`: 생성 파이프라인. `TripGenerationExecutor`가 입력 보강(Haiku) → `DraftRequestFactory`(요청을 초안 입력으로) → `TripPlanner`(Sonnet 초안 `DraftCallGenerator` → `DraftItineraryPlanner`·`DayBuilder`가 장소·시각 확정 → `ItineraryRules` 검사 → 지킬 수 없는 위반이 있을 때만 한 번 편집) → 저장 순으로 돌린다. 사용자가 뺄 것은 `TripExclusions` 한 곳에서 판정하고, 장소 사실(`place_facts`의 방문 가치·상위 장소·휴무 요일)은 `PlaceFactsReader`로 읽는다. 튜닝 상수는 `ScheduleTuning` 한 곳에 둔다. 검사는 `ItineraryRules` 한 벌이다. HARD는 지킬 수 없는 일정이라 편집을 부르고 저장 관문(`QualityGate`)이 막는다. SOFT는 저장을 막지 않고, 고칠 수 있는 것만 안내로 남긴다. 하루 배치안은 `DayScore` 감점으로 고른다. 요청 자체로 지킬 수 없는 조건(음식 충돌·운전 불가·기간 내내 휴무·장소 데이터 부족)은 `TripFeasibility` 한 곳에서 판정하고, 대화(`TripFeasibilityQuestions`)가 그 턴에 되묻는다. 모델이 피할 음식과 부딪히는 바람을 스스로 지우면 그 지우기는 받지 않는다.
 - `domain/tripchat`: 대화형 입력. 생성 요청은 `TripRequestMapper` 한 곳에서만 만든다.
-- `domain/place/batch`: `batch` 프로필 전용 적재·보강·임베딩 작업.
+- `domain/place/batch`: `batch` 프로필 전용 적재·보강·임베딩 작업. 보강 규칙(`PlaceEnrichment`)과 임베딩(`PlaceEmbedder`)만 프로필 없이 웹에서도 쓴다.
+- `domain/place/enrich`: 생성 중 카탈로그에서 승격한 장소의 즉시 보강(`PromotedPlaceEnricher`). 승격 커밋 뒤 바로 시작하고, 남은 요청(`place_enrich_requests`)은 1분 주기 작업이 다시 맡는다. 운영 프로필에서만 켜져 있다.
 - `src/main/resources/prompts/`: LLM 프롬프트, `db/migration/`: Flyway.
 
 ## 규칙

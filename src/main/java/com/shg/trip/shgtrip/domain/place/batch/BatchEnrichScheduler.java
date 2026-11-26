@@ -44,6 +44,8 @@ public class BatchEnrichScheduler {
     // 맵 항목 순서가 달라도 같은 본문이면 같은 키가 되게 키 순으로 쓴다.
     private static final ObjectWriter REQUEST_KEY_WRITER = new ObjectMapper()
             .writer().with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS);
+    /** 섞인 글자 검사를 하는 나라. 해외 설명은 현지어 이름에 조사가 붙어 섞인 글자로 보인다. */
+    private static final List<String> DOMESTIC_COUNTRIES = List.of(OverseasEnrichment.DOMESTIC);
     /** 실행에서 제외한 실패 id 상한. 대상 조회의 NOT IN 바인드 파라미터 한도(pgjdbc 32767)보다 작아야 한다. */
     static final int MAX_EXCLUDED_IDS = 20_000;
 
@@ -241,7 +243,7 @@ public class BatchEnrichScheduler {
         } else if (mode() == Mode.DESCRIPTIONS) {
             // 이름 속 낱말·한자만 걸린 행은 조회 뒤 다시 걸러 실제 대상은 이보다 조금 적다.
             log.info("소개 다시 쓰기 후보 {}건", placeRepository.countDescriptionRewriteTargets(
-                    regions.isEmpty(), regionsParam(regions), overseasCountries(), DescriptionRewrite.REPUTATION_REGEX));
+                    regions.isEmpty(), regionsParam(regions), DOMESTIC_COUNTRIES, DescriptionRewrite.REPUTATION_REGEX));
             long exhausted = placeRepository.countDescriptionRewriteExhausted();
             if (exhausted > 0) log.warn("소개 고쳐 쓰기에 3번 실패해 제외된 장소 {}건", exhausted);
         } else {
@@ -361,7 +363,7 @@ public class BatchEnrichScheduler {
             case ATTRIBUTES -> placeRepository.findAttributeTargetsInRegions(regions, excluded, page);
             case INGREDIENTS -> placeRepository.findIngredientTargetsInRegions(regions, excluded, page);
             case DESCRIPTIONS -> placeRepository.findDescriptionRewriteTargets(regions.isEmpty(),
-                    regionsParam(regions), overseasCountries(), DescriptionRewrite.REPUTATION_REGEX, excluded, page);
+                    regionsParam(regions), DOMESTIC_COUNTRIES, DescriptionRewrite.REPUTATION_REGEX, excluded, page);
             case V1 -> regions.isEmpty()
                     ? placeRepository.findEnrichTargets(categoryPrefix, excluded, page)
                     : placeRepository.findEnrichTargetsInRegions(regions, categoryPrefix, excluded, page);
@@ -378,10 +380,6 @@ public class BatchEnrichScheduler {
     // IN ()은 문법 오류라 지역 조건을 끄는 실행에도 자리값 하나를 넘긴다.
     private static List<String> regionsParam(List<String> regions) {
         return regions.isEmpty() ? List.of("") : regions;
-    }
-
-    private static List<String> overseasCountries() {
-        return List.copyOf(OverseasEnrichment.COUNTRIES.keySet());
     }
 
     private boolean requestCapReached() {
@@ -686,15 +684,7 @@ public class BatchEnrichScheduler {
     }
 
     EnrichPrompt buildEnrichPrompt(Place place) {
-        boolean overseas = OverseasEnrichment.isOverseas(place.getCountry());
-        if (DiningEnrichment.isDiningVenue(place.getCategory())) {
-            return DiningEnrichment.buildPrompt(place.getName(), place.getCategory(), place.getDescription(),
-                    DiningEnrichment.venueOf(place.getCategory()),
-                    DiningEnrichment.isFamous(place.getWikidataSitelinks()),
-                    overseas ? OverseasEnrichment.contextLines(place) : null,
-                    overseas && place.getNameKo() == null);
-        }
-        return overseas ? AttractionEnrichment.overseasPrompt(place) : AttractionEnrichment.prompt(place);
+        return PlaceEnrichment.prompt(place);
     }
 
     String submitBatch(List<Map<String, Object>> requests) {
@@ -921,42 +911,8 @@ public class BatchEnrichScheduler {
         return "invalid_request_error".equals(type);
     }
 
-    /**
-     * 응답이 JSON이 아니거나(잘림 포함) 규칙에 맞지 않으면 false라 실패 횟수에 넣고 다음 실행에서 다시 받는다.
-     * 그 밖의 예외는 던진다. 코드 오류를 장소 실패 횟수로 세지 않는다.
-     */
     boolean applyEnrichment(Place place, String content) {
-        try {
-            JsonNode root = objectMapper.readTree(EnrichOutputs.extractJson(content));
-            if (!DiningEnrichment.isDiningVenue(place.getCategory())) return AttractionEnrichment.apply(root, place);
-            boolean overseas = OverseasEnrichment.isOverseas(place.getCountry());
-            if (!root.isObject()) {
-                log.warn("식당 보강 응답이 JSON 객체가 아님 - placeId={}", place.getId());
-                return false;
-            }
-            Short fame = EnrichOutputs.fame(root.get("traveler_fame"));
-            // 모델이 모르는 동네 식당의 설명은 지어낸 내용이다. 해외는 Wikidata에 없는 유명 식당이 많아 알려진 곳 판단을 믿는다.
-            boolean describe = DiningEnrichment.isFamous(place.getWikidataSitelinks())
-                    || (overseas && fame != null && fame >= 1);
-            DiningEnrichment.Result dining = DiningEnrichment.interpret(root,
-                    DiningEnrichment.venueOf(place.getCategory()), describe,
-                    overseas ? OverseasEnrichment.ownRegionNames(place) : Set.of());
-            if (EnrichOutputs.rejectsDescription(place.getId(), place.getName(), overseas, dining.description())) {
-                return false;
-            }
-            place.enrichWith(dining.tags(), dining.description(), dining.timeSlots(), dining.durationMinutes(), null);
-            // 카테고리 리프까지 보고 음식 종류를 다시 정한다(태그만으로는 "라멘집"의 면요리가 빠질 수 있다).
-            String cuisine = !"MEAL".equals(dining.placeRole()) ? null
-                    : overseas ? OverseasEnrichment.cuisineOf(dining.tags(), place.getCategory())
-                    : DiningEnrichment.cuisineOf(dining.tags(), place.getCategory());
-            place.assignRole(dining.placeRole(), cuisine);
-            place.rateFame(fame);
-            if (overseas) place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko"), place.getName()));
-            return true;
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            log.warn("보강 데이터 파싱 실패 - placeId={}, error={}", place.getId(), e.getMessage());
-            return false;
-        }
+        return PlaceEnrichment.apply(objectMapper, place, content);
     }
 
     /** 묶음마다 요청이 chunkSize건을 넘지 않게 나눈다. 같은 요청으로 묶인 장소는 결과 한 건으로 반영돼 한 묶음에 넣는다. */

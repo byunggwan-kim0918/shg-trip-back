@@ -386,6 +386,9 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     int updateWikidataMatch(@Param("id") long id, @Param("wikidataId") String wikidataId,
                             @Param("sitelinks") int sitelinks);
 
+    /** 보강 응답이 이만큼 실패한 행은 배치와 승격 장소 즉시 보강 모두 다시 묻지 않는다. */
+    int MAX_ENRICH_ATTEMPTS = 3;
+
     /**
      * 보강 대상: 미보강(enriched_at IS NULL)·활성. BatchEnrichScheduler가 첫 페이지만 반복 조회한다.
      * 카테고리만으로 비방문(NOT_VISITABLE)이 확정된 곳은 보강해도 일정에 안 나오므로 뺀다.
@@ -402,13 +405,11 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
      * @param categoryPrefix 카테고리 접두어(예: "Dining and Drinking"). 빈 문자열이면 전체다
      */
     /** v1 보강 대상 조건. 대상 조회와 견적이 같은 조건을 쓰도록 여기 한 곳에 둔다. */
-    String ENRICH_TARGETS = """
-            p.enrichedAt IS NULL AND p.active = true
-              AND p.wikidataMatchedAt IS NOT NULL
-              AND p.enrichAttempts < 3
-              AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')
-              AND (:categoryPrefix = '' OR p.category LIKE CONCAT(:categoryPrefix, '%'))
-            """;
+    String ENRICH_TARGETS = " p.enrichedAt IS NULL AND p.active = true"
+            + " AND p.wikidataMatchedAt IS NOT NULL"
+            + " AND p.enrichAttempts < " + MAX_ENRICH_ATTEMPTS
+            + " AND (p.placeRole IS NULL OR p.placeRole <> 'NOT_VISITABLE')"
+            + " AND (:categoryPrefix = '' OR p.category LIKE CONCAT(:categoryPrefix, '%')) ";
 
     String ENRICH_TARGET_ORDER = """
             ORDER BY COALESCE(p.wikidataSitelinks, 0) DESC,
@@ -519,9 +520,9 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
         return values == null ? null : String.join(ARRAY_SEPARATOR, values);
     }
 
-    /** 보강 응답이 3번 실패해 대상에서 빠진 활성 미보강 행 수. */
-    @Query(value = "SELECT count(*) FROM places WHERE active = true AND enriched_at IS NULL AND enrich_attempts >= 3",
-            nativeQuery = true)
+    /** 보강 응답이 {@link #MAX_ENRICH_ATTEMPTS}번 실패해 대상에서 빠진 활성 미보강 행 수. */
+    @Query(value = "SELECT count(*) FROM places WHERE active = true AND enriched_at IS NULL AND enrich_attempts >= "
+            + MAX_ENRICH_ATTEMPTS, nativeQuery = true)
     long countEnrichExhausted();
 
     @Query(value = "SELECT count(*) FROM places WHERE active AND description_rewrite_attempts >= 3", nativeQuery = true)
@@ -835,7 +836,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
               AND (place_role IS NULL OR place_role <> 'NOT_VISITABLE')
               AND (:allRegions OR region IN (:regions))
               AND (description ~ :reputation
-                   OR ((country IS NULL OR country NOT IN (:overseas))
+                   OR ((country IS NULL OR country !~ '^[A-Z]{2}$' OR country IN (:domestic))
                        AND description ~ '[\\uAC00-\\uD7A3][\\u3005-\\u3007\\u3021-\\u3029\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\U00020000-\\U0003134F\\u3040-\\u30FF]|[\\u3005-\\u3007\\u3021-\\u3029\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\U00020000-\\U0003134F\\u3040-\\u30FF][\\uAC00-\\uD7A3]'))
             """;
 
@@ -845,7 +846,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
             """, nativeQuery = true)
     List<Place> findDescriptionRewriteTargets(@Param("allRegions") boolean allRegions,
                                               @Param("regions") List<String> regions,
-                                              @Param("overseas") List<String> overseasCountries,
+                                              @Param("domestic") List<String> domesticCountries,
                                               @Param("reputation") String reputationRegex,
                                               @Param("excludedIds") Collection<Long> excludedIds,
                                               Pageable pageable);
@@ -853,7 +854,7 @@ public interface PlaceRepository extends JpaRepository<Place, Long> {
     @Query(value = "SELECT COUNT(*) FROM places WHERE " + DESCRIPTION_REWRITE_TARGETS, nativeQuery = true)
     long countDescriptionRewriteTargets(@Param("allRegions") boolean allRegions,
                                         @Param("regions") List<String> regions,
-                                        @Param("overseas") List<String> overseasCountries,
+                                        @Param("domestic") List<String> domesticCountries,
                                         @Param("reputation") String reputationRegex);
 
     /**

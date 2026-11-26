@@ -1,5 +1,7 @@
 package com.shg.trip.shgtrip.domain.place.catalog;
 
+import com.shg.trip.shgtrip.domain.place.batch.PlaceEnrichment;
+import com.shg.trip.shgtrip.domain.place.enrich.PromotedPlaceEnricher;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +19,7 @@ import java.util.Optional;
  * 카탈로그 장소를 운영 DB 장소로 만든다. 일정은 DB 장소 id만 참조하므로 고른 장소는 반드시 이 경로로 저장한다.
  * 같은 fsq id 행이나 같은 출처의 같은 이름·주소·좌표 행이 있으면 그 행의 id를 그대로 쓴다(합쳐진 행은 대표 행). 추출에서 빠져
  * 꺼진 행(stale)은 다시 켜고, 정책으로 끈 행(policy)은 쓰지 않는다. 없으면 새로 넣는다.
+ * 올린 행이 보강 전이면 커밋 뒤 바로 보강하도록 요청한다({@link PromotedPlaceEnricher}).
  */
 @Slf4j
 @Component
@@ -31,6 +34,7 @@ public class PlaceCatalogPromoter {
     private final PlaceRepository placeRepository;
     private final PlaceCatalog catalog;
     private final NamedParameterJdbcTemplate named;
+    private final PromotedPlaceEnricher enricher;
 
     /** @return 올린 장소. 같은 장소가 추출 누락 말고 다른 이유로 꺼져 있으면 비어 있다 */
     @Transactional
@@ -39,13 +43,18 @@ public class PlaceCatalogPromoter {
         named.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))::text",
                 new MapSqlParameterSource("key", "place-promote:" + lockKey(c)), String.class);
         Map<String, Object> row = existing(c);
-        if (row == null) return placeRepository.findById(insert(c.withEmbedding(catalog.embeddingOf(c))));
-        long id = ((Number) row.get("id")).longValue();
-        if (!Boolean.TRUE.equals(row.get("active"))) {
-            if (!STALE.equals(row.get("deactivated_reason"))) return Optional.empty();
-            named.update("UPDATE places SET active = true, deactivated_at = NULL, deactivated_reason = NULL, "
-                    + "updated_at = now() WHERE id = :id AND NOT active", new MapSqlParameterSource("id", id));
+        long id;
+        if (row == null) {
+            id = insert(c.withEmbedding(catalog.embeddingOf(c)));
+        } else {
+            id = ((Number) row.get("id")).longValue();
+            if (!Boolean.TRUE.equals(row.get("active"))) {
+                if (!STALE.equals(row.get("deactivated_reason"))) return Optional.empty();
+                named.update("UPDATE places SET active = true, deactivated_at = NULL, deactivated_reason = NULL, "
+                        + "updated_at = now() WHERE id = :id AND NOT active", new MapSqlParameterSource("id", id));
+            }
         }
+        enricher.request(id);
         return placeRepository.findById(id);
     }
 
@@ -78,7 +87,10 @@ public class PlaceCatalogPromoter {
 
     private long insert(CatalogPlace c) {
         MapSqlParameterSource p = new MapSqlParameterSource()
-                .addValue("name", c.name()).addValue("nameKo", c.nameKo()).addValue("address", address(c))
+                .addValue("name", c.name())
+                // 카탈로그 이름은 Wikidata·OSM 한국어 라벨이라 보강 응답과 같은 검사를 통과한 것만 바로 보인다.
+                .addValue("nameKo", PlaceEnrichment.verifiedNameKo(c.nameKo(), c.name(), c.country()))
+                .addValue("address", address(c))
                 .addValue("lat", c.latitude()).addValue("lon", c.longitude()).addValue("category", c.category())
                 .addValue("region", c.region()).addValue("country", c.country()).addValue("source", c.source())
                 .addValue("fsq", c.fsqPlaceId()).addValue("qid", c.wikidataId())

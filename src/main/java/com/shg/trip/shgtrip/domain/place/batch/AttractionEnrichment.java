@@ -87,15 +87,19 @@ final class AttractionEnrichment {
         sb.append("  \"description\": \"장소에 대한 2~3문장 설명 (한국어)\",\n");
         sb.append("  \"recommended_time_slots\": [\"morning\", \"afternoon\", \"evening\"],  // 추천 방문 시간대\n");
         sb.append("  \"recommended_duration_minutes\": 90,  // 평균 체류시간(분, 정수)\n");
-        sb.append("  \"admission_fee_local\": 0,  // 입장료(").append(currency.label()).append(", 정수). ")
-                .append("무료면 0, 유료면 성인 1인 기준 실제 입장료\n");
+        if (currency != null) {
+            sb.append("  \"admission_fee_local\": 0,  // 입장료(").append(currency.label()).append(", 정수). ")
+                    .append("무료면 0, 유료면 성인 1인 기준 실제 입장료\n");
+        }
         sb.append("  \"place_role\": \"SIGHT\",  // 여행 일정에서의 역할(아래 목록 중 하나)\n");
         sb.append("  \"traveler_fame\": 0  // 알려진 정도(0~2, 아래 규칙)\n");
         sb.append("}\n");
         sb.append("\n추천 시간대는 다음 중에서 선택: morning, afternoon, evening, night, all_day");
         sb.append("\n체류시간 가이드: 등산·트레킹 150~240 / 해변·시장 60 / 박물관·미술관 90 / 사찰·신사 60 / 테마파크 300");
-        sb.append("\n입장료 가이드: 공원·해변·거리·외관만 보는 곳·대부분의 신사는 0(무료). 관리되는 유료 명소만 ")
-                .append(currency.label()).append(" 단위 실제 금액. 식당·카페·숙소는 0.");
+        if (currency != null) {
+            sb.append("\n입장료 가이드: 공원·해변·거리·외관만 보는 곳·대부분의 신사는 0(무료). 관리되는 유료 명소만 ")
+                    .append(currency.label()).append(" 단위 실제 금액. 식당·카페·숙소는 0.");
+        }
         sb.append("\n").append(DescriptionRewrite.ENRICH_RULE);
         sb.append("\nplace_role: SIGHT(명소·자연·유적·박물관·공원) / ACTIVITY(체험·레저·테마파크) / "
                 + "SHOPPING(쇼핑몰·백화점·쇼핑거리) / MARKET(전통시장·야시장) / LODGING(숙소) / TRANSIT(공항·역·터미널) / "
@@ -134,8 +138,10 @@ final class AttractionEnrichment {
         place.rateFame(EnrichOutputs.fame(root.get("traveler_fame")));
         if (overseas) {
             OverseasEnrichment.Currency currency = OverseasEnrichment.currencyOf(place.getCountry());
-            place.recordAdmissionLocal(OverseasEnrichment.admissionLocal(root.get("admission_fee_local"), currency),
-                    currency.code());
+            if (currency != null) {
+                place.recordAdmissionLocal(OverseasEnrichment.admissionLocal(root.get("admission_fee_local"), currency),
+                        currency.code());
+            }
             place.fillNameKo(OverseasEnrichment.nameKo(root.get("name_ko"), place.getName()));
         }
         return true;

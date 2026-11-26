@@ -242,7 +242,7 @@ class DescriptionRewriteTest {
         spied.enrich();
 
         verify(placeRepository).countDescriptionRewriteTargets(eq(true), eq(List.of("")),
-                argThat((List<String> l) -> l.containsAll(List.of("JP", "CN", "TW", "VN")) && !l.contains("KR")),
+                eq(List.of("KR")),
                 eq(DescriptionRewrite.REPUTATION_REGEX));
         verify(placeRepository, times(2)).findDescriptionRewriteTargets(anyBoolean(), anyList(), anyList(), anyString(),
                 anyCollection(), any(Pageable.class));

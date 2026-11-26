@@ -7,11 +7,12 @@ import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.name.PlaceNames;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
  * 해외 장소 보강 규칙. 한국 장소의 프롬프트·해석은 바꾸지 않고, 해외 행에만 국가·주소 문맥, 한국어 표시 이름,
- * 현지 통화 입장료를 더한다.
+ * 현지 통화 입장료를 더한다. 한국이 아닌 나라는 모두 해외 규칙을 타고, 국가별로 다른 값은 {@link #COUNTRIES}에만 둔다.
  */
 final class OverseasEnrichment {
 
@@ -31,7 +32,10 @@ final class OverseasEnrichment {
 
     record Country(String nameKo, String nameEn, Currency currency) {}
 
-    /** 국가 코드 → 국가명·현지 통화. 여기 없는 국가는 한국 규칙을 탄다. */
+    /**
+     * 국가 코드 → 국가명·현지 통화. 여기 없는 해외 국가는 국가명을 ISO 국가 데이터({@link Locale})에서 읽고, 입장료 금액
+     * 범위를 몰라 현지 통화 입장료를 묻지 않는다.
+     */
     static final Map<String, Country> COUNTRIES = Map.of(
             "JP", new Country("일본", "japan", new Currency("JPY", "엔", 10, 30_000)),
             "CN", new Country("중국", "china", new Currency("CNY", "위안", 1, 2_000)),
@@ -44,12 +48,32 @@ final class OverseasEnrichment {
         static final Destinations INSTANCE = Destinations.fromClasspath();
     }
 
+    static final String DOMESTIC = "KR";
+    /** ISO 3166-1 국가 코드. 소개 다시 쓰기 대상 SQL(PlaceRepository.DESCRIPTION_REWRITE_TARGETS)도 같은 식을 쓴다. */
+    static final String COUNTRY_CODE_REGEX = "^[A-Z]{2}$";
+    private static final java.util.regex.Pattern COUNTRY_CODE = java.util.regex.Pattern.compile(COUNTRY_CODE_REGEX);
+
+    /** 국가 코드가 아니면 해외 문맥(국가명·현지 통화)을 만들 수 없어 국내 규칙을 탄다. */
     static boolean isOverseas(String country) {
-        return country != null && COUNTRIES.containsKey(country);
+        return country != null && COUNTRY_CODE.matcher(country).matches() && !DOMESTIC.equals(country);
     }
 
+    static Country countryOf(String code) {
+        Country known = COUNTRIES.get(code);
+        if (known != null) return known;
+        try {
+            Locale region = new Locale.Builder().setRegion(code).build();
+            String nameKo = region.getDisplayCountry(Locale.KOREAN);
+            return new Country(nameKo.isBlank() ? code : nameKo,
+                    region.getDisplayCountry(Locale.ENGLISH).toLowerCase(Locale.ROOT), null);
+        } catch (java.util.IllformedLocaleException e) {
+            return new Country(code, code.toLowerCase(Locale.ROOT), null);
+        }
+    }
+
+    /** @return 현지 통화와 입장료 금액 범위. 범위를 모르는 나라는 null이다 */
     static Currency currencyOf(String country) {
-        return COUNTRIES.get(country).currency();
+        return countryOf(country).currency();
     }
 
     /**
@@ -58,8 +82,8 @@ final class OverseasEnrichment {
      */
     static java.util.Set<String> ownRegionNames(Place place) {
         java.util.Set<String> names = new java.util.HashSet<>();
-        Country country = COUNTRIES.get(place.getCountry());
-        if (country != null) {
+        if (isOverseas(place.getCountry())) {
+            Country country = countryOf(place.getCountry());
             names.add(PlaceNames.exactKey(country.nameKo()));
             names.add(PlaceNames.exactKey(country.nameEn()));
         }
@@ -73,7 +97,7 @@ final class OverseasEnrichment {
     /** 프롬프트의 장소 정보 줄(국가·여행지·주소). */
     static String contextLines(Place place) {
         StringBuilder sb = new StringBuilder();
-        sb.append("- 국가: ").append(COUNTRIES.get(place.getCountry()).nameKo()).append("\n");
+        sb.append("- 국가: ").append(countryOf(place.getCountry()).nameKo()).append("\n");
         if (place.getRegion() != null) {
             String label = DestinationsHolder.INSTANCE.find(place.getRegion())
                     .map(Destination::nameKo).map(ko -> ko + " (" + place.getRegion() + ")")
@@ -180,7 +204,7 @@ final class OverseasEnrichment {
 
     /** 현지 통화 입장료. 숫자가 아니거나 그 통화로 있을 수 없는 금액은 버린다(0은 무료). */
     static Integer admissionLocal(JsonNode node, Currency currency) {
-        if (node == null || !node.canConvertToInt()) return null;
+        if (currency == null || node == null || !node.canConvertToInt()) return null;
         int v = node.asInt();
         return v >= 0 && currency.plausible(v) ? v : null;
     }

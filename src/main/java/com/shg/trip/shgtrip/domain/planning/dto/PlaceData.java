@@ -33,6 +33,13 @@ public record PlaceData(
         this(name, address, category, region, country, subRegion, description, null, null);
     }
 
+    /** 보강이 채운 한국어 이름·소개. 이미 있는 값은 그대로 둔다. */
+    public PlaceData withEnrichment(String newNameKo, String newDescription) {
+        return new PlaceData(name, address, category, region, country, subRegion,
+                description != null && !description.isBlank() ? description : newDescription, placeId,
+                nameKo != null && !nameKo.isBlank() ? nameKo : newNameKo);
+    }
+
     /** 화면·스토리에 쓰는 이름. 한국어 이름이 있으면 그것이다. */
     public String displayName() {
         return nameKo != null && !nameKo.isBlank() ? nameKo : name;
