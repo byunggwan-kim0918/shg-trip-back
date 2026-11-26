@@ -26,12 +26,14 @@ public record ItineraryResponse(
         String status,
         /** 해소하지 못한 품질 문제 안내. 편집하면 현재 일정 기준으로 다시 만든다. 없거나 공유 응답이면 빈 목록이다. */
         List<String> qualityNotices,
-        List<ItineraryStepResponse> steps
+        List<ItineraryStepResponse> steps,
+        /** 곧 한국어 이름·소개가 채워질 스텝 장소. 화면은 이 장소의 소개 자리를 준비 중으로 두고 다시 조회한다. */
+        List<Long> enrichingPlaceIds
 ) {
     /**
      * @param cover coverPlaceId로 읽은 장소. 없으면 null. 저장된 coverImage 컬럼은 만료된 주소라 쓰지 않는다.
      */
-    public static ItineraryResponse from(Itinerary itinerary, Place cover) {
+    public static ItineraryResponse from(Itinerary itinerary, Place cover, List<Long> enrichingPlaceIds) {
         boolean hasImage = cover != null && cover.getImageUrl() != null;
         return new ItineraryResponse(
                 itinerary.getId(),
@@ -53,13 +55,14 @@ public record ItineraryResponse(
                         .sorted(Comparator.comparingInt(ItineraryStep::getDayNumber)
                                 .thenComparingInt(ItineraryStep::getStepOrder))
                         .map(ItineraryStepResponse::from)
-                        .toList()
+                        .toList(),
+                enrichingPlaceIds
         );
     }
 
     /** 공유 링크는 누구나 열 수 있어 소유자용 품질 안내(사용자가 적은 장소 이름 포함)를 뺀다. */
     public ItineraryResponse forSharing() {
         return new ItineraryResponse(id, title, destination, startDate, endDate, totalBudget, estimatedCost, coverImage,
-                coverImageCredit, coverImageLicense, coverImageSourceUrl, tags, status, List.of(), steps);
+                coverImageCredit, coverImageLicense, coverImageSourceUrl, tags, status, List.of(), steps, List.of());
     }
 }

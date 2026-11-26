@@ -55,6 +55,7 @@ class ItineraryServiceTest {
     @Mock private ItineraryEditEventRepository editEventRepository;
     @Mock private EntityManager entityManager;
     @Mock private com.shg.trip.shgtrip.domain.planning.service.QualityGate qualityGate;
+    @Mock private com.shg.trip.shgtrip.domain.place.enrich.PromotedPlaceEnricher placeEnricher;
 
     @InjectMocks private ItineraryService itineraryService;
 

@@ -104,23 +104,24 @@ class PlaceRepositoryBatchQueryTest {
     @DisplayName("소개 다시 쓰기 후보는 평판 문구와 국내 섞인 글자 행이고, 쓰기는 보낼 때의 소개가 그대로일 때만 바꾼다")
     void descriptionRewriteTargetsAndWrites() {
         String reputation = com.shg.trip.shgtrip.domain.place.batch.DescriptionRewrite.REPUTATION_REGEX;
-        List<String> overseas = List.of("JP", "CN", "TW", "VN");
+        List<String> domestic = List.of("KR");
         Place popular = saveDescribed("광안리", "KR", "야경 명소로 인기입니다.");
         Place mixed = saveDescribed("경주레져", "KR", "가족과 즐기기에 适합니다.");
         Place compatHan = saveDescribed("어느 절", null, "산책하기 좋은 \uF900곳입니다.");
         saveDescribed("해운대", "KR", "모래사장이 넓은 해변입니다.");
         saveDescribed("金閣寺", "JP", "鹿苑寺라고도 부르는 절입니다.");
+        saveDescribed("วัดอรุณ", "TH", "Wat Arun 또는 鄭王廟라고도 부르는 사원입니다.");
         saveDescribed("빈 곳", "KR", "  ");
         em.clear();
 
-        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation,
+        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), domestic, reputation,
                 List.of(-1L), PageRequest.of(0, 10))).extracting(Place::getId)
                 .containsExactlyInAnyOrder(popular.getId(), mixed.getId(), compatHan.getId());
-        assertThat(placeRepository.countDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation))
+        assertThat(placeRepository.countDescriptionRewriteTargets(false, List.of(REGION), domestic, reputation))
                 .isEqualTo(3);
-        assertThat(placeRepository.countDescriptionRewriteTargets(true, List.of(""), overseas, reputation))
+        assertThat(placeRepository.countDescriptionRewriteTargets(true, List.of(""), domestic, reputation))
                 .isGreaterThanOrEqualTo(3);
-        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation,
+        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), domestic, reputation,
                 List.of(popular.getId()), PageRequest.of(0, 10))).extracting(Place::getId)
                 .doesNotContain(popular.getId());
 
@@ -131,11 +132,11 @@ class PlaceRepositoryBatchQueryTest {
 
         assertThat(placeRepository.findById(popular.getId()).orElseThrow().getDescription())
                 .isEqualTo("광안대교가 보이는 해변입니다.");
-        assertThat(placeRepository.countDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation))
+        assertThat(placeRepository.countDescriptionRewriteTargets(false, List.of(REGION), domestic, reputation))
                 .isEqualTo(2);
 
         for (int i = 0; i < 3; i++) placeRepository.incrementDescriptionRewriteAttempts(List.of(mixed.getId()));
-        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation,
+        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), domestic, reputation,
                 List.of(-1L), PageRequest.of(0, 10))).extracting(Place::getId).containsExactly(compatHan.getId());
         assertThat(placeRepository.countDescriptionRewriteExhausted()).isGreaterThanOrEqualTo(1);
 
@@ -148,7 +149,7 @@ class PlaceRepositoryBatchQueryTest {
         reloaded.enrichWith(List.of("레저"), reloaded.getDescription(), List.of("afternoon"));
         placeRepository.writeEnrichment(reloaded);
         em.clear();
-        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), overseas, reputation,
+        assertThat(placeRepository.findDescriptionRewriteTargets(false, List.of(REGION), domestic, reputation,
                 List.of(-1L), PageRequest.of(0, 10))).extracting(Place::getId)
                 .containsExactlyInAnyOrder(mixed.getId(), compatHan.getId());
     }

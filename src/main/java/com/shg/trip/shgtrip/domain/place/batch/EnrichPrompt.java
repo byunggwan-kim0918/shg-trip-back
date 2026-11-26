@@ -9,9 +9,9 @@ import java.util.Map;
  * @param system 응답 형식·규칙. 같은 프롬프트 갈래(국내·해외, 업종, 물을 항목)끼리 글자까지 같아야 캐시가 맞는다
  * @param user   장소 정보
  */
-record EnrichPrompt(String system, String user) {
+public record EnrichPrompt(String system, String user) {
 
-    static final int MAX_TOKENS = 1024;
+    public static final int MAX_TOKENS = 1024;
 
     Map<String, Object> requestParams(String model) {
         return Map.of(

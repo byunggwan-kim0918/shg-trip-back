@@ -95,6 +95,11 @@ place:
   catalog:
     # 운영 DB 밖 장소 카탈로그. 앱이 시작할 때 데이터 버킷에서 받아 연다(PlaceCatalogConfig)
     s3-keys: ${PLACE_CATALOG_S3_KEYS:catalog/jp.parquet}
+  promote-enrich:
+    # 생성 중 카탈로그에서 올린 장소를 바로 보강한다(PromotedPlaceEnricher). 다른 프로필은 꺼져 있어 Haiku를 부르지 않는다
+    enabled: ${PLACE_PROMOTE_ENRICH_ENABLED:true}
+    max-per-hour: ${PLACE_PROMOTE_ENRICH_MAX_PER_HOUR:60}
+    max-per-day: ${PLACE_PROMOTE_ENRICH_MAX_PER_DAY:300}
 
 planning:
   # 일정을 만들어 주는 국가(한국은 늘 포함). 장소 적재·검증을 마친 나라만 넣는다

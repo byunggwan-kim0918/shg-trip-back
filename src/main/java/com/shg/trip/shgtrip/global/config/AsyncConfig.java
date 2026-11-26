@@ -26,6 +26,21 @@ public class AsyncConfig {
     }
 
     /**
+     * 승격 장소 즉시 보강(PromotedPlaceEnricher). 생성 실행기와 나눠 Haiku 대기가 생성 스레드를 잡지 않는다.
+     * 큐가 차면 거절하고, 거절된 요청은 대기열에 남아 주기 작업이 다시 맡는다.
+     */
+    @Bean(name = "placeEnrichExecutor")
+    public Executor placeEnrichExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(2);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("place-enrich-");
+        executor.initialize();
+        return executor;
+    }
+
+    /**
      * 요청마다 스케줄러를 만들지 않고 공유해 스레드 낭비를 막는다.
      */
     @Bean(name = "sseHeartbeatScheduler")

@@ -1,12 +1,8 @@
 package com.shg.trip.shgtrip.domain.place.batch;
 
-import com.shg.trip.shgtrip.domain.place.embedding.EmbeddingService;
-import com.shg.trip.shgtrip.domain.place.embedding.EmbeddingTextBuilder;
 import com.shg.trip.shgtrip.domain.place.entity.Place;
-import com.shg.trip.shgtrip.domain.place.integrity.PlaceFingerprints;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.place.vector.PlaceVectorSearchService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -15,21 +11,25 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 @Slf4j
 @Component
 @Profile("batch")
-@RequiredArgsConstructor
 public class EmbeddingBatchJob {
 
     private final PlaceRepository placeRepository;
-    private final EmbeddingService embeddingService;
     private final PlaceVectorSearchService placeVectorSearchService;
+    private final PlaceEmbedder embedder;
+
+    public EmbeddingBatchJob(PlaceRepository placeRepository, PlaceVectorSearchService placeVectorSearchService,
+                             PlaceEmbedder embedder) {
+        this.placeRepository = placeRepository;
+        this.placeVectorSearchService = placeVectorSearchService;
+        this.embedder = embedder;
+    }
 
     @Value("${batch.embedding.batch-size:100}")
     private int batchSize;
@@ -120,63 +120,8 @@ public class EmbeddingBatchJob {
     }
 
     BatchResult processBatch(List<Place> places) {
-        List<String> texts = new ArrayList<>();
-        List<Place> validPlaces = new ArrayList<>();
-        List<Long> textBuildFailedIds = new ArrayList<>();
-
-        for (Place place : places) {
-            try {
-                String text = EmbeddingTextBuilder.buildText(place);
-                texts.add(text);
-                validPlaces.add(place);
-            } catch (Exception e) {
-                log.warn("텍스트 생성 실패 - placeId={}, name={}: {}",
-                        place.getId(), place.getName(), e.getMessage());
-                textBuildFailedIds.add(place.getId());
-            }
-        }
-
-        if (validPlaces.isEmpty()) {
-            return new BatchResult(0, places.size(), allIds(places));
-        }
-
-        List<float[]> embeddings;
-        try {
-            embeddings = embeddingService.embedBatch(texts);
-        } catch (Exception e) {
-            apiFailures++;
-            log.error("배치 임베딩 생성 API 호출 실패: {}", e.getMessage(), e);
-            return new BatchResult(0, places.size(), allIds(places));
-        }
-
-        if (embeddings.size() != validPlaces.size()) {
-            apiFailures++;
-            log.error("임베딩 결과 수 불일치 - 요청: {}건, 응답: {}건",
-                    validPlaces.size(), embeddings.size());
-            return new BatchResult(0, places.size(), allIds(places));
-        }
-
-        Map<Long, float[]> embeddingMap = new HashMap<>();
-        for (int i = 0; i < validPlaces.size(); i++) {
-            embeddingMap.put(validPlaces.get(i).getId(), embeddings.get(i));
-        }
-
-        try {
-            placeVectorSearchService.storeBatch(embeddingMap);
-            placeRepository.stampEmbeddingTextFingerprints(
-                    validPlaces.stream().map(p -> String.valueOf(p.getId())).collect(java.util.stream.Collectors.joining(",")),
-                    texts.stream().map(PlaceFingerprints::embeddingText).collect(java.util.stream.Collectors.joining(",")));
-        } catch (Exception e) {
-            apiFailures++;
-            log.error("임베딩 일괄 저장 실패: {}", e.getMessage(), e);
-            return new BatchResult(0, places.size(), allIds(places));
-        }
-
-        int failed = places.size() - validPlaces.size();
-        return new BatchResult(validPlaces.size(), failed, textBuildFailedIds);
-    }
-
-    private List<Long> allIds(List<Place> places) {
-        return places.stream().map(Place::getId).toList();
+        PlaceEmbedder.Result result = embedder.embed(places);
+        if (result.apiFailed()) apiFailures++;
+        return new BatchResult(result.success(), result.failed(), result.failedIds());
     }
 }

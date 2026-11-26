@@ -33,4 +33,9 @@ public record StepData(
                 transportationDuration, transportationDistance, transportationCost, newNotes, estimatedCost);
     }
 
+    public StepData withPlace(PlaceData newPlace) {
+        return new StepData(stepOrder, dayNumber, startTime, endTime, newPlace, alternatives, transportationMode,
+                transportationDuration, transportationDistance, transportationCost, notes, estimatedCost);
+    }
+
 }

@@ -45,7 +45,8 @@ class EmbeddingBatchJobTest {
 
     @BeforeEach
     void setUp() {
-        embeddingBatchJob = new EmbeddingBatchJob(placeRepository, embeddingService, placeVectorSearchService);
+        embeddingBatchJob = new EmbeddingBatchJob(placeRepository, placeVectorSearchService,
+                new PlaceEmbedder(placeRepository, embeddingService, placeVectorSearchService));
         ReflectionTestUtils.setField(embeddingBatchJob, "batchSize", 100);
         ReflectionTestUtils.setField(embeddingBatchJob, "annRebuildMinPending", 10_000L);
     }
