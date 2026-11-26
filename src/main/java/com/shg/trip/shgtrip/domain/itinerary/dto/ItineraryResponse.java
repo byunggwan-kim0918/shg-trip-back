@@ -28,7 +28,9 @@ public record ItineraryResponse(
         List<String> qualityNotices,
         List<ItineraryStepResponse> steps,
         /** 곧 한국어 이름·소개가 채워질 스텝 장소. 화면은 이 장소의 소개 자리를 준비 중으로 두고 다시 조회한다. */
-        List<Long> enrichingPlaceIds
+        List<Long> enrichingPlaceIds,
+        /** 이야기 작성 상태(PENDING·DONE·FAILED). 화면은 PENDING일 때만 다시 조회한다. 판별하지 못한 옛 일정은 null이다. */
+        String storyStatus
 ) {
     /**
      * @param cover coverPlaceId로 읽은 장소. 없으면 null. 저장된 coverImage 컬럼은 만료된 주소라 쓰지 않는다.
@@ -56,13 +58,15 @@ public record ItineraryResponse(
                                 .thenComparingInt(ItineraryStep::getStepOrder))
                         .map(ItineraryStepResponse::from)
                         .toList(),
-                enrichingPlaceIds
+                enrichingPlaceIds,
+                itinerary.getStoryStatus() != null ? itinerary.getStoryStatus().name() : null
         );
     }
 
     /** 공유 링크는 누구나 열 수 있어 소유자용 품질 안내(사용자가 적은 장소 이름 포함)를 뺀다. */
     public ItineraryResponse forSharing() {
         return new ItineraryResponse(id, title, destination, startDate, endDate, totalBudget, estimatedCost, coverImage,
-                coverImageCredit, coverImageLicense, coverImageSourceUrl, tags, status, List.of(), steps, List.of());
+                coverImageCredit, coverImageLicense, coverImageSourceUrl, tags, status, List.of(), steps, List.of(),
+                storyStatus);
     }
 }

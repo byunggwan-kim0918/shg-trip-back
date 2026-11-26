@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.itinerary.entity;
 import com.shg.trip.shgtrip.global.entity.BaseTimeEntity;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -14,7 +15,12 @@ import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
 
+/**
+ * 이야기 작업은 제목·이야기 상태를 @Version 없이 JPQL로 바꾼다. 바뀐 컬럼만 쓰지 않으면 그전에 읽은 편집·확정·공유 저장이
+ * 이 값들을 읽었던 값으로 되돌린다.
+ */
 @Entity
+@DynamicUpdate
 @Table(name = "itineraries")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -68,6 +74,12 @@ public class Itinerary extends BaseTimeEntity {
     @Enumerated(EnumType.STRING)
     @Builder.Default
     private ItineraryStatus status = ItineraryStatus.DRAFT;
+
+    /** 이야기(Haiku) 작성 상태. null은 이 상태를 기록하기 전에 만든 일정 중 완료 여부를 판별하지 못한 것이다. */
+    @Column(name = "story_status", length = 10)
+    @Enumerated(EnumType.STRING)
+    @Builder.Default
+    private StoryStatus storyStatus = StoryStatus.PENDING;
 
     /** 편집 뒤 같은 기준으로 다시 판정할 입력(JSON). 관문 이전에 만든 일정은 null이라 다시 판정하지 않는다. */
     @JdbcTypeCode(SqlTypes.JSON)
@@ -178,5 +190,9 @@ public class Itinerary extends BaseTimeEntity {
 
     public enum ItineraryStatus {
         DRAFT, FINALIZED, ARCHIVED
+    }
+
+    public enum StoryStatus {
+        PENDING, DONE, FAILED
     }
 }

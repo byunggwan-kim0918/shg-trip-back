@@ -1,5 +1,6 @@
 package com.shg.trip.shgtrip.domain.planning.service;
 
+import com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryRepository;
 import com.shg.trip.shgtrip.domain.itinerary.repository.ItineraryStepRepository;
 import com.shg.trip.shgtrip.domain.planning.dto.AssemblyItineraryOutput;
@@ -37,7 +38,7 @@ class StorySaveHelperTest {
     void setUp() {
         helper = new StorySaveHelper(itineraryStepRepository, itineraryRepository);
         lenient().when(itineraryRepository.findByIdForUpdate(42L))
-                .thenReturn(java.util.Optional.of(mock(com.shg.trip.shgtrip.domain.itinerary.entity.Itinerary.class)));
+                .thenReturn(java.util.Optional.of(mock(Itinerary.class)));
     }
 
     private StepData step(int order) {
@@ -64,6 +65,61 @@ class StorySaveHelperTest {
 
         verify(itineraryStepRepository).updateNotesByDayAndPlace(42L, 1, "장소1", "이야기1");
         verify(itineraryStepRepository).updateNotesByDayAndPlace(42L, 1, "장소2", "이야기2");
+        verify(itineraryRepository).updateStoryStatus(42L, Itinerary.StoryStatus.DONE);
+    }
+
+    @Test
+    @DisplayName("이야기 상태는 메모·제목을 쓴 뒤 같은 저장에서 DONE으로 바꾼다")
+    void saveStory_marksDoneAfterNotesAndTitle() {
+        List<StepData> steps = List.of(step(1));
+        when(itineraryStepRepository.updateNotesByDayAndPlace(42L, 1, "장소1", "이야기")).thenReturn(1);
+
+        helper.saveStory(42L, steps, new AssemblyItineraryOutput(
+                "나고야 장어와 성 산책", List.of(), List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기"))), DRAFT_TITLE);
+
+        var order = inOrder(itineraryStepRepository, itineraryRepository);
+        order.verify(itineraryStepRepository).updateNotesByDayAndPlace(42L, 1, "장소1", "이야기");
+        order.verify(itineraryRepository).updateTitleIfUnchanged(42L, "나고야 장어와 성 산책", DRAFT_TITLE);
+        order.verify(itineraryRepository).updateStoryStatus(42L, Itinerary.StoryStatus.DONE);
+    }
+
+    @Test
+    @DisplayName("이야기 응답에 스텝 문장이 하나도 없으면 FAILED로 남긴다")
+    void saveStory_emptyStoryMarksFailed() {
+        helper.saveStory(42L, List.of(step(1)), new AssemblyItineraryOutput("제목", List.of(), List.of()), DRAFT_TITLE);
+
+        verify(itineraryRepository).updateStoryStatus(42L, Itinerary.StoryStatus.FAILED);
+        verify(itineraryRepository, never()).updateStoryStatus(42L, Itinerary.StoryStatus.DONE);
+    }
+
+    @Test
+    @DisplayName("메모 저장이 실패하면 DONE을 쓰기 전에 예외를 넘겨 트랜잭션이 롤백된다")
+    void saveStory_failureBeforeDoneLeavesStatusUntouched() {
+        when(itineraryStepRepository.updateNotesByDayAndPlace(42L, 1, "장소1", "이야기"))
+                .thenThrow(new org.springframework.dao.QueryTimeoutException("timeout"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> helper.saveStory(42L, List.of(step(1)),
+                new AssemblyItineraryOutput("제목", List.of(),
+                        List.of(new AssemblyItineraryOutput.StoryStep(1, "이야기"))), DRAFT_TITLE))
+                .isInstanceOf(org.springframework.dao.QueryTimeoutException.class);
+
+        verify(itineraryRepository, never()).updateStoryStatus(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("실패 기록은 아직 PENDING인 일정만 바꾸고, 기록 자체가 실패해도 예외를 넘기지 않는다")
+    void markFailed_onlyFromPendingAndSoft() {
+        when(itineraryRepository.transitionStoryStatus(42L, Itinerary.StoryStatus.PENDING, Itinerary.StoryStatus.FAILED))
+                .thenReturn(1);
+        when(itineraryRepository.transitionStoryStatus(43L, Itinerary.StoryStatus.PENDING, Itinerary.StoryStatus.FAILED))
+                .thenReturn(0);
+        when(itineraryRepository.transitionStoryStatus(44L, Itinerary.StoryStatus.PENDING, Itinerary.StoryStatus.FAILED))
+                .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("db down"));
+
+        assertThat(helper.markFailed(42L)).isTrue();
+        assertThat(helper.markFailed(43L)).isFalse();
+        assertThat(helper.markFailed(44L)).isFalse();
+        verify(itineraryRepository, never()).updateStoryStatus(anyLong(), any());
     }
 
     @Test
@@ -100,6 +156,7 @@ class StorySaveHelperTest {
         // 조건부 UPDATE 한 번만 시도하고, 그 외 제목 관련 추가 조작은 없다
         verify(itineraryRepository, times(1)).updateTitleIfUnchanged(42L, "제주 오름과 흑돼지", DRAFT_TITLE);
         verify(itineraryRepository).findByIdForUpdate(42L);
+        verify(itineraryRepository).updateStoryStatus(42L, Itinerary.StoryStatus.DONE);
         verifyNoMoreInteractions(itineraryRepository);
     }
 
@@ -163,6 +220,7 @@ class StorySaveHelperTest {
 
         verifyNoInteractions(itineraryStepRepository);
         verify(itineraryRepository, never()).updateTitleIfUnchanged(anyLong(), anyString(), anyString());
+        verify(itineraryRepository, never()).updateStoryStatus(anyLong(), any());
     }
 
     @Test

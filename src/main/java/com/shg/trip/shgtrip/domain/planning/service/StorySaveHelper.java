@@ -86,6 +86,28 @@ public class StorySaveHelper {
 
         // story 단계의 tags는 쓰지 않는다. 사용자가 자주 손대는 값이라 제목처럼 임시값 비교로
         // 편집 여부를 판별하기 어렵다.
+
+        // 메모·제목과 같은 트랜잭션이라 저장이 롤백되면 DONE도 남지 않는다.
+        Itinerary.StoryStatus status = storyByOrder.isEmpty() ? Itinerary.StoryStatus.FAILED : Itinerary.StoryStatus.DONE;
+        if (status == Itinerary.StoryStatus.FAILED) {
+            log.warn("story 응답에 스텝 문장이 없음 (itineraryId={})", itineraryId);
+        }
+        itineraryRepository.updateStoryStatus(itineraryId, status);
+    }
+
+    /**
+     * 이야기를 쓰지 못한 일정을 FAILED로 남긴다. {@link #saveStory}가 롤백된 뒤 따로 커밋해야 하므로 호출자에 트랜잭션이 없어야 한다.
+     *
+     * @return 기록했으면 true. 이미 끝난 상태거나 기록이 실패하면 false이고, 남은 PENDING은 {@link StaleStoryJob}이 맡는다
+     */
+    public boolean markFailed(Long itineraryId) {
+        try {
+            return itineraryRepository.transitionStoryStatus(itineraryId, Itinerary.StoryStatus.PENDING,
+                    Itinerary.StoryStatus.FAILED) > 0;
+        } catch (RuntimeException e) {
+            log.warn("story 실패 상태 기록 실패 (itineraryId={}): {}", itineraryId, e.getMessage());
+            return false;
+        }
     }
 
     private static final Pattern NIGHTS_AND_DAYS = Pattern.compile("\\d+박\\s*\\d+일");
