@@ -6,6 +6,7 @@
   일반어       : 신사·신궁·공원·시장처럼 한국 여행자가 번역해 부르는 낱말만 번역하고, 모르는 영어 낱말이 있으면 옮기지 않는다
 틀린 이름은 다른 장소로 잘못 잇게 하므로, 확실하지 않으면 None을 돌려준다.
 """
+import os
 import re
 import unicodedata
 
@@ -260,3 +261,29 @@ def _add_final(syllable, final):
         return syllable
     index = {"ㄴ": 4, "ㅅ": 19}[final]
     return syllable[:-1] + chr(0xAC00 + code + index)
+
+
+# 한자 → 한국 한자음. Java LocalNameCheck와 같은 표를 쓴다.
+_HANJA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src", "main", "resources", "names",
+                           "hanja-ko.tsv")
+_hanja = None
+
+
+def _hanja_table():
+    global _hanja
+    if _hanja is None:
+        with open(_HANJA_FILE, encoding="utf-8") as f:
+            _hanja = {ch: set(r.split(",")) for ch, r in (line.rstrip("\n").split("\t") for line in f if "\t" in line)}
+    return _hanja
+
+
+def reads_as_hanja(korean, han):
+    """korean(띄어쓰기 무시)이 han의 한자를 글자마다 한국 한자음으로 읽은 것인지(金閣寺 → 금각사). 한자가 아닌 글자는 뗀다.
+    읽기 표에 없는 한자(일본 신자체 일부)가 있으면 읽을 수 없어 거짓이다."""
+    table = _hanja_table()
+    han = han or ""
+    if any(c not in table and unicodedata.name(c, "").startswith("CJK ") for c in han):
+        return False
+    chars = [c for c in han if c in table]
+    syllables = [c for c in (korean or "") if not c.isspace()]
+    return bool(chars) and len(chars) == len(syllables) and all(s in table[c] for c, s in zip(chars, syllables))

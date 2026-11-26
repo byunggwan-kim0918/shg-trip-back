@@ -10,7 +10,12 @@ def at(i):
 
 def run(con, wikidata=None):
     candidates.build(con, "ov", "2026-11-18.0", "fs", "test")
-    evidence.build(con, "candidates", "fs", wikidata_raw=wikidata)
+    if wikidata:
+        con.execute("CREATE TABLE IF NOT EXISTS no_items (qid VARCHAR)")
+        con.execute("CREATE TABLE IF NOT EXISTS no_kinds (qid VARCHAR, kind VARCHAR)")
+    evidence.build(con, "candidates", "fs", wikidata_raw=wikidata, wikidata_areas="no_items" if wikidata else None,
+                   wikidata_brands="no_items" if wikidata else None,
+                   wikidata_businesses="no_items" if wikidata else None, wikidata_kinds="no_kinds" if wikidata else None)
     selection.build(con, "evidence", "candidates", "fs")
     cur = con.execute("SELECT source_id, role, outcome, reason FROM selection")
     return {r[0]: r[1:] for r in cur.fetchall()}

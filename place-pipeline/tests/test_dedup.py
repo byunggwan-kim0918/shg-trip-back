@@ -10,7 +10,12 @@ def near(m):
 
 def run(con, wikidata=None):
     candidates.build(con, "ov", "2026-11-18.0", "fs", "test")
-    evidence.build(con, "candidates", "fs", wikidata_raw=wikidata)
+    if wikidata:
+        con.execute("CREATE TABLE IF NOT EXISTS no_items (qid VARCHAR)")
+        con.execute("CREATE TABLE IF NOT EXISTS no_kinds (qid VARCHAR, kind VARCHAR)")
+    evidence.build(con, "candidates", "fs", wikidata_raw=wikidata, wikidata_areas="no_items" if wikidata else None,
+                   wikidata_brands="no_items" if wikidata else None,
+                   wikidata_businesses="no_items" if wikidata else None, wikidata_kinds="no_kinds" if wikidata else None)
     selection.build(con, "evidence", "candidates", "fs")
     dedup.build(con, "evidence", "candidates", "selection")
     pairs = {}
@@ -109,3 +114,52 @@ def test_notable_part_stays_when_its_parent_is_less_notable(con):
     run(con, wikidata="wd")
     selection.build(con, "evidence_dedup", "candidates", "fs", table="selection_dedup")
     assert con.execute("SELECT outcome FROM selection_dedup WHERE source_id = 'hall'").fetchone()[0] == "recommend"
+
+
+def test_rows_of_one_wikidata_item_merge_beyond_the_name_cluster_span(con):
+    for i, name in enumerate(("Shirakawa-Go", "白川郷", "Shirakawa-go")):
+        ov(con, f"v{i}", name, hierarchy=("attractions_and_activities", "historic_site"), coord=near(i * 450))
+    con.execute("""CREATE TABLE wd AS SELECT * FROM (VALUES
+        ('Q1002193', 43.1976 + 450 / 111000, 141.0025, 15, '白川郷', 'Shirakawa-gō', '시라카와고', true, true))
+        AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
+    _, kept = run(con, wikidata="wd")
+    assert len(kept & {"v0", "v1", "v2"}) == 1
+    assert con.execute("SELECT DISTINCT status FROM place_clusters").fetchall() == [("merged",)]
+
+
+def test_chain_without_an_item_wider_than_the_cluster_span_stays_apart(con):
+    rock = ("geographic_entities", "rock_formation")
+    ov(con, "g0", "ゴジラ岩", hierarchy=rock, coord=near(0))
+    ov(con, "g1", "ゴジラ岩茶屋", hierarchy=rock, coord=near(280))
+    ov(con, "g2", "ゴジラ岩", hierarchy=rock, coord=near(560))
+    con.execute("UPDATE ov SET phones = ['+81134220001'] WHERE id IN ('g0', 'g1')")
+    con.execute("UPDATE ov SET phones = ['+81134220002'] WHERE id = 'g2'")
+    con.execute("UPDATE ov SET phones = list_append(phones, '+81134220002') WHERE id = 'g1'")
+    pairs, kept = run(con)
+    assert pairs[("ゴジラ岩", "ゴジラ岩茶屋")].startswith("REVIEW:cluster_too_large")
+    assert {"g0", "g1", "g2"} <= kept
+
+
+def test_wide_item_cluster_keeps_the_row_at_the_item_as_representative(con):
+    shrine = ("religious_organization", "shinto_shrine")
+    ov(con, "far", "足神神社", hierarchy=shrine, coord=near(0))
+    ov(con, "near", "足神神社", hierarchy=shrine, coord=near(1600))
+    con.execute("UPDATE ov SET websites = ['https://ashigami.example.jp'] WHERE id = 'far'")
+    con.execute("""CREATE TABLE wd AS SELECT * FROM (VALUES
+        ('Q109594523', 43.1976 + 1610 / 111000, 141.0025, 1, '足神神社', NULL, NULL, true, false))
+        AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
+    _, kept = run(con, wikidata="wd")
+    assert kept & {"far", "near"} == {"near"}
+
+
+def test_rest_area_named_by_an_alias_of_the_building_above_it_is_not_merged_into_it(con):
+    ov(con, "place", "湊町リバープレイス", hierarchy=("attractions_and_activities", "monument"))
+    ov(con, "pa", "湊町PA", hierarchy=("travel", "rest_stop"), coord=near(20))
+    con.execute(f"""CREATE TABLE wd AS SELECT * FROM (VALUES
+        ('Q1177386', {near(5)[0]}, {near(5)[1]}, 4, '湊町リバープレイス', 'Minatomachi River Place', NULL, true, true,
+         []::VARCHAR[], ['なんばHatch', '湊町PA', '湊町パーキングエリア']))
+        AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki, labels, aliases)""")
+    _, kept = run(con, wikidata="wd")
+    links = dict(con.execute("SELECT source_id, qid FROM wikidata_links").fetchall())
+    assert links == {"place": "Q1177386"}
+    assert kept >= {"place", "pa"}

@@ -25,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +51,8 @@ public class PlaceLinkJob {
     private static final double MAX_FAILURE_RATIO = 0.2;
     static final String BASIS_RULE = "RULE";
     static final String BASIS_LLM = "LLM";
+    /** 장소 파이프라인 dedup의 같은 곳 쌍. 근처 쌍 조건·입력 지문과 상관없이 그대로 쓰고 다시 묻지 않는다. 무효화 배치가 거둔다. */
+    static final String BASIS_PIPELINE = "PIPELINE";
 
 
     private final PlaceLinkRepository links;
@@ -138,8 +141,13 @@ public class PlaceLinkJob {
     /** 이름 표기만 다른 쌍은 묻지 않고 같은 곳으로 남긴다. @return 판정이 없거나 입력이 바뀌어 물어야 할 나머지 쌍 */
     private List<Candidate> recordSameNames(String region, List<Candidate> candidates) {
         Map<String, String> knownKeys = new HashMap<>();
-        links.findVerdicts(region).forEach(v -> knownKeys.put(pairKey(v.lowId(), v.highId()), v.inputKey()));
+        Set<String> settled = new HashSet<>();
+        links.findVerdicts(region).forEach(v -> {
+            knownKeys.put(pairKey(v.lowId(), v.highId()), v.inputKey());
+            if (BASIS_PIPELINE.equals(v.basis())) settled.add(pairKey(v.lowId(), v.highId()));
+        });
         List<Candidate> unjudged = candidates.stream()
+                .filter(c -> !settled.contains(pairKey(c.low().id(), c.high().id())))
                 .filter(c -> !c.inputKey().equals(knownKeys.get(pairKey(c.low().id(), c.high().id()))))
                 .toList();
         List<VerdictRow> sameNames = unjudged.stream().filter(Candidate::sameName)
@@ -280,7 +288,8 @@ public class PlaceLinkJob {
     }
 
     /**
-     * 지금 대상인 쌍 중 입력 지문이 맞는 판정만 쓴다. 비활성이 됐거나 역할·좌표·이름이 바뀐 행의 옛 판정이 행을 계속 숨기지 않게 한다.
+     * 지금 대상인 쌍 중 입력 지문이 맞는 판정과 파이프라인 판정만 쓴다. 비활성이 됐거나 역할·좌표·이름이 바뀐 행의 옛 판정이
+     * 행을 계속 숨기지 않게 한다. 파이프라인 판정은 근처 쌍 거리 밖(넓은 장소의 출처별 행)에도 있어 지금 대상 쌍과 맞추지 않는다.
      *
      * @return 합쳐지는 행 기록이 바뀐 행 수
      */
@@ -288,7 +297,8 @@ public class PlaceLinkJob {
         Map<String, String> currentKeys = new HashMap<>();
         candidates.forEach(c -> currentKeys.put(pairKey(c.low().id(), c.high().id()), c.inputKey()));
         List<Verdict> verdicts = links.findVerdicts(region).stream()
-                .filter(v -> v.inputKey().equals(currentKeys.get(pairKey(v.lowId(), v.highId()))))
+                .filter(v -> BASIS_PIPELINE.equals(v.basis())
+                        || v.inputKey().equals(currentKeys.get(pairKey(v.lowId(), v.highId()))))
                 .map(v -> new Verdict(v.lowId(), v.highId(), Relation.valueOf(v.relation())))
                 .toList();
         Set<Long> ids = verdicts.stream().flatMap(v -> Stream.of(v.lowId(), v.highId())).collect(Collectors.toSet());

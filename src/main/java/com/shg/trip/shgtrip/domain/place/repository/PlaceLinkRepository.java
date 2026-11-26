@@ -128,14 +128,17 @@ public class PlaceLinkRepository {
         });
     }
 
-    /** 지역 안 행이 낀 판정. 쌍은 같은 지역끼리만 만들어 낮은 id 쪽 지역으로 고른다. */
+    /**
+     * 지역 안 행이 낀 판정. 근처 쌍은 같은 지역끼리만 만들지만 파이프라인 쌍은 지역 경계를 넘을 수 있어 양쪽 지역에서 읽는다.
+     * 한쪽 지역에서만 읽으면 다른 쪽 지역을 처리할 때 그 합침을 판정 없는 합침으로 보고 푼다.
+     */
     public List<VerdictRow> findVerdicts(String region) {
         return jdbc.query("""
                 SELECT v.low_id, v.high_id, v.relation, v.basis, v.input_key
-                FROM place_pair_verdicts v JOIN places p ON p.id = v.low_id
-                WHERE p.region = ?
+                FROM place_pair_verdicts v JOIN places p ON p.id = v.low_id JOIN places q ON q.id = v.high_id
+                WHERE p.region = ? OR q.region = ?
                 """, (rs, i) -> new VerdictRow(rs.getLong(1), rs.getLong(2), rs.getString(3), rs.getString(4),
-                rs.getString(5)), region);
+                rs.getString(5)), region, region);
     }
 
     @Transactional

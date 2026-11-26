@@ -12,7 +12,7 @@ FSQ의 폐업 기록, Overture에서 분류 때문에 빠진 행도 같은 장�
 """
 from . import policy
 from .rules import literal as _literal
-from .rules import load_name_rules, match_sql
+from .rules import load_item_kinds, load_name_rules, match_sql, strip_sql
 
 # 같은 이름 두 출처의 좌표 차이 상한. 같은 건물 안 다른 층 매장까지 붙지 않을 만큼 좁게 둔다.
 EXACT_NAME_MAX_METERS = 50
@@ -39,6 +39,21 @@ NAMESAKE_STORE_CATEGORIES = ("Dining and Drinking", "Retail")
 # 몰·백화점·시장은 이름을 딴 가게가 아니라 그 이름의 장소 자체다.
 NAMESAKE_STORE_EXCEPTIONS = ("Retail > Shopping Mall", "Retail > Shopping Plaza", "Retail > Department Store",
                              "Retail > Market")
+# 가게·숙소 행이 사업체가 아닌 같은 이름 항목에 이어지는 거리. 이보다 먼 강·다리·명소 항목은 이름만 딴 것이다(식당 Нева).
+SHOP_NAME_MAX_METERS = 250
+STORE_LIKE_CATEGORIES = ("Dining and Drinking", "Retail", "Travel and Transportation > Lodging",
+                         "Travel and Transportation > Tourist Information and Service")
+# 한 항목에 이어진 같은 이름 행을 같은 장소의 출처별 행으로 보는 거리. 출처별 좌표가 같은 건물 안에서 이만큼 다르다.
+NAMESAKE_NEAR_METERS = 150
+# 이 언어판 수 이상인 항목의 먼 같은 이름 행은 넓은 장소(절 경내·공항·산)의 출처별 사본이다.
+NAMESAKE_FAMOUS_SITELINKS = 3
+# 끝 낱말이 장소 종류인(머리말이 뒤에 오는) 문자. 이 문자의 이름은 항목 이름으로 끝나야 그 항목 자체다.
+HEAD_FINAL_SCRIPTS = "[\\p{Han}\\p{Hiragana}\\p{Katakana}\\p{Hangul}]"
+# 역 행은 운영사 이름만 붙었을 때(name_rules operator_prefix) 포함 연결한다. 정류장·출구 이름은 역 이름을 품는다.
+TRANSIT_HUB_CATEGORY = "Travel and Transportation > Transport Hub"
+# 외래어 가타카나는 같은 소리를 두 표기로 적는다(テュイルリー·チュイルリー). 항목 연결 키에서만 한쪽으로 접는다.
+KATAKANA_VARIANTS = (("ヴァ", "バ"), ("ヴィ", "ビ"), ("ヴェ", "ベ"), ("ヴォ", "ボ"), ("ヴ", "ブ"), ("テュ", "チュ"),
+                     ("デュ", "ジュ"), ("ティ", "チ"), ("ディ", "ジ"))
 CONTAINED_IGNORED_CATEGORIES = ("Dining and Drinking", "Retail", "Business and Professional Services",
                                 "Travel and Transportation")
 _WIKI_CELL = 0.03
@@ -128,6 +143,17 @@ def build_links(con, candidates="candidates", table="source_links"):
 # 괄호 안·" / " 뒤는 다른 표기(로마자·정식 이름)거나 위치 설명이라 본 이름과 따로 비교한다.
 _ALIAS = "[(（\\[［【「]([^)）\\]］】」]*)[)）\\]］】」]"
 _ALIAS_SPLIT = "\\s+/\\s+"
+# 한 이름 안의 다른 언어 병기(" / "·" | "·"ㅣ"). " - "·쉼표 뒤는 위치(- Berlin)나 그 안의 시설(- Red Stairs)이 많아 나누지 않는다.
+_SEGMENT_SPLIT = "\\s+[/|｜]\\s+|\\s*[ㅣ｜]\\s*"
+# 이름 뒤 " - "·쉼표 꼬리. 꼬리가 지명·군말뿐일 때만 앞 조각을 이름으로 본다(Japanese garden, Monte Carlo).
+_HEAD_SPLIT = "\\s+[-–—]\\s+|\\s*,\\s*"
+# 구분 기호 없이 현지 문자 이름 뒤(앞)에 로마자 표기가 붙은 이름(醍醐寺 Daigo-ji Temple). 두 쪽이 한 항목의 이름일 때만
+# 병기다. 한쪽이 지명이면(BIG JOY 心斎橋) 위치 표시다.
+_LOCAL = "\\p{Han}\\p{Hiragana}\\p{Katakana}\\p{Hangul}"
+_SCRIPT_SPLITS = (f"^([^A-Za-z]*[{_LOCAL}][^A-Za-z]*?)\\s+([A-Za-z][^{_LOCAL}]*)$",
+                  f"^([A-Za-z][^{_LOCAL}]*?)\\s+([^A-Za-z]*[{_LOCAL}][^A-Za-z]*)$")
+# Wikidata 정확 연결에서 떼는 괄호. 「」 안은 장소 안의 물건·작품 이름(八幡神社「狛犬」)이라 떼지 않는다.
+_NOTE = "[[:space:]]*[（(【［][^）)】］]*[）)】］]"
 # 공급처마다 빵집·과자점·식품점을 식음료와 소매로 엇갈려 분류한다.
 SHOP_MAJORS = ("Dining and Drinking", "Retail")
 # 짧은 이름이 긴 이름의 철자 변형(글자 빠짐)으로 보려면 긴 이름 글자의 이만큼은 짧은 이름에 있어야 한다.
@@ -229,65 +255,206 @@ def fsq_only(con, candidates="candidates", links="source_links", table="fsq_only
     return table
 
 
-def wikidata_links(con, rows, candidates, wikidata_raw, table="wikidata_links", area_items=None):
+def wikidata_links(con, rows, candidates, wikidata_raw, table="wikidata_links", area_items=None,
+                   brand_items=None, business_items=None, kind_items=None):
     """
     rows(키: source, source_id)마다 Wikidata 항목 하나. 열: source, source_id, qid, meters, rule.
-      exact    : 이름 정확 키(악센트 접음)가 같은 가장 가까운 항목. 같은 이름의 신사·사찰이 흔해 가까운 것 하나만 남긴다.
-                 괄호 병기를 뗀 이름도 본다(鹿苑寺 (金閣寺) → 鹿苑寺). 같은 항목에 명소 행이 이어지면 이름을 딴 가게·식당 행은 잇지 않는다.
+      exact    : 이름 정확 키(악센트 접음)가 같은 가장 가까운 항목. 전체 이름 → 괄호 뗀 이름 → 조각 순으로 앞서고, 같은 이름이면
+                 라벨 일치가 별칭 일치보다 앞선다. 별칭에는 옛 이름(北品川駅의 品川駅)과 기관이 든 건물 이름이 섞인다.
+                 가게·식당·숙소 행(몰·백화점 제외)은 사업체 항목(business_items)이 아니면 SHOP_NAME_MAX_METERS 안에서만
+                 잇는다. 이름이 브랜드명뿐인 체인 지점은 사업체 항목에도 가까이서만 잇는다. 같은 이름 지점 항목이 따로 있다.
+                 business_items가 없으면 모든 항목을 사업체로 본다. 괄호 병기를 뗀 이름과 병기 조각(" / "·" | "·
+                 "ㅣ"로 나눈 부분)도 따로 본다(鹿苑寺 (金閣寺) → 鹿苑寺). 병기 조각은 가게·교통 행에 쓰지 않고(정류장 이름
+                 뒤의 거리 이름) 지명 항목에 잇지 않는다. " - "·쉼표 뒤 꼬리가 모두 지명(지명 항목 이름이나 그 행 주소의 도시)이거나 군말(name_rules
+                 tail_filler)이거나 앞 조각과 함께 한 항목의 이름이면 앞 조각도 병기 조각처럼 본다. 구분 기호 없이 현지 문자와
+                 로마자가 이어진 이름(醍醐寺 Daigo-ji Temple)은 두 쪽이 한 항목의 이름일 때 병기 조각으로 본다. 같은 항목에 명소 행이 이어지면 이름을 딴 가게·식당 행은 잇지 않는다.
+                 지명 항목(area_items)은 가게·식당·업무·교통 행에 잇지 않고, 지명 이름뿐인 가게 행과 병기 조각은 같은 이름의 다른
+                 항목(도시 이름 조각상)에도 잇지 않는다(시 이름만 적힌 주류점, Le District | Paris).
+                 항목 이름은 ja·en·ko 라벨, 스냅샷에 있으면 그 나라 언어 라벨(labels)과 별칭(aliases)이다. 별칭은 정확 연결에만 쓰고, 언어판이
+                 NAMESAKE_FAMOUS_SITELINKS개 미만인 항목의 별칭이 다른 항목의 라벨이면(흔한 이름 宇賀神社) 쓰지 않는다.
+                 행 분류가 item_kinds.tsv의 종류(휴게소)면 별칭으로는 그 종류 항목(kind_items, 열 qid·kind)에만 잇는다.
+                 kind_items가 없으면 종류를 보지 않는다. 이름 키는 외래어 가타카나 표기 차이(KATAKANA_VARIANTS)를 접는다.
+                 한 항목에 이어진 행 가운데 그 항목에 가장 가까운 행(기준 행)에서 NAMESAKE_NEAR_METERS 밖에 있는 행은
+                 같은 이름의 다른 항목이 있고 항목 언어판 수가 NAMESAKE_FAMOUS_SITELINKS보다 적을 때 잇지 않는다.
+                 흔한 이름(熊野神社)의 먼 행은 항목이 없는 다른 장소이고, 드물거나 유명한 이름의 먼 행은 같은 장소의 사본이다.
       contains : 정확 키로 이어진 행이 없는 항목은 CONTAINED_MAX_METERS 안에서 이름에 항목 이름을 품은 가장 가까운 행 하나에 잇는다.
-                 정식 이름이 길게 붙은 명소(浅草観音金龍山浅草寺)를 잡고, 지명을 단 가게·식당과 부속 표지(中神門)는 잇지 않는다.
-                 이름이 항목 이름으로 끝나는 행을 먼저 고른다. 끝 낱말이 장소 종류라 京都タワー神社는 타워가 아니라 그 안의 신사다.
+                 정식 이름이 길게 붙은 명소(浅草観音金龍山浅草寺)를 잡고, 지명을 단 가게·식당은 잇지 않는다.
+                 항목 이름 뒤에 다른 말이 붙은 행(大涌谷延命地蔵尊·鹿苑寺 方丈·新宿駅 臨時口)은 그 안의 시설이나 이름을 딴
+                 다른 곳이라 잇지 않는다. 한자·가나·한글 이름은 끝 낱말이 장소 종류라 이름이 항목 이름으로 끝나야 하고,
+                 그 밖의 문자는 남은 말이 같은 종류를 다시 말하는 낱말(name_rules same_kind)이거나 항목 이름 앞에 낱말
+                 하나(Evangelische Christuskirche·AKC Museum of the Dog)만 붙었을 때 잇는다. "Museum of …"처럼 앞에 여럿이
+                 붙으면 그 항목 안·옆의 다른 시설이다. 라틴 문자 이름 뒤에 [전치사] + 지명만 남으면(… in Berlin) 같은 장소다.
+                 교통 허브 행은 남은 말이 운영사·노선 이름(name_rules operator_prefix)일 때만 포함 연결한다(JR 新宿駅).
                  area_items(열 qid)에 든 지명 항목(市·町)은 시설 이름에 흔히 들어가서 포함 연결에 쓰지 않는다. 없으면 포함 연결을 하지 않는다.
+    brand_items(열 qid)는 브랜드·체인 항목이다(wikidata.brand_qids). 좌표가 본사 한 점이라 같은 이름 지점 어디에도 잇지 않는다.
     """
-    areas = f"AND qid NOT IN (SELECT qid FROM {area_items})" if area_items else "AND false"
+    rules = load_name_rules()
+    columns = {d[0] for d in con.execute(f"SELECT * FROM {wikidata_raw} LIMIT 0").description}
+    local_labels = "coalesce(labels, [])" if "labels" in columns else "[]::VARCHAR[]"
+    alias_labels = "coalesce(aliases, [])" if "aliases" in columns else "[]::VARCHAR[]"
+    # 좌표가 여러 개인 항목(강)은 행에 가장 가까운 좌표로 잰다.
+    points = "coalesce(coords, [[lat, lon]])" if "coords" in columns else "[[lat, lon]]"
+    # 목록 표에 NULL이 섞여도 NOT IN이 모든 항목을 버리지 않게 NULL을 거른다.
+    listed = lambda table: f"(SELECT qid FROM {table} WHERE qid IS NOT NULL)"
+    area_qid = f"qid IN {listed(area_items)}" if area_items else "false"
+    item_is_area = f"b.qid IN {listed(area_items)}" if area_items else "false"
+    areas = f"AND qid NOT IN {listed(area_items)}" if area_items else "AND false"
+    brands = f"AND qid NOT IN {listed(brand_items)}" if brand_items else ""
     shops = " OR ".join(f"starts_with(c.category, '{p}')" for p in CONTAINED_IGNORED_CATEGORIES)
     stores = " OR ".join(f"starts_with(c.category, '{p}')" for p in NAMESAKE_STORE_CATEGORIES)
-    stores = f"({stores}) AND NOT (" + " OR ".join(f"starts_with(c.category, '{p}')" for p in NAMESAKE_STORE_EXCEPTIONS) + ")"
-    part = match_sql("replace(a.k, b.k, '')", "a.country", load_name_rules()["part_marker"])
+    big_store = " OR ".join(f"starts_with(c.category, '{p}')" for p in NAMESAKE_STORE_EXCEPTIONS)
+    store_like = " OR ".join(f"starts_with(c.category, '{p}')" for p in STORE_LIKE_CATEGORIES)
+    business = f"b.qid IN {listed(business_items)}" if business_items else "true"
+    stores = f"({stores}) AND NOT ({big_store})"
+    rest = "replace(a.k, b.k, '')"
+    part = match_sql(rest, "a.country", rules["part_marker"])
+    same_kind = match_sql(rest, "a.country", rules["same_kind"])
+    filler = match_sql("t.tk", "t.country", rules["tail_filler"])
+    operator = match_sql(rest, "a.country", rules["operator_prefix"])
+    def is_place_name(text, country, locality):
+        stripped = strip_sql(text, country, rules["place_preposition"])
+        return (f"({text} IN (SELECT k FROM area_keys) OR {stripped} IN (SELECT k FROM area_keys) "
+                f"OR (length({locality}) > 0 AND ({text} = {locality} OR {stripped} = {locality})))")
+    fold = "name_key(s)"
+    for variant, standard in KATAKANA_VARIANTS:
+        fold = f"replace({fold}, '{variant}', '{standard}')"
+    con.execute(f"CREATE OR REPLACE TEMP MACRO link_key(s) AS strip_accents({fold})")
+    kinds = load_item_kinds()
+    row_kind = ("CASE " + " ".join(f"WHEN starts_with(c.category, '{_literal(prefix)}') THEN '{_literal(kind)}'"
+                                   for kind, prefix, _ in kinds) + " END") if kinds else "NULL"
+    lacks_kind = (f"(b.qid, a.kind) NOT IN (SELECT (qid, kind) FROM {kind_items} WHERE qid IS NOT NULL)"
+                  if kind_items else "false")
+    locality = "link_key(coalesce(c.locality, ''))"
+    bare = f"trim(regexp_replace(n.value, '{_literal(_NOTE)}', ' ', 'g'))"
+    anchor_meters = _HAVERSINE_M.replace("a.lat", "x.lat").replace("a.lon", "x.lon").replace("b.", "e.")
     con.execute(f"""
         CREATE OR REPLACE TABLE {table} AS
-        WITH w AS (
-            SELECT qid, lat, lon, sitelinks, strip_accents(name_key(label)) AS k,
-                   floor(lat / {_WIKI_CELL})::BIGINT AS cy, floor(lon / {_WIKI_CELL})::BIGINT AS cx
-            FROM {wikidata_raw}, unnest([ja::VARCHAR, en::VARCHAR, ko::VARCHAR]) AS l(label)
-            WHERE label IS NOT NULL
+        WITH w_all AS (
+            SELECT qid, p[1] AS lat, p[2] AS lon, sitelinks, link_key(l.label) AS k, l.alias,
+                   len(regexp_split_to_array(trim(l.label), '\\s+')) AS words,
+                   floor(p[1] / {_WIKI_CELL})::BIGINT AS cy, floor(p[2] / {_WIKI_CELL})::BIGINT AS cx
+            FROM (SELECT * EXCLUDE (lat, lon), unnest({points}) AS p FROM {wikidata_raw}),
+                 unnest(list_transform([ja::VARCHAR, en::VARCHAR, ko::VARCHAR] || {local_labels}, x -> {{'label': x, 'alias': false}})
+                        || list_transform({alias_labels}, x -> {{'label': x, 'alias': true}})) AS u(l)
+            WHERE l.label IS NOT NULL {brands}
+        ),
+        label_keys AS (SELECT k, min(qid) AS q1, max(qid) AS q2 FROM w_all WHERE NOT alias GROUP BY k),
+        w AS (
+            SELECT w_all.* FROM w_all LEFT JOIN label_keys USING (k)
+            WHERE NOT (alias AND sitelinks < {NAMESAKE_FAMOUS_SITELINKS} AND label_keys.k IS NOT NULL
+                       AND (label_keys.q1 <> qid OR label_keys.q2 <> qid))
+        ),
+        area_keys AS (SELECT DISTINCT k FROM w WHERE NOT alias AND length(k) > 0 AND {area_qid}),
+        tails AS (
+            SELECT source, source_id, country, lk, value, parts[1] AS head, len(parts) - 1 AS n,
+                   link_key(t.tail) AS tk
+            FROM (SELECT r.source, r.source_id, c.country, {locality} AS lk, n.value,
+                         regexp_split_to_array({bare}, '{_HEAD_SPLIT}') AS parts
+                  FROM {rows} r JOIN {candidates} c USING (source, source_id), unnest(c.names) AS u(n)),
+                 unnest(parts[2:]) AS t(tail)
+            WHERE len(parts) > 1 AND length(trim(parts[1])) > 0
+        ),
+        heads AS (
+            SELECT source, source_id, head FROM tails t
+            GROUP BY source, source_id, value, head
+            HAVING bool_and(length(tk) > 0 AND ({filler} OR {is_place_name('t.tk', 't.country', 't.lk')}))
+            UNION
+            SELECT t.source, t.source_id, t.head FROM tails t
+            JOIN w a ON a.k = t.tk JOIN w b ON b.qid = a.qid AND b.k = link_key(t.head)
+            GROUP BY t.source, t.source_id, t.value, t.head, a.qid
+            HAVING count(DISTINCT t.tk) = any_value(t.n)
+        ),
+        script_pairs AS (
+            SELECT source, source_id, regexp_extract(value, pattern, 1) AS x, regexp_extract(value, pattern, 2) AS y
+            FROM (SELECT DISTINCT r.source, r.source_id, {bare} AS value
+                  FROM {rows} r JOIN {candidates} c USING (source, source_id), unnest(c.names) AS u(n)),
+                 (SELECT unnest([{", ".join(f"'{_literal(x)}'" for x in _SCRIPT_SPLITS)}]) AS pattern)
+            WHERE regexp_matches(value, pattern)
+        ),
+        name_values AS (
+            SELECT DISTINCT r.source, r.source_id, v.value, v.segment, v.rank
+            FROM {rows} r JOIN {candidates} c USING (source, source_id), unnest(c.names) AS u(n),
+                 unnest([{{'value': n.value, 'segment': false, 'rank': 0}}, {{'value': {bare}, 'segment': false, 'rank': 1}}]
+                        || list_transform(regexp_split_to_array({bare}, '{_SEGMENT_SPLIT}'),
+                                          x -> {{'value': x, 'segment': len(regexp_split_to_array({bare}, '{_SEGMENT_SPLIT}')) > 1,
+                                                'rank': 2}})
+                 ) AS u2(v)
+            UNION ALL
+            SELECT source, source_id, head, true, 2 FROM heads
+            UNION ALL
+            SELECT DISTINCT s.source, s.source_id, part, true, 2 FROM script_pairs s
+            JOIN w a ON a.k = link_key(s.x) JOIN w b ON b.qid = a.qid AND b.k = link_key(s.y),
+                 unnest([s.x, s.y]) AS u(part)
+        ),
+        row_attrs AS MATERIALIZED (
+            SELECT r.source, r.source_id, c.lat, c.lon, c.country, {locality} AS lk,
+                   coalesce({shops}, false) AS shop, coalesce({stores}, false) AS store,
+                   coalesce(starts_with(c.category, '{TRANSIT_HUB_CATEGORY}'), false) AS transit,
+                   coalesce(({store_like}) AND NOT ({big_store}), false) AS store_like,
+                   coalesce(({store_like}) AND name_key(c.brand) = name_key(c.name), false) AS branch,
+                   {row_kind} AS kind
+            FROM {rows} r JOIN {candidates} c USING (source, source_id)
+        ),
+        name_keys AS MATERIALIZED (
+            SELECT source, source_id, k, min(words) AS words, bool_and(segment) AS segment, min(rank) AS rank
+            FROM (SELECT source, source_id, link_key(value) AS k, segment, rank,
+                         len(regexp_split_to_array(trim(value), '\\s+')) AS words FROM name_values)
+            GROUP BY source, source_id, k
         ),
         names AS (
-            SELECT DISTINCT r.source, r.source_id, c.lat, c.lon, c.country, strip_accents(name_key(v.value)) AS k,
-                   coalesce({shops}, false) AS shop, coalesce({stores}, false) AS store,
+            SELECT v.source, v.source_id, c.lat, c.lon, c.country, c.lk, v.k, v.words, v.segment, v.rank,
+                   c.shop, c.store, c.transit, c.store_like, c.branch, c.kind,
                    floor(c.lat / {_WIKI_CELL})::BIGINT + dy AS cy, floor(c.lon / {_WIKI_CELL})::BIGINT + dx AS cx
-            FROM {rows} r JOIN {candidates} c USING (source, source_id), unnest(c.names) AS u(n),
-                 unnest(list_distinct([n.value, trim(regexp_replace(n.value, '[[:space:]]*[（(【［][^）)】］]*[）)】］]', ' ', 'g'))])) AS v(value),
+            FROM name_keys v JOIN row_attrs c USING (source, source_id),
                  (SELECT unnest([-1, 0, 1]) AS dy), (SELECT unnest([-1, 0, 1]) AS dx)
         ),
         exact_any AS (
-            SELECT a.source, a.source_id, b.qid, a.store, {_HAVERSINE_M} AS meters
+            SELECT a.source, a.source_id, b.qid, a.store, a.k, a.lat, a.lon, b.sitelinks, {_HAVERSINE_M} AS meters
             FROM names a JOIN w b USING (k, cy, cx)
-            WHERE length(a.k) >= 2
-            QUALIFY row_number() OVER (PARTITION BY a.source, a.source_id ORDER BY meters, b.qid) = 1
-                AND meters <= {WIKIDATA_MAX_METERS}
+            WHERE length(a.k) >= 2 AND NOT (a.shop AND {item_is_area}) AND NOT (a.segment AND (a.shop OR {item_is_area}))
+              AND NOT ((a.shop OR a.segment) AND a.k IN (SELECT k FROM area_keys))
+              AND NOT (b.alias AND a.kind IS NOT NULL AND {lacks_kind})
+              AND {_HAVERSINE_M} <= CASE WHEN a.branch OR (a.store_like AND NOT ({business})) THEN {SHOP_NAME_MAX_METERS}
+                                         ELSE {WIKIDATA_MAX_METERS} END
+            QUALIFY row_number() OVER (PARTITION BY a.source, a.source_id ORDER BY a.rank, b.alias, meters, b.qid) = 1
         ),
-        exact AS (
-            SELECT source, source_id, qid, meters FROM exact_any e
+        exact_kept AS (
+            SELECT * FROM exact_any e
             WHERE NOT (e.store AND e.qid IN (SELECT qid FROM exact_any WHERE NOT store))
         ),
+        anchors AS (
+            SELECT qid, p.lat, p.lon FROM (SELECT qid, arg_min({{'lat': lat, 'lon': lon}}, (meters, source, source_id)) AS p
+                                FROM exact_kept GROUP BY 1)
+        ),
+        shared_names AS (SELECT k FROM w GROUP BY k HAVING count(DISTINCT qid) > 1),
+        exact AS (
+            SELECT e.source, e.source_id, e.qid, e.meters FROM exact_kept e JOIN anchors x USING (qid)
+            WHERE {anchor_meters} <= {NAMESAKE_NEAR_METERS} OR e.sitelinks >= {NAMESAKE_FAMOUS_SITELINKS}
+               OR e.k NOT IN (SELECT k FROM shared_names)
+        ),
         wc AS (
-            SELECT qid, lat, lon, k, floor(lat / {_CONTAINED_CELL})::BIGINT AS cy, floor(lon / {_CONTAINED_CELL})::BIGINT AS cx
-            FROM w WHERE length(k) >= CASE WHEN regexp_matches(k, '^[a-z0-9]+$') THEN {CONTAINS_MIN_LATIN_LENGTH}
+            SELECT qid, lat, lon, k, words,
+                   floor(lat / {_CONTAINED_CELL})::BIGINT AS cy, floor(lon / {_CONTAINED_CELL})::BIGINT AS cx
+            FROM w WHERE NOT alias AND length(k) >= CASE WHEN regexp_matches(k, '^[a-z0-9]+$') THEN {CONTAINS_MIN_LATIN_LENGTH}
                                            ELSE {CONTAINED_MIN_CHARS} END
               AND sitelinks >= {CONTAINED_MIN_SITELINKS}
               AND qid NOT IN (SELECT qid FROM exact) {areas}
         ),
         nc AS (
-            SELECT DISTINCT source, source_id, lat, lon, country, k,
+            SELECT DISTINCT source, source_id, lat, lon, country, lk, k, words, shop,
                    floor(lat / {_CONTAINED_CELL})::BIGINT + dy AS cy, floor(lon / {_CONTAINED_CELL})::BIGINT + dx AS cx
-            FROM (SELECT DISTINCT source, source_id, lat, lon, country, k FROM names WHERE NOT shop),
+            FROM (SELECT DISTINCT source, source_id, lat, lon, country, lk, k, words, shop FROM names WHERE NOT shop OR transit),
                  (SELECT unnest([-1, 0, 1]) AS dy), (SELECT unnest([-1, 0, 1]) AS dx)
         ),
         contained AS (
             SELECT a.source, a.source_id, b.qid, {_HAVERSINE_M} AS meters, ends_with(a.k, b.k) AS head
             FROM nc a JOIN wc b USING (cy, cx)
             WHERE a.k <> b.k AND contains(a.k, b.k) AND NOT {part}
+              AND (NOT a.shop OR (ends_with(a.k, b.k) AND {operator}))
+              AND ({same_kind} OR (ends_with(a.k, b.k)
+                                   AND (regexp_matches(a.k, '{HEAD_FINAL_SCRIPTS}') OR a.words - b.words <= 1))
+                   OR (starts_with(a.k, b.k) AND NOT regexp_matches(a.k, '{HEAD_FINAL_SCRIPTS}')
+                       AND {is_place_name(rest, 'a.country', 'a.lk')}))
               AND NOT EXISTS (SELECT 1 FROM exact e WHERE e.source = a.source AND e.source_id = a.source_id)
         ),
         nearest_contained AS (

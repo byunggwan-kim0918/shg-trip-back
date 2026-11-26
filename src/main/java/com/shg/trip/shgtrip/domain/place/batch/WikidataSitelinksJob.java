@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.function.Function;
 
 /**
@@ -200,11 +201,19 @@ public class WikidataSitelinksJob {
         return new int[]{places.size(), assignments.size()};
     }
 
+    /** 위키백과 제목식 한국어 라벨 끝의 괄호("가마타 역 (도쿄 도)"). 원문 괄호를 옮긴 것이 아니라 같은 이름 문서를 가르는 말이다. */
+    private static final Pattern DISAMBIGUATION = Pattern.compile("\\s*\\([^()]*\\)\\s*$");
+
+    /** Wikidata 한국어 라벨. 끝의 구분 괄호를 떼고 {@link OverseasEnrichment#nameKoText}와 같은 검사를 거친다. */
+    static String koreanLabel(String label, String originalName) {
+        return label == null ? null : OverseasEnrichment.nameKoText(DISAMBIGUATION.matcher(label).replaceFirst(""), originalName);
+    }
+
     /**
      * 지역 전체를 0("항목 없음")으로 덮고 매칭된 곳만 다시 쓴다. 한 트랜잭션이라 일정 생성이 중간 상태(인기도가
      * 다 0인 순간)를 보지 않는다. 해외는 이름 전체가 같은 매칭만 한국어 라벨로 name_ko를 채운다. 채운 이름은
-     * 매칭이 바뀌어도 지워지지 않아 병기·지점명으로 붙은 매칭에서는 쓰지 않는다. 라벨도 모델 이름과 같은 검사
-     * ({@link OverseasEnrichment#nameKo})를 거친다. 검사에 걸리는 라벨을 채우면 무효화가 지우고 이 단계가 다시 채우기를 반복한다.
+     * 매칭이 바뀌어도 지워지지 않아 병기·지점명으로 붙은 매칭에서는 쓰지 않는다. 라벨도 구분 괄호를 뗀 뒤 모델 이름과 같은 검사
+     * ({@link #koreanLabel})를 거친다. 검사에 걸리는 라벨을 채우면 무효화가 지우고 이 단계가 다시 채우기를 반복한다.
      */
     void writeAssignments(String region, List<Assignment> assignments, boolean overseas) {
         transactionTemplate.executeWithoutResult(status -> {
@@ -212,7 +221,7 @@ public class WikidataSitelinksJob {
             for (Assignment a : assignments) {
                 placeRepository.updateWikidataMatch(a.placeId(), a.item().id(), a.item().sitelinks());
                 String nameKo = overseas && a.exact() && a.item().koLabel() != null
-                        ? OverseasEnrichment.nameKoText(a.item().koLabel(), a.placeName()) : null;
+                        ? koreanLabel(a.item().koLabel(), a.placeName()) : null;
                 if (nameKo != null) placeRepository.fillNameKo(a.placeId(), nameKo);
             }
         });

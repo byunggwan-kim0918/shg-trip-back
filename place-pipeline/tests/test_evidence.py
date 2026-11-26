@@ -217,8 +217,10 @@ class TestWikidataLinks:
             ('Q1134429', 43.1977, 141.0025, 14, '大涌谷', 'Ōwakudani', '오와쿠다니', true, true))
             AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
         con.execute("CREATE TABLE areas (qid VARCHAR)")
+        con.execute("CREATE TABLE no_kinds (qid VARCHAR, kind VARCHAR)")
         candidates.build(con, "ov", "2026-11-18.0", "fs", "test")
-        evidence.build(con, "candidates", "fs", wikidata_raw="wd", wikidata_areas="areas")
+        evidence.build(con, "candidates", "fs", wikidata_raw="wd", wikidata_areas="areas", wikidata_brands="areas",
+                       wikidata_businesses="areas", wikidata_kinds="no_kinds")
         rows = {r[0]: r[1:] for r in con.execute("SELECT source_id, pool_basis, wd_qid FROM evidence").fetchall()}
         assert rows["main"] == ("fsq_notable", "Q1134429")
         assert rows["jizo"][1] is None
@@ -229,7 +231,10 @@ class TestWikidataLinks:
             ('Q681144', 43.1976, 141.0025, 14, 'Zepp Sapporo', 'Zepp Sapporo', 'Zepp', true, false))
             AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
         candidates.build(con, "ov", "2026-11-18.0", None, None)
-        evidence.build(con, "candidates", None, wikidata_raw="wd")
+        con.execute("CREATE TABLE none_items (qid VARCHAR)")
+        con.execute("CREATE TABLE no_kinds (qid VARCHAR, kind VARCHAR)")
+        evidence.build(con, "candidates", None, wikidata_raw="wd", wikidata_areas="none_items", wikidata_brands="none_items",
+                       wikidata_businesses="none_items", wikidata_kinds="no_kinds")
         assert con.execute("SELECT wd_qid, wd_name_ko FROM evidence").fetchone() == ("Q681144", None)
 
     def test_held_fsq_row_of_an_unlinked_wikidata_item_is_promoted(self, con):
@@ -239,6 +244,18 @@ class TestWikidataLinks:
             ('Q865839', 43.1977, 141.0025, 7, '櫛田神社', 'Kushida Shrine', NULL, true, false))
             AS t(qid, lat, lon, sitelinks, ja, en, ko, jawiki, kowiki)""")
         candidates.build(con, "ov", "2026-11-18.0", "fs", "test")
-        evidence.build(con, "candidates", "fs", wikidata_raw="wd")
+        con.execute("CREATE TABLE none_items (qid VARCHAR)")
+        con.execute("CREATE TABLE no_kinds (qid VARCHAR, kind VARCHAR)")
+        evidence.build(con, "candidates", "fs", wikidata_raw="wd", wikidata_areas="none_items", wikidata_brands="none_items",
+                       wikidata_businesses="none_items", wikidata_kinds="no_kinds")
         rows = dict(con.execute("SELECT source_id, pool_basis FROM evidence").fetchall())
         assert rows == {"gate": "overture", "main": "fsq_notable"}
+
+    def test_wikidata_without_area_and_brand_lists_fails_loudly(self, con):
+        ov(con, "a", "小樽運河", hierarchy=("geographic_entities", "canal"))
+        con.execute("CREATE TABLE wd AS SELECT 'Q1' AS qid, 43.1976 AS lat, 141.0025 AS lon, 1 AS sitelinks, '小樽運河' AS ja,"
+                    " NULL AS en, NULL AS ko, true AS jawiki, false AS kowiki")
+        candidates.build(con, "ov", "2026-11-18.0", None, None)
+        import pytest
+        with pytest.raises(ValueError):
+            evidence.build(con, "candidates", None, wikidata_raw="wd")

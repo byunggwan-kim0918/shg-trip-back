@@ -5,8 +5,9 @@
             읽기를 모르는 행만 보강이 짓는다.
             Wikidata 매칭은 파이프라인 연결 값으로 채운다(매칭 전 행은 보강이 미룬다).
   kana    : 카탈로그 행과 짝지은 Wikidata 대표 항목의 가나 이름(P1814)을 받는다(초당 1회).
-  catalog : 여행지 반경 안 기준 선별 행 → PlaceCatalog Parquet(일본어·한국어 이름 키, 규칙 읽기·로마자 이름, 임베딩 없음).
-            --exclude(source, source_id Parquet)에 든 행은 뺀다. 실험 DB에 이미 같은 장소로 있는 행(sync_core의 core_twins)이다.
+  catalog : 여행지 반경 안 기준 선별 행 → PlaceCatalog Parquet(일본어·한국어 이름 키, 규칙 읽기·로마자 이름, 합쳐진 원천 행
+            이름 키 alias_keys, 이 행과 합쳐진 원천 행의 원천 id source_ref·member_refs, 임베딩 없음).
+            대표 원천 행과 DB 행(core)이 달라도 승격이 member_refs로 그 DB 행을 찾는다(place_source_refs, sync_core가 채운다).
 좌표가 틀린 동명 행(mislocated)은 둘 다에서 뺀다.
 
 실행: python bench/load_country.py core --policy budget_50000_55_40_5_dest --database trip_jp
@@ -127,13 +128,21 @@ def kana(budget_db, country_db):
     return {"items": len(qids), "asked": len(todo), "found": len(found), "total_kana": len(previous)}
 
 
-def catalog(budget_db, country_db, out_dir, exclude=None):
+def catalog(budget_db, country_db, out_dir):
     con = _connect(budget_db, country_db)
     rows = _catalog_rows(con)
-    if exclude:
-        con.execute(f"DELETE FROM {rows} WHERE (source, source_id) IN (SELECT source, source_id FROM read_parquet('{exclude}'))")
     links = _links(con)
     rd = _readings(con, rows, links)
+    # 합쳐진 원천 행은 카탈로그에 없어 그 현지어 이름으로는 대표 행을 찾지 못한다(PlaceCatalog.findByExactKey가 별칭으로 본다).
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE catalog_aliases AS
+        SELECT r.source, r.source_id,
+               list_distinct(list(exact_key(c.name)) || list(bare_key(c.name))) AS alias_keys,
+               list_sort(list(m.source || ':' || m.source_id)) AS member_refs
+        FROM jp.place_clusters r JOIN jp.place_clusters m ON m.cluster_id = r.cluster_id AND NOT m.is_representative
+        JOIN jp.candidates_all c ON c.source = m.source AND c.source_id = m.source_id
+        WHERE r.is_representative AND r.status = 'merged' GROUP BY 1, 2
+    """)
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{COUNTRY.lower()}.parquet")
     con.execute(f"""
@@ -143,10 +152,14 @@ def catalog(budget_db, country_db, out_dir, exclude=None):
                    n.readings, n.latin,
                    coalesce(c.address, '') AS address, b.lat AS latitude, b.lon AS longitude,
                    coalesce(b.pool_category, 'Unknown') AS category, d.region, '{COUNTRY}' AS country, b.source,
-                   CASE WHEN b.source = 'fsq' THEN b.source_id END AS fsq_place_id, l.qid AS wikidata_id,
+                   CASE WHEN b.source = 'fsq' THEN b.source_id END AS fsq_place_id,
+                   l.qid AS wikidata_id,
                    w.sitelinks AS wikidata_sitelinks, NULL::VARCHAR AS place_role, NULL::VARCHAR AS cuisine,
-                   NULL::VARCHAR AS description, []::VARCHAR[] AS tags, NULL::VARCHAR AS embedding
+                   NULL::VARCHAR AS description, []::VARCHAR[] AS tags, NULL::VARCHAR AS embedding,
+                   coalesce(al.alias_keys, []::VARCHAR[]) AS alias_keys, b.source || ':' || b.source_id AS source_ref,
+                   coalesce(al.member_refs, []::VARCHAR[]) AS member_refs
             FROM {rows} r JOIN base b USING (source, source_id)
+            LEFT JOIN catalog_aliases al USING (source, source_id)
             JOIN budget_destinations d USING (source, source_id)
             LEFT JOIN {links} l USING (source, source_id)
             LEFT JOIN read_parquet('{replay_places.WIKIDATA}') w ON w.qid = l.qid
@@ -186,14 +199,13 @@ def main():
     parser.add_argument("--database", default="trip_jp")
     parser.add_argument("--work", default="build/jp")
     parser.add_argument("--out", default="build/jp/catalog")
-    parser.add_argument("--exclude", help="카탈로그에서 뺄 행(source, source_id) Parquet")
     args = parser.parse_args()
     if args.command == "core":
         print(core(args.budget_db, args.country_db, args.policy, args.database, args.work))
     elif args.command == "kana":
         print(kana(args.budget_db, args.country_db))
     else:
-        print(catalog(args.budget_db, args.country_db, args.out, args.exclude))
+        print(catalog(args.budget_db, args.country_db, args.out))
 
 
 if __name__ == "__main__":

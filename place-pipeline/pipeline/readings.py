@@ -1,6 +1,6 @@
 """
 장소 이름의 규칙 읽기. 초안이 쓴 한국어 이름이 그 장소를 가리키는지 생성기가 대조하는 근거다(장소 신원의 근거는 아니다).
-  readings : 한글 읽기. 이어진 Wikidata 항목의 한국어 라벨(한글일 때)·가나 이름(P1814)·영어 라벨과 출처 영어 이름·
+  readings : 한글 읽기. 이어진 Wikidata 항목의 한국어 라벨(names.wikidata_korean_label을 통과할 때)·가나 이름(P1814)·영어 라벨과 출처 영어 이름·
              괄호 병기·로마자 이름·가나 이름을 korean_names 규칙으로 옮긴 것. 로마자 표기는 낱말마다도 옮기고, 이름 속
              가나 부분(小樽オルゴール堂의 オルゴール)도 따로 옮긴다. 옮길 수 없으면 넣지 않는다.
   reading  : 이름 전체를 옮긴 첫 읽기(가나 이름 → 영어 라벨 → 출처 영어 이름 → 괄호 병기 → 로마자·가나 이름 순). 한국어 이름 후보다.
@@ -9,6 +9,7 @@
 import re
 
 from . import korean_names
+from .candidates import register_functions
 
 _PAREN_LATIN = r"[(（]([A-Za-z][^)）]*)[)）]"
 _LATIN_NAME = r"^[A-Za-z][A-Za-z\s\-.'’ōūāēī]*$"
@@ -45,13 +46,15 @@ def word_readings(texts):
 
 def build(con, rows, links, candidates, wikidata_raw, kana=None, table="name_readings"):
     """rows(source, source_id)마다 한 줄. links(source, source_id, qid)는 행이 이어진 항목이고, kana(qid, kana)는 없어도 된다."""
-    con.create_function("ko_kana", korean_names.from_kana, ["VARCHAR"], "VARCHAR", null_handling="special")
-    con.create_function("ko_romaji", korean_names.from_romaji, ["VARCHAR"], "VARCHAR", null_handling="special")
-    con.create_function("ko_kana_runs", kana_runs, ["VARCHAR"], "VARCHAR[]", null_handling="special")
-    con.create_function("ko_words", lambda texts: word_readings(texts)[0], ["VARCHAR[]"], "VARCHAR[]",
-                        null_handling="special")
-    con.create_function("en_words", lambda texts: word_readings(texts)[1], ["VARCHAR[]"], "VARCHAR[]",
-                        null_handling="special")
+    register_functions(con)
+    if not con.execute("SELECT count(*) FROM duckdb_functions() WHERE function_name = 'ko_kana_runs'").fetchone()[0]:
+        con.create_function("ko_kana", korean_names.from_kana, ["VARCHAR"], "VARCHAR", null_handling="special")
+        con.create_function("ko_romaji", korean_names.from_romaji, ["VARCHAR"], "VARCHAR", null_handling="special")
+        con.create_function("ko_kana_runs", kana_runs, ["VARCHAR"], "VARCHAR[]", null_handling="special")
+        con.create_function("ko_words", lambda texts: word_readings(texts)[0], ["VARCHAR[]"], "VARCHAR[]",
+                            null_handling="special")
+        con.create_function("en_words", lambda texts: word_readings(texts)[1], ["VARCHAR[]"], "VARCHAR[]",
+                            null_handling="special")
     kana_join = f"LEFT JOIN {kana} k ON k.qid = l.qid" if kana else ""
     kana_col = "k.kana" if kana else "NULL::VARCHAR"
     latin_name = _LATIN_NAME.replace("'", "''")
@@ -59,7 +62,7 @@ def build(con, rows, links, candidates, wikidata_raw, kana=None, table="name_rea
         CREATE OR REPLACE TEMP TABLE {table} AS
         WITH src AS (
             SELECT r.source, r.source_id, c.name, l.qid,
-                   CASE WHEN regexp_matches(w.ko::VARCHAR, '[가-힣]') THEN w.ko END AS wd_ko,
+                   wikidata_korean_label(w.ko::VARCHAR, c.name) AS wd_ko,
                    w.en AS wd_en, {kana_col} AS wd_kana,
                    list_filter(c.names, n -> n.lang = 'en')[1].value AS en_name,
                    nullif(regexp_extract(c.name, '{_PAREN_LATIN}', 1), '') AS paren

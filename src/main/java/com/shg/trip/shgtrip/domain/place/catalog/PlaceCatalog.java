@@ -23,7 +23,8 @@ import java.util.List;
  * 경로가 비어 있으면 꺼져 있고 조회는 빈 결과다. 빈은 {@link PlaceCatalogConfig}가 만든다.
  *
  * <p>파일 열: name·name_key·name_ko·name_ko_key·address·latitude·longitude·category·region·country·source·
- * fsq_place_id·wikidata_id·wikidata_sitelinks·place_role·cuisine·description·tags·embedding, 있으면 bare_key·readings·latin.
+ * fsq_place_id·wikidata_id·wikidata_sitelinks·place_role·cuisine·description·tags·embedding, 있으면 bare_key·readings·latin·
+ * alias_keys(같은 곳으로 합쳐진 원천 행의 이름 키)·source_ref(이 행의 원천 id)·member_refs(합쳐진 원천 행의 원천 id).
  * 이름 키는 DB {@code place_name_key}로 만든 값이라 {@code PlaceRepository} 이름 조회와 같은 규칙으로 맞춘다.
  */
 @Slf4j
@@ -34,11 +35,14 @@ public class PlaceCatalog implements AutoCloseable {
     /** 이름 대조에 읽는 열. 임베딩은 행당 수 KB라 DB로 새로 올릴 한 행만 {@link #embeddingOf}로 읽는다. */
     private static final String BASE_COLUMNS = "name, name_ko, address, latitude, longitude, category, region, country, "
             + "source, fsq_place_id, wikidata_id, wikidata_sitelinks, place_role, cuisine, description, tags";
+    /** 원천 id 열이 없는 파일은 빈 목록이다. 승격은 그때 fsq id·이름·주소·좌표로만 같은 장소를 찾는다. */
+    private final String columns;
 
     private final DuckDBConnection connection;
     /** 이름 읽기 열은 현지어 이름 확인에만 써서 같은 행 조회({@link #twinOf})에서만 읽는다. 열이 없는 파일은 빈 목록이다. */
     private final String twinColumns;
     private final boolean hasBareKey;
+    private final boolean hasAliasKeys;
     /** 한 일정을 짓는 동안 같은 이름을 요구 확인·위치·항목 단계에서 여러 번 해석하고, 파일은 실행 중에 바뀌지 않는다. */
     private final java.util.Map<String, List<CatalogPlace>> cache = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.concurrent.atomic.AtomicInteger cachedRows = new java.util.concurrent.atomic.AtomicInteger();
@@ -48,7 +52,10 @@ public class PlaceCatalog implements AutoCloseable {
     public PlaceCatalog(String path) {
         this.connection = path == null || path.isBlank() ? null : open(path);
         this.hasBareKey = hasColumn("bare_key");
-        this.twinColumns = BASE_COLUMNS + (hasColumn("readings") ? ", readings" : ", []::VARCHAR[] AS readings")
+        this.hasAliasKeys = hasColumn("alias_keys");
+        this.columns = BASE_COLUMNS + (hasColumn("source_ref") && hasColumn("member_refs")
+                ? ", list_prepend(source_ref, member_refs) AS source_refs" : ", []::VARCHAR[] AS source_refs");
+        this.twinColumns = columns + (hasColumn("readings") ? ", readings" : ", []::VARCHAR[] AS readings")
                 + (hasColumn("latin") ? ", latin" : ", []::VARCHAR[] AS latin");
     }
 
@@ -140,9 +147,16 @@ public class PlaceCatalog implements AutoCloseable {
                 COMPACT_LIMIT);
     }
 
-    /** 이름·괄호 뗀 이름·한국어 이름 키가 key와 같은 행. 괄호 뗀 키 열이 없는 파일은 포함 조회로 대신한다. */
+    /**
+     * 이름·괄호 뗀 이름·한국어 이름·합쳐진 원천 행 이름 키가 key와 같은 행. 괄호 뗀 키 열이 없는 파일은 포함 조회로 대신한다.
+     * 합쳐진 원천 행은 카탈로그에서 빠지므로 그 이름(青い池 → 대표 Blue Pond)은 대표 행의 별칭 키로만 찾는다.
+     */
     public List<CatalogPlace> findByExactKey(String key, Collection<String> regions, Collection<String> roles) {
         if (!hasBareKey) return findByCompactName(key, key.length(), regions, roles);
+        if (hasAliasKeys) {
+            return query("(name_key = ? OR bare_key = ? OR name_ko_key = ? OR list_contains(alias_keys, ?))",
+                    List.of(key, key, key, key), regions, roles, COMPACT_LIMIT);
+        }
         return query("(name_key = ? OR bare_key = ? OR name_ko_key = ?)", List.of(key, key, key), regions, roles,
                 COMPACT_LIMIT);
     }
@@ -161,7 +175,7 @@ public class PlaceCatalog implements AutoCloseable {
         List<String> roleList = roles == null ? List.of() : List.copyOf(roles);
         String roleFilter = roleList.isEmpty() ? "place_role IS NULL"
                 : "(place_role IS NULL OR place_role IN (" + marks(roleList.size()) + "))";
-        String sql = "SELECT " + BASE_COLUMNS + " FROM catalog WHERE region IN (" + marks(regions.size()) + ") AND "
+        String sql = "SELECT " + columns + " FROM catalog WHERE region IN (" + marks(regions.size()) + ") AND "
                 + roleFilter + " AND " + where + " ORDER BY length(name), name LIMIT " + limit;
         String cacheKey = sql + "|" + regions + "|" + roleList + "|" + params;
         List<CatalogPlace> cached = cache.get(cacheKey);
@@ -227,7 +241,7 @@ public class PlaceCatalog implements AutoCloseable {
                 rs.getString("wikidata_id"), sitelinks == null ? null : sitelinks.intValue(), rs.getString("place_role"),
                 rs.getString("cuisine"), rs.getString("description"), List.copyOf(tagList), null,
                 withReadings ? strings(rs.getArray("readings")) : List.of(),
-                withReadings ? strings(rs.getArray("latin")) : List.of());
+                withReadings ? strings(rs.getArray("latin")) : List.of(), strings(rs.getArray("source_refs")));
     }
 
     private static List<String> strings(Array array) throws SQLException {
