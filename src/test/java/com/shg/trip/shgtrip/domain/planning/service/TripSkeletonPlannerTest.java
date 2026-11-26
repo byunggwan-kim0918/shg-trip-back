@@ -26,6 +26,85 @@ import static org.mockito.Mockito.mock;
 
 class TripSkeletonPlannerTest {
 
+    private static final com.shg.trip.shgtrip.domain.place.destination.Destinations REGISTRY =
+            com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath();
+
+    @Test
+    @DisplayName("홋카이도: 묵기로 한 도시를 밤마다 숙소 지역으로 두고, 마지막 날은 숙소를 두지 않는다")
+    void plannedStaysOverrideDraftLodging() {
+        var sapporo = REGISTRY.findByName("삿포로").orElseThrow();
+        var furano = REGISTRY.findByName("후라노").orElseThrow();
+        DraftPlan draft = new DraftPlan("홋카이도", List.of(), List.of(
+                new DraftPlan.Day(1, "삿포로", "삿포로", List.of(), List.of()),
+                new DraftPlan.Day(2, "후라노", "후라노", List.of(), List.of()),
+                new DraftPlan.Day(3, "비에이", "후라노", List.of(), List.of()),
+                new DraftPlan.Day(4, "오타루", "오타루", List.of(), List.of()),
+                new DraftPlan.Day(5, "삿포로", null, List.of(), List.of())));
+
+        DraftPlan out = TripSkeletonPlanner.withPlannedStays(draft,
+                Map.of(1, sapporo, 2, sapporo, 3, furano, 4, sapporo), 5);
+
+        assertThat(out.days()).extracting(DraftPlan.Day::lodgingArea)
+                .containsExactly("삿포로", "삿포로", "후라노", "삿포로", null);
+        assertThat(out.days()).extracting(DraftPlan.Day::area)
+                .containsExactly("삿포로", "후라노", "비에이", "오타루", "삿포로");
+    }
+
+    @Test
+    @DisplayName("빠진 지역을 넣으려고 바꿀 날은 다른 들를 지역을 그날만 들르는 날을 고르지 않는다")
+    void areaDayKeepsOtherAreasOnlyDay() {
+        var sapporo = REGISTRY.findByName("삿포로").orElseThrow();
+        var furano = REGISTRY.findByName("후라노").orElseThrow();
+        var biei = REGISTRY.findByName("비에이").orElseThrow();
+        PlaceCandidate clock = new PlaceCandidate(1, 1L, "시계탑", null, "Landmarks", List.of(), "Sapporo", "JP",
+                java.math.BigDecimal.valueOf(43.0625), java.math.BigDecimal.valueOf(141.3536), null, null, 0.0, null, null,
+                null, null, false, null, null, null, null, "SIGHT", null, false, null, null, null, null);
+        PlaceCandidate farm = new PlaceCandidate(2, 2L, "팜 도미타", null, "Garden", List.of(), "Furano", "JP",
+                java.math.BigDecimal.valueOf(43.4185), java.math.BigDecimal.valueOf(142.4266), null, null, 0.0, null, null,
+                null, null, false, null, null, null, null, "SIGHT", null, false, null, null, null, null);
+        List<List<DayBuilder.Stop>> stops = List.of(new ArrayList<>(List.of(new DayBuilder.Stop(clock, "sight", null, List.of()))),
+                new ArrayList<>(List.of(new DayBuilder.Stop(farm, "sight", null, List.of()))));
+        List<com.shg.trip.shgtrip.domain.place.destination.Destination> cityByDay = List.of(sapporo, furano);
+
+        java.util.Set<Integer> keep = DraftItineraryPlanner.onlyDaysOfOtherAreas(stops, List.of(sapporo, furano, biei), biei);
+
+        assertThat(keep).containsExactlyInAnyOrder(0, 1);
+        assertThat(DraftItineraryPlanner.dayForArea(stops, cityByDay, furano, keep, false)).isNull();
+        assertThat(DraftItineraryPlanner.dayForArea(stops, cityByDay, furano, java.util.Set.of(), false)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("초안 프롬프트에 들를 지역·숙박 순서·지역별 이동을 적고, 구간 수단은 출발지가 든 지역을 따른다")
+    void layoutLinesInPrompt() {
+        var sapporo = REGISTRY.findByName("삿포로").orElseThrow();
+        var otaru = REGISTRY.findByName("오타루").orElseThrow();
+        var furano = REGISTRY.findByName("후라노").orElseThrow();
+        Map<Integer, com.shg.trip.shgtrip.domain.place.destination.Destination> nights = new java.util.LinkedHashMap<>();
+        nights.put(1, sapporo);
+        nights.put(2, sapporo);
+        nights.put(3, furano);
+        nights.put(4, sapporo);
+        Map<com.shg.trip.shgtrip.domain.place.destination.Destination, String> modes = new java.util.LinkedHashMap<>();
+        modes.put(sapporo, "transit");
+        modes.put(furano, "car");
+        StringBuilder sb = new StringBuilder();
+
+        DraftItineraryPlanner.layoutLines(new DraftItineraryPlanner.Layout(List.of(sapporo, otaru, furano), nights,
+                modes), sb);
+
+        assertThat(sb.toString()).contains("들를 지역: 삿포로, 오타루, 후라노\n")
+                .contains("숙박: 삿포로 2박 → 후라노 1박 → 삿포로 1박\n")
+                .contains("지역별 이동: 삿포로 대중교통, 후라노 자동차\n");
+        var biei = REGISTRY.findByName("비에이").orElseThrow();
+        var layout = new DraftItineraryPlanner.Layout(List.of(), Map.of(), Map.of(sapporo, "any", biei, "car"));
+        assertThat(layout.modeAt(new double[]{43.493, 142.614}, "any")).as("아오이이케").isEqualTo("car");
+        assertThat(layout.modeAt(new double[]{43.0687, 141.3508}, "car")).as("삿포로역").isEqualTo("any");
+        assertThat(layout.modeAt(new double[]{35.68, 139.76}, "walk")).as("말한 지역 밖").isEqualTo("walk");
+        StringBuilder none = new StringBuilder();
+        DraftItineraryPlanner.layoutLines(DraftItineraryPlanner.Layout.NONE, none);
+        assertThat(none).isEmpty();
+    }
+
     @Test
     @DisplayName("초안이 어느 날에도 두지 않은 요구는 그 도시의 온전한 날에 넣는다")
     void missingWantIsPlaced() {
@@ -155,6 +234,108 @@ class TripSkeletonPlannerTest {
 
         assertThat(infeasible).containsExactly("w1");
         assertThat(conflicts).singleElement().asString().contains("일출 전에 닿을 수 있는 날이 없어");
+    }
+
+    @Test
+    @DisplayName("초안이 날에 두지 않은 요구는 문장에 도시 이름이 없어도 장소와 가까운 권역의 날에 넣는다")
+    void missingWantGoesToNearestAreaDay() {
+        var sapporo = REGISTRY.findByName("삿포로").orElseThrow();
+        var furano = REGISTRY.findByName("후라노").orElseThrow();
+        var biei = REGISTRY.findByName("비에이").orElseThrow();
+        DraftPlan.Want farm = new DraftPlan.Want("w1", "place", "팜 토미타", "팜 토미타", null, null, List.of());
+        DraftPlan.Want lake = new DraftPlan.Want("w2", "place", "아오이이케", "아오이이케", null, null, List.of());
+        DraftPlan.Item bieiLunch = new DraftPlan.Item("lunch", "meal", "비에이 야채 요리", "비에이", false, null, null, null);
+        DraftPlan draft = new DraftPlan("홋카이도", List.of(farm, lake), List.of(
+                new DraftPlan.Day(1, "삿포로", null, List.of(), List.of()),
+                new DraftPlan.Day(2, "삿포로", null, List.of(), List.of()),
+                new DraftPlan.Day(3, "후라노", null, List.of(), List.of()),
+                new DraftPlan.Day(4, "삿포로", null, List.of(bieiLunch), List.of()),
+                new DraftPlan.Day(5, "삿포로", null, List.of(), List.of())));
+
+        DraftPlan out = TripSkeletonPlanner.withAllWants(draft, 5, List.of("삿포로", "후라노"), new ArrayList<>(),
+                Map.of("w1", new double[]{43.4185, 142.4266}, "w2", new double[]{43.493, 142.614}),
+                List.of(sapporo, furano, biei));
+
+        assertThat(out.days().get(2).items()).extracting(DraftPlan.Item::want).containsExactly("w1");
+        assertThat(out.days().get(3).items()).as("권역은 삿포로지만 항목이 비에이인 날").extracting(DraftPlan.Item::want)
+                .contains("w2");
+    }
+
+    @Test
+    @DisplayName("요구 문장에 여행 도시 이름이 있으면 이름으로 찾은 좌표가 다른 도시를 가리켜도 그 도시의 날에 넣는다")
+    void cityNamedWantKeepsCityDay() {
+        var busan = com.shg.trip.shgtrip.domain.place.destination.DomesticCities.find("부산").orElseThrow();
+        var gyeongju = com.shg.trip.shgtrip.domain.place.destination.DomesticCities.find("경주").orElseThrow();
+        DraftPlan.Want want = new DraftPlan.Want("w1", "place", "부산 시장 구경", "시장", null, null, List.of());
+        DraftPlan draft = new DraftPlan("부산·경주", List.of(want), List.of(
+                new DraftPlan.Day(1, "부산", null, List.of(), List.of()),
+                new DraftPlan.Day(2, "부산", null, List.of(), List.of()),
+                new DraftPlan.Day(3, "경주", null, List.of(), List.of()),
+                new DraftPlan.Day(4, "경주", null, List.of(), List.of())));
+
+        DraftPlan out = TripSkeletonPlanner.withAllWants(draft, 4, List.of("부산", "경주"), new ArrayList<>(),
+                Map.of("w1", new double[]{gyeongju.lat(), gyeongju.lng()}), List.of(busan, gyeongju));
+
+        assertThat(out.days().get(1).items()).extracting(DraftPlan.Item::want).containsExactly("w1");
+    }
+
+    @Test
+    @DisplayName("숙소 자리 조건은 묵기로 한 도시 안에서 지킬 수 있으면 남기고, 그 도시 어디에서도 못 지키면 버린다")
+    void lodgingNeedKeptWhenCompatibleWithPlannedCity() {
+        var biei = REGISTRY.findByName("비에이").orElseThrow();
+        var sapporo = REGISTRY.findByName("삿포로").orElseThrow();
+        var need = new DraftItineraryPlanner.LodgingNeed(new double[]{43.493, 142.614}, 25, true, "청의 호수 일출");
+        List<String> notes = new ArrayList<>();
+
+        assertThat(DraftItineraryPlanner.withinPlannedCities(Map.of(1, need), Map.of(1, biei), notes)).containsKey(1);
+        assertThat(DraftItineraryPlanner.withinPlannedCities(Map.of(1, need), Map.of(1, sapporo), notes)).isEmpty();
+        assertThat(notes).singleElement().asString().contains("삿포로");
+    }
+
+    @Test
+    @DisplayName("일출과 숙박 계획이 부딪히면 한쪽을 버리지 않고, 묵기로 한 도시에서 닿는지 보고 못 닿으면 조정을 알린다")
+    void sunriseAgainstPlannedStay() {
+        var sapporo = REGISTRY.findByName("삿포로").orElseThrow();
+        var biei = REGISTRY.findByName("비에이").orElseThrow();
+        double[] aoiike = {43.493, 142.614};
+        DraftPlan.Want sunrise = new DraftPlan.Want("w1", "place", "청의 호수 일출", "청의 호수", null, "sunrise",
+                List.of("청의 호수"));
+        DraftPlan.Item item = new DraftPlan.Item("morning", "sight", "청의 호수", "비에이", true, "w1", null, null);
+        DraftPlan draft = new DraftPlan("홋카이도", List.of(sunrise), List.of(
+                new DraftPlan.Day(1, "삿포로", null, List.of(), List.of()),
+                new DraftPlan.Day(2, "비에이", null, List.of(item), List.of())));
+
+        List<String> conflicts = new ArrayList<>();
+        java.util.Set<String> infeasible = new java.util.HashSet<>();
+        TripSkeletonPlanner.withTimedWantsOnFeasibleDays(draft,
+                hokkaido(new DraftItineraryPlanner.Layout(List.of(), Map.of(1, sapporo), Map.of())), 2,
+                new ArrayList<>(), conflicts, infeasible, Map.of("w1", aoiike));
+        assertThat(infeasible).containsExactly("w1");
+        assertThat(conflicts).singleElement().asString().contains("묵기로 한 도시", "숙박 계획을 바꾸거나");
+
+        List<String> none = new ArrayList<>();
+        DraftPlan kept = TripSkeletonPlanner.withTimedWantsOnFeasibleDays(draft,
+                hokkaido(new DraftItineraryPlanner.Layout(List.of(), Map.of(1, biei), Map.of(biei, "car"))), 2,
+                new ArrayList<>(), none, new java.util.HashSet<>(), Map.of("w1", aoiike));
+        assertThat(none).as("비에이에 묵고 차로 다니면 일출 전에 닿는다").isEmpty();
+        DraftPlan.Item free = new DraftPlan.Item("lunch", "meal", "스프카레", "삿포로", false, null, null, null);
+        DraftPlan withFreeItem = new DraftPlan("홋카이도", List.of(sunrise), List.of(
+                new DraftPlan.Day(1, "삿포로", null, List.of(free), List.of()),
+                new DraftPlan.Day(2, "비에이", null, List.of(item), List.of())));
+        assertThat(TripSkeletonPlanner.withTimedWantsOnFeasibleDays(withFreeItem, hokkaido(DraftItineraryPlanner.Layout.NONE),
+                2, new ArrayList<>(), new ArrayList<>(), new java.util.HashSet<>(), Map.of()).days())
+                .as("요구가 아닌 항목이 있어도 좌표 표를 찾다 멈추지 않는다").hasSize(2);
+        assertThat(kept.days().get(1).items()).singleElement().extracting(DraftPlan.Item::want).isEqualTo("w1");
+    }
+
+    private static DraftItineraryPlanner.Request hokkaido(DraftItineraryPlanner.Layout layout) {
+        VectorEnrichedInput input = new VectorEnrichedInput("홋카이도", List.of("nature"), List.of("attraction"), "normal",
+                "any", null, java.time.LocalDate.of(2027, 7, 15), java.time.LocalDate.of(2027, 7, 16), "홋카이도",
+                List.of(), "홋카이도", "JP", List.of("Sapporo", "Biei"), List.of(), Map.of(), null, null, null, null,
+                Map.of(), VectorEnrichedInput.CompanionType.COUPLE, 2, List.of());
+        return new DraftItineraryPlanner.Request(input, null, List.of(REGISTRY.findByName("삿포로").orElseThrow()), null,
+                null, null, null, List.of(), List.of(), Map.of(), null, null, Map.of(), java.util.Set.of(), List.of(),
+                layout);
     }
 
     @Test

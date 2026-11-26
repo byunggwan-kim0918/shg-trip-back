@@ -124,6 +124,24 @@ public class Destinations {
         return all.stream().filter(d -> d.aliases().stream().anyMatch(a -> key(a).equals(key))).findFirst();
     }
 
+    /**
+     * 여행자가 말한 지역 이름을 그 나라 여행지로. 목록 이름·별칭, 국내 도시 순이고 행정 단위를 붙여 말한 국내 도시("경주시"·
+     * "제주도")는 단위를 떼고도 찾는다.
+     *
+     * @param country 여행 나라. 모르면 null이고 나라로 거르지 않는다
+     */
+    public Optional<Destination> resolveArea(String name, String country) {
+        Optional<Destination> d = resolve(name).or(() -> DomesticCities.find(name))
+                .or(() -> withoutUnit(name).flatMap(DomesticCities::find));
+        return d.filter(x -> country == null || country.isBlank() || country.trim().equalsIgnoreCase(x.country()));
+    }
+
+    private static Optional<String> withoutUnit(String name) {
+        String n = name == null ? "" : name.strip();
+        return n.length() > 2 && (n.endsWith("시") || n.endsWith("도") || n.endsWith("군"))
+                ? Optional.of(n.substring(0, n.length() - 1)) : Optional.empty();
+    }
+
     private static String key(String text) {
         return PlaceNames.exactKey(text);
     }

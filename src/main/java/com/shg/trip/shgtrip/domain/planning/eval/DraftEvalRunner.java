@@ -274,7 +274,7 @@ class DraftEvalRunner implements CommandLineRunner {
                     localNames, aliases.stream().distinct().toList()));
         }
         return new TripConditions(wants, expect.cityDays(), expect.avoid(), expect.lowMobility(), expect.transport(),
-                expect.arrival(), expect.departure(), designed.pace(), designed.chosenPlaceIds());
+                expect.arrival(), expect.departure(), designed.pace(), designed.chosenPlaceIds(), designed.layout());
     }
 
     @FunctionalInterface

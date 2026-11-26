@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.planning.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
+import com.shg.trip.shgtrip.domain.itinerary.dto.TripLayout;
 import com.shg.trip.shgtrip.domain.place.destination.Destination;
 import com.shg.trip.shgtrip.domain.place.destination.DestinationCatalog;
 import com.shg.trip.shgtrip.domain.place.destination.Destinations;
@@ -192,6 +193,146 @@ class DraftRequestFactoryTest {
                 .longitude(BigDecimal.valueOf(lng)).build();
     }
 
+    @Test
+    @DisplayName("홋카이도: 묵는 도시가 기준 도시가 되고, 들를 근교는 검색 지역에 들어가며, 지역별 이동 방법을 말한 순서대로 둔다")
+    void hokkaidoLayoutDrivesCitiesNightsAndModes() {
+        ItineraryGenerateRequest base = request("any", List.of());
+        ItineraryGenerateRequest request = new ItineraryGenerateRequest(base.mode(), "홋카이도", base.themes(),
+                base.categories(), base.pace(), base.transportPref(), base.budget(), base.startDate(),
+                LocalDate.of(2027, 5, 5), base.description(), null, null, base.companion(), base.partySize(), null,
+                null, List.of(), null, List.of(), null, null,
+                new TripLayout(List.of("삿포로", "오타루", "후라노", "비에이"),
+                        List.of(new TripLayout.Stay("삿포로", 2), new TripLayout.Stay("후라노", 1),
+                                new TripLayout.Stay("삿포로", 1)),
+                        List.of(new TripLayout.AreaTransport("삿포로", "any"),
+                                new TripLayout.AreaTransport("오타루", "any"),
+                                new TripLayout.AreaTransport("비에이", "car"))));
+
+        DraftRequestFactory.Prepared prepared = factory.prepare(request,
+                enriched("JP", "any", LocalDate.of(2027, 5, 5), "Sapporo", "Furano"));
+
+        DraftItineraryPlanner.Layout layout = prepared.request().layout();
+        assertThat(prepared.request().cities()).extracting(Destination::name).containsExactly("Sapporo", "Furano");
+        assertThat(prepared.input().regions()).contains("Otaru", "Biei");
+        assertThat(layout.visitAreas()).extracting(Destination::name)
+                .containsExactly("Sapporo", "Otaru", "Furano", "Biei");
+        assertThat(layout.nights()).extractingFromEntries(e -> e.getKey() + ":" + e.getValue().name())
+                .containsExactly("1:Sapporo", "2:Sapporo", "3:Furano", "4:Sapporo");
+        assertThat(layout.modes()).extractingFromEntries(e -> e.getKey().name() + ":" + e.getValue())
+                .containsExactly("Sapporo:any", "Otaru:any", "Biei:car");
+        assertThat(prepared.request().mustDo()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("숙박 계획이 일부 밤만 정했으면 보강이 고른 도시도 기준 도시로 남긴다")
+    void partialStaysKeepEnrichedCities() {
+        ItineraryGenerateRequest base = request("any", List.of());
+        ItineraryGenerateRequest request = new ItineraryGenerateRequest(base.mode(), "간사이", base.themes(),
+                base.categories(), base.pace(), base.transportPref(), base.budget(), base.startDate(),
+                base.endDate(), base.description(), null, null, base.companion(), base.partySize(), null, null,
+                List.of(), null, List.of(), null, null,
+                new TripLayout(List.of(), List.of(new TripLayout.Stay("교토", 1)), List.of()));
+
+        DraftRequestFactory.Prepared prepared = factory.prepare(request, enriched("JP", "any", "Osaka", "Kyoto"));
+
+        assertThat(prepared.request().cities()).extracting(Destination::name).containsExactly("Kyoto", "Osaka");
+        assertThat(prepared.request().layout().nights()).extractingFromEntries(e -> e.getKey() + ":" + e.getValue().name())
+                .containsExactly("1:Kyoto");
+    }
+
+    @Test
+    @DisplayName("목록에 없는 지역은 그대로 두기로 한 요구로 넣어 빠져도 저장을 막지 않고, 행정 단위를 붙인 도시는 찾는다")
+    void unknownVisitAreaIsHintOnly() {
+        DraftRequestFactory.Prepared prepared = factory.prepare(withLayout("부산",
+                new TripLayout(List.of("부산", "경주시", "기장 연화리"), List.of(), List.of())),
+                enriched("KR", "any", "Busan"));
+
+        assertThat(prepared.request().mustDo()).contains("기장 연화리");
+        assertThat(prepared.request().userWants()).filteredOn(w -> w.text().equals("기장 연화리")).singleElement()
+                .extracting(DraftItineraryPlanner.UserWant::accepted).isEqualTo(true);
+        assertThat(prepared.request().layout().visitAreas()).extracting(Destination::nameKo)
+                .containsExactly("부산", "경주");
+        assertThat(prepared.notices()).anyMatch(n -> n.contains("'기장 연화리'"));
+    }
+
+    @Test
+    @DisplayName("장소 데이터가 없는 들를 지역은 조건에서 빼고 알린다")
+    void visitAreaWithoutPlacesIsNoticed() {
+        when(placeRepository.countRolesByRegions(List.of("Gyeongju"))).thenReturn(List.of());
+
+        DraftRequestFactory.Prepared prepared = factory.prepare(withLayout("부산",
+                new TripLayout(List.of("부산", "경주"), List.of(), List.of())), enriched("KR", "any", "Busan"));
+
+        assertThat(prepared.request().layout().visitAreas()).extracting(Destination::nameKo).containsExactly("부산");
+        assertThat(prepared.notices()).anyMatch(n -> n.contains("'경주'") && n.contains("장소 정보가 없어"));
+    }
+
+    @Test
+    @DisplayName("한국 면허로 운전할 수 없는 나라는 지역별 렌터카도 택시·대중교통으로 바꾸고 알린다")
+    void areaCarInNoDrivingCountry() {
+        DraftRequestFactory.Prepared prepared = factory.prepare(withLayout("상하이",
+                new TripLayout(List.of(), List.of(), List.of(new TripLayout.AreaTransport("쑤저우", "car")))),
+                enriched("CN", "any", "Shanghai"));
+
+        assertThat(prepared.request().layout().modes()).extractingFromEntries(e -> e.getKey().name() + ":" + e.getValue())
+                .containsExactly("Suzhou:any");
+        assertThat(prepared.notices()).anyMatch(n -> n.contains("운전할 수 없어"));
+    }
+
+    @Test
+    @DisplayName("여행 기간을 넘는 박은 세지 않고, 마지막 밤 도시를 출발 도시로 본다")
+    void nightsBeyondTripAreDropped() {
+        DraftRequestFactory.Prepared prepared = factory.prepare(withLayout("홋카이도",
+                new TripLayout(List.of(), List.of(new TripLayout.Stay("후라노", 1), new TripLayout.Stay("삿포로", 3)),
+                        List.of())), enriched("JP", "any", "Sapporo"));
+
+        assertThat(prepared.request().layout().nights()).extractingFromEntries(e -> e.getKey() + ":" + e.getValue().name())
+                .containsExactly("1:Furano", "2:Sapporo");
+        assertThat(prepared.request().cities()).extracting(Destination::name).containsExactly("Furano", "Sapporo");
+
+        DraftRequestFactory.Prepared outside = factory.prepare(withLayout("홋카이도",
+                new TripLayout(List.of(), List.of(new TripLayout.Stay("후라노", 1), new TripLayout.Stay("삿포로", 1),
+                        new TripLayout.Stay("하코다테", 1)), List.of())), enriched("JP", "any", "Sapporo"));
+        assertThat(outside.request().cities()).as("기간 밖에만 묵는 도시").extracting(Destination::name)
+                .containsExactly("Furano", "Sapporo");
+    }
+
+    @Test
+    @DisplayName("지역별 이동은 같은 도시를 다른 이름으로 다시 말해도 나중 값을 쓰고, 찾지 못한 지역은 알린다")
+    void areaTransportLaterWinsAndUnknownIsNoticed() {
+        DraftRequestFactory.Prepared prepared = factory.prepare(withLayout("부산",
+                new TripLayout(List.of(), List.of(), List.of(new TripLayout.AreaTransport("부산", "any"),
+                        new TripLayout.AreaTransport("부산시", "car"), new TripLayout.AreaTransport("기장 연화리", "car")))),
+                enriched("KR", "any", "Busan"));
+
+        assertThat(prepared.request().layout().modes()).extractingFromEntries(e -> e.getKey().nameKo() + ":" + e.getValue())
+                .containsExactly("부산:car");
+        assertThat(prepared.notices()).anyMatch(n -> n.contains("'기장 연화리'") && n.contains("이동 방법"));
+    }
+
+    @Test
+    @DisplayName("목록 밖 동네는 이름에 그 지명이 든 장소가 한곳에 모였을 때만 구역으로 잇는다")
+    void districtFromClusteredPlaces() {
+        List<double[]> susukino = List.of(new double[]{43.0556, 141.3530}, new double[]{43.0549, 141.3545},
+                new double[]{43.0561, 141.3522}, new double[]{43.0570, 141.3551}, new double[]{43.0640, 141.3469});
+        List<double[]> chain = List.of(new double[]{43.06, 141.35}, new double[]{43.19, 140.99},
+                new double[]{43.34, 142.38}, new double[]{42.77, 141.69});
+
+        assertThat(DraftRequestFactory.district(susukino)).hasValueSatisfying(d -> {
+            assertThat(d[0]).isBetween(43.05, 43.06);
+            assertThat(d[2]).isBetween(1.0, 5.0);
+        });
+        assertThat(DraftRequestFactory.district(chain)).as("도시 곳곳의 같은 이름 상호").isEmpty();
+        assertThat(DraftRequestFactory.district(susukino.subList(0, 2))).as("장소가 너무 적음").isEmpty();
+    }
+
+    private static ItineraryGenerateRequest withLayout(String destination, TripLayout layout) {
+        ItineraryGenerateRequest base = request("any", List.of());
+        return new ItineraryGenerateRequest(base.mode(), destination, base.themes(), base.categories(), base.pace(),
+                base.transportPref(), base.budget(), base.startDate(), base.endDate(), base.description(), null, null,
+                base.companion(), base.partySize(), null, null, List.of(), null, List.of(), null, null, layout);
+    }
+
     private List<String> cities(String country, String... regions) {
         return factory.citiesOf(enriched(country, "any", regions)).stream().map(Destination::name).toList();
     }
@@ -205,8 +346,12 @@ class DraftRequestFactoryTest {
     }
 
     private static VectorEnrichedInput enriched(String country, String transport, String... regions) {
+        return enriched(country, transport, LocalDate.of(2027, 5, 3), regions);
+    }
+
+    private static VectorEnrichedInput enriched(String country, String transport, LocalDate end, String... regions) {
         return new VectorEnrichedInput("여행", List.of("food"), List.of("restaurant"), "normal", transport,
-                new BigDecimal("500000"), LocalDate.of(2027, 5, 1), LocalDate.of(2027, 5, 3), "여행", List.of(),
+                new BigDecimal("500000"), LocalDate.of(2027, 5, 1), end, "여행", List.of(),
                 "여행", country, List.of(regions), List.of(), Map.of(), null, null, null, null, Map.of(),
                 VectorEnrichedInput.CompanionType.UNKNOWN, 3, List.of());
     }

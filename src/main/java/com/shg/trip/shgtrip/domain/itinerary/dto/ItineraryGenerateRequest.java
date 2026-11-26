@@ -70,7 +70,7 @@ public record ItineraryGenerateRequest(
         String departureTime,
 
         // 이름으로 장소를 맞추지 못한 꼭 가고 싶은 곳. 맞춘 장소는 selectedPlaceIds로 온다
-        @Size(max = 5, message = "꼭 하고 싶은 경험은 최대 5개까지 가능합니다.")
+        @Size(max = 10, message = "꼭 하고 싶은 경험은 최대 10개까지 가능합니다.")
         List<@NotNull(message = "경험 값이 비어 있습니다.") @Valid RequiredExperience> requiredExperiences,
 
         // selectedPlaceIds에도 있는 장소는 빼지 않는다
@@ -89,8 +89,25 @@ public record ItineraryGenerateRequest(
         // 대화에서 넣지 못한다는 안내를 듣고도 그대로 두기로 한 꼭 갈 곳·바람. 일정에 없어도 동의 없이 뺀 것으로 보지 않는다
         @Size(max = 10, message = "그대로 둘 요청은 최대 10개까지 가능합니다.")
         List<@NotBlank(message = "그대로 둘 요청이 비어 있습니다.")
-             @Size(max = 100, message = "그대로 둘 요청은 100자 이내여야 합니다.") String> acceptedUnmet
+             @Size(max = 100, message = "그대로 둘 요청은 100자 이내여야 합니다.") String> acceptedUnmet,
+
+        // 대화에서 말한 방문 지역·숙박 순서·지역별 이동 방법. 없으면 null
+        @Valid
+        TripLayout layout
 ) {
+    public ItineraryGenerateRequest(PlanningMode mode, String destination, List<String> themes, List<String> categories,
+                                    String pace, String transportPref, BigDecimal budget, LocalDate startDate,
+                                    LocalDate endDate, String description, List<Long> selectedPlaceIds,
+                                    List<String> customPlaceNames, String companion, Integer partySize,
+                                    String arrivalTime, String departureTime,
+                                    List<RequiredExperience> requiredExperiences, List<Long> avoidPlaceIds,
+                                    List<PlaceRestriction> restrictions, List<String> avoidPlaceNames,
+                                    List<String> acceptedUnmet) {
+        this(mode, destination, themes, categories, pace, transportPref, budget, startDate, endDate, description,
+                selectedPlaceIds, customPlaceNames, companion, partySize, arrivalTime, departureTime,
+                requiredExperiences, avoidPlaceIds, restrictions, avoidPlaceNames, acceptedUnmet, null);
+    }
+
     public ItineraryGenerateRequest(PlanningMode mode, String destination, List<String> themes, List<String> categories,
                                     String pace, String transportPref, BigDecimal budget, LocalDate startDate,
                                     LocalDate endDate, String description, List<Long> selectedPlaceIds,

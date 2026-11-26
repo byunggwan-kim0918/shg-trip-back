@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.tripchat.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
+import com.shg.trip.shgtrip.domain.itinerary.dto.TripLayout;
 import com.shg.trip.shgtrip.domain.itinerary.dto.WizardOptionIds;
 import com.shg.trip.shgtrip.domain.tripchat.model.Draft;
 import com.shg.trip.shgtrip.domain.tripchat.model.Draft.Fact;
@@ -17,6 +18,7 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -33,10 +35,12 @@ public final class TripRequestMapper {
     static final int MAX_PRIORITIES_TEXT = 200;
     static final int MAX_DESCRIPTION = 500;         // ItineraryGenerateRequest description @Size
     static final int MAX_DESTINATION = 50;
+    static final int MAX_AREA = 30;                 // TripLayout 지역 @Size
+    static final int MAX_LAYOUT_ITEMS = 10;         // TripLayout 목록 @Size
     static final int MAX_ACCEPTED_TEXT = 100;       // ItineraryGenerateRequest acceptedUnmet 항목 @Size
     static final long MAX_BUDGET = 100_000_000L;
     private static final int MAX_SELECTED_PLACES = 10;
-    private static final int MAX_REQUIRED_EXPERIENCES = 5;  // ItineraryGenerateRequest requiredExperiences @Size
+    private static final int MAX_REQUIRED_EXPERIENCES = 10; // ItineraryGenerateRequest requiredExperiences @Size
     private static final int MAX_AVOID_PLACES = 10;         // ItineraryGenerateRequest avoidPlaceIds @Size
     private static final String SEPARATOR = " / ";
 
@@ -107,6 +111,11 @@ public final class TripRequestMapper {
 
         Set<Long> placeIds = new LinkedHashSet<>();
         List<ItineraryGenerateRequest.RequiredExperience> required = requiredExperiences(draft, matches, destination);
+        long unmatched = userItems(draft, DraftField.MUST_VISIT).stream()
+                .filter(i -> !matches.containsKey(PlaceMatcher.key(DraftField.MUST_VISIT, i.text()))).count();
+        if (required.size() >= MAX_REQUIRED_EXPERIENCES && unmatched > required.size()) {
+            addNote(notes, Slot.ANCHORS, GeneratorSupport.MUST_VISIT_TRIMMED);
+        }
         anchors(draft, matches, required, placeIds, notes, fragments);
 
         String arrival = time(draft.value(DraftField.ARRIVAL_TIME));
@@ -130,6 +139,8 @@ public final class TripRequestMapper {
         List<String> avoidPlaceNames = new ArrayList<>();
         List<Long> avoidPlaceIds = avoidPlaces(draft, matches, placeIds, notes, avoidPlaceNames);
 
+        TripLayout layout = layout(draft, start, end, notes);
+
         List<String> acceptedUnmet = TripFeasibilityQuestions.acknowledged(draft, asked);
         acceptedUnmet.forEach(text -> addNote(notes, Slot.ANCHORS, text + " · " + GeneratorSupport.KEPT_UNMET));
 
@@ -151,8 +162,64 @@ public final class TripRequestMapper {
                 budget, start, end, description, selected, List.of(), companion, partySize, arrival, departure,
                 required.isEmpty() ? null : required, avoidPlaceIds.isEmpty() ? null : avoidPlaceIds,
                 restrictions.isEmpty() ? null : List.copyOf(restrictions), avoidPlaceNames.isEmpty() ? null : avoidPlaceNames,
-                acceptedUnmet.isEmpty() ? null : acceptedUnmet);
+                acceptedUnmet.isEmpty() ? null : acceptedUnmet, layout);
         return new Result(request, blockers, notes, description, days);
+    }
+
+    /**
+     * 방문 지역·숙박 순서·지역별 이동 방법. 여행지 문장 하나로는 담기지 않아 따로 넘긴다. 사용자가 말한 것만 넘기고, 셋 다
+     * 없으면 null이다.
+     */
+    static TripLayout layout(Draft draft, LocalDate start, LocalDate end, Map<Slot, List<String>> notes) {
+        List<String> areas = visitAreas(draft);
+        if (!areas.isEmpty()) {
+            addNote(notes, Slot.CITY, String.join("·", areas) + " · " + GeneratorSupport.VISIT_AREAS_INCLUDED);
+        }
+
+        List<TripLayout.Stay> stays = new ArrayList<>();
+        String staysValue = userValue(draft, DraftField.STAYS);
+        for (String stay : staysValue == null ? new String[0] : staysValue.split(",")) {
+            String[] pair = stay.split("\\|", 2);
+            Integer nights = pair.length == 2 ? parseInt(pair[1], 1, 30) : null;
+            if (nights != null && stays.size() < MAX_LAYOUT_ITEMS) stays.add(new TripLayout.Stay(pair[0], nights));
+        }
+        if (!stays.isEmpty()) {
+            addNote(notes, Slot.ANCHORS, String.join(" → ", stays.stream().map(x -> x.area() + " " + x.nights() + "박")
+                    .toList()) + " · " + GeneratorSupport.STAYS_FOLLOWED);
+            long tripNights = start == null || end == null ? -1 : ChronoUnit.DAYS.between(start, end);
+            if (tripNights >= 0 && stays.stream().mapToInt(TripLayout.Stay::nights).sum() != tripNights) {
+                addNote(notes, Slot.ANCHORS, GeneratorSupport.STAYS_MISMATCH);
+            }
+        }
+
+        // 같은 지역을 다시 말하면 정정이라 나중 값이 이긴다.
+        Map<String, String> modeByArea = new LinkedHashMap<>();
+        for (Item item : userItems(draft, DraftField.AREA_TRANSPORT)) {
+            String[] pair = item.text().split("\\|", 2);
+            if (pair.length == 2) modeByArea.put(pair[0], pair[1]);
+        }
+        List<TripLayout.AreaTransport> transports = new ArrayList<>();
+        modeByArea.forEach((area, mode) -> {
+            if (transports.size() >= MAX_LAYOUT_ITEMS) return;
+            transports.add(new TripLayout.AreaTransport(area, GeneratorSupport.areaTransport(mode)));
+            addNote(notes, Slot.TRANSPORT, area + " " + GeneratorSupport.TRANSPORT_LABELS.getOrDefault(mode, mode)
+                    + " · " + GeneratorSupport.AREA_TRANSPORT_FOLLOWED);
+        });
+        TripLayout layout = new TripLayout(areas, stays, transports);
+        return layout.isEmpty() ? null : layout;
+    }
+
+    /** 여행자가 들르겠다고 한 지역. 여행지 자체를 받으면 목록에 없는 넓은 지역("홋카이도")이 들를 곳이 되어 빼고 센다. */
+    static List<String> visitAreas(Draft draft) {
+        String destinationKey = TextNormalizer.key(draft.value(DraftField.DESTINATION));
+        return userItems(draft, DraftField.VISIT_AREAS).stream().map(Item::text)
+                .filter(a -> !TextNormalizer.key(a).equals(destinationKey)).distinct().limit(MAX_LAYOUT_ITEMS).toList();
+    }
+
+    /** 숙박 계획의 박 수. 1~30박이 아니면 null이다. */
+    static String nightsOf(String value) {
+        Integer n = parseInt(value, 1, 30);
+        return n == null ? null : String.valueOf(n);
     }
 
     /** 확인 화면 보완 질문에 답하면 그 보완 대상 필드만 지우고 새 답을 받는다. */

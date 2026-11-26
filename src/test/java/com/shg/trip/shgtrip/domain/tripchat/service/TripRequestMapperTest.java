@@ -2,6 +2,7 @@ package com.shg.trip.shgtrip.domain.tripchat.service;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.ItineraryGenerateRequest;
 import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
+import com.shg.trip.shgtrip.domain.itinerary.dto.TripLayout;
 import com.shg.trip.shgtrip.domain.tripchat.model.Draft;
 import com.shg.trip.shgtrip.domain.tripchat.model.DraftField;
 import com.shg.trip.shgtrip.domain.tripchat.model.FieldStatus;
@@ -61,6 +62,103 @@ class TripRequestMapperTest {
         assertThat(r.days()).isEqualTo(6);
         assertThat(VALIDATOR.validate(req)).isEmpty();
         assertThat(r.notes().get(Slot.MOOD)).containsExactly("느긋한 일정 · 바다/해변·힐링 위주로 찾아요 (제안)");
+    }
+
+    /** 홋카이도 4박: 삿포로 2박 → 후라노 1박 → 삿포로 1박, 삿포로·오타루는 대중교통, 후라노·비에이는 렌터카. */
+    private static Events hokkaidoTrip() {
+        return Events.of().user(DraftField.DESTINATION, "홋카이도")
+                .user(DraftField.START_DATE, "2026-12-03", "12월 3일부터 7일까지")
+                .user(DraftField.END_DATE, "2026-12-07", "12월 3일부터 7일까지")
+                .user(DraftField.VISIT_AREAS, "삿포로").user(DraftField.VISIT_AREAS, "오타루")
+                .user(DraftField.VISIT_AREAS, "후라노").user(DraftField.VISIT_AREAS, "비에이")
+                .user(DraftField.COMPANION, "couple", "둘이")
+                .user(DraftField.TRANSPORT, "mixed", "삿포로·오타루는 대중교통, 후라노·비에이는 렌터카")
+                .user(DraftField.AREA_TRANSPORT, "삿포로|transit").user(DraftField.AREA_TRANSPORT, "오타루|transit")
+                .user(DraftField.AREA_TRANSPORT, "후라노|car").user(DraftField.AREA_TRANSPORT, "비에이|car")
+                .user(DraftField.STAYS, "삿포로|2,후라노|1,삿포로|1", "삿포로 2박, 후라노 1박, 마지막 날 삿포로 1박")
+                .outcome(Slot.ANCHORS, FieldStatus.NONE);
+    }
+
+    @Test
+    @DisplayName("여러 지역 여행의 들를 지역·숙박 순서·지역별 이동을 잃지 않고 생성 요청에 담는다")
+    void multiAreaTripKeepsLayout() {
+        TripRequestMapper.Result r = map(hokkaidoTrip());
+
+        ItineraryGenerateRequest req = r.request();
+        assertThat(req.destination()).isEqualTo("홋카이도");
+        assertThat(req.layout().visitAreas()).containsExactly("삿포로", "오타루", "후라노", "비에이");
+        assertThat(req.layout().stays()).containsExactly(new TripLayout.Stay("삿포로", 2),
+                new TripLayout.Stay("후라노", 1), new TripLayout.Stay("삿포로", 1));
+        assertThat(req.layout().transports()).containsExactly(new TripLayout.AreaTransport("삿포로", "transit"),
+                new TripLayout.AreaTransport("오타루", "transit"), new TripLayout.AreaTransport("후라노", "car"),
+                new TripLayout.AreaTransport("비에이", "car"));
+        assertThat(map(hokkaidoTrip().user(DraftField.AREA_TRANSPORT, "오타루|taxi")).request().layout().transports())
+                .as("택시로 다니는 지역은 대중교통과 따로 남는다").contains(new TripLayout.AreaTransport("오타루", "taxi"));
+        assertThat(VALIDATOR.validate(req)).isEmpty();
+        assertThat(r.notes().get(Slot.ANCHORS)).noneMatch(n -> n.equals(GeneratorSupport.STAYS_MISMATCH));
+    }
+
+    @Test
+    @DisplayName("확인 화면 요약에 들를 지역·지역별 이동·숙박 순서를 보인다")
+    void summaryShowsLayout() {
+        com.shg.trip.shgtrip.domain.tripchat.model.Draft draft = hokkaidoTrip().draft();
+
+        assertThat(SummaryBuilder.value(Slot.CITY, draft, TODAY)).isEqualTo("홋카이도 (삿포로·오타루·후라노·비에이)");
+        assertThat(SummaryBuilder.value(Slot.TRANSPORT, draft, TODAY)).contains("삿포로 대중교통", "후라노 자동차");
+        assertThat(SummaryBuilder.value(Slot.ANCHORS, draft, TODAY)).contains("숙박: 삿포로 2박 → 후라노 1박 → 삿포로 1박");
+    }
+
+    @Test
+    @DisplayName("숙박 박 수 합이 여행 박 수와 다르면 알리고, 지역을 말하지 않은 여행은 뼈대를 보내지 않는다")
+    void staysMismatchAndNoLayout() {
+        TripRequestMapper.Result r = map(hokkaidoTrip().user(DraftField.STAYS, "삿포로|2,후라노|1,삿포로|1,오타루|1"));
+
+        assertThat(r.notes().get(Slot.ANCHORS)).contains(GeneratorSupport.STAYS_MISMATCH);
+        assertThat(map(Events.busanTrip()).request().layout()).isNull();
+    }
+
+    @Test
+    @DisplayName("찾지 못한 꼭 갈 곳이 여섯 곳이어도 모두 꼭 할 경험으로 넘긴다")
+    void sixUnmatchedMustVisitsAreKept() {
+        Events trip = hokkaidoTrip();
+        for (String place : List.of("오타루 운하", "기타이치 글라스 3호관", "오타루 덴구야마 로프웨이", "팜 도미타",
+                "비에이 청의 호수", "흰수염 폭포")) {
+            trip.user(DraftField.MUST_VISIT, place);
+        }
+
+        TripRequestMapper.Result r = map(trip);
+
+        assertThat(r.request().requiredExperiences()).extracting(ItineraryGenerateRequest.RequiredExperience::text)
+                .contains("흰수염 폭포").hasSize(6);
+        assertThat(VALIDATOR.validate(r.request())).isEmpty();
+        assertThat(r.notes().get(Slot.ANCHORS)).noneMatch(n -> n.equals(GeneratorSupport.MUST_VISIT_TRIMMED));
+    }
+
+    @Test
+    @DisplayName("같은 도시로 돌아오는 숙박은 순서대로 남고, 숙박을 고쳐 말하면 전체가 바뀐다")
+    void returningStayKeepsOrder() {
+        Events trip = Events.of().user(DraftField.DESTINATION, "서울·부산")
+                .user(DraftField.START_DATE, "2026-12-03").user(DraftField.END_DATE, "2026-12-06")
+                .user(DraftField.STAYS, "서울|1,부산|1,서울|1", "서울 1박, 부산 1박, 다시 서울 1박")
+                .outcome(Slot.ANCHORS, FieldStatus.NONE);
+
+        TripRequestMapper.Result r = map(trip);
+        assertThat(r.request().layout().stays()).containsExactly(new TripLayout.Stay("서울", 1),
+                new TripLayout.Stay("부산", 1), new TripLayout.Stay("서울", 1));
+        assertThat(r.notes().get(Slot.ANCHORS)).noneMatch(n -> n.equals(GeneratorSupport.STAYS_MISMATCH));
+        assertThat(map(trip.user(DraftField.STAYS, "서울|1,부산|2", "부산은 2박으로")).request().layout().stays())
+                .containsExactly(new TripLayout.Stay("서울", 1), new TripLayout.Stay("부산", 2));
+    }
+
+    @Test
+    @DisplayName("지역별 이동을 고쳐 말하면 나중 값을 쓰고, 여행지 자체는 들를 지역으로 세지 않는다")
+    void areaTransportCorrectionAndDestinationArea() {
+        TripRequestMapper.Result r = map(hokkaidoTrip().user(DraftField.AREA_TRANSPORT, "삿포로|car")
+                .user(DraftField.VISIT_AREAS, "홋카이도"));
+
+        assertThat(r.request().layout().transports()).first()
+                .isEqualTo(new TripLayout.AreaTransport("삿포로", "car"));
+        assertThat(r.request().layout().visitAreas()).doesNotContain("홋카이도");
     }
 
     @Test

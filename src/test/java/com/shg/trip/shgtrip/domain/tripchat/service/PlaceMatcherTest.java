@@ -66,6 +66,25 @@ class PlaceMatcherTest {
     }
 
     @Test
+    @DisplayName("묶음 여행지(홋카이도)는 들를 지역의 장소로 맞춘다")
+    void groupedDestinationMatchesInVisitAreas() {
+        PlaceService placeService = mock(PlaceService.class);
+        when(placeService.searchPlaces(any(), any(Pageable.class))).thenReturn(new PageImpl<>(List.of(
+                overseas(22361, "小樽運河", "오타루 운하", "Otaru", "Landmarks and Outdoors > Waterfront"))));
+        when(placeService.searchPlacesInRegions(any(), any(), anyInt())).thenReturn(List.of(
+                overseas(22361, "小樽運河", "오타루 운하", "Otaru", "Landmarks and Outdoors > Waterfront")));
+        PlaceMatcher matcher = new PlaceMatcher(placeService, Destinations.fromClasspath(), mock(PlaceFactsReader.class));
+        Events trip = Events.of().user(DraftField.DESTINATION, "홋카이도").user(DraftField.MUST_VISIT, "오타루 운하");
+
+        assertThat(matcher.match(trip.draft())).as("들를 지역을 말하기 전").isEmpty();
+        String before = PlaceMatcher.signature(trip.draft());
+        Events withAreas = trip.user(DraftField.VISIT_AREAS, "삿포로").user(DraftField.VISIT_AREAS, "오타루");
+        assertThat(matcher.match(withAreas.draft()).get(PlaceMatcher.key(DraftField.MUST_VISIT, "오타루 운하")).placeId())
+                .isEqualTo(22361L);
+        assertThat(PlaceMatcher.signature(withAreas.draft())).as("들를 지역이 바뀌면 다시 맞춘다").isNotEqualTo(before);
+    }
+
+    @Test
     @DisplayName("피할 장소도 같은 기준으로 맞추고, 바뀌면 다시 맞춘다")
     void matchesAvoidPlaces() {
         PlaceService placeService = mock(PlaceService.class);

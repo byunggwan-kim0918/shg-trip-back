@@ -129,6 +129,13 @@ public record VectorEnrichedInput(
                 companionType, partySize, ferryOnlyAreas, restrictions);
     }
 
+    public VectorEnrichedInput withRegions(List<String> newRegions) {
+        return new VectorEnrichedInput(destination, themes, categories, pace, transportPref, budget, startDate, endDate,
+                description, selectedPlaceIds, normalizedDestination, country, newRegions, searchTags, regionAllocation,
+                budgetRange, seasonContext, enrichedContext, transportationHub, categorySearchQueries,
+                companionType, partySize, ferryOnlyAreas, restrictions);
+    }
+
     /** null-safe 동행 유형. */
     public CompanionType companion() {
         return companionType != null ? companionType : CompanionType.UNKNOWN;

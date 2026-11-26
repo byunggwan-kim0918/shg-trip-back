@@ -1,11 +1,14 @@
 package com.shg.trip.shgtrip.domain.planning.dto;
 
 import com.shg.trip.shgtrip.domain.itinerary.dto.PlaceRestriction;
+import com.shg.trip.shgtrip.global.util.GeoUtils;
 
 import java.time.LocalTime;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 /**
  * 일정이 지켜야 하는 여행 조건. 최종 검사가 이것으로 일정을 받아들일지 정한다.
@@ -19,13 +22,83 @@ import java.util.Set;
  * @param departure  마지막 날 출발 시각. 없으면 null
  * @param pace       relaxed·normal·tight. 모르면 null
  * @param chosenPlaceIds 사용자가 직접 고른 장소. 피할 조건에 걸려도 사용자가 고른 것이라 짓는 쪽이 남긴다
+ * @param layout     사용자가 말한 들를 지역과 밤마다 묵을 도시
  */
 public record TripConditions(List<Want> wants, Map<String, Integer> cityDays, List<PlaceRestriction> avoid,
                              boolean lowMobility, String transport, LocalTime arrival, LocalTime departure,
-                             String pace, Set<Long> chosenPlaceIds) {
+                             String pace, Set<Long> chosenPlaceIds, Layout layout) {
 
     public TripConditions {
         chosenPlaceIds = chosenPlaceIds == null ? Set.of() : Set.copyOf(chosenPlaceIds);
+        layout = layout == null ? Layout.NONE : layout;
+    }
+
+    public TripConditions(List<Want> wants, Map<String, Integer> cityDays, List<PlaceRestriction> avoid,
+                          boolean lowMobility, String transport, LocalTime arrival, LocalTime departure,
+                          String pace, Set<Long> chosenPlaceIds) {
+        this(wants, cityDays, avoid, lowMobility, transport, arrival, departure, pace, chosenPlaceIds, Layout.NONE);
+    }
+
+    /**
+     * @param radiusKm 이 거리 안의 활동을 그 지역에 간 것으로 본다
+     * @param rangeKm  이 거리 안의 숙소와 구간 출발지를 그 도시 것으로 본다. 도시 둘레 숙소를 넣으려고 radiusKm보다 넓다
+     */
+    public record Area(String name, double lat, double lng, double radiusKm, double rangeKm) {
+
+        /** 좌표를 모르면 아주 먼 곳으로 본다. */
+        public double kmTo(double[] at) {
+            return at == null ? Double.MAX_VALUE : GeoUtils.haversine(at, new double[]{lat, lng});
+        }
+
+        /** 그 도시의 숙소·구간 출발지로 볼 만큼 가까운지. */
+        public boolean covers(double[] at) {
+            return kmTo(at) <= rangeKm;
+        }
+
+        public boolean coversPlace(PlaceCandidate place) {
+            return place != null && place.latitude() != null && place.longitude() != null
+                    && covers(new double[]{place.latitude().doubleValue(), place.longitude().doubleValue()});
+        }
+    }
+
+    /** @param mode 그 지역에서 다니는 방법(walk·car·transit·taxi·any) */
+    public record AreaMode(Area area, String mode) {}
+
+    /**
+     * @param visitAreas 활동이 하나 이상 있어야 하는 지역
+     * @param nights     밤(1부터)마다 묵어야 하는 도시
+     * @param modes      지역별 이동 방법. 말한 순서다
+     */
+    public record Layout(List<Area> visitAreas, Map<Integer, Area> nights, List<AreaMode> modes) {
+        public static final Layout NONE = new Layout(List.of(), Map.of(), List.of());
+
+        public Layout {
+            visitAreas = visitAreas == null ? List.of() : List.copyOf(visitAreas);
+            nights = nights == null ? Map.of() : Collections.unmodifiableMap(new TreeMap<>(nights));
+            modes = modes == null ? List.of() : List.copyOf(modes);
+        }
+
+        public String modeAt(double[] at, String fallback) {
+            return TripConditions.modeAt(modes, at, fallback);
+        }
+    }
+
+    /**
+     * 좌표가 든 지역 가운데 가장 가까운 지역의 이동 방법. 말한 지역 밖이면 fallback이다. 짓기와 검사가 이 판정 하나를
+     * 같이 써야 같은 구간을 두고 수단과 거리 상한이 갈리지 않는다.
+     */
+    public static String modeAt(List<AreaMode> modes, double[] at, String fallback) {
+        if (at == null) return fallback;
+        AreaMode best = null;
+        double bestKm = Double.MAX_VALUE;
+        for (AreaMode m : modes) {
+            double km = m.area().kmTo(at);
+            if (km <= m.area().rangeKm() && km < bestKm) {
+                best = m;
+                bestKm = km;
+            }
+        }
+        return best == null ? fallback : best.mode();
     }
 
     public TripConditions(List<Want> wants, Map<String, Integer> cityDays, List<PlaceRestriction> avoid,

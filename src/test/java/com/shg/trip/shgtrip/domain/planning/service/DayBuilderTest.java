@@ -38,6 +38,40 @@ class DayBuilderTest {
                 false, hardEnd, null, false, "walk", spares, earlier, Integer.MAX_VALUE, 1.0, null, "KR", 0);
     }
 
+    @org.junit.jupiter.api.Test
+    @DisplayName("대중교통으로만 다니는 지역은 가까운 구간도 버스, 택시로 다니는 지역은 먼 구간도 택시다")
+    void areaTransitAndTaxiLegs() {
+        PlaceCandidate a = sight("부산역", 35.1151, 129.0415);
+        PlaceCandidate twoKm = sight("남포동", 35.0980, 129.0300);
+        PlaceCandidate fifteenKm = sight("해운대", 35.1587, 129.1604);
+
+        assertThat(DayBuilder.legOf(a, twoKm, "any", false).mode()).isEqualTo("TAXI");
+        assertThat(DayBuilder.legOf(a, twoKm, "transit", false).mode()).isEqualTo("BUS");
+        assertThat(DayBuilder.legOf(a, fifteenKm, "any", false).mode()).isEqualTo("BUS");
+        assertThat(DayBuilder.legOf(a, fifteenKm, "taxi", false).mode()).isEqualTo("TAXI");
+    }
+
+    @org.junit.jupiter.api.Test
+    @DisplayName("말한 지역 둘 사이를 차 없이 오가는 구간은 도시 간 이동으로 재고, 같은 지역 안과 렌터카 구간은 그대로 둔다")
+    void legBetweenStatedAreasUsesIntercityEstimate() {
+        var registry = com.shg.trip.shgtrip.domain.place.destination.Destinations.fromClasspath();
+        var sapporo = registry.findByName("삿포로").orElseThrow();
+        var otaru = registry.findByName("오타루").orElseThrow();
+        var layout = new DraftItineraryPlanner.Layout(List.of(sapporo, otaru), java.util.Map.of(),
+                java.util.Map.of(sapporo, "transit", otaru, "car"));
+        DayBuilder.Frame f = new DayBuilder.Frame(1, WEDNESDAY, 540, 1260, 22 * 60, 19 * 60, 5 * 60, null, null, null,
+                false, false, null, false, "any", List.of(), List.of(), Integer.MAX_VALUE, 1.0, null, "JP", 0, layout);
+        PlaceCandidate hotel = sight("Sapporo Grand Hotel", 43.0628, 141.3497);
+        PlaceCandidate canal = sight("小樽運河", 43.1990, 140.9944);
+        PlaceCandidate clock = sight("時計台", 43.0625, 141.3536);
+
+        TransportLeg toOtaru = f.leg(hotel, canal);
+        assertThat(toOtaru.mode()).isEqualTo("TRAIN");
+        assertThat(toOtaru.durationMin()).isLessThan(DayBuilder.legOf(hotel, canal, "transit", false).durationMin());
+        assertThat(f.leg(hotel, clock).mode()).isEqualTo("WALK");
+        assertThat(f.leg(canal, hotel).mode()).as("렌터카 지역에서 떠나는 구간").isEqualTo("CAR");
+    }
+
     private static DayBuilder.Stop stop(PlaceCandidate p, String kind, String slot) {
         return new DayBuilder.Stop(p, kind, slot, List.of());
     }

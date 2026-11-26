@@ -50,6 +50,11 @@ public final class ItineraryRules {
         WANT_MISSING(Severity.HARD),
         WANT_TIME(Severity.HARD),
         CITY_DAYS(Severity.HARD),
+        AREA_MISSING(Severity.HARD),
+        /** 숙소는 묵기로 한 도시 안에서 고르므로 어긋나면 그 도시에 쓸 숙소가 없다. 편집은 숙소를 바꾸지 못한다. */
+        STAY_MISMATCH(Severity.HARD, true),
+        /** 숙소에서 바로 허브로 가도 출발편 기한에 닿지 못한다. 편집으로 고칠 장소가 없다. */
+        DEPARTURE_UNREACHABLE(Severity.HARD, true),
         AVOID(Severity.HARD),
         UNREACHABLE(Severity.HARD),
         TRAVEL_MISSING(Severity.HARD),
@@ -72,6 +77,8 @@ public final class ItineraryRules {
         PACE_SHORT(Severity.SOFT),
         LONG_GAP(Severity.SOFT),
         LONG_LEG(Severity.SOFT),
+        /** 렌터카를 숙소·역·공항이 아닌 곳에서 받거나 두고 다른 교통편으로 바꾼다. */
+        RENTAL_HANDOFF(Severity.SOFT),
         DAILY_TRANSIT(Severity.SOFT),
         STRENUOUS(Severity.SOFT),
         DUPLICATE(Severity.SOFT),
@@ -219,6 +226,17 @@ public final class ItineraryRules {
         return new Verdict(VERSION, out, tally.meals, tally.unknown);
     }
 
+    /**
+     * 구간을 떠나는 곳이 든 지역의 이동 방법으로 본 상한. 짓는 쪽이 그 방법으로 구간을 정하므로 렌터카 지역의 구간을
+     * 여행 전체의 대중교통 상한으로 재면 지킨 일정을 넘었다고 본다. 하루 상한은 그날 가장 넓은 방법을 따른다.
+     */
+    private static double[] legLimits(Context ctx, PlaceCandidate origin, double[] tripLimits) {
+        if (ctx.conditions() == null || ctx.conditions().layout().modes().isEmpty()) return tripLimits;
+        String fallback = ctx.transportPref() != null ? ctx.transportPref() : "any";
+        String mode = ctx.conditions().layout().modeAt(origin == null ? null : CandidateGeo.coordsOf(origin), fallback);
+        return mode.equals(fallback) ? tripLimits : ScheduleTuning.distanceLimits(mode, ctx.pace());
+    }
+
     private void checkDay(int day, List<StepData> daySteps, boolean first, boolean last, double[] limits,
                           Context ctx, CandidateLookup lookup, Map<Long, PlaceFactsReader.PlaceFact> facts,
                           MealTally tally, List<Violation> out) {
@@ -250,6 +268,7 @@ public final class ItineraryRules {
         }
 
         double dayKm = 0;
+        double dayLimit = limits[1];
         for (int i = 0; i < daySteps.size(); i++) {
             StepData s = daySteps.get(i);
             if (s.transportationDistance() == null || InvariantChecker.isOutsideDayBudget(daySteps, i, first, last)) {
@@ -258,16 +277,19 @@ public final class ItineraryRules {
             // 저장된 이동거리는 도로 환산값이라 상한과 같은 직선 단위로 되돌린다
             double straight = s.transportationDistance().doubleValue() / GeoUtils.ROAD_DISTANCE_FACTOR;
             dayKm += straight;
-            if (straight > limits[0]) {
+            // 그날 첫 구간은 앞 숙소를 모르므로 도착한 곳의 지역으로 본다. 숙소와 첫 장소는 대개 같은 지역이다.
+            double[] legLimits = legLimits(ctx, lookup.byPlaceId(daySteps.get(Math.max(0, i - 1))), limits);
+            dayLimit = Math.max(dayLimit, legLimits[1]);
+            if (straight > legLimits[0]) {
                 out.add(new Violation(Rule.LEG_OVER_CAP, day,
                         "day" + day + " 구간 상한 초과(" + CandidateLookup.name(s) + ")", List.of(shownName(s))));
             }
         }
-        if (dayKm > limits[1]) {
+        if (dayKm > dayLimit) {
             String shownKm = String.format("%.0f", dayKm * GeoUtils.ROAD_DISTANCE_FACTOR);
             out.add(new Violation(Rule.DAY_DISTANCE_OVER_CAP, day, String.format(
                     "day%d 하루 이동 %skm(상한 %.0fkm)", day, shownKm,
-                    limits[1] * GeoUtils.ROAD_DISTANCE_FACTOR), List.of(shownKm)));
+                    dayLimit * GeoUtils.ROAD_DISTANCE_FACTOR), List.of(shownKm)));
         }
 
         checkOpeningHours(day, daySteps, ctx, lookup, facts, out);

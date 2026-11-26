@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.regex.Pattern;
 
@@ -85,6 +86,7 @@ final class TripConditionChecks {
         }
         wants(conditions, days, ctx.startDate(), ctx.country(), facts, out);
         cityDays(conditions, days, ctx.cities(), out);
+        layout(conditions.layout(), conditions.chosenPlaceIds(), days, out);
         for (int d = 1; d <= ctx.dayCount(); d++) {
             List<Visit> day = days.getOrDefault(d, List.of());
             boolean first = d == 1;
@@ -104,6 +106,7 @@ final class TripConditionChecks {
                 continue;
             }
             mealsBackToBack(day, d, out);
+            rentalHandoffs(day, d, out);
             pace(day, d, first, last, conditions, out);
             movement(day, d, conditions, out);
         }
@@ -246,6 +249,62 @@ final class TripConditionChecks {
         }
     }
 
+    /**
+     * 차와 버스·택시를 오가는 곳이 숙소·역·공항이 아니면 차를 빌리거나 둘 곳이 없다. 걷는 구간은 차를 세워 둔 채로 보고,
+     * 기차·비행기 구간은 역·공항을 거친다.
+     */
+    private static void rentalHandoffs(List<Visit> day, int d, List<Violation> out) {
+        Boolean driving = null;
+        for (int i = 1; i < day.size(); i++) {
+            String mode = Objects.toString(day.get(i).step().transportationMode(), "");
+            if (mode.isEmpty() || "WALK".equals(mode)) continue;
+            if (List.of("TRAIN", "FLIGHT").contains(mode)) {
+                driving = null;
+                continue;
+            }
+            // 도시 간 자동차 구간(DRIVE)은 같은 차로 이어 간다.
+            boolean car = "CAR".equals(mode) || "DRIVE".equals(mode);
+            Visit at = day.get(i - 1);
+            if (driving != null && driving != car && !at.stayOrHub()) {
+                out.add(new Violation(Rule.RENTAL_HANDOFF, d, d + "일차 " + at.name() + "에서 "
+                        + (car ? "차로" : "차에서 " + mode + "로") + " 바꿈", List.of(at.name())));
+            }
+            driving = car;
+        }
+    }
+
+    /** 렌터카 지역에서 떠나는 구간이 있는 날. 그날 운전 시간을 대중교통 이동 시간 상한으로 재지 않는다. */
+    private static boolean drivesThatDay(List<Visit> day, TripConditions conditions) {
+        for (int i = 1; i < day.size(); i++) {
+            String mode = conditions.layout().modeAt(CandidateGeo.coordsOf(day.get(i - 1).place()), conditions.transport());
+            if ("car".equals(mode)) return true;
+        }
+        return false;
+    }
+
+    private static void layout(TripConditions.Layout layout, Set<Long> chosen, Map<Integer, List<Visit>> days,
+                               List<Violation> out) {
+        for (TripConditions.Area area : layout.visitAreas()) {
+            boolean visited = days.values().stream().flatMap(day -> activities(day).stream())
+                    .anyMatch(v -> area.kmTo(CandidateGeo.coordsOf(v.place())) <= area.radiusKm());
+            if (!visited) {
+                out.add(new Violation(Rule.AREA_MISSING, 0, "들를 지역 '" + area.name() + "'에 일정이 없음",
+                        List.of(area.name()), "'" + area.name() + "'에 들를 날을 정한다"));
+            }
+        }
+        layout.nights().forEach((night, area) -> {
+            List<Visit> day = days.getOrDefault(night, List.of());
+            Visit last = day.isEmpty() ? null : day.get(day.size() - 1);
+            if (last == null || last.role() != CandidatePolicy.Role.LODGING) return;
+            // 예약한 숙소는 여행자가 고른 것이라 숙박 계획과 달라도 따른다.
+            if (chosen.contains(last.place().placeId())) return;
+            if (!area.covers(CandidateGeo.coordsOf(last.place()))) {
+                out.add(new Violation(Rule.STAY_MISMATCH, night, night + "일차 밤 숙소 " + last.name() + "이(가) '"
+                        + area.name() + "'이 아님", List.of(area.name(), last.name())));
+            }
+        });
+    }
+
     private static void mealsBackToBack(List<Visit> day, int d, List<Violation> out) {
         List<Visit> meals = activities(day).stream().filter(Visit::meal).toList();
         for (int i = 1; i < meals.size(); i++) {
@@ -292,7 +351,7 @@ final class TripConditionChecks {
                 out.add(new Violation(Rule.LONG_LEG, d, v.name() + "까지 " + mode + " " + leg + "분"));
             }
         }
-        boolean transit = !"car".equals(conditions.transport());
+        boolean transit = !"car".equals(conditions.transport()) && !drivesThatDay(day, conditions);
         int limit = conditions.lowMobility() ? LOW_MOBILITY_DAILY_TRANSIT : DAILY_TRANSIT;
         if (transit && total > limit) {
             out.add(new Violation(Rule.DAILY_TRANSIT, d, d + "일차 이동만 " + total + "분", List.of(),
@@ -312,12 +371,14 @@ final class TripConditionChecks {
     private static void departure(List<Visit> day, int d, TripConditions conditions, String country,
                                   List<Violation> out) {
         Visit end = day.get(day.size() - 1);
+        // 관광 없이 허브로만 가는 날이 늦으면 숙소에서 바로 가도 닿지 못한 것이라 장소를 고쳐서는 맞출 수 없다.
+        Rule rule = activities(day).isEmpty() ? Rule.DEPARTURE_UNREACHABLE : Rule.DEPARTURE_MISSED;
         PlaceCandidate hub = hubOrNull(end.place());
         int deadline = TripHubs.departureDeadline(conditions.departure(), hub, drivesHome(hub, conditions), country);
         // 허브까지의 이동은 추정이라 여유를 더한 도착으로 본다. 빠듯한 일정을 지킬 수 있다고 확정하지 않는다.
         int slack = hub == null ? 0 : TripHubs.estimatedLegSlack(end.step().transportationDuration());
         if (end.start() + slack > deadline) {
-            out.add(new Violation(Rule.DEPARTURE_MISSED, d, "출발 " + conditions.departure() + "인데 " + end.name()
+            out.add(new Violation(rule, d, "출발 " + conditions.departure() + "인데 " + end.name()
                     + " " + end.step().startTime() + " 도착(추정 이동 여유 " + slack + "분)", List.of(end.name())));
         }
     }

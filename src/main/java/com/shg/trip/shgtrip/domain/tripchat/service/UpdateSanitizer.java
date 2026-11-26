@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -135,6 +136,9 @@ public final class UpdateSanitizer {
         if (v == null || v.isEmpty()) return null;
         return switch (field) {
             case DESTINATION, LODGING -> TextNormalizer.cap(v, TripRequestMapper.MAX_DESTINATION);
+            case VISIT_AREAS -> TextNormalizer.cap(v, TripRequestMapper.MAX_AREA);
+            case STAYS -> stays(v);
+            case AREA_TRANSPORT -> pair(v, mode -> inSet(mode, TRANSPORTS));
             case START_DATE, END_DATE -> isoDate(v);
             case DATE_APPROX -> DateCandidates.parseApprox(v) != null ? v : null;
             case NIGHTS -> intIn(v, 1, 30);
@@ -157,6 +161,24 @@ public final class UpdateSanitizer {
             case MUST_VISIT, BOOKED -> TextNormalizer.cap(v, TripRequestMapper.MAX_DESTINATION);
             case FOOD_LIKES, FOOD_AVOID, AVOID_PLACES, AVOID_ACTIVITIES, NOTES -> TextNormalizer.cap(v, 60);
         };
+    }
+
+    private static String stays(String v) {
+        List<String> out = new ArrayList<>();
+        for (String part : v.split(",")) {
+            String stay = pair(part, TripRequestMapper::nightsOf);
+            if (stay != null && out.size() < TripRequestMapper.MAX_LAYOUT_ITEMS) out.add(stay);
+        }
+        return out.isEmpty() ? null : String.join(",", out);
+    }
+
+    /** "지역|값" 꼴. 지역이 비었거나 값이 형식에 맞지 않으면 null이다. */
+    private static String pair(String v, Function<String, String> second) {
+        int bar = v.indexOf('|');
+        if (bar <= 0) return null;
+        String area = TextNormalizer.cap(v.substring(0, bar).strip(), TripRequestMapper.MAX_AREA);
+        String value = second.apply(v.substring(bar + 1).strip());
+        return area == null || value == null ? null : area + "|" + value;
     }
 
     private static boolean isDateField(DraftField f) {

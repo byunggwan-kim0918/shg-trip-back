@@ -145,15 +145,15 @@ class ItineraryGenerateRequestValidationTest {
     }
 
     @Test
-    @DisplayName("필수 경험은 5개까지, 지역 낱말이 있고 시간대는 morning·evening만 통과한다")
+    @DisplayName("필수 경험은 10개까지, 지역 낱말이 있고 시간대는 morning·evening만 통과한다")
     void requiredExperiences() {
         var ok = new ItineraryGenerateRequest.RequiredExperience("광안리 야경", "광안리", "evening");
         var noArea = new ItineraryGenerateRequest.RequiredExperience("야경", " ", null);
         var badTiming = new ItineraryGenerateRequest.RequiredExperience("광안리 야경", "광안리", "night");
 
         assertThat(messages(withRequired(List.of(ok)))).isEmpty();
-        assertThat(messages(withRequired(java.util.Collections.nCopies(6, ok))))
-                .contains("꼭 하고 싶은 경험은 최대 5개까지 가능합니다.");
+        assertThat(messages(withRequired(java.util.Collections.nCopies(11, ok))))
+                .contains("꼭 하고 싶은 경험은 최대 10개까지 가능합니다.");
         assertThat(messages(withRequired(List.of(noArea, badTiming))))
                 .contains("경험의 지역 키워드가 비어 있습니다.", "지원하지 않는 시간대입니다.");
     }

@@ -33,6 +33,8 @@ public class ChatState {
     /** "LODGING|이름" 같은 키로 이름에 맞춘 DB 장소. 여행지·정해둔 것이 바뀔 때 다시 맞춘다. */
     private Map<String, PlaceMatch> matches = new LinkedHashMap<>();
     private String matchSignature;
+    /** 맞춘 장소와 같이 구한 비슷한 관광지. 못 찾은 꼭 갈 곳을 다음 턴에도 이어 물을 때 쓴다. */
+    private Map<String, String> matchSuggestions = new LinkedHashMap<>();
     /** 수정을 취소하면 돌아갈 질문 */
     private OpenQuestion resume;
     private Long confirmedVersion;

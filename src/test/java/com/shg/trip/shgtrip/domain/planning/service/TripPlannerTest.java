@@ -36,6 +36,9 @@ class TripPlannerTest {
         assertThat(TripPlanner.editProblems(built(result, List.of(soft, hard)))).containsExactly(
                 "요청한 '감천문화마을'이(가) 없음 (고칠 방향: '감천문화마을'을(를) 넣을 날짜와 시간대를 정한다)",
                 "요청 장소 '감천문화마을' 찾지 못함");
+        Violation unreachable = new Violation(Rule.DEPARTURE_UNREACHABLE, 3, "출발 10:00인데 공항 10:57 도착");
+        assertThat(TripPlanner.editProblems(built(result, List.of(soft, unreachable)))).as("숙소에서 바로 가도 늦는 출발")
+                .isEmpty();
     }
 
     @Test
