@@ -49,6 +49,31 @@ resource "aws_instance" "nat" {
   }
 }
 
+# 외부 API의 IP 허용 목록에 등록하는 출구 주소라서 인스턴스를 교체하거나 재시작해도 바뀌면 안 된다.
+resource "aws_eip" "nat" {
+  for_each = local.nat_public_subnets
+
+  domain = "vpc"
+
+  tags = {
+    Name      = "shgTrip-nat-eip-${each.key}"
+    Project   = var.project
+    Env       = var.env
+    ManagedBy = "manual"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "aws_eip_association" "nat" {
+  for_each = local.nat_public_subnets
+
+  instance_id   = aws_instance.nat[each.key].id
+  allocation_id = aws_eip.nat[each.key].id
+}
+
 moved {
   from = aws_instance.nat
   to   = aws_instance.nat["2a"]
