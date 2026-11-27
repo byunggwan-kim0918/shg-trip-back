@@ -1,0 +1,269 @@
+[
+ {
+  "group": "JR",
+  "label": "JR 홋카이도(전국 JR 피드)",
+  "match": "^JR$",
+  "cases": [
+   "req-sapporo-otaru",
+   "req-sapporo-chitose",
+   "req-furano-biei"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "JR",
+  "label": "JR 동일본",
+  "match": "^JR$",
+  "cases": [
+   "op-jr-east"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "JR",
+  "label": "JR 도카이",
+  "match": "^JR$|JR東海",
+  "cases": [
+   "req-tokyo-kyoto",
+   "op-jr-central"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "JR",
+  "label": "JR 서일본",
+  "match": "^JR$",
+  "cases": [
+   "req-kyoto-kix",
+   "op-jr-west"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "JR",
+  "label": "JR 시코쿠",
+  "match": "^JR$",
+  "cases": [
+   "op-jr-shikoku"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "JR",
+  "label": "JR 규슈",
+  "match": "^JR$",
+  "cases": [
+   "op-jr-kyushu"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "지하철",
+  "label": "도쿄메트로",
+  "match": "東京メトロ|TokyoMetro",
+  "cases": [
+   "op-tokyo-metro"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "지하철",
+  "label": "도에이 지하철",
+  "match": "都営|東京都交通局|Toei",
+  "cases": [
+   "op-toei-subway"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "지하철",
+  "label": "오사카메트로",
+  "match": "Osaka Metro",
+  "cases": [
+   "op-osaka-metro"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "지하철",
+  "label": "교토시 지하철",
+  "match": "京都市交通局",
+  "cases": [
+   "op-kyoto-subway"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "지하철",
+  "label": "나고야시 지하철",
+  "match": "名古屋市交通局",
+  "cases": [
+   "op-nagoya-subway"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "지하철",
+  "label": "삿포로시 지하철",
+  "match": "札幌市交通局",
+  "cases": [
+   "op-sapporo-subway"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "지하철",
+  "label": "후쿠오카시 지하철",
+  "match": "福岡市交通局",
+  "cases": [
+   "op-fukuoka-subway"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "사철",
+  "label": "오다큐",
+  "match": "小田急",
+  "cases": [
+   "op-odakyu"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "사철",
+  "label": "긴테쓰",
+  "match": "近畿日本鉄道",
+  "cases": [
+   "op-kintetsu"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "사철",
+  "label": "메이테쓰",
+  "match": "名古屋鉄道",
+  "cases": [
+   "req-takayama-centrair"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "사철",
+  "label": "니시테쓰 철도",
+  "match": "西日本鉄道",
+  "cases": [
+   "op-nishitetsu-rail"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "모노레일",
+  "label": "오키나와 유이레일",
+  "match": "沖縄都市モノレール",
+  "cases": [
+   "op-okinawa-monorail"
+  ],
+  "mode": "RAIL"
+ },
+ {
+  "group": "버스",
+  "label": "도에이 버스",
+  "match": "東京都交通局|都営バス|ToeiBus",
+  "cases": [
+   "op-toei-bus"
+  ],
+  "mode": "BUS"
+ },
+ {
+  "group": "버스",
+  "label": "교토 시영 버스",
+  "match": "京都市交通局|KyotoMunicipal|kyoto_municipal",
+  "cases": [
+   "op-kyoto-city-bus"
+  ],
+  "mode": "BUS"
+ },
+ {
+  "group": "버스",
+  "label": "요코하마 시영 버스",
+  "match": "横浜市交通局|YokohamaMunicipal|yokohama_municipal",
+  "cases": [],
+  "mode": "BUS"
+ },
+ {
+  "group": "버스",
+  "label": "오사카 시티버스",
+  "match": "大阪シティバス|OsakaCityBus",
+  "cases": [],
+  "mode": "BUS"
+ },
+ {
+  "group": "버스",
+  "label": "니시테쓰 버스",
+  "match": "西鉄バス|nishitetsu",
+  "cases": [],
+  "mode": "BUS"
+ },
+ {
+  "group": "버스",
+  "label": "홋카이도 중앙버스",
+  "match": "北海道中央バス|hokkaido~chuo|hokkaido_chuo",
+  "cases": [],
+  "mode": "BUS"
+ },
+ {
+  "group": "버스",
+  "label": "나고야 시영 버스",
+  "match": "名古屋市営バス|名古屋市交通局",
+  "cases": [],
+  "mode": "BUS"
+ },
+ {
+  "group": "버스",
+  "label": "센다이 시영 버스",
+  "match": "仙台市交通局|仙台市営バス",
+  "cases": [],
+  "mode": "BUS"
+ },
+ {
+  "group": "고속버스",
+  "label": "노히 버스(다카야마)",
+  "match": "濃飛|nohi",
+  "cases": [
+   "op-highway-bus"
+  ],
+  "mode": "BUS"
+ },
+ {
+  "group": "배",
+  "label": "가고시마시 사쿠라지마 페리",
+  "match": "鹿児島市船舶局|KagoshimaCityMaritime|kagoshima_city_maritime",
+  "cases": [
+   "op-sakurajima-ferry"
+  ],
+  "mode": "FERRY"
+ },
+ {
+  "group": "배",
+  "label": "미야지마 페리",
+  "match": "宮島|miyajima|JR西日本宮島フェリー",
+  "cases": [
+   "op-miyajima-ferry"
+  ],
+  "mode": "FERRY"
+ },
+ {
+  "group": "배",
+  "label": "도쿄 관광 기선",
+  "match": "東京都観光汽船|TokyoCruiseShip",
+  "cases": [],
+  "mode": "FERRY"
+ },
+ {
+  "group": "배",
+  "label": "세이칸 페리",
+  "match": "青函|seikan",
+  "cases": [],
+  "mode": "FERRY"
+ }
+]

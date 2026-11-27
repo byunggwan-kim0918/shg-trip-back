@@ -1,0 +1,118 @@
+{
+ "journeys": [
+  {
+   "startDateTime": "2026-11-26T09:01:00",
+   "arrivalDateTime": "2026-11-26T09:32:00",
+   "duration": 31,
+   "legs": [
+    {
+     "duration": 11,
+     "departureTime": "2026-11-26T09:01:00",
+     "arrivalTime": "2026-11-26T09:12:00",
+     "scheduledDepartureTime": "2026-11-26T09:01:00",
+     "scheduledArrivalTime": "2026-11-26T09:12:00",
+     "departurePoint": {
+      "commonName": "1D BELVEDERE ROAD, LONDON",
+      "lat": 51.5032897,
+      "lon": -0.1193771
+     },
+     "arrivalPoint": {
+      "commonName": "Waterloo Underground Station",
+      "lat": 51.503126996782,
+      "lon": -0.114845032842
+     },
+     "routeOptions": [
+      {
+       "name": ""
+      }
+     ],
+     "mode": {
+      "id": "walking"
+     },
+     "distance": 529.0
+    },
+    {
+     "duration": 6,
+     "departureTime": "2026-11-26T09:12:00",
+     "arrivalTime": "2026-11-26T09:18:00",
+     "scheduledDepartureTime": "2026-11-26T09:12:00",
+     "scheduledArrivalTime": "2026-11-26T09:18:00",
+     "departurePoint": {
+      "commonName": "Waterloo Underground Station",
+      "lat": 51.503126996782,
+      "lon": -0.114845032842
+     },
+     "arrivalPoint": {
+      "commonName": "Oxford Circus Underground Station",
+      "lat": 51.515710112794,
+      "lon": -0.142055844667
+     },
+     "routeOptions": [
+      {
+       "name": "Bakerloo"
+      }
+     ],
+     "mode": {
+      "id": "tube"
+     },
+     "distance": 7.0
+    },
+    {
+     "duration": 5,
+     "departureTime": "2026-11-26T09:21:00",
+     "arrivalTime": "2026-11-26T09:26:00",
+     "scheduledDepartureTime": "2026-11-26T09:21:00",
+     "scheduledArrivalTime": "2026-11-26T09:26:00",
+     "departurePoint": {
+      "commonName": "Oxford Circus Underground Station",
+      "lat": 51.515750166204995,
+      "lon": -0.142313645658
+     },
+     "arrivalPoint": {
+      "commonName": "King's Cross St. Pancras Underground Station",
+      "lat": 51.53084222788301,
+      "lon": -0.122149060278
+     },
+     "routeOptions": [
+      {
+       "name": "Victoria"
+      }
+     ],
+     "mode": {
+      "id": "tube"
+     },
+     "distance": 24.0
+    },
+    {
+     "duration": 6,
+     "departureTime": "2026-11-26T09:26:00",
+     "arrivalTime": "2026-11-26T09:32:00",
+     "scheduledDepartureTime": "2026-11-26T09:26:00",
+     "scheduledArrivalTime": "2026-11-26T09:32:00",
+     "departurePoint": {
+      "commonName": "King's Cross St. Pancras Underground Station",
+      "lat": 51.53084222788301,
+      "lon": -0.122149060278
+     },
+     "arrivalPoint": {
+      "commonName": "9-11 EUSTON ROAD, LONDON",
+      "lat": 51.5308236,
+      "lon": -0.1237934
+     },
+     "routeOptions": [
+      {
+       "name": ""
+      }
+     ],
+     "mode": {
+      "id": "walking"
+     },
+     "distance": 113.0
+    }
+   ],
+   "fare": {
+    "totalCost": 310
+   }
+  }
+ ]
+}
