@@ -1,0 +1,207 @@
+# 실제 경로 공급자. 이 프로필을 켤 때만 RouteEngine이 공급자에 묻는다(--spring.profiles.active=...,routing).
+# 영역은 ISO 3166-2 구역 코드(coverage-areas, 나라 코드면 그 나라 전체) 또는 사각형(coverage)으로 적는다.
+# 출발지와 도착지가 모두 영역 안인 공급자를 priority 순으로 묻고, 앞 공급자가 데이터 밖이면 다음 공급자에 묻는다.
+# 지역 OTP는 scripts/routing/regions.json과 포트를 맞춘다. 도보·자전거·자동차·택시는 Valhalla가 맡는다.
+routing:
+  enabled: true
+  # 상업 이용이 안 되는 무료 플랜(commercial-use: false)은 평가·비교 실행에서만 켠다.
+  allow-non-commercial: ${ROUTING_ALLOW_NON_COMMERCIAL:false}
+  breaker-failures: 5
+  breaker-open: 60s
+  admin-areas-file: routing/admin-areas.json
+  area-buffer-km: 3
+  providers:
+    otp-jp-hokkaido: &otp-jp
+      type: otp
+      enabled: ${ROUTING_OTP_JP_ENABLED:true}
+      priority: 10
+      base-url: ${ROUTING_OTP_JP_HOKKAIDO_URL:http://127.0.0.1:8101}
+      modes: [TRANSIT]
+      coverage-areas: [JP-01]
+      timeout: 10s
+      cache-ttl: 24h
+      no-connection-ttl: 6h
+      cache-bucket: 10m
+      snap-to-stop-meters: 2000
+      transfer-minutes: 10
+      # 철도는 커뮤니티가 만든 전국 GTFS라 공식 데이터로 표시하지 않는다.
+      official-data: false
+      attribution: "jp-jr GTFS (community), GTFSデータリポジトリ, ODPT, Transitland Atlas, © OpenStreetMap contributors"
+      timezone: Asia/Tokyo
+    otp-jp-tohoku:
+      <<: *otp-jp
+      base-url: ${ROUTING_OTP_JP_TOHOKU_URL:http://127.0.0.1:8102}
+      coverage-areas: [JP-02, JP-03, JP-04, JP-05, JP-06, JP-07]
+    otp-jp-kanto:
+      <<: *otp-jp
+      base-url: ${ROUTING_OTP_JP_KANTO_URL:http://127.0.0.1:8103}
+      coverage-areas: [JP-08, JP-09, JP-10, JP-11, JP-12, JP-13, JP-14]
+    otp-jp-chubu:
+      <<: *otp-jp
+      base-url: ${ROUTING_OTP_JP_CHUBU_URL:http://127.0.0.1:8104}
+      coverage-areas: [JP-15, JP-16, JP-17, JP-18, JP-19, JP-20, JP-21, JP-22, JP-23]
+    otp-jp-kansai:
+      <<: *otp-jp
+      base-url: ${ROUTING_OTP_JP_KANSAI_URL:http://127.0.0.1:8105}
+      coverage-areas: [JP-24, JP-25, JP-26, JP-27, JP-28, JP-29, JP-30]
+    otp-jp-chugoku:
+      <<: *otp-jp
+      base-url: ${ROUTING_OTP_JP_CHUGOKU_URL:http://127.0.0.1:8106}
+      coverage-areas: [JP-31, JP-32, JP-33, JP-34, JP-35]
+    otp-jp-shikoku:
+      <<: *otp-jp
+      base-url: ${ROUTING_OTP_JP_SHIKOKU_URL:http://127.0.0.1:8107}
+      coverage-areas: [JP-36, JP-37, JP-38, JP-39]
+    otp-jp-kyushu:
+      <<: *otp-jp
+      base-url: ${ROUTING_OTP_JP_KYUSHU_URL:http://127.0.0.1:8108}
+      coverage-areas: [JP-40, JP-41, JP-42, JP-43, JP-44, JP-45, JP-46, JP-47]
+    # 지역 그래프를 넘는 도시 간 철도. 도로 없이 시간표만 넣어 양 끝을 가까운 철도역으로 바꿔 묻고,
+    # 엔진이 출발지→역, 역→목적지 구간을 지역 그래프로 붙인다.
+    otp-jp-rail:
+      <<: *otp-jp
+      priority: 30
+      base-url: ${ROUTING_OTP_JP_RAIL_URL:http://127.0.0.1:8100}
+      coverage-areas: [JP]
+      snap-to-stop-meters: 5000
+      stop-to-stop: true
+      stop-modes: [RAIL]
+    otp-kr:
+      type: otp
+      enabled: ${ROUTING_OTP_KR_ENABLED:true}
+      priority: 10
+      base-url: ${ROUTING_OTP_KR_URL:http://127.0.0.1:8110}
+      modes: [TRANSIT]
+      coverage-areas: [KR]
+      timeout: 10s
+      cache-ttl: 24h
+      no-connection-ttl: 6h
+      cache-bucket: 10m
+      snap-to-stop-meters: 2000
+      # KTDB 전국 GTFS는 교통접근성 분석용 평일 대표 시각표라 운행일·배차를 확정하지 못한다.
+      unverified-agencies: [KTDB]
+      unverified-feeds: [kr-ktdb]
+      # 열차(코레일)·고속버스 구간은 TAGO 공식 시간표와 맞으면 확정 시각으로 올린다.
+      verifiers: [tago]
+      official-data: false
+      attribution: "KTDB 전국 대중교통 GTFS, Korail GTFS (mkuran.pl), © OpenStreetMap contributors"
+      timezone: Asia/Seoul
+    otp-de-berlin:
+      type: otp
+      enabled: ${ROUTING_OTP_BERLIN_ENABLED:true}
+      priority: 10
+      base-url: ${ROUTING_OTP_BERLIN_URL:http://127.0.0.1:8092}
+      modes: [TRANSIT]
+      coverage-areas: [DE-BE]
+      timeout: 10s
+      cache-ttl: 24h
+      no-connection-ttl: 6h
+      cache-bucket: 10m
+      snap-to-stop-meters: 2000
+      official-data: true
+      attribution: "VBB GTFS, © OpenStreetMap contributors"
+      timezone: Europe/Berlin
+    # 제3국 파이프라인 검증용. 커뮤니티 GTFS(SMRT·SBS 버스·MRT)라 공식 데이터로 표시하지 않는다.
+    # mdb-1076은 2012~2099년 형식상 달력이라(피드 목록 calendarSuspect) 운행일을 확정하지 않는다.
+    otp-sg:
+      type: otp
+      enabled: ${ROUTING_OTP_SG_ENABLED:true}
+      priority: 10
+      base-url: ${ROUTING_OTP_SG_URL:http://127.0.0.1:8120}
+      modes: [TRANSIT]
+      coverage-areas: [SG]
+      timeout: 10s
+      cache-ttl: 24h
+      no-connection-ttl: 6h
+      cache-bucket: 10m
+      snap-to-stop-meters: 2000
+      official-data: false
+      unverified-feeds: [mdb-1076]
+      attribution: "Singapore GTFS (Mobility Database mdb-1076), © OpenStreetMap contributors"
+      timezone: Asia/Singapore
+    tfl:
+      type: tfl
+      enabled: ${ROUTING_TFL_ENABLED:true}
+      priority: 20
+      base-url: https://api.tfl.gov.uk
+      api-key: ${TFL_APP_KEY:}
+      modes: [TRANSIT]
+      coverage:
+        - { min-lat: 51.28, min-lng: -0.52, max-lat: 51.70, max-lng: 0.34 }
+      timeout: 10s
+      # 키 없는 호출은 분당 50회다.
+      per-minute-limit: 45
+      external: true
+      cache-ttl: 30m
+      no-connection-ttl: 30m
+      cache-bucket: 5m
+      official-data: true
+      attribution: "Transport for London"
+      timezone: Europe/London
+    kakao-car:
+      type: kakao-car
+      enabled: ${ROUTING_KAKAO_CAR_ENABLED:true}
+      priority: 20
+      base-url: https://apis-navi.kakaomobility.com
+      api-key: ${KAKAO_MOBILITY_REST_KEY:${KAKAO_CLIENT_ID:}}
+      modes: [CAR, TAXI]
+      coverage-areas: [KR]
+      timeout: 5s
+      # 무료 한도(하루 10,000회) 안에서 멈춘다.
+      daily-limit: 9000
+      per-minute-limit: 120
+      external: true
+      cache-ttl: 6h
+      no-connection-ttl: 6h
+      cache-bucket: 60m
+      official-data: false
+      attribution: "카카오모빌리티"
+      timezone: Asia/Seoul
+    # OSM 도로·보행망. 로컬은 한국+일본 타일, 운영은 같은 설정에 전 세계 타일을 쓴다.
+    valhalla:
+      type: valhalla
+      enabled: ${ROUTING_VALHALLA_ENABLED:true}
+      priority: 50
+      base-url: ${ROUTING_VALHALLA_URL:http://127.0.0.1:8002}
+      modes: [WALK, BICYCLE, CAR, TAXI]
+      coverage:
+        - { min-lat: -90, min-lng: -180, max-lat: 90, max-lng: 180 }
+      timeout: 10s
+      cache-ttl: 24h
+      no-connection-ttl: 24h
+      cache-bucket: 60m
+      official-data: false
+      attribution: "© OpenStreetMap contributors"
+      # 시간대를 두지 않아 질의 시간대(여행지 현지)로 출발 시각을 넘긴다.
+    # 자체 Valhalla 타일이 없는 지역의 도로 경로. 무료 Standard 플랜은 상업 이용이 허용되지 않는다.
+    ors:
+      type: ors
+      enabled: ${ROUTING_ORS_ENABLED:true}
+      priority: 60
+      base-url: https://api.heigit.org
+      api-key: ${ORS_API_KEY:}
+      modes: [WALK, BICYCLE, CAR]
+      coverage:
+        - { min-lat: -90, min-lng: -180, max-lat: 90, max-lng: 180 }
+      timeout: 10s
+      # 무료 한도는 directions 하루 2,000회·분당 40회다.
+      daily-limit: 1900
+      per-minute-limit: 38
+      cache-ttl: 24h
+      no-connection-ttl: 24h
+      cache-bucket: 60m
+      commercial-use: false
+      external: true
+      official-data: false
+      attribution: "© openrouteservice.org by HeiGIT, © OpenStreetMap contributors"
+      timezone: Europe/Berlin
+  # 지역별 택시 거리 요금(운수국 공시·시도 고시). 시간 요금·할증은 넣지 않은 추정이다.
+  taxi-fares-file: routing/taxi-fares.csv
+  taxi-anchor-max-km: 40
+  tago:
+    enabled: ${ROUTING_TAGO_ENABLED:true}
+    base-url: https://apis.data.go.kr
+    service-key: ${TAGO_SERVICE_KEY:${TOUR_API_SERVICE_KEY:}}
+    timeout: 8s
+    # 개발계정 하루 10,000회 안에서 멈춘다.
+    daily-limit: 9000

@@ -1,0 +1,1089 @@
+{
+  "_comment": "지역 OTP 그래프 정의. bbox는 피드 자르기와 application-routing.yml coverage에 쓰고, 지역끼리 겹쳐도 된다. osm이 null이면 도로 없이 시간표만 넣은 역→역 그래프다. mdb는 Mobility Database에서 subdivisions(현·주) 안 운행 중 피드를 더한다.",
+  "regions": {
+    "jp-hokkaido": {
+      "osm": "asia/japan/hokkaido",
+      "timezone": "Asia/Tokyo",
+      "port": 8101,
+      "heap": "4G",
+      "buildHeap": "8G",
+      "feeds": [
+        "jp-rail"
+      ],
+      "mdb": "JP",
+      "bbox": [
+        41.3,
+        139.3,
+        45.6,
+        146.0
+      ],
+      "subdivisions": [
+        "Hokkaido"
+      ],
+      "odpt": true,
+      "atlas": "jp",
+      "smoke": [
+        {
+          "name": "札幌→小樽",
+          "from": [
+            43.0687,
+            141.3508
+          ],
+          "to": [
+            43.1977,
+            140.9937
+          ],
+          "time": "10:00"
+        }
+      ]
+    },
+    "jp-tohoku": {
+      "osm": "asia/japan/tohoku",
+      "timezone": "Asia/Tokyo",
+      "port": 8102,
+      "heap": "4G",
+      "buildHeap": "8G",
+      "feeds": [
+        "jp-rail"
+      ],
+      "mdb": "JP",
+      "bbox": [
+        36.7,
+        139.1,
+        41.6,
+        142.1
+      ],
+      "subdivisions": [
+        "Aomori",
+        "Iwate",
+        "Miyagi",
+        "Akita",
+        "Yamagata",
+        "Fukushima"
+      ],
+      "odpt": true,
+      "atlas": "jp",
+      "smoke": [
+        {
+          "name": "仙台→松島海岸",
+          "from": [
+            38.2601,
+            140.8822
+          ],
+          "to": [
+            38.3678,
+            141.0612
+          ],
+          "time": "10:00"
+        }
+      ]
+    },
+    "jp-kanto": {
+      "osm": "asia/japan/kanto",
+      "timezone": "Asia/Tokyo",
+      "port": 8103,
+      "heap": "8G",
+      "buildHeap": "14G",
+      "feeds": [
+        "jp-rail"
+      ],
+      "mdb": "JP",
+      "bbox": [
+        34.8,
+        138.3,
+        37.2,
+        140.9
+      ],
+      "subdivisions": [
+        "Ibaraki",
+        "Tochigi",
+        "Gunma",
+        "Saitama",
+        "Chiba",
+        "Tokyo",
+        "Kanagawa"
+      ],
+      "odpt": true,
+      "atlas": "jp",
+      "smoke": [
+        {
+          "name": "新宿→東京",
+          "from": [
+            35.6896,
+            139.7006
+          ],
+          "to": [
+            35.6812,
+            139.7671
+          ],
+          "time": "10:00"
+        }
+      ]
+    },
+    "jp-chubu": {
+      "osm": "asia/japan/chubu",
+      "timezone": "Asia/Tokyo",
+      "port": 8104,
+      "heap": "6G",
+      "buildHeap": "12G",
+      "feeds": [
+        "jp-rail"
+      ],
+      "mdb": "JP",
+      "bbox": [
+        34.5,
+        135.4,
+        38.6,
+        140.0
+      ],
+      "subdivisions": [
+        "Niigata",
+        "Toyama",
+        "Ishikawa",
+        "Fukui",
+        "Yamanashi",
+        "Nagano",
+        "Gifu",
+        "Shizuoka",
+        "Aichi"
+      ],
+      "odpt": true,
+      "atlas": "jp",
+      "smoke": [
+        {
+          "name": "名古屋→栄",
+          "from": [
+            35.1709,
+            136.8815
+          ],
+          "to": [
+            35.1706,
+            136.9086
+          ],
+          "time": "10:00"
+        }
+      ]
+    },
+    "jp-kansai": {
+      "osm": "asia/japan/kansai",
+      "timezone": "Asia/Tokyo",
+      "port": 8105,
+      "heap": "6G",
+      "buildHeap": "12G",
+      "feeds": [
+        "jp-rail"
+      ],
+      "mdb": "JP",
+      "bbox": [
+        33.4,
+        134.2,
+        35.8,
+        136.9
+      ],
+      "subdivisions": [
+        "Mie",
+        "Shiga",
+        "Kyoto",
+        "Osaka",
+        "Hyogo",
+        "Nara",
+        "Wakayama"
+      ],
+      "odpt": true,
+      "atlas": "jp",
+      "smoke": [
+        {
+          "name": "梅田→なんば",
+          "from": [
+            34.7025,
+            135.4959
+          ],
+          "to": [
+            34.6664,
+            135.501
+          ],
+          "time": "10:00"
+        }
+      ]
+    },
+    "jp-chugoku": {
+      "osm": "asia/japan/chugoku",
+      "timezone": "Asia/Tokyo",
+      "port": 8106,
+      "heap": "4G",
+      "buildHeap": "8G",
+      "feeds": [
+        "jp-rail"
+      ],
+      "mdb": "JP",
+      "bbox": [
+        33.7,
+        130.8,
+        35.7,
+        134.5
+      ],
+      "subdivisions": [
+        "Tottori",
+        "Shimane",
+        "Okayama",
+        "Hiroshima",
+        "Yamaguchi"
+      ],
+      "odpt": true,
+      "atlas": "jp",
+      "smoke": [
+        {
+          "name": "広島→宮島口",
+          "from": [
+            34.3972,
+            132.4757
+          ],
+          "to": [
+            34.3121,
+            132.3036
+          ],
+          "time": "10:00"
+        }
+      ]
+    },
+    "jp-shikoku": {
+      "osm": "asia/japan/shikoku",
+      "timezone": "Asia/Tokyo",
+      "port": 8107,
+      "heap": "3G",
+      "buildHeap": "6G",
+      "feeds": [
+        "jp-rail"
+      ],
+      "mdb": "JP",
+      "bbox": [
+        32.7,
+        132.0,
+        34.5,
+        134.9
+      ],
+      "subdivisions": [
+        "Tokushima",
+        "Kagawa",
+        "Ehime",
+        "Kochi"
+      ],
+      "odpt": true,
+      "atlas": "jp",
+      "smoke": [
+        {
+          "name": "高松→丸亀",
+          "from": [
+            34.3509,
+            134.0469
+          ],
+          "to": [
+            34.29,
+            133.798
+          ],
+          "time": "10:00"
+        }
+      ]
+    },
+    "jp-kyushu": {
+      "osm": "asia/japan/kyushu",
+      "timezone": "Asia/Tokyo",
+      "port": 8108,
+      "heap": "4G",
+      "buildHeap": "8G",
+      "feeds": [
+        "jp-rail"
+      ],
+      "mdb": "JP",
+      "bbox": [
+        24.0,
+        122.9,
+        34.8,
+        132.1
+      ],
+      "subdivisions": [
+        "Fukuoka",
+        "Saga",
+        "Nagasaki",
+        "Kumamoto",
+        "Oita",
+        "Miyazaki",
+        "Kagoshima",
+        "Okinawa"
+      ],
+      "odpt": true,
+      "atlas": "jp",
+      "smoke": [
+        {
+          "name": "博多→天神",
+          "from": [
+            33.5902,
+            130.4207
+          ],
+          "to": [
+            33.5913,
+            130.3991
+          ],
+          "time": "10:00"
+        }
+      ]
+    },
+    "jp-rail": {
+      "osm": null,
+      "bbox": [
+        24.0,
+        122.9,
+        45.6,
+        146.0
+      ],
+      "timezone": "Asia/Tokyo",
+      "port": 8100,
+      "heap": "6G",
+      "buildHeap": "12G",
+      "feeds": [
+        "jp-rail"
+      ],
+      "smoke": [
+        {
+          "name": "東京→新大阪",
+          "fromStop": "jp-rail:1748",
+          "toStop": "jp-rail:2815",
+          "time": "09:00"
+        }
+      ]
+    },
+    "kr": {
+      "osm": "asia/south-korea",
+      "timezone": "Asia/Seoul",
+      "port": 8110,
+      "heap": "12G",
+      "buildHeap": "18G",
+      "feeds": [
+        "kr-ktdb",
+        "kr-korail"
+      ],
+      "bbox": [
+        33.0,
+        124.5,
+        38.7,
+        132.0
+      ],
+      "smoke": [
+        {
+          "name": "수서→부산(SR 운행 열차)",
+          "fromStop": "kr-korail:suseo",
+          "toStop": "kr-korail:busan",
+          "time": "09:00"
+        },
+        {
+          "name": "서울역→강남역",
+          "from": [
+            37.5547,
+            126.9707
+          ],
+          "to": [
+            37.4979,
+            127.0276
+          ],
+          "time": "10:00"
+        }
+      ]
+    },
+    "de-berlin": {
+      "osm": "europe/germany/berlin",
+      "timezone": "Europe/Berlin",
+      "port": 8092,
+      "heap": "5G",
+      "buildHeap": "8G",
+      "feeds": [
+        "de-vbb"
+      ],
+      "bbox": [
+        52.33,
+        13.08,
+        52.68,
+        13.77
+      ],
+      "smoke": [
+        {
+          "name": "Alexanderplatz→Hbf",
+          "from": [
+            52.5219,
+            13.4132
+          ],
+          "to": [
+            52.5251,
+            13.3694
+          ],
+          "time": "10:00"
+        }
+      ]
+    },
+    "sg": {
+      "osmUrl": "https://download.bbbike.org/osm/bbbike/Singapore/Singapore.osm.pbf",
+      "bbox": [
+        1.15,
+        103.55,
+        1.48,
+        104.1
+      ],
+      "timezone": "Asia/Singapore",
+      "port": 8120,
+      "heap": "3G",
+      "buildHeap": "6G",
+      "mdb": "SG",
+      "subdivisions": [],
+      "smoke": [
+        {
+          "name": "Orchard→Marina Bay Sands",
+          "from": [
+            1.304,
+            103.8318
+          ],
+          "to": [
+            1.2834,
+            103.8607
+          ],
+          "time": "10:00"
+        },
+        {
+          "name": "Changi Airport→City Hall",
+          "from": [
+            1.3592,
+            103.9894
+          ],
+          "to": [
+            1.2931,
+            103.852
+          ],
+          "time": "10:00"
+        }
+      ]
+    }
+  },
+  "feeds": {
+    "jp-rail": {
+      "url": "https://jbb.ghsq.de/gtfs/jp-jr.gtfs.zip",
+      "official": false,
+      "refreshDays": 7
+    },
+    "kr-ktdb": {
+      "official": false,
+      "_comment": "KTDB 자료신청으로만 받는다(공개 주소 없음). 판마다 비공개 저장소에 올리고 KTDB_GTFS_PATH(로컬 경로 또는 s3://)로 넣는다. 노선 종류 0 시내버스, 1 도시철도, 2 해운, 3 시외버스, 4 일반철도, 5 공항버스, 6 고속철도, 7 항공. 코레일 피드(SR 운행 SRT 포함)와 겹치는 열차는 빼고 공항철도 직통만 남긴다. 평일 하루 기준 시각표를 모든 요일에 적용한 분석용 자료라 운행일을 확정하지 못한다. 판은 기준월 약 1년 반 뒤에 나와 editionMaxAgeDays가 지나면 다음 판을 신청한다.",
+      "routeTypeMap": "0:3,2:4,3:200,4:2,5:3,6:2,7:1100",
+      "dropRouteTypes": "",
+      "dropRouteNameRegex": "^\\[(고속|일반)\\](?!서울공-인천국)",
+      "pathEnv": "KTDB_GTFS_PATH",
+      "representativeCalendar": true,
+      "edition": "2025-03",
+      "editionMaxAgeDays": 1000,
+      "sha256": "3fc975a32da73ac3ac111025786562ac2e6c654ad595a58ec7ae4609327444a8",
+      "basis": "2025-03 평일 1일 대표 시각표(KTDB 자료신청)"
+    },
+    "kr-korail": {
+      "url": "https://mkuran.pl/gtfs/korail.zip",
+      "official": false,
+      "refreshDays": 7,
+      "realtime": {
+        "url": "https://mkuran.pl/gtfs/korail.pb",
+        "frequency": "30s"
+      }
+    },
+    "de-vbb": {
+      "url": "https://unternehmen.vbb.de/fileadmin/user_upload/VBB/Dokumente/API-Datensaetze/gtfs-mastscharf/GTFS.zip",
+      "official": true,
+      "refreshDays": 7
+    }
+  },
+  "odpt": {
+    "_comment": "ODPT 카탈로그(ckan.odpt.org)의 GTFS. token이 true면 ODPT_ACCESS_TOKEN 환경변수가 있을 때만 받는다. 지역은 정류장 중심 위치로 정한다.",
+    "feeds": [
+      {
+        "id": "odpt-ckan-a_line_ferry_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/ALineFerry/AllLines.zip?date=20250801",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-akaiwa_city_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/AkaiwaCity/AllLines.zip?date=20261201",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-akiha_bus_service_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/AkihaBusService/AllLines.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-akita_city_akita_city_bus",
+        "url": "https://api.odpt.org/api/v4/files/odpt/AkitaCity/AkitaCityBus.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-aomori_city_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/AomoriCity/AllLines.zip?date=20261201",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-b_bus_gtfs_jp-city_joetsu_niigata",
+        "url": "https://api.odpt.org/api/v4/files/JoetsuCity/data/data-1.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-b_bus_gtfs_jp-city_mitoyo_kagawa",
+        "url": "https://api-public.odpt.org/api/v4/files/MitoyoCity/data/data-1.zip",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-b_bus_gtfs_jp-toei",
+        "url": "https://api-public.odpt.org/api/v4/files/Toei/data/ToeiBus-GTFS.zip",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-b_bus_gtfs_jp-town_shodoshima_kagawa",
+        "url": "https://api-public.odpt.org/api/v4/files/ShodoshimaTown/data/gtfs-町営バス三都西線2022v01.zip",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-bingo_shosen_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/BingoShosen/AllLines.zip?date=20251007",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-daishinto_radiantcity_yokohama",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/Daishinto/Radiantcity_Yokohama.zip?date=20260301",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-f_ferry_gtfs-fujikyumarineresort",
+        "url": "https://api.odpt.org/api/v4/files/FujikyuMarineResort/data/output.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-f_ferry_gtfs-haboroenkaiferry",
+        "url": "https://api.odpt.org/api/v4/files/HaboroEnkaiFerry/data/GTFS.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-f_ferry_gtfs-nippokisen",
+        "url": "https://api.odpt.org/api/v4/files/NippoKisen/data/Nippou_Kisen.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-f_ferry_gtfs-sakataferryoffice",
+        "url": "https://api.odpt.org/api/v4/files/SakataFerryOffice/data/output-3.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-f_ferry_gtfs-shimizucruise",
+        "url": "https://api.odpt.org/api/v4/files/ShimizuCruise/data/output.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-gunma_bus_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/GunmaBus/AllLines.zip?date=20261016",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-gunmachuo_bus_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/GunmachuoBus/AllLines.zip?date=20260430",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-hakodate_city_alllines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/HakodateCity/Alllines.zip?date=20260815",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-hankyu_ferry_schedul_hankyu",
+        "url": "https://api.odpt.org/api/v4/files/odpt/HankyuFerry/schedul_hankyu.zip?date=20270201",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-higashi_murayama_city_alllines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/HigashiMurayamaCity/Alllines.zip?date=20260401",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-higashiyamato_city_all_lines_cc0",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/HigashiyamatoCity/AllLines_CC0.zip?date=20261118",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-higashiyamato_city_all_lines_ccby4",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/HigashiyamatoCity/AllLines_CCBY4.zip?date=20261118",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-higashiyamato_city_all_lines_odpt",
+        "url": "https://api.odpt.org/api/v4/files/odpt/HigashiyamatoCity/AllLines_ODPT.zip?date=20261118",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-himeshima_vill_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/HimeshimaVill/AllLines.zip?date=20250814",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-hitachi_automobile_transportation_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/HitachiAutomobileTransportation/AllLines.zip?date=20260401",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-hitachi_automobile_transportation_chiyoda_alllines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/HitachiAutomobileTransportation/Chiyoda_ALLLINES.zip?date=20260601",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-hitachi_automobile_transportation_kita_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/HitachiAutomobileTransportation/KitaAllLines.zip?date=20251220",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-hokkaido_takushoku_bus_takusyoku_highway_line",
+        "url": "https://api.odpt.org/api/v4/files/odpt/HokkaidoTakushokuBus/Takusyoku_highway_line.zip?date=20261118",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-hokkaido_takushoku_bus_takusyoku_regular_line",
+        "url": "https://api.odpt.org/api/v4/files/odpt/HokkaidoTakushokuBus/Takusyoku_regular_line.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-inagi_city_ibas_a_course",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/InagiCity/ibas_A_course.zip?date=20240219",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-itsukishima_kisen_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/ItsukishimaKisen/AllLines.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-iyotetsu_bus_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/IyotetsuBus/AllLines.zip?date=20261025",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-izuhakone_bus_izhb",
+        "url": "https://api.odpt.org/api/v4/files/odpt/IzuhakoneBus/IZHB.zip?date=20261201",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-joshin_hire_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/JoshinHire/AllLines.zip?date=20260819",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-joshin_kanko_bus_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/JoshinKankoBus/AllLines.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-juo_bus_isesaki_honjo_line",
+        "url": "https://api.odpt.org/api/v4/files/odpt/JuoBus/Isesaki_Honjo_Line.zip?date=20261025",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-kagoshima_city_maritime_bureau_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KagoshimaCityMaritimeBureau/AllLines.zip?date=20251010",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kan_etsu_transportation_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/Kan_etsuTransportation/AllLines.zip?date=20261216",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kanto_bus_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/KantoBus/AllLines.zip?date=20261201",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-kawasaki_tsurumi_rinko_bus_allrinko",
+        "url": "https://api.odpt.org/api/v4/files/odpt/KawasakiTsurumiRinkoBus/allrinko.zip?date=20261101",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-keifuku_bus_keifuku_rosen",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KeifukuBus/keifuku_rosen.zip?date=20261201",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-keio_bus_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/KeioBus/AllLines.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-keisei_transit_bus_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KeiseiTransitBus/AllLines.zip?date=20260401",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kenko_hokubu_kotsu_localbus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KenkoHokubuKotsu/Localbus.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kiyose_city_kiyo_bus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KiyoseCity/KiyoBus.zip?date=20260401",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kochi_koryo_kotsu_localbus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KochiKoryoKotsu/Localbus.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kochi_seinan_traffic_express",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KochiSeinanTraffic/Express.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kochi_seinan_traffic_localbus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KochiSeinanTraffic/Localbus.zip?date=20261101",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kochi_seinan_traffic_loopbus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KochiSeinanTraffic/Loopbus.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kochi_seinan_traffic_riverbus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KochiSeinanTraffic/Riverbus.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kochi_seinan_traffic_shimaashibus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KochiSeinanTraffic/Shimaashibus.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kokubunji_city_kokubunji_city_bunbus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KokubunjiCity/kokubunji_city_bunbus.zip?date=20260105",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kunitachi_city_kunitachi_city_aoyagikko",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KunitachiCity/kunitachi_city_aoyagikko.zip?date=20260113",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kunitachi_city_kunitachi_city_kunikko",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/KunitachiCity/kunitachi_city_kunikko.zip?date=20260901",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-kyoto_bus_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/KyotoBus/AllLines.zip?date=20261125",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-kyoto_bus_all_lines_anotherversion",
+        "url": "https://api.odpt.org/api/v4/files/odpt/KyotoBus/AllLinesAnotherversion.zip?date=20261125",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-kyoto_municipal_transportation_kyoto_city_bus_gtfs",
+        "url": "https://api.odpt.org/api/v4/files/odpt/KyotoMunicipalTransportation/Kyoto_City_Bus_GTFS.zip?date=20261110",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-kyoto_municipal_transportation_kyoto_city_subway_gtfs",
+        "url": "https://api.odpt.org/api/v4/files/odpt/KyotoMunicipalTransportation/Kyoto_City_Subway_GTFS.zip?date=20260703",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-kyusho_ferry_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/KyushoFerry/AllLines.zip?date=20251005",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-machida_city_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/MachidaCity/AllLines.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-marubun_kisen_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/MarubunKisen/AllLines.zip?date=20251005",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-matsue_city_traffic_office_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/MatsueCityTrafficOffice/AllLines.zip?date=20261124",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-meimon_taiyo_ferry_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/MeimonTaiyoFerry/AllLines.zip?date=20270101",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-midori_city_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/MidoriCity/AllLines.zip?date=20260630",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-miyake_vill_all_line",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/MiyakeVill/AllLine.zip?date=20250929",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-mizuho_town_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/MizuhoTown/AllLines.zip?date=20241001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-nagai_transportation_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/NagaiTransportation/AllLines.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-nagai_transportation_tamarin",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/NagaiTransportation/Tamarin.zip?date=20240401",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-nagoya_housing_city_planning_bureau_nagoya_srt_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/NagoyaHousingCityPlanningBureau/NagoyaSRT_AllLines.zip?date=20260911",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-nippon_chuo_bus_maebashi_area",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/NipponChuoBus/Maebashi_Area.zip?date=20260401",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-nippon_chuo_bus_okutano_area",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/NipponChuoBus/Okutano_Area.zip?date=20231101",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-nishi_tokyo_bus_nt_bus",
+        "url": "https://api.odpt.org/api/v4/files/odpt/NishiTokyoBus/NTBus.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-nishitokyo_city_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/NishitokyoCity/AllLines.zip?date=20260401",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-odakyu_bus_aii_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/OdakyuBus/AIILines.zip?date=20260924",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-okushiri_island_ferry_okushiri_esashi_ferry_route",
+        "url": "https://api.odpt.org/api/v4/files/odpt/OkushiriIslandFerry/Okushiri_Esashi_Ferry_Route.zip?date=20260101",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-orange_ferry_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/OrangeFerry/AllLines.zip?date=20261101",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-oshima_bus_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/OshimaBus/AllLines.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-otone_kotsu_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/OtoneKotsu/AllLines.zip?date=20260409",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-sanwa_merchant_vessel_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/SanwaMerchantVessel/AllLines.zip?date=20260105",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-seibu_bus__b-bus_gtfs",
+        "url": "https://api.odpt.org/api/v4/files/SeibuBus/data/SeibuBus-GTFS.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-sentetsu_bus_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/SentetsuBus/AllLines.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-shimanto_kotsu_feederbus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/ShimantoKotsu/Feederbus.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-shimanto_kotsu_localbus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/ShimantoKotsu/Localbus.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-shimoden_shimoden_gtfs_static",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/Shimoden/Shimoden_GTFS_Static.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-shodoshima_olive_bus_alllines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/ShodoshimaOliveBus/alllines.zip?date=20261013",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-suonada_ferry_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/SuonadaFerry/AllLines.zip?date=20260723",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-susaki_city_citybus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/SusakiCity/Citybus.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-susaki_city_cityferry",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/SusakiCity/Cityferry.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-tachikawa_city_kururin_bus_alllines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/TachikawaCity/kururin_bus_alllines.zip?date=20260401",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-takasaki_city_yosiibus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/TakasakiCity/yosiibus.zip?date=20260421",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-taneyaku_kousokusen_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/TaneyakuKousokusen/AllLines.zip?date=20250901",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-tokai_kisen_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/TokaiKisen/AllLines.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-tokyo_chuo_city_alldata",
+        "url": "https://api.odpt.org/api/v4/files/odpt/TokyoChuoCity/Alldata.zip?date=20260712",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-tokyo_cruise_ship_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/TokyoCruiseShip/AllLines.zip?date=20250402",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-tokyo_suginami_city_green_slow_mobility",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/TokyoSuginamiCity/GreenSlowMobility.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-tokyo_taito_city_megurin_ccby40",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/TokyoTaitoCity/megurinCCBY40.zip?date=20261102",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-tokyu_bus_tokyubus_community_meguro_city",
+        "url": "https://api.odpt.org/api/v4/files/odpt/TokyuBus/tokyubus_community_MeguroCity.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-tokyu_bus_tokyubus_community_ota_city",
+        "url": "https://api.odpt.org/api/v4/files/odpt/TokyuBus/tokyubus_community_OtaCity.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-tokyu_bus_tokyubus_community_shinagawa_city",
+        "url": "https://api.odpt.org/api/v4/files/odpt/TokyuBus/tokyubus_community_ShinagawaCity.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-tosa_city_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/TosaCity/AllLines.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-tosaden_traffic_airportbus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/TosadenTraffic/Airportbus.zip?date=20261201",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-tosaden_traffic_regularbus",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/TosadenTraffic/Regularbus.zip?date=20261201",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-tosaden_traffic_streetcar",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/TosadenTraffic/Streetcar.zip?date=20260801",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-train-mir",
+        "url": "https://api.odpt.org/api/v4/files/MIR/data/MIR-Train-GTFS.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-train-tamamonorail",
+        "url": "https://api.odpt.org/api/v4/files/TamaMonorail/data/TamaMonorail-Train-GTFS.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-train-toei",
+        "url": "https://api-public.odpt.org/api/v4/files/Toei/data/Toei-Train-GTFS.zip",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-train-tokyometro",
+        "url": "https://api.odpt.org/api/v4/files/TokyoMetro/data/TokyoMetro-Train-GTFS.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-train-twr",
+        "url": "https://api.odpt.org/api/v4/files/TWR/data/TWR-Train-GTFS.zip",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-transportation_bureau_city_of_kawasaki_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/TransportationBureau_CityOfKawasaki/AllLines.zip?date=20261101",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-tsukuba_kankou_kotsu_co_co_bus_nogawa",
+        "url": "https://api.odpt.org/api/v4/files/odpt/TsukubaKankouKotsu/CoCoBusNogawa.zip?date=20260401",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-uno_bus_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/UnoBus/AllLines.zip?date=20261116",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-urban_development_aomori_city_all_lines",
+        "url": "https://api-public.odpt.org/api/v4/files/odpt/UrbanDevelopment_AomoriCity/AllLines.zip?date=20261001",
+        "token": false
+      },
+      {
+        "id": "odpt-ckan-uwajima_unyu_all_lines",
+        "url": "https://api.odpt.org/api/v4/files/odpt/UwajimaUnyu/AllLines.zip?date=20261001",
+        "token": true
+      },
+      {
+        "id": "odpt-ckan-yokohama_municipal_bus",
+        "url": "https://api.odpt.org/api/v4/files/odpt/YokohamaMunicipal/Bus.zip?date=20261101",
+        "token": true
+      }
+    ]
+  },
+  "atlas": {
+    "_comment": "Transitland Atlas(github.com/transitland/transitland-atlas) 후보를 고르는 나라별 패턴. 피드 id·주소·운영사 이름에 맞춘다.",
+    "jp": {
+      "country": "JP",
+      "match": "~jp$|~jp |\\.jp/|\\.jp$|ottop|buskita|[\\u3040-\\u30ff]"
+    }
+  },
+  "sourceHostAliases": {
+    "api-public.odpt.org": "api.odpt.org"
+  },
+  "catalogRefreshDays": 7
+}

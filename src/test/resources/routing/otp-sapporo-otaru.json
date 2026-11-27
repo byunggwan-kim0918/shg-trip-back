@@ -1,0 +1,103 @@
+{
+ "data": {
+  "planConnection": {
+   "routingErrors": [],
+   "edges": [
+    {
+     "node": {
+      "start": "2026-11-26T09:08:48+09:00",
+      "end": "2026-11-26T09:56:14+09:00",
+      "duration": 2846,
+      "numberOfTransfers": 0,
+      "legs": [
+       {
+        "mode": "WALK",
+        "duration": 72.0,
+        "distance": 90.9,
+        "realTime": false,
+        "transitLeg": false,
+        "start": {
+         "scheduledTime": "2026-11-26T09:08:48+09:00",
+         "estimated": null
+        },
+        "end": {
+         "scheduledTime": "2026-11-26T09:10:00+09:00",
+         "estimated": null
+        },
+        "from": {
+         "name": "Origin",
+         "lat": 43.0687,
+         "lon": 141.3508
+        },
+        "to": {
+         "name": "札幌",
+         "lat": 43.0686365,
+         "lon": 141.3509218
+        },
+        "route": null
+       },
+       {
+        "mode": "RAIL",
+        "duration": 2100.0,
+        "distance": 32812.56,
+        "realTime": false,
+        "transitLeg": true,
+        "start": {
+         "scheduledTime": "2026-11-26T09:10:00+09:00",
+         "estimated": null
+        },
+        "end": {
+         "scheduledTime": "2026-11-26T09:45:00+09:00",
+         "estimated": null
+        },
+        "from": {
+         "name": "札幌",
+         "lat": 43.0686365,
+         "lon": 141.3509218
+        },
+        "to": {
+         "name": "小樽",
+         "lat": 43.1975759,
+         "lon": 140.9933746
+        },
+        "route": {
+         "shortName": "エアポート27号",
+         "longName": null,
+         "agency": {
+          "name": "JR"
+         }
+        }
+       },
+       {
+        "mode": "WALK",
+        "duration": 674.0,
+        "distance": 782.76,
+        "realTime": false,
+        "transitLeg": false,
+        "start": {
+         "scheduledTime": "2026-11-26T09:45:00+09:00",
+         "estimated": null
+        },
+        "end": {
+         "scheduledTime": "2026-11-26T09:56:14+09:00",
+         "estimated": null
+        },
+        "from": {
+         "name": "小樽",
+         "lat": 43.1975759,
+         "lon": 140.9933746
+        },
+        "to": {
+         "name": "Destination",
+         "lat": 43.199,
+         "lon": 141.002
+        },
+        "route": null
+       }
+      ]
+     }
+    }
+   ]
+  }
+ }
+}
