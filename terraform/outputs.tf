@@ -52,3 +52,8 @@ output "myshgtrip_cert_validation" {
   description = "Cloudflare에 DNS 전용으로 추가할 ACM 검증 CNAME"
   value       = [for o in aws_acm_certificate.myshgtrip.domain_validation_options : { name = o.resource_record_name, value = o.resource_record_value }]
 }
+
+output "nat_public_ips" {
+  description = "프라이빗 서브넷의 외부 출구 고정 IP"
+  value       = { for k, eip in aws_eip.nat : k => eip.public_ip }
+}
