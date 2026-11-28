@@ -57,6 +57,8 @@ class ItineraryServiceTest {
     @Mock private EntityManager entityManager;
     @Mock private com.shg.trip.shgtrip.domain.planning.service.QualityGate qualityGate;
     @Mock private com.shg.trip.shgtrip.domain.place.enrich.PromotedPlaceEnricher placeEnricher;
+    @Mock private com.shg.trip.shgtrip.domain.planning.service.TripRoutes tripRoutes;
+    @Mock private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
     @InjectMocks private ItineraryService itineraryService;
 
@@ -69,6 +71,11 @@ class ItineraryServiceTest {
     void setUp() {
         // @RequiredArgsConstructor로 생성자 주입되면 @InjectMocks가 @PersistenceContext 필드를 건드리지 않으므로 직접 주입
         ReflectionTestUtils.setField(itineraryService, "entityManager", entityManager);
+        org.mockito.Mockito.lenient().when(tripRoutes.editSession(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(com.shg.trip.shgtrip.domain.planning.service.TripRoutes.estimatesOnly("KR"));
+        org.mockito.Mockito.lenient().when(transactionTemplate.execute(org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> inv.<org.springframework.transaction.support.TransactionCallback<?>>getArgument(0)
+                        .doInTransaction(null));
 
         // Day1: A(0) B(1) C(2), Day2: D(3) E(4), Day3: F(5) 단일
         List<ItineraryStep> steps = new ArrayList<>(List.of(
@@ -172,6 +179,161 @@ class ItineraryServiceTest {
         assertThat(m.get(12L).startTime()).isEqualTo("09:00"); // slot0 (원래 C는 11:00)
         assertThat(m.get(10L).startTime()).isEqualTo("10:00"); // slot1 (원래 A는 09:00)
         assertThat(m.get(11L).startTime()).isEqualTo("11:00"); // slot2 (원래 B는 10:00)
+    }
+
+    private static com.shg.trip.shgtrip.domain.planning.dto.TransportRoute checkedRoute(long fromPlaceId,
+                                                                                    long toPlaceId, String departAt) {
+        return new com.shg.trip.shgtrip.domain.planning.dto.TransportRoute("GTFS_SCHEDULE", "GTFS_SCHEDULE", "FOUND",
+                "otp-kr", "2026-11-27T18:01:47", fromPlaceId, toPlaceId, departAt, null, 4, 0, List.of(),
+                null, "2026-11-28T00:00:00Z", null, null);
+    }
+
+    @Test
+    @DisplayName("스텝을 지워도 앞 장소·도착 장소·떠나는 시각이 그대로인 구간은 확인한 경로를 그대로 둔다")
+    void keepsCheckedLegWhenPairAndTimeUnchanged() {
+        mockFind();
+        ItineraryStep b = itinerary.getSteps().stream().filter(x -> x.getId() == 11L).findFirst().orElseThrow();
+        b.updateTransportation("BUS", 33, BigDecimal.valueOf(4.2), BigDecimal.valueOf(1550),
+                checkedRoute(100L, 110L, "2026-08-01T10:00+09:00").toJson());
+
+        var m = byId(itineraryService.deleteStep(ITINERARY_ID, USER_ID, 12L));
+
+        assertThat(m.get(11L).transportationMode()).isEqualTo("BUS");
+        assertThat(m.get(11L).transportationDuration()).isEqualTo(33);
+        assertThat(m.get(11L).transportationRoute().provider()).isEqualTo("otp-kr");
+        assertThat(m.get(11L).travelEstimated()).isFalse();
+    }
+
+    @Test
+    @DisplayName("편집으로 바뀐 구간만 그날 그 출발 시각으로 경로를 묻는다")
+    void routesOnlyChangedLegAtItsDeparture() {
+        mockFind();
+        List<com.shg.trip.shgtrip.domain.routing.RouteQuery> asked = routeWithEngine();
+
+        var m = byId(itineraryService.deleteStep(ITINERARY_ID, USER_ID, 11L));
+
+        assertThat(asked).hasSize(1);
+        assertThat(asked.get(0).departAt().toLocalDateTime()).isEqualTo(java.time.LocalDateTime.of(2026, 8, 1, 10, 0));
+        assertThat(m.get(12L).transportationRoute().status()).isEqualTo("NOT_COVERED");
+        assertThat(m.get(12L).travelEstimated()).isTrue();
+    }
+
+    private List<com.shg.trip.shgtrip.domain.routing.RouteQuery> routeWithEngine() {
+        return routeWithEngine(() -> {});
+    }
+
+    /** @param duringRouting 경로를 묻는 동안 다른 편집이 바꾸는 것(잠금 밖이라 끼어들 수 있다) */
+    private List<com.shg.trip.shgtrip.domain.routing.RouteQuery> routeWithEngine(Runnable duringRouting) {
+        var engine = org.mockito.Mockito.mock(com.shg.trip.shgtrip.domain.routing.RouteEngine.class);
+        when(engine.enabled()).thenReturn(true);
+        List<com.shg.trip.shgtrip.domain.routing.RouteQuery> asked = new ArrayList<>();
+        when(engine.route(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> {
+            asked.add(inv.getArgument(0));
+            duringRouting.run();
+            return com.shg.trip.shgtrip.domain.routing.RouteResult.of(
+                    com.shg.trip.shgtrip.domain.routing.RouteStatus.NOT_COVERED, null, "no provider");
+        });
+        var routes = new com.shg.trip.shgtrip.domain.planning.service.TripRoutes(engine, java.time.Clock.systemUTC());
+        when(tripRoutes.editSession(org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> routes.editSession("KR"));
+        when(tripRoutes.editRoutingAllowed(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        return asked;
+    }
+
+    @Test
+    @DisplayName("사용자별 편집 경로 한도를 넘으면 경로를 묻지 않고 거리 추정으로 둔다")
+    void editRoutingOverUserLimitKeepsEstimates() {
+        mockFind();
+        when(tripRoutes.editRoutingAllowed(USER_ID)).thenReturn(false);
+
+        var m = byId(itineraryService.deleteStep(ITINERARY_ID, USER_ID, 11L));
+
+        org.mockito.Mockito.verify(tripRoutes, org.mockito.Mockito.never())
+                .editSession(org.mockito.ArgumentMatchers.any());
+        assertThat(m.get(12L).travelEstimated()).isTrue();
+    }
+
+    @Test
+    @DisplayName("경로를 잠금 밖에서 묻는 사이 다른 편집이 그 구간을 바꾸면 늦게 온 결과를 적지 않는다")
+    void staleRouteIsNotWrittenOverNewerEdit() {
+        mockFind();
+        routeWithEngine(() -> stepById(10L).assignSlot(0, "09:00", "10:30"));
+
+        var m = byId(itineraryService.deleteStep(ITINERARY_ID, USER_ID, 11L));
+
+        assertThat(m.get(12L).transportationRoute()).as("앞 스텝 끝 시각이 바뀐 구간").isNull();
+        assertThat(m.get(12L).travelEstimated()).isTrue();
+    }
+
+    @Test
+    @DisplayName("경로를 묻는 사이 일정이 확정되면 경로만 적지 못하고 이미 커밋된 편집 결과를 돌려준다")
+    void editStillSucceedsWhenItineraryFinalizedDuringRouting() {
+        mockFind();
+        routeWithEngine(() -> itinerary.complete());
+
+        var m = byId(itineraryService.deleteStep(ITINERARY_ID, USER_ID, 11L));
+
+        assertThat(m).doesNotContainKey(11L);
+        assertThat(m.get(12L).transportationRoute()).isNull();
+    }
+
+    @Test
+    @DisplayName("편집은 잠금을 잡은 트랜잭션에서 끝내고 경로는 그 뒤에 묻는다")
+    void routesAfterLockedTransaction() {
+        mockFind();
+        List<String> order = new ArrayList<>();
+        org.mockito.Mockito.doAnswer(inv -> {
+            order.add("tx");
+            return inv.<org.springframework.transaction.support.TransactionCallback<?>>getArgument(0).doInTransaction(null);
+        }).when(transactionTemplate).execute(org.mockito.ArgumentMatchers.any());
+        routeWithEngine(() -> order.add("route"));
+
+        itineraryService.deleteStep(ITINERARY_ID, USER_ID, 11L);
+
+        assertThat(order).containsExactly("tx", "route", "tx");
+    }
+
+    @Test
+    @DisplayName("순서를 바꿔 앞 장소가 달라진 구간은 그 스텝에 있던 수단이 아니라 거리 추정 수단으로 묻는다")
+    void changedPairIgnoresOldMode() {
+        mockFind();
+        List<com.shg.trip.shgtrip.domain.routing.RouteQuery> asked = routeWithEngine();
+
+        itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 1, List.of(12L, 10L, 11L));
+
+        assertThat(asked).extracting(com.shg.trip.shgtrip.domain.routing.RouteQuery::mode)
+                .first().as("오름 → 제주공항 15km, 예전 수단은 도보").isEqualTo(com.shg.trip.shgtrip.domain.routing.TravelMode.CAR);
+    }
+
+    @Test
+    @DisplayName("첫 스텝이 바뀌면 도시 간 구간 값은 새 첫 스텝에 두되 예전 도착 장소를 가리키는 근거는 지운다")
+    void transferRouteDroppedWhenFirstStepChanges() {
+        mockFind();
+        ItineraryStep hotel = stepById(20L);
+        hotel.updateTransportation("TRAIN", 197, BigDecimal.valueOf(524), BigDecimal.valueOf(117_600),
+                checkedRoute(900L, 200L, "2026-08-02T09:00+09:00").toJson());
+
+        var m = byId(itineraryService.reorderSteps(ITINERARY_ID, USER_ID, 2, List.of(21L, 20L)));
+
+        assertThat(m.get(21L).transportationMode()).isEqualTo("TRAIN");
+        assertThat(m.get(21L).transportationRoute()).isNull();
+        assertThat(m.get(21L).travelEstimated()).isTrue();
+    }
+
+    @Test
+    @DisplayName("대안 장소의 위치를 몰라 구간을 잴 수 없으면 예전 이동 값은 두고 예전 장소를 가리키는 근거는 지운다")
+    void unmeasurableAlternativeDropsRoute() {
+        mockFind();
+        stepById(11L).updateTransportation("BUS", 33, BigDecimal.valueOf(4.2), BigDecimal.valueOf(1550),
+                checkedRoute(100L, 110L, "2026-08-01T10:00+09:00").toJson());
+        Place noCoords = Place.builder().id(998L).name("위치 모르는 카페").address("주소")
+                .category("관광").region("제주").country("Korea").build();
+        stepById(11L).addAlternative(com.shg.trip.shgtrip.domain.itinerary.entity.AlternativeOption.builder()
+                .id(6L).place(noCoords).optionOrder(1).estimatedCost(BigDecimal.valueOf(7000)).build());
+
+        var m = byId(itineraryService.selectAlternative(ITINERARY_ID, 11L, 6L, USER_ID));
+
+        assertThat(m.get(11L).transportationMode()).isEqualTo("BUS");
+        assertThat(m.get(11L).transportationRoute()).isNull();
     }
 
     @Test

@@ -95,7 +95,8 @@ final class DayTiming {
                 leg != null ? leg.distanceKm() : null,
                 leg != null ? leg.cost() : null,
                 null, // notes(story)는 비동기 Haiku 단계에서 채움
-                estimateCost(cand)
+                estimateCost(cand),
+                leg != null ? leg.route() : null
         );
     }
 

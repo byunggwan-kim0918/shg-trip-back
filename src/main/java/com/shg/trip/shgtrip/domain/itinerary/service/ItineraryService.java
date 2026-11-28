@@ -13,9 +13,13 @@ import com.shg.trip.shgtrip.domain.place.entity.Place;
 import com.shg.trip.shgtrip.domain.place.repository.PlaceRepository;
 import com.shg.trip.shgtrip.domain.planning.service.OpeningCheck;
 import com.shg.trip.shgtrip.domain.planning.service.PlaceCategoryConstants;
+import com.shg.trip.shgtrip.domain.planning.service.PartyCosts;
 import com.shg.trip.shgtrip.domain.planning.service.QualityGate;
 import com.shg.trip.shgtrip.domain.planning.service.SavedItineraryFacts;
 import com.shg.trip.shgtrip.domain.planning.service.ScheduleTuning;
+import com.shg.trip.shgtrip.domain.planning.service.TransportLeg;
+import com.shg.trip.shgtrip.domain.planning.service.TripRoutes;
+import com.shg.trip.shgtrip.domain.planning.dto.TransportRoute;
 import com.shg.trip.shgtrip.global.exception.BusinessException;
 import com.shg.trip.shgtrip.global.exception.ErrorCode;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
@@ -27,11 +31,14 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+import com.shg.trip.shgtrip.domain.planning.dto.PlaceCandidate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -55,6 +62,8 @@ public class ItineraryService {
     private final GenerationTraceRepository generationTraceRepository;
     private final ItineraryEditEventRepository editEventRepository;
     private final QualityGate qualityGate;
+    private final TripRoutes tripRoutes;
+    private final TransactionTemplate transactionTemplate;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -168,9 +177,15 @@ public class ItineraryService {
     /**
      * 선택 후 해당 step과 다음 step의 교통 거리를 좌표 기반으로 재계산한다.
      */
-    @Transactional
     public ItineraryResponse selectAlternative(Long itineraryId, Long stepId, Long alternativeId, Long userId) {
-        Itinerary itinerary = findEditableForUpdate(itineraryId, userId);
+        return edit(itineraryId, userId, routes -> {
+            Itinerary itinerary = routes.lock();
+            return selectAlternative(itinerary, stepId, alternativeId, userId, routes);
+        });
+    }
+
+    private ItineraryResponse selectAlternative(Itinerary itinerary, Long stepId, Long alternativeId, Long userId,
+                                                EditRoutes routes) {
 
         ItineraryStep step = itinerary.getSteps().stream()
                 .filter(s -> s.getId().equals(stepId))
@@ -191,7 +206,7 @@ public class ItineraryService {
         // DELETE가 INSERT보다 먼저 나가야 Hibernate orphanRemoval flush가 충돌하지 않는다.
         entityManager.flush();
 
-        recalculateTransportation(itinerary.getSteps(), step);
+        recalculateTransportation(routes, step);
         itinerary.recalculateEstimatedCost();
         qualityGate.reflectEdit(itinerary);
 
@@ -202,10 +217,25 @@ public class ItineraryService {
      * 대안으로 바꿨을 때의 변화. 일정은 바꾸지 않는다. 이동은 {@link #recalculateTransportation}처럼 같은 날 앞뒤 구간만
      * 다시 재고, 잴 수 없으면 저장된 값을 둔다. 안내는 편집 재판정과 같은 판정으로 만든다.
      */
-    @Transactional(readOnly = true)
     public AlternativePreviewResponse previewAlternative(Long itineraryId, Long stepId, Long alternativeId,
                                                          Long userId) {
+        EditRoutes routes = new EditRoutes(null);
+        AlternativePreviewResponse estimated = transactionTemplate.execute(s ->
+                previewAlternative(itineraryId, stepId, alternativeId, userId, routes, Map.of()));
+        if (routes.pending.isEmpty() || !tripRoutes.editRoutingAllowed(userId)) return estimated;
+        Map<Long, TransportLeg> routed = routes.routeOutsideLock();
+        return transactionTemplate.execute(s ->
+                previewAlternative(itineraryId, stepId, alternativeId, userId, new EditRoutes(null), routed));
+    }
+
+    /**
+     * @param routed 잠금 밖에서 물어 본 구간(도착 스텝 id별). 비어 있으면 거리 추정이고, 이웃이 바뀐 구간도 추정으로 둔다
+     */
+    private AlternativePreviewResponse previewAlternative(Long itineraryId, Long stepId, Long alternativeId,
+                                                          Long userId, EditRoutes routes,
+                                                          Map<Long, TransportLeg> routed) {
         Itinerary itinerary = findAndVerifyOwner(itineraryId, userId);
+        routes.itinerary = itinerary;
         verifyEditable(itinerary);
         ItineraryStep step = itinerary.getSteps().stream()
                 .filter(s -> s.getId().equals(stepId))
@@ -220,8 +250,10 @@ public class ItineraryService {
         List<ItineraryStep> sorted = byStepOrder(itinerary.getSteps());
         ItineraryStep prev = sameDayNeighbor(sorted, step, -1);
         ItineraryStep next = sameDayNeighbor(sorted, step, 1);
-        GeoUtils.TransportLeg incoming = prev == null ? null : computeLeg(prev.getPlace(), to);
-        GeoUtils.TransportLeg outgoing = next == null ? null : computeLeg(to, next.getPlace());
+        GeoUtils.TransportLeg incoming = prev == null ? null
+                : routes.preview(prev, prev.getPlace(), to, step, routed.get(step.getId()));
+        GeoUtils.TransportLeg outgoing = next == null ? null
+                : routes.preview(step, to, next.getPlace(), next, routed.get(next.getId()));
 
         QualityGate.SwapPreview quality = qualityGate.previewSwap(itinerary, step, to, incoming, next, outgoing);
         List<String> now = itinerary.getQualityNotices() == null ? List.of() : itinerary.getQualityNotices();
@@ -255,9 +287,12 @@ public class ItineraryService {
      * 시간(startTime/endTime)은 슬롯에 고정되고 장소만 재배치되며, 교통 정보는 새 순서로 재계산한다.
      * orderedStepIds가 해당 day의 전체 스텝 집합과 정확히 일치하지 않으면 거부한다.
      */
-    @Transactional
     public ItineraryResponse reorderSteps(Long itineraryId, Long userId, Integer dayNumber, List<Long> orderedStepIds) {
-        Itinerary itinerary = findEditableForUpdate(itineraryId, userId);
+        return edit(itineraryId, userId, routes -> reorderSteps(routes.lock(), userId, dayNumber, orderedStepIds, routes));
+    }
+
+    private ItineraryResponse reorderSteps(Itinerary itinerary, Long userId, Integer dayNumber,
+                                           List<Long> orderedStepIds, EditRoutes routes) {
 
         List<ItineraryStep> daySteps = itinerary.getSteps().stream()
                 .filter(s -> dayNumber.equals(s.getDayNumber()))
@@ -303,7 +338,7 @@ public class ItineraryService {
         }
         entityManager.flush();
 
-        recalculateDayTransportation(itinerary.getSteps(), dayNumber, transfer);
+        recalculateDayTransportation(routes, dayNumber, transfer);
         itinerary.recalculateEstimatedCost();
         qualityGate.reflectEdit(itinerary);
         return toResponse(itinerary);
@@ -312,9 +347,11 @@ public class ItineraryService {
     /**
      * day의 마지막 1스텝은 삭제할 수 없다. 남은 스텝 순서와 해당 day의 이동 정보는 재계산한다.
      */
-    @Transactional
     public ItineraryResponse deleteStep(Long itineraryId, Long userId, Long stepId) {
-        Itinerary itinerary = findEditableForUpdate(itineraryId, userId);
+        return edit(itineraryId, userId, routes -> deleteStep(routes.lock(), userId, stepId, routes));
+    }
+
+    private ItineraryResponse deleteStep(Itinerary itinerary, Long userId, Long stepId, EditRoutes routes) {
 
         ItineraryStep target = itinerary.getSteps().stream()
                 .filter(s -> s.getId().equals(stepId))
@@ -345,14 +382,43 @@ public class ItineraryService {
         }
         entityManager.flush();
 
-        recalculateDayTransportation(itinerary.getSteps(), dayNumber, transfer);
+        recalculateDayTransportation(routes, dayNumber, transfer);
         itinerary.recalculateEstimatedCost();
         qualityGate.reflectEdit(itinerary);
         return toResponse(itinerary);
     }
 
+    /**
+     * 편집 한 번. 잠금을 잡은 트랜잭션에서 편집하고 바뀐 구간을 거리 추정으로 적은 뒤 커밋하고, 경로 엔진이 켜져 있으면
+     * 잠금 밖에서 그 구간만 묻는다. 다시 잠가 그 사이 바뀌지 않은 구간에만 결과를 적어, 늦게 온 답이 다른 편집을 덮지 않는다.
+     */
+    private ItineraryResponse edit(Long itineraryId, Long userId,
+                                   java.util.function.Function<EditRoutes, ItineraryResponse> change) {
+        EditRoutes routes = new EditRoutes(null);
+        routes.itineraryId = itineraryId;
+        routes.userId = userId;
+        ItineraryResponse edited = transactionTemplate.execute(s -> change.apply(routes));
+        if (routes.pending.isEmpty() || !tripRoutes.editRoutingAllowed(userId)) return edited;
+        Map<Long, TransportLeg> routed = routes.routeOutsideLock();
+        if (routed.isEmpty()) return edited;
+        try {
+            return transactionTemplate.execute(s -> {
+                Itinerary itinerary = findEditableForUpdate(itineraryId, userId);
+                int applied = routes.applyStillValid(itinerary, routed);
+                if (applied == 0) return toResponse(itinerary);
+                itinerary.recalculateEstimatedCost();
+                qualityGate.reflectEdit(itinerary);
+                return toResponse(itinerary);
+            });
+        } catch (RuntimeException e) {
+            // 편집은 이미 커밋됐다. 그 사이 확정·삭제됐으면 경로만 못 적은 것이라 편집 결과를 돌려준다.
+            log.warn("edit route apply skipped itineraryId={} cause={}", itineraryId, e.getClass().getSimpleName());
+            return edited;
+        }
+    }
+
     /** 다른 도시에서 넘어온 날 첫 스텝의 도시 간 이동 구간. 그날 순서를 바꿔도 이동 자체는 그대로다. */
-    private record TransferLeg(String mode, Integer duration, BigDecimal distance, BigDecimal cost) {}
+    private record TransferLeg(String mode, Integer duration, BigDecimal distance, BigDecimal cost, String route) {}
 
     /** 그날 첫 스텝이 도시 간 이동 구간이면 그 값, 아니면 null. */
     private static TransferLeg transferLegOf(List<ItineraryStep> daySteps) {
@@ -361,7 +427,7 @@ public class ItineraryService {
                 .filter(s -> s.getTransportationMode() != null
                         && ScheduleTuning.INTERCITY_LEG_MODES.contains(s.getTransportationMode()))
                 .map(s -> new TransferLeg(s.getTransportationMode(), s.getTransportationDuration(),
-                        s.getTransportationDistance(), s.getTransportationCost()))
+                        s.getTransportationDistance(), s.getTransportationCost(), s.getTransportationRoute()))
                 .orElse(null);
     }
 
@@ -371,8 +437,8 @@ public class ItineraryService {
      *
      * @param transfer 편집 전 첫 스텝의 도시 간 이동 구간. 있으면 새 첫 스텝에 둔다
      */
-    private void recalculateDayTransportation(List<ItineraryStep> allSteps, Integer dayNumber, TransferLeg transfer) {
-        List<ItineraryStep> daySteps = allSteps.stream()
+    private void recalculateDayTransportation(EditRoutes routes, Integer dayNumber, TransferLeg transfer) {
+        List<ItineraryStep> daySteps = routes.itinerary.getSteps().stream()
                 .filter(s -> dayNumber.equals(s.getDayNumber()))
                 .sorted(Comparator.comparingInt(ItineraryStep::getStepOrder))
                 .toList();
@@ -380,30 +446,174 @@ public class ItineraryService {
             ItineraryStep step = daySteps.get(i);
             if (i == 0) {
                 if (transfer != null) {
-                    step.updateTransportation(transfer.mode(), transfer.duration(), transfer.distance(), transfer.cost());
+                    step.updateTransportation(transfer.mode(), transfer.duration(), transfer.distance(), transfer.cost(),
+                            EditRoutes.arrivesAt(transfer.route(), step.getPlace()) ? transfer.route() : null);
                 } else {
                     step.updateTransportation(null, null, null, null);
                 }
                 continue;
             }
-            GeoUtils.TransportLeg leg = computeLeg(daySteps.get(i - 1), step);
-            if (leg != null) {
-                step.updateTransportation(leg.mode(), leg.durationMin(), leg.distanceKm(), leg.cost());
-            } else {
-                step.updateTransportation(null, null, null, null);
-            }
+            ItineraryStep prev = daySteps.get(i - 1);
+            if (routes.unchanged(prev, step)) continue;
+            if (!routes.update(prev, step)) step.updateTransportation(null, null, null, null);
         }
     }
 
     /**
      * 일차 경계를 넘는 구간은 재계산하지 않는다.
      */
-    private void recalculateTransportation(List<ItineraryStep> allSteps, ItineraryStep changedStep) {
-        List<ItineraryStep> sorted = byStepOrder(allSteps);
+    private void recalculateTransportation(EditRoutes routes, ItineraryStep changedStep) {
+        List<ItineraryStep> sorted = byStepOrder(routes.itinerary.getSteps());
         ItineraryStep prev = sameDayNeighbor(sorted, changedStep, -1);
         ItineraryStep next = sameDayNeighbor(sorted, changedStep, 1);
-        if (prev != null) updateDistance(prev, changedStep);
-        if (next != null) updateDistance(changedStep, next);
+        if (prev != null && !routes.update(prev, changedStep)) EditRoutes.dropRoute(changedStep);
+        if (next != null && !routes.update(changedStep, next)) EditRoutes.dropRoute(next);
+    }
+
+    /**
+     * 편집 한 번에서 바뀐 구간. 잠금 안에서는 거리 추정을 적고 그 구간을 기억한다. 잠금 밖에서 경로를 물은 뒤 앞 장소·도착
+     * 장소·떠나는 시각·적어 둔 추정이 그대로인 구간에만 결과를 적는다. 교통 데이터가 바뀌어도 고치지 않은 구간은 건드리지 않는다.
+     */
+    private final class EditRoutes {
+        private Itinerary itinerary;
+        private Long itineraryId;
+        private Long userId;
+        private final List<Pending> pending = new ArrayList<>();
+
+        EditRoutes(Itinerary itinerary) {
+            this.itinerary = itinerary;
+        }
+
+        /**
+         * 잠금 밖에서 물을 구간. 장소는 잠금 안에서 후보로 옮겨 두어 트랜잭션이 끝난 뒤에도 쓴다.
+         *
+         * @param stepId 이 구간으로 도착하는 스텝. 결과는 이 스텝에 적는다
+         */
+        private record Pending(Long stepId, Long prevStepId, Long fromPlaceId, Long toPlaceId, String departTime,
+                               LocalDate date, String country, PlaceCandidate from, PlaceCandidate to,
+                               GeoUtils.TransportLeg estimate, String modeHint) {}
+
+        Itinerary lock() {
+            itinerary = findEditableForUpdate(itineraryId, userId);
+            return itinerary;
+        }
+
+        /** 앞 장소·도착 장소·떠나는 시각이 저장된 경로 근거와 같은 구간. 다시 묻지 않는다. */
+        boolean unchanged(ItineraryStep from, ItineraryStep to) {
+            TransportRoute r = TransportRoute.fromJson(to.getTransportationRoute());
+            return sameEnds(r, from.getPlace(), to.getPlace())
+                    && r.departAt() != null && r.departAt().length() >= 16
+                    && r.departAt().substring(11, 16).equals(from.getEndTime());
+        }
+
+        private static boolean sameEnds(TransportRoute r, Place from, Place to) {
+            return r != null && from != null && to != null && Objects.equals(r.fromPlaceId(), from.getId())
+                    && Objects.equals(r.toPlaceId(), to.getId());
+        }
+
+        /** 도시 간 구간 근거가 이 장소에 닿는 경로인지. 첫 스텝이 바뀌면 근거는 다른 장소를 가리킨다. */
+        static boolean arrivesAt(String routeJson, Place place) {
+            TransportRoute r = TransportRoute.fromJson(routeJson);
+            return r != null && place != null && Objects.equals(r.toPlaceId(), place.getId());
+        }
+
+        /** 잴 수 없는 구간은 예전 값을 두되, 다른 장소를 가리키는 근거는 지운다. */
+        static void dropRoute(ItineraryStep s) {
+            s.updateTransportation(s.getTransportationMode(), s.getTransportationDuration(),
+                    s.getTransportationDistance(), s.getTransportationCost(), null);
+        }
+
+        /**
+         * 이 구간을 물을 수단. 앞 장소·도착 장소가 그대로일 때만 저장된 수단을 쓴다. 바뀐 구간에 이웃 구간 수단(짧은 도보 등)을
+         * 쓰면 먼 구간을 걸어서 묻는다. 그 밖에는 추정 수단이다.
+         */
+        private static String modeHint(ItineraryStep arriving, Place from, Place to) {
+            TransportRoute r = TransportRoute.fromJson(arriving.getTransportationRoute());
+            return sameEnds(r, from, to) ? arriving.getTransportationMode() : null;
+        }
+
+        /**
+         * 시간·비용·수단을 함께 바꿔야 화면 예산 합산(장소비+이동비)이 맞는다. 저장된 여행 조건이 없어 추정은 혼합 단가다.
+         *
+         * @return 좌표가 없거나 하루 안에 오갈 거리가 아니어서 잴 수 없으면 false. 저장된 값은 그대로다
+         */
+        boolean update(ItineraryStep from, ItineraryStep to) {
+            GeoUtils.TransportLeg estimate = remember(from, from.getPlace(), to.getPlace(), to);
+            if (estimate == null) return false;
+            to.updateTransportation(estimate.mode(), estimate.durationMin(), estimate.distanceKm(), estimate.cost());
+            return true;
+        }
+
+        /** 거리 추정을 내고 잠금 밖에서 물을 구간으로 기억한다. 잴 수 없으면 null이다. */
+        private GeoUtils.TransportLeg remember(ItineraryStep departing, Place from, Place to, ItineraryStep arriving) {
+            GeoUtils.TransportLeg estimate = computeLeg(from, to);
+            if (estimate == null) return null;
+            LocalDate date = itinerary.getStartDate() == null ? null
+                    : itinerary.getStartDate().plusDays(arriving.getDayNumber() - 1L);
+            pending.add(new Pending(arriving.getId(), departing.getId(), from.getId(), to.getId(),
+                    departing.getEndTime(), date, to.getCountry(), SavedItineraryFacts.candidate(from),
+                    SavedItineraryFacts.candidate(to), estimate, modeHint(arriving, from, to)));
+            return estimate;
+        }
+
+        /**
+         * @param routed 트랜잭션 밖에서 물어 본 이 구간. 없거나 그 사이 이웃이 바뀌었으면 거리 추정이다
+         */
+        GeoUtils.TransportLeg preview(ItineraryStep departing, Place from, Place to, ItineraryStep arriving,
+                                      TransportLeg routed) {
+            GeoUtils.TransportLeg estimate = remember(departing, from, to, arriving);
+            if (routed == null || estimate == null || !sameEnds(routed.route(), from, to)
+                    || routed.unreachable()) return estimate;
+            TransportLeg priced = priced(routed);
+            return new GeoUtils.TransportLeg(priced.mode(), priced.durationMin(), priced.distanceKm(), priced.cost());
+        }
+
+        /** 요금을 생성 때와 같은 인원으로 곱한다. 요금을 모르면 이동 비용을 비운다. */
+        private TransportLeg priced(TransportLeg leg) {
+            TransportRoute r = leg.route();
+            if (r == null || r.fare() == null) return leg;
+            TransportRoute.Fare fare = r.fare().forParty(qualityGate.partySize(itinerary),
+                    PartyCosts.seatsPerVehicle(leg.mode()));
+            return new TransportLeg(leg.mode(), leg.durationMin(), leg.distanceKm(), fare.totalWon(), r.withFare(fare));
+        }
+
+        /** 기억한 구간을 잠금 밖에서 묻는다. 경로를 받지 못한 구간은 빠진다(이미 거리 추정이 적혀 있다). */
+        Map<Long, TransportLeg> routeOutsideLock() {
+            Map<Long, TransportLeg> out = new LinkedHashMap<>();
+            TripRoutes.Session session = null;
+            for (Pending p : pending) {
+                if (session == null) session = tripRoutes.editSession(p.country());
+                TransportLeg leg = session.between(p.date(), p.departTime(), p.from(), p.to(), p.estimate(),
+                        p.modeHint());
+                if (leg.route() != null) out.put(p.stepId(), leg);
+            }
+            return out;
+        }
+
+        /** 다시 잠근 일정에서 그 사이 바뀌지 않은 구간에만 경로를 적는다. @return 적은 구간 수 */
+        int applyStillValid(Itinerary current, Map<Long, TransportLeg> routed) {
+            itinerary = current;
+            List<ItineraryStep> sorted = byStepOrder(current.getSteps());
+            int applied = 0;
+            for (Pending p : pending) {
+                TransportLeg leg = routed.get(p.stepId());
+                ItineraryStep step = sorted.stream().filter(x -> x.getId().equals(p.stepId())).findFirst().orElse(null);
+                if (leg == null || step == null) continue;
+                ItineraryStep prev = sameDayNeighbor(sorted, step, -1);
+                boolean same = prev != null && prev.getId().equals(p.prevStepId())
+                        && Objects.equals(placeIdOf(prev), p.fromPlaceId()) && Objects.equals(placeIdOf(step), p.toPlaceId())
+                        && Objects.equals(prev.getEndTime(), p.departTime())
+                        && Objects.equals(step.getTransportationMode(), p.estimate().mode())
+                        && Objects.equals(step.getTransportationDuration(), p.estimate().durationMin())
+                        && step.getTransportationRoute() == null;
+                if (!same) continue;
+                TransportLeg priced = priced(leg);
+                step.updateTransportation(priced.mode(), priced.durationMin(), priced.distanceKm(), priced.cost(),
+                        priced.route().toJson());
+                applied++;
+            }
+            return applied;
+        }
     }
 
     private static List<ItineraryStep> byStepOrder(List<ItineraryStep> steps) {
@@ -425,25 +635,7 @@ public class ItineraryService {
         return neighbor.getDayNumber().equals(step.getDayNumber()) ? neighbor : null;
     }
 
-    /**
-     * 시간·비용·모드도 거리와 함께 {@link GeoUtils#estimateLeg}로 갱신해야 프론트 예산 합산(장소비+이동비)이 맞는다.
-     * transportPref는 저장돼 있지 않아 "any"(혼합 단가)로 계산한다.
-     */
-    private void updateDistance(ItineraryStep from, ItineraryStep to) {
-        GeoUtils.TransportLeg leg = computeLeg(from, to);
-        if (leg == null) return; // 좌표 없음·비현실 구간이면 기존 교통정보를 유지한다
-        to.updateTransportation(leg.mode(), leg.durationMin(), leg.distanceKm(), leg.cost());
-        log.debug("Recalculated transport: {} → {} = {}km, {}원",
-                from.getPlace().getName(), to.getPlace().getName(), leg.distanceKm(), leg.cost());
-    }
-
-    /**
-     * 좌표가 없거나(0,0 포함) 비현실 구간이면 null.
-     */
-    private GeoUtils.TransportLeg computeLeg(ItineraryStep from, ItineraryStep to) {
-        return computeLeg(from.getPlace(), to.getPlace());
-    }
-
+    /** 좌표가 없거나(0,0 포함) 비현실 구간이면 null. */
     private static GeoUtils.TransportLeg computeLeg(Place fromPlace, Place toPlace) {
         return SavedItineraryFacts.legBetween(fromPlace, toPlace);
     }

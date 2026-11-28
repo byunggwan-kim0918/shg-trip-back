@@ -52,6 +52,23 @@ class RoutingConfigCoverageTest {
     }
 
     @Test
+    void 작은_섬은_자기_구역에_들고_먼_바다는_어느_나라에도_들지_않는다() throws IOException {
+        AdminAreas areas = areas();
+
+        assertThat(areas.contains("KR-49", new GeoPoint(33.5064, 126.9530))).as("우도").isTrue();
+        assertThat(areas.contains("KR-49", new GeoPoint(33.9626, 126.2985))).as("추자도").isTrue();
+        assertThat(areas.contains("KR-45", new GeoPoint(35.8100, 126.4100))).as("선유도").isTrue();
+        assertThat(areas.contains("KR-28", new GeoPoint(37.9600, 124.6700))).as("백령도").isTrue();
+        assertThat(areas.contains("JP-37", new GeoPoint(34.4600, 133.9950))).as("나오시마").isTrue();
+        assertThat(areas.contains("JP-47", new GeoPoint(24.0600, 123.7800))).as("하테루마").isTrue();
+        assertThat(areas.contains("JP-47", new GeoPoint(26.2124, 127.6792))).as("나하").isTrue();
+        assertThat(areas.contains("JP-13", new GeoPoint(33.1100, 139.7900))).as("하치조지마").isTrue();
+        assertThat(areas.contains("KR", new GeoPoint(34.5, 129.0))).as("대한해협").isFalse();
+        assertThat(areas.contains("JP", new GeoPoint(34.5, 129.0))).as("대한해협").isFalse();
+        assertThat(areas.contains("KR", new GeoPoint(34.0, 125.5))).as("서해 먼 바다").isFalse();
+    }
+
+    @Test
     void 상업_이용이_안_되는_공급자는_설정에_표시돼_있다() throws IOException {
         assertThat(providers().get("ors").commercialUse()).isFalse();
         assertThat(providers().entrySet().stream().filter(e -> e.getValue().external()).map(Map.Entry::getKey))

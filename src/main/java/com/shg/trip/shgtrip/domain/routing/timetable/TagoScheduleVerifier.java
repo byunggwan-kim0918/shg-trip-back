@@ -83,38 +83,55 @@ public class TagoScheduleVerifier implements ScheduleVerifier {
 
     @Override
     public Verdict verify(RouteLeg leg) {
+        return check(leg).verdict();
+    }
+
+    @Override
+    public Check check(RouteLeg leg) {
         if (settings == null || !settings.enabled() || leg.departure() == null || leg.arrival() == null) {
-            return Verdict.UNKNOWN;
+            return UNKNOWN;
         }
         String line = leg.line() == null ? "" : leg.line();
         if (leg.mode() == LegMode.RAIL && KORAIL_GRADE.matcher(line).find()) return verifyTrain(leg);
         if (leg.mode() == LegMode.BUS && INTERCITY_BUS_LINE.matcher(line).find()) return verifyExpressBus(leg);
-        return Verdict.UNKNOWN;
+        return UNKNOWN;
     }
 
-    private Verdict verifyTrain(RouteLeg leg) {
+    private static final Check UNKNOWN = new Check(Verdict.UNKNOWN, null);
+
+    private Check verifyTrain(RouteLeg leg) {
         Optional<String> from = id("train", normalize(leg.fromName()));
         Optional<String> to = id("train", normalize(leg.toName()));
-        if (from.isEmpty() || to.isEmpty()) return Verdict.UNKNOWN;
+        if (from.isEmpty() || to.isEmpty()) return UNKNOWN;
         LocalDate day = leg.departure().atZoneSameInstant(KOREA).toLocalDate();
         TagoTrainTimetable.Result r = trains(from.get(), to.get(), day);
         // 두 역 사이 운행이 아예 없으면 다른 운영사 노선이거나 역 이름이 어긋난 것이라 확인하지 못한 것으로 둔다.
-        if (r.status() != RouteStatus.FOUND) return Verdict.UNKNOWN;
-        boolean match = r.trains().stream().anyMatch(t -> sameMinute(t.departure(), leg.departure())
-                && Math.abs(Duration.between(t.arrival(), leg.arrival()).toMinutes()) <= ARRIVAL_TOLERANCE_MINUTES);
-        return match ? Verdict.CONFIRMED : Verdict.NOT_IN_OFFICIAL;
+        if (r.status() != RouteStatus.FOUND) return UNKNOWN;
+        return r.trains().stream().filter(t -> sameMinute(t.departure(), leg.departure())
+                        && Math.abs(Duration.between(t.arrival(), leg.arrival()).toMinutes()) <= ARRIVAL_TOLERANCE_MINUTES)
+                .findFirst()
+                .map(t -> new Check(Verdict.CONFIRMED, won(t.adultFare())))
+                .orElse(new Check(Verdict.NOT_IN_OFFICIAL, null));
     }
 
     /** 고속버스 도착 시각은 TAGO도 예정값이라 출발 시각만 맞춘다. 고속버스 노선이 아니면(시외버스) 확인하지 못한다. */
-    private Verdict verifyExpressBus(RouteLeg leg) {
+    private Check verifyExpressBus(RouteLeg leg) {
         Optional<String> from = id("express", normalize(leg.fromName()));
         Optional<String> to = id("express", normalize(leg.toName()));
-        if (from.isEmpty() || to.isEmpty()) return Verdict.UNKNOWN;
+        if (from.isEmpty() || to.isEmpty()) return UNKNOWN;
         String day = leg.departure().atZoneSameInstant(KOREA).format(DAY);
         Optional<List<String[]>> rows = expressRows(from.get(), to.get(), day);
-        if (rows.isEmpty() || rows.get().isEmpty()) return Verdict.UNKNOWN;
+        if (rows.isEmpty() || rows.get().isEmpty()) return UNKNOWN;
         String dep = leg.departure().atZoneSameInstant(KOREA).format(MINUTE);
-        return rows.get().stream().anyMatch(r -> r[0].equals(dep)) ? Verdict.CONFIRMED : Verdict.NOT_IN_OFFICIAL;
+        return rows.get().stream().filter(r -> r[0].equals(dep)).findFirst()
+                .map(r -> new Check(Verdict.CONFIRMED, won(r[2].isBlank() || "0".equals(r[2]) ? null
+                        : new java.math.BigDecimal(r[2]))))
+                .orElse(new Check(Verdict.NOT_IN_OFFICIAL, null));
+    }
+
+    private static com.shg.trip.shgtrip.domain.routing.Fare won(java.math.BigDecimal amount) {
+        return amount == null ? null : new com.shg.trip.shgtrip.domain.routing.Fare(amount, "KRW",
+                com.shg.trip.shgtrip.domain.routing.Fare.Kind.TICKET);
     }
 
     static String normalize(String stopName) {
@@ -181,7 +198,8 @@ public class TagoScheduleVerifier implements ScheduleVerifier {
                 Map.of("depTerminalId", from, "arrTerminalId", to, "depPlandTime", day));
         if (j.isEmpty()) return Optional.empty();
         List<String[]> rows = items(j.get()).stream()
-                .map(r -> new String[]{r.path("depPlandTime").asText(), r.path("arrPlandTime").asText()}).toList();
+                .map(r -> new String[]{r.path("depPlandTime").asText(), r.path("arrPlandTime").asText(),
+                        r.path("charge").asText("")}).toList();
         put(timetables, key, rows);
         return Optional.of(rows);
     }

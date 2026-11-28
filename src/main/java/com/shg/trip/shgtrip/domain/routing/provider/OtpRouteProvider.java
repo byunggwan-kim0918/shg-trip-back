@@ -61,6 +61,8 @@ public class OtpRouteProvider extends AbstractRouteProvider {
                     from { name lat lon }
                     to { name lat lon }
                     route { gtfsId shortName longName agency { name } }
+                    fareProducts { id product { riderCategory { id } medium { id }
+                      ... on DefaultFareProduct { price { amount currency { code } } } } }
                   }
                 } }
               }
@@ -107,6 +109,11 @@ public class OtpRouteProvider extends AbstractRouteProvider {
         super(id, settings, http, mapper, clock);
         this.feedCoverage = settings.feedCoveragePath(coverageDir).map(p -> new FeedCoverage.File(p, mapper, clock))
                 .orElse(null);
+    }
+
+    @Override
+    public String dataVersion() {
+        return feedCoverage == null ? null : feedCoverage.version();
     }
 
     private static final String SERVICE_RANGE = "{ serviceTimeRange { start end } }";
@@ -500,7 +507,45 @@ public class OtpRouteProvider extends AbstractRouteProvider {
         if (legs.stream().anyMatch(RouteLeg::unverifiedSchedule)) basis = RouteBasis.UNVERIFIED_SCHEDULE;
         return new RouteItinerary(OffsetDateTime.parse(n.path("start").asText()),
                 OffsetDateTime.parse(n.path("end").asText()), n.path("duration").asInt(),
-                n.path("numberOfTransfers").asInt(0), legs, List.of(), source(basis));
+                n.path("numberOfTransfers").asInt(0), legs, fares(n.path("legs")), source(basis));
+    }
+
+    /**
+     * GTFS 요금(fare_attributes)으로 OTP가 낸 승차권 합. 같은 사용 id는 갈아타기를 한 장으로 덮는 표라 한 번만 센다.
+     * 탈 것 하나라도 요금이 없으면 일부만 더한 금액이 되어 요금을 모르는 것으로 둔다. 매체가 여럿이면 현금처럼 매체를 가리지
+     * 않는 상품, 없으면 가장 비싼 상품을 쓴다(교통카드 할인은 여행자가 카드를 가졌는지 모른다).
+     */
+    static List<com.shg.trip.shgtrip.domain.routing.Fare> fares(JsonNode legs) {
+        Map<String, java.math.BigDecimal> byUse = new java.util.LinkedHashMap<>();
+        String currency = null;
+        for (JsonNode l : legs) {
+            if (!l.path("transitLeg").asBoolean(false)) continue;
+            JsonNode chosen = null;
+            String useId = null;
+            for (JsonNode use : l.path("fareProducts")) {
+                JsonNode product = use.path("product");
+                JsonNode price = product.path("price");
+                if (!price.path("amount").isNumber() || !product.path("riderCategory").isNull()
+                        && !product.path("riderCategory").isMissingNode()) continue;
+                boolean anyMedium = product.path("medium").isNull() || product.path("medium").isMissingNode();
+                boolean chosenAnyMedium = chosen != null && (chosen.path("medium").isNull()
+                        || chosen.path("medium").isMissingNode());
+                if (chosen == null || anyMedium && !chosenAnyMedium || anyMedium == chosenAnyMedium
+                        && price.path("amount").asDouble() > chosen.path("price").path("amount").asDouble()) {
+                    chosen = product;
+                    useId = use.path("id").asText();
+                }
+            }
+            if (chosen == null) return List.of();
+            String code = chosen.path("price").path("currency").path("code").asText(null);
+            if (code == null || currency != null && !currency.equals(code)) return List.of();
+            currency = code;
+            byUse.putIfAbsent(useId, java.math.BigDecimal.valueOf(chosen.path("price").path("amount").asDouble()));
+        }
+        if (byUse.isEmpty()) return List.of();
+        java.math.BigDecimal total = byUse.values().stream().reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add);
+        return List.of(new com.shg.trip.shgtrip.domain.routing.Fare(total, currency,
+                com.shg.trip.shgtrip.domain.routing.Fare.Kind.TICKET));
     }
 
     /** OTP 노선 id는 "피드id:노선id"다. */

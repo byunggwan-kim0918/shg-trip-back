@@ -1,6 +1,7 @@
 package com.shg.trip.shgtrip.domain.routing;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 import java.time.Duration;
 import java.time.ZoneId;
@@ -79,6 +80,8 @@ public record RoutingProperties(
      * @param unverifiedFeeds 운행일을 확정하지 못하는 피드 id(빌드 피드 목록의 calendarSuspect). 이 피드 구간이 든 경로는 UNVERIFIED_SCHEDULE이다
      * @param feedCoverageFile 그래프 빌드가 남긴 feeds-coverage.json 경로(상대 경로는 otpCoverageDir 기준). 출발지·도착지
      *                         근처 피드가 그날 운행 기간 밖이면 경로를 UNVERIFIED_SCHEDULE로 낮춘다. 비면 그래프 전체 운행 기간만 본다
+     * @param maxConcurrent  앱 전체에서 이 공급자에 동시에 보내는 질의 수. 0이면 막지 않는다. 자체 OTP는 CPU를 다투어 동시 질의를
+     *                       늘리면 처리량은 그대로이고 질의마다 느려진다
      */
     /** 역 안 이동·표 구매를 포함한 갈아타기 여유. 큰 역 환승 안내 최소 시간에 맞춘다. */
     private static final int DEFAULT_TRANSFER_MINUTES = 10;
@@ -111,8 +114,24 @@ public record RoutingProperties(
             boolean external,
             List<String> verifiers,
             Set<String> unverifiedFeeds,
-            String feedCoverageFile
+            String feedCoverageFile,
+            Integer maxConcurrent
     ) {
+        public ProviderSettings(String type, boolean enabled, int priority, String baseUrl, String apiKey,
+                                Set<TravelMode> modes, List<Area> coverage, List<String> coverageAreas, Duration timeout,
+                                int dailyLimit, int perMinuteLimit, Duration cacheTtl, Duration noConnectionTtl,
+                                Duration cacheBucket, boolean officialData, String attribution, String timezone,
+                                Integer snapToStopMeters, boolean stopToStop, Set<String> stopModes,
+                                Set<String> unverifiedAgencies, Integer transferMinutes, Integer monthlyLimit,
+                                Boolean commercialUse, boolean external, List<String> verifiers,
+                                Set<String> unverifiedFeeds, String feedCoverageFile) {
+            this(type, enabled, priority, baseUrl, apiKey, modes, coverage, coverageAreas, timeout, dailyLimit,
+                    perMinuteLimit, cacheTtl, noConnectionTtl, cacheBucket, officialData, attribution, timezone,
+                    snapToStopMeters, stopToStop, stopModes, unverifiedAgencies, transferMinutes, monthlyLimit,
+                    commercialUse, external, verifiers, unverifiedFeeds, feedCoverageFile, null);
+        }
+
+        @ConstructorBinding
         public ProviderSettings {
             // 환경변수를 빈 값으로 두면 설정하지 않은 것(월 한도 세지 않음)으로 본다.
             if (monthlyLimit == null) monthlyLimit = 0;
@@ -135,6 +154,7 @@ public record RoutingProperties(
             if (commercialUse == null) commercialUse = true;
             verifiers = verifiers == null ? List.of() : List.copyOf(verifiers);
             unverifiedFeeds = unverifiedFeeds == null ? Set.of() : Set.copyOf(unverifiedFeeds);
+            if (maxConcurrent == null || maxConcurrent < 0) maxConcurrent = 0;
         }
 
         /** 피드 범위 파일 위치. 상대 경로인데 기준 폴더가 없으면 판정을 끈다. */

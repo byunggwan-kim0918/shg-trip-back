@@ -27,6 +27,8 @@ routing:
       cache-bucket: 10m
       snap-to-stop-meters: 2000
       transfer-minutes: 10
+      # 그래프마다 처리량이 가장 높은 동시 질의 수가 있고, 넘기면 처리량은 늘지 않고 질의마다 느려진다.
+      max-concurrent: ${ROUTING_OTP_JP_MAX_CONCURRENT:4}
       # 철도는 커뮤니티가 만든 전국 GTFS라 공식 데이터로 표시하지 않는다.
       official-data: false
       attribution: "jp-jr GTFS (community), GTFSデータリポジトリ, ODPT, Transitland Atlas, © OpenStreetMap contributors"
@@ -86,6 +88,8 @@ routing:
       modes: [TRANSIT]
       coverage-areas: [KR]
       timeout: 10s
+      # 전국 그래프 한 대는 동시 질의를 늘려도 처리량이 늘지 않고 질의마다 느려진다.
+      max-concurrent: ${ROUTING_OTP_KR_MAX_CONCURRENT:2}
       cache-ttl: 24h
       no-connection-ttl: 6h
       cache-bucket: 10m

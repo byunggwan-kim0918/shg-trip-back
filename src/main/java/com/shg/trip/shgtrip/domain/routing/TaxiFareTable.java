@@ -56,7 +56,7 @@ public class TaxiFareTable {
                 .filter(f -> f.country().equals(country) && f.area().equals(area))
                 .filter(f -> f.validFrom() == null || !f.validFrom().isAfter(date))
                 .max(Comparator.comparing(f -> f.validFrom() == null ? LocalDate.MIN : f.validFrom()))
-                .map(f -> new Fare(BigDecimal.valueOf(amount(f, meters)), f.currency(), Fare.Kind.TAXI_ESTIMATE));
+                .map(f -> new Fare(BigDecimal.valueOf(amount(f, meters)), f.currency(), Fare.Kind.TAXI_TABLE));
     }
 
     static long amount(TaxiFare f, int meters) {

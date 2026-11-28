@@ -464,4 +464,90 @@ class DayBuilderTest {
         assertThat(DayBuilder.minutesOf(stop(floralVillage, "sight", "afternoon"), 1.25)).isEqualTo(90);
         assertThat(DayBuilder.minutesOf(stop(garden, "sight", "morning"), 1.25)).isEqualTo(DayBuilder.MAX_STAY);
     }
+
+    @Test
+    @DisplayName("점심 앞 장소는 식당까지 가는 시간까지 넣어 점심 시작이 13:30을 넘기면 빼고 점심을 지킨다")
+    void travelToLunchCountsForMealWindow() {
+        PlaceCandidate park = new PlaceCandidate(1, nextId++, "오래 보는 공원", null, "Landmarks and Outdoors > Park",
+                List.of(), "Busan", "KR", BigDecimal.valueOf(35.1000), BigDecimal.valueOf(129.0300), null, null, 0.0,
+                null, null, null, 150, false, null, null, null, null, "SIGHT", null, false, null, null, null, null);
+        PlaceCandidate farLunch = restaurant("먼 식당", 35.2300, 129.1500);
+        DayBuilder.Frame f = new DayBuilder.Frame(1, WEDNESDAY, 10 * 60 + 40, 21 * 60, 22 * 60, 19 * 60 + 30,
+                5 * 60 + 15, null, null, null, false, false, null, false, "any", List.of(), List.of(), Integer.MAX_VALUE,
+                1.0, null, "KR", 0);
+
+        DayBuilder.Built built = DayBuilder.build(f, List.of(stop(park, "sight", "morning"),
+                stop(farLunch, "meal", "lunch")));
+
+        StepData lunch = built.steps().stream().filter(x -> x.place().name().equals("먼 식당")).findFirst().orElseThrow();
+        assertThat(lunch.startTime()).isLessThanOrEqualTo("13:30");
+    }
+
+    private static TransportLeg routedBus(int minutes) {
+        var route = new com.shg.trip.shgtrip.domain.planning.dto.TransportRoute("ESTIMATED", "UNVERIFIED_SCHEDULE",
+                "FOUND", "otp-kr", null, null, null, null, null, 20, 0, List.of(), null, null, null, null);
+        return new TransportLeg("BUS", minutes, BigDecimal.TEN, null, route);
+    }
+
+    private static DayBuilder.Frame eveningFrame(PlaceCandidate lodging) {
+        return new DayBuilder.Frame(1, WEDNESDAY, 18 * 60 + 30, 21 * 60 + 30, 22 * 60, 19 * 60 + 30, 5 * 60 + 15, null,
+                null, lodging, false, false, null, false, "transit", List.of(), List.of(), Integer.MAX_VALUE, 1.0,
+                null, "KR", 0);
+    }
+
+    @Test
+    @DisplayName("덜 장소가 요청 식당뿐이면 숙소 도착을 한 시간까지 늦춰 지키고, 더 늦으면 뺀다")
+    void keepsRequestedDinnerWhenLodgingIsSlightlyLate() {
+        PlaceCandidate lodging = place("중산간 펜션", "Travel and Transportation > Lodging > Hotel", "LODGING",
+                33.40, 126.30, null);
+        PlaceCandidate dinner = restaurant("고등어회 식당", 33.51, 126.52);
+        List<DayBuilder.Stop> stops = List.of(new DayBuilder.Stop(dinner, "meal", "dinner", List.of(), true));
+        DayBuilder.Frame base = eveningFrame(lodging);
+
+        DayBuilder.Built slightlyLate = DayBuilder.build(
+                base.withRoutes(java.util.Map.of(DayBuilder.hopKey(dinner, lodging), routedBus(160))), stops);
+        DayBuilder.Built veryLate = DayBuilder.build(
+                base.withRoutes(java.util.Map.of(DayBuilder.hopKey(dinner, lodging), routedBus(300))), stops);
+
+        assertThat(slightlyLate.placed()).contains(dinner);
+        assertThat(veryLate.placed()).doesNotContain(dinner);
+        assertThat(veryLate.drops()).extracting(DayBuilder.Drop::reason).contains(DayBuilder.LATE_FOR_LODGING);
+    }
+
+    @Test
+    @DisplayName("저녁에 도시를 옮기는 날은 늦추면 탈 편을 놓쳐 요청 장소라도 숙소 도착을 늦추지 않는다")
+    void eveningTransferDayDoesNotDelayForRequest() {
+        PlaceCandidate lodging = place("다음 도시 호텔", "Travel and Transportation > Lodging > Hotel", "LODGING",
+                35.18, 129.08, null);
+        PlaceCandidate dinner = restaurant("요청 식당", 37.57, 126.98);
+        TransportLeg intercity = new TransportLeg("TRAIN", 180, BigDecimal.valueOf(400), BigDecimal.valueOf(59800));
+        DayBuilder.Frame f = new DayBuilder.Frame(1, WEDNESDAY, 18 * 60 + 30, 23 * 60 - 180 - 30 + 120, 23 * 60,
+                19 * 60 + 30, 5 * 60 + 15, null, null, lodging, false, false, null, false, "transit", List.of(),
+                List.of(), Integer.MAX_VALUE, 1.0, intercity, "KR", 0);
+        DayBuilder.Frame routed = f.withRoutes(java.util.Map.of(DayBuilder.hopKey(dinner, lodging), routedBus(250)));
+
+        DayBuilder.Built built = DayBuilder.build(routed,
+                List.of(new DayBuilder.Stop(dinner, "meal", "dinner", List.of(), true)));
+
+        assertThat(built.placed()).doesNotContain(dinner);
+    }
+
+    @Test
+    @DisplayName("저녁에 도시를 옮기는 날은 실제 도시 간 경로 시간으로 하루 끝을 다시 잡는다")
+    void eveningTransferDayEndFollowsRoutedLeg() {
+        PlaceCandidate lodging = place("다음 도시 호텔", "Travel and Transportation > Lodging > Hotel", "LODGING",
+                35.18, 129.08, null);
+        PlaceCandidate museum = sight("박물관", 37.57, 126.98);
+        TransportLeg intercity = new TransportLeg("TRAIN", 180, BigDecimal.valueOf(400), BigDecimal.valueOf(59800));
+        DayBuilder.Frame f = new DayBuilder.Frame(1, WEDNESDAY, 9 * 60, 23 * 60 - 180 - 30, 23 * 60, 19 * 60 + 30,
+                5 * 60 + 15, null, null, lodging, false, false, null, false, "transit", List.of(), List.of(),
+                Integer.MAX_VALUE, 1.0, intercity, "KR", 0);
+        var route = new com.shg.trip.shgtrip.domain.planning.dto.TransportRoute("ESTIMATED", "UNVERIFIED_SCHEDULE",
+                "FOUND", "otp-kr", null, null, null, null, null, 10, 1, List.of(), null, null, null, null);
+        DayBuilder.Frame routed = f.withRoutes(java.util.Map.of(DayBuilder.hopKey(museum, lodging),
+                new TransportLeg("TRAIN", 140, BigDecimal.valueOf(400), null, route)));
+
+        assertThat(DayBuilder.endLimit(f, museum)).isEqualTo(23 * 60 - 180 - 30);
+        assertThat(DayBuilder.endLimit(routed, museum)).isEqualTo(23 * 60 - 140 - 30);
+    }
 }

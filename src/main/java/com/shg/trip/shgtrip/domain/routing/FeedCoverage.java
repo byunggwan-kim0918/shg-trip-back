@@ -52,13 +52,24 @@ public final class FeedCoverage {
     }
 
     private final List<Feed> feeds;
+    private final String builtAt;
 
     FeedCoverage(List<Feed> feeds) {
+        this(feeds, null);
+    }
+
+    FeedCoverage(List<Feed> feeds, String builtAt) {
         this.feeds = List.copyOf(feeds);
+        this.builtAt = builtAt;
     }
 
     public static FeedCoverage empty() {
         return new FeedCoverage(List.of());
+    }
+
+    /** 서빙 중인 그래프를 지은 시각. 그래프를 바꾸면 달라지므로 판 식별에 쓴다. 파일이 없으면 null이다. */
+    public String builtAt() {
+        return builtAt;
     }
 
     static FeedCoverage read(JsonNode root) {
@@ -75,7 +86,8 @@ public final class FeedCoverage {
             out.add(new Feed(f.path("feed").asText(), modes, box.get(0).asDouble(), box.get(1).asDouble(),
                     box.get(2).asDouble(), box.get(3).asDouble(), periods));
         }
-        return new FeedCoverage(out);
+        String builtAt = root.path("builtAt").asText(null);
+        return new FeedCoverage(out, builtAt == null || builtAt.isBlank() ? null : builtAt);
     }
 
     /** 출발지나 도착지 근처 피드 중 그날 운행 기간 밖인 것. */
@@ -96,12 +108,17 @@ public final class FeedCoverage {
     /** 파일이 바뀌면 다시 읽는다. 파일이 없거나 깨지면 피드 단위 판정을 끄고 그래프 운행 기간만 본다. */
     public static final class File {
 
+        /** 서버를 띄울 때 같은 폴더에 쓰는 그래프 정보. 범위 파일이 없는 옛 그래프도 빌드 시각은 여기 있다. */
+        static final String GRAPH_FILE = "graph.json";
+
         private final Path path;
         private final ObjectMapper mapper;
         private final Clock clock;
         private volatile FeedCoverage current = empty();
         private volatile Instant checkedAt = Instant.MIN;
         private volatile long modifiedAt = -1;
+        private volatile String graphBuiltAt;
+        private volatile Instant graphCheckedAt = Instant.MIN;
 
         public File(Path path, ObjectMapper mapper, Clock clock) {
             this.path = path;
@@ -125,6 +142,22 @@ public final class FeedCoverage {
                 modifiedAt = -2;
             }
             return current;
+        }
+
+        /** 서빙 중인 그래프의 판. 범위 파일의 빌드 시각, 없으면 graph.json의 빌드 시각이다. 둘 다 없으면 null이다. */
+        public String version() {
+            FeedCoverage c = get();
+            if (c.builtAt() != null) return c.builtAt();
+            Instant now = clock.instant();
+            if (graphCheckedAt.plus(RECHECK).isAfter(now)) return graphBuiltAt;
+            graphCheckedAt = now;
+            try {
+                String built = mapper.readTree(path.resolveSibling(GRAPH_FILE).toFile()).path("builtAt").asText(null);
+                graphBuiltAt = built == null || built.isBlank() ? null : built;
+            } catch (IOException | RuntimeException e) {
+                graphBuiltAt = null;
+            }
+            return graphBuiltAt;
         }
     }
 }

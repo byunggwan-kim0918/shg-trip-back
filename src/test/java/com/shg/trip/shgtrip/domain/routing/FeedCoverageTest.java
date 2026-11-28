@@ -33,6 +33,25 @@ class FeedCoverageTest {
                         "periods": [["20261120", "20261130"], ["20261201", "20261230"]]}]}""";
 
     @Test
+    void 범위_파일이_없는_옛_그래프는_서빙_정보의_빌드_시각을_판으로_쓴다(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws IOException {
+        java.nio.file.Files.writeString(dir.resolve("graph.json"), "{\"builtAt\": \"2026-11-27T15:33:56\"}");
+        FeedCoverage.File file = new FeedCoverage.File(dir.resolve("feeds-coverage.json"), mapper, clock);
+
+        assertThat(file.version()).isEqualTo("2026-11-27T15:33:56");
+        assertThat(file.get().lapsed(SENDAI, SENDAI, java.time.LocalDate.of(2026, 12, 1))).isEmpty();
+    }
+
+    @Test
+    void 그래프_빌드_시각을_판으로_읽는다() throws IOException {
+        FeedCoverage c = FeedCoverage.read(mapper.readTree("""
+                {"builtAt": "2026-11-27T18:01:47", "feeds": []}"""));
+
+        assertThat(c.builtAt()).isEqualTo("2026-11-27T18:01:47");
+        assertThat(FeedCoverage.read(mapper.readTree(SENDAI_TWO_EDITIONS)).builtAt()).isNull();
+    }
+
+    @Test
     void 이어_실은_판의_기간이면_운행_중이고_마지막_판이_끝나면_만료다() throws IOException {
         FeedCoverage c = FeedCoverage.read(mapper.readTree(SENDAI_TWO_EDITIONS));
 

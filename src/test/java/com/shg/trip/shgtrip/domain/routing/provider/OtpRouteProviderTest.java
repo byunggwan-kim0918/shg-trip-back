@@ -510,4 +510,40 @@ class OtpRouteProviderTest {
             return in.readAllBytes();
         }
     }
+
+    @Test
+    void GTFS_요금은_같은_사용_id를_한_번만_세고_매체를_가리지_않는_상품을_쓴다() throws Exception {
+        var legs = mapper.readTree("""
+                [{"transitLeg": false},
+                 {"transitLeg": true, "fareProducts": [
+                   {"id": "u1", "product": {"riderCategory": null, "medium": {"id": "ic"},
+                     "price": {"amount": 210.0, "currency": {"code": "JPY"}}}},
+                   {"id": "u1", "product": {"riderCategory": null, "medium": null,
+                     "price": {"amount": 220.0, "currency": {"code": "JPY"}}}},
+                   {"id": "u1", "product": {"riderCategory": {"id": "child"}, "medium": null,
+                     "price": {"amount": 110.0, "currency": {"code": "JPY"}}}}]},
+                 {"transitLeg": true, "fareProducts": [
+                   {"id": "u1", "product": {"riderCategory": null, "medium": null,
+                     "price": {"amount": 220.0, "currency": {"code": "JPY"}}}}]},
+                 {"transitLeg": true, "fareProducts": [
+                   {"id": "u2", "product": {"riderCategory": null, "medium": null,
+                     "price": {"amount": 300.0, "currency": {"code": "JPY"}}}}]}]""");
+
+        assertThat(OtpRouteProvider.fares(legs)).singleElement().satisfies(f -> {
+            assertThat(f.amount()).isEqualByComparingTo("520");
+            assertThat(f.currency()).isEqualTo("JPY");
+            assertThat(f.kind()).isEqualTo(com.shg.trip.shgtrip.domain.routing.Fare.Kind.TICKET);
+        });
+    }
+
+    @Test
+    void 요금이_없는_탈_것이_하나라도_있으면_요금을_모르는_것으로_둔다() throws Exception {
+        var legs = mapper.readTree("""
+                [{"transitLeg": true, "fareProducts": [
+                   {"id": "u1", "product": {"riderCategory": null, "medium": null,
+                     "price": {"amount": 220.0, "currency": {"code": "JPY"}}}}]},
+                 {"transitLeg": true, "fareProducts": []}]""");
+
+        assertThat(OtpRouteProvider.fares(legs)).isEmpty();
+    }
 }

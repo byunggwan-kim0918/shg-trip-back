@@ -17,6 +17,9 @@ public final class KrwRates {
             "TWD", 41.0,
             "VND", 0.053);
 
+    /** {@link #WON_PER_UNIT}를 정한 날. 저장한 요금에 함께 남겨 어느 환율로 바꿨는지 보인다. */
+    public static final java.time.LocalDate RATES_AS_OF = java.time.LocalDate.of(2026, 11, 11);
+
     private static final int ROUND_TO_WON = 100;
 
     private KrwRates() {}
@@ -26,6 +29,12 @@ public final class KrwRates {
         if (place == null) return null;
         if (place.getAdmissionFee() != null) return place.getAdmissionFee();
         return toWon(place.getAdmissionFeeLocal(), place.getAdmissionCurrency());
+    }
+
+    /** 통화 1단위의 원화. 표에 없는 통화는 빈 값이고 다른 환율로 대신하지 않는다. */
+    public static java.util.Optional<java.math.BigDecimal> wonPerUnit(String currency) {
+        Double rate = currency == null ? null : WON_PER_UNIT.get(currency);
+        return rate == null ? java.util.Optional.empty() : java.util.Optional.of(java.math.BigDecimal.valueOf(rate));
     }
 
     /** 100원 단위 원화. 0은 무료(0), 금액·통화를 모르거나 환율이 없는 통화면 null이다. */

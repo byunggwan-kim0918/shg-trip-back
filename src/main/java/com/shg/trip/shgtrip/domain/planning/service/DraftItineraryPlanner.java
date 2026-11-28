@@ -107,6 +107,7 @@ public class DraftItineraryPlanner {
     private final CandidateSupplement candidateSupplement;
     private final PlaceFactsReader factsReader;
     private final TripHubs hubs;
+    private final TripRoutes tripRoutes;
 
     /**
      * @param cities           여행 도시. 비어 있지 않고, 첫 도시에서 여행을 시작한다
@@ -271,10 +272,17 @@ public class DraftItineraryPlanner {
      * @param placed     날마다 넣은 정류지(숙소·허브 제외)와 시작 시각
      * @param reasons    장소 id별로 그 경험을 넣은 이유. 일정에 남은 장소의 이유만 여행자에게 보인다
      * @param omissions  장소는 찾았지만 어느 날에도 넣지 못한 요청 장소
+     * @param routes     이 일정의 경로 조회 묶음. 편집으로 다시 지을 때 같은 구간은 다시 묻지 않는다
      */
     public record Result(List<StepData> steps, List<PlaceCandidate> candidates, List<String> notes,
                          List<DayBuilder.Frame> frames, List<List<Placed>> placed, Map<Long, String> reasons,
-                         List<Omission> omissions) {
+                         List<Omission> omissions, TripRoutes.Session routes) {
+
+        public Result(List<StepData> steps, List<PlaceCandidate> candidates, List<String> notes,
+                      List<DayBuilder.Frame> frames, List<List<Placed>> placed, Map<Long, String> reasons,
+                      List<Omission> omissions) {
+            this(steps, candidates, notes, frames, placed, reasons, omissions, null);
+        }
     }
 
     /** 요청 장소를 마지막으로 시도한 날과 그날 넣지 못한 이유. */
@@ -282,7 +290,7 @@ public class DraftItineraryPlanner {
     }
 
     /** 요청 장소를 넣지 못한 까닭의 갈래. 여행자에게 알릴 말과 평가가 이 갈래로 나눈다. */
-    public enum MissCause { DEPARTURE, CLOSED, HOURS, TIME, DAYLIGHT, ROUTE, OTHER }
+    public enum MissCause { DEPARTURE, CLOSED, HOURS, TIME, DAYLIGHT, TRANSIT, ROUTE, OTHER }
 
     record Placed(DayBuilder.Stop stop, int at) {
     }
@@ -294,7 +302,8 @@ public class DraftItineraryPlanner {
     private static final Map<String, String> PACE_LABELS = Map.of(
             "tight", "빡빡하게", "normal", "보통", "relaxed", "여유롭게");
     private static final Map<String, String> TRANSPORT_LABELS = Map.of(
-            "car", "자동차", "walk", "도보(먼 곳은 대중교통)", "any", "대중교통 또는 상관없음");
+            "car", "자동차", "walk", "도보(먼 곳은 대중교통)", "transit", "대중교통만(차 없음)", "taxi", "택시",
+            "any", "대중교통 또는 상관없음");
 
     /** 초안 요청 문장. 날짜마다 요일·공휴일·일몰 시각을 적어, 모델이 휴관일과 해 지는 시각을 보고 순서를 정하게 한다. */
     public static String prompt(Request req) {
@@ -427,6 +436,9 @@ public class DraftItineraryPlanner {
         String pace = input.pace() == null ? "normal" : input.pace();
         Set<Integer> transfers = req.eveningTransfers();
         List<Destination> cities = req.cities();
+        TripRoutes.Session routes = tripRoutes.session(req.country(), input.budget() == null ? null
+                : input.budget().divide(java.math.BigDecimal.valueOf(dayCount), java.math.RoundingMode.HALF_UP),
+                dayCount, input.partySize());
 
         List<List<DayBuilder.Stop>> stopsByDay = new ArrayList<>();
         List<List<DayBuilder.Stop>> sparesByDay = new ArrayList<>();
@@ -705,7 +717,9 @@ public class DraftItineraryPlanner {
                     built = retry;
                 }
             }
-            DayBuilder.Frame frame = planned;
+            TripRoutes.Day routed = routes.route(planned, built);
+            built = routed.built();
+            DayBuilder.Frame frame = routed.frame();
             built.dropped().forEach(x -> notes.add(frame.dayNumber() + "일차 뺌: " + x));
             for (DayBuilder.Drop miss : built.missed()) {
                 Integer to = miss.cause() == MissCause.ROUTE ? null
@@ -723,8 +737,9 @@ public class DraftItineraryPlanner {
             frames.add(frame);
             placed.add(placedOf(built));
         }
+        routes.notes().forEach(n -> notes.add("이동: " + n));
         return new Result(AlternativeBuilder.pruneUsedAndRenumber(steps), registry.list(), notes, frames, placed,
-                reasons, omissions);
+                reasons, omissions, routes);
     }
 
     /**
@@ -960,6 +975,8 @@ public class DraftItineraryPlanner {
         }
         List<DayBuilder.Frame> fixedFrames = new ArrayList<>(prior.frames());
         Set<Long> removed = new HashSet<>();
+        TripRoutes.Session routes = prior.routes() != null ? prior.routes() : tripRoutes.session(req.country());
+        Set<String> knownNotes = new HashSet<>(routes.notes());
         for (DraftEdit e : edits == null ? List.<DraftEdit>of() : edits) {
             String failed = isLodgingEdit(e, fixedFrames, req)
                     ? applyLodgingEdit(e, fixedFrames, req, registry)
@@ -998,15 +1015,17 @@ public class DraftItineraryPlanner {
             DayBuilder.Frame frame = f.withSpares(sparesNotVisited(spares, earlier, registry), List.copyOf(earlier));
             List<DayBuilder.Stop> stops = day.stream()
                     .sorted(Comparator.comparingInt(Placed::at)).map(Placed::stop).toList();
-            DayBuilder.Built built = DayBuilder.build(frame, stops, true);
+            TripRoutes.Day routed = routes.route(frame, DayBuilder.build(frame, stops, true));
+            DayBuilder.Built built = routed.built();
             built.dropped().forEach(x -> notes.add(frame.dayNumber() + "일차 수정 뒤 뺌: " + x));
             built.missed().forEach(m -> omissions.add(new Omission(dayNumber, m.stop().place(), m.reason(),
                     m.cause())));
             earlier.addAll(built.placed());
             steps.addAll(built.steps());
-            frames.add(frame);
+            frames.add(routed.frame());
             placed.add(placedOf(built));
         }
+        routes.notes().stream().filter(n -> !knownNotes.contains(n)).forEach(n -> notes.add("이동: " + n));
         Set<Long> kept = new HashSet<>();
         placed.forEach(day -> day.forEach(p -> kept.add(p.stop().place().placeId())));
         omissions.removeIf(o -> kept.contains(o.place().placeId()));
@@ -1014,7 +1033,7 @@ public class DraftItineraryPlanner {
                 && omissions.stream().noneMatch(x -> Objects.equals(x.place().placeId(), o.place().placeId())))
                 .forEach(omissions::add);
         return new Result(AlternativeBuilder.pruneUsedAndRenumber(steps), registry.list(), notes, frames, placed,
-                prior.reasons(), omissions);
+                prior.reasons(), omissions, routes);
     }
 
     /** @return 반영하지 못한 이유. 반영했으면 null */

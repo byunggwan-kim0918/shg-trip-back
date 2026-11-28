@@ -77,6 +77,19 @@ public class ProviderCallBudget {
 
     /** 분·일·월 한도를 모두 센다. 하나라도 넘으면 false이고 어느 카운터도 올리지 않는다. */
     public boolean tryAcquire(String providerId, int dailyLimit, int perMinuteLimit, int monthlyLimit, ZoneId zone) {
+        return take(providerId, dailyLimit, perMinuteLimit, monthlyLimit, zone, true);
+    }
+
+    /**
+     * 공급자가 아닌 카운터(사용자별 편집 한도 등). 같은 방식으로 세지만 한도 경고·소진 기록을 남기지 않는다. 사용자 행동이
+     * 공급자 한도 알림을 울리거나 사용자마다 기록이 쌓이지 않게 한다.
+     */
+    public boolean tryAcquireQuietly(String key, int dailyLimit, int perMinuteLimit, ZoneId zone) {
+        return take(key, dailyLimit, perMinuteLimit, 0, zone, false);
+    }
+
+    private boolean take(String providerId, int dailyLimit, int perMinuteLimit, int monthlyLimit, ZoneId zone,
+                         boolean report) {
         if (dailyLimit <= 0 && perMinuteLimit <= 0 && monthlyLimit <= 0) return true;
         List<String> keys = keys(providerId, zone);
         int[] limits = {perMinuteLimit, dailyLimit, monthlyLimit};
@@ -86,15 +99,16 @@ public class ProviderCallBudget {
             if (r == null || r.isEmpty()) return false;
             int refused = r.get(0).intValue();
             if (refused > 0) {
-                exhausted(providerId, keys.get(refused - 1), WINDOWS.get(refused - 1), limits[refused - 1]);
+                if (report) exhausted(providerId, keys.get(refused - 1), WINDOWS.get(refused - 1), limits[refused - 1]);
                 return false;
             }
-            for (int i = 0; i < 3; i++) {
+            for (int i = 0; i < 3 && report; i++) {
                 if (limits[i] > 0 && r.get(i + 1) == warnAt(limits[i])) warn(providerId, WINDOWS.get(i), r.get(i + 1), limits[i]);
             }
             return true;
         } catch (RuntimeException e) {
-            log.warn("route budget unavailable provider={} cause={}", providerId, e.getClass().getSimpleName());
+            log.warn("route budget unavailable provider={} cause={}", report ? providerId : "-",
+                    e.getClass().getSimpleName());
             return false;
         }
     }

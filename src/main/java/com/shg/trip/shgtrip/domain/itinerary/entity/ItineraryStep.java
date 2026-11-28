@@ -129,7 +129,15 @@ public class ItineraryStep extends BaseTimeEntity {
         this.transportationDistance = distance;
     }
 
+    /** 거리 추정으로 다시 잰 구간. 앞서 확인한 경로 근거는 이 구간과 맞지 않아 지운다. */
     public void updateTransportation(String mode, Integer durationMin, BigDecimal distanceKm, BigDecimal cost) {
+        updateTransportation(mode, durationMin, distanceKm, cost, null);
+    }
+
+    /** @param routeJson 경로 근거(TransportRoute JSON). 추정이면 null */
+    public void updateTransportation(String mode, Integer durationMin, BigDecimal distanceKm, BigDecimal cost,
+                                     String routeJson) {
+        this.transportationRoute = routeJson;
         this.transportationMode = mode;
         this.transportationDuration = durationMin;
         this.transportationDistance = distanceKm;

@@ -86,9 +86,15 @@ final class DayBuilder {
     static final String SUNRISE_PASSED = "일출 시각 지남";
     static final String PAST_DAY_END = "하루 끝 시각 초과";
     static final String LATE_FOR_LODGING = "숙소 도착 늦음";
+    /**
+     * 덜 장소가 요청 장소뿐이면 숙소 도착을 이만큼까지 늦춰 요청 장소를 지킨다. 도시를 옮기는 날 숙소 기한(23:00)과 같은 폭이다.
+     * 더 늦으면 요청 장소를 빼고 넣지 못한 까닭을 남긴다.
+     */
+    static final int LATE_LODGING_TOLERANCE_MINUTES = 60;
     static final String YIELDED = "요청 장소에 자리 양보";
     static final String AFTER_DARK = "해 진 뒤 야외";
     static final String NO_ROUTE = "갈 수 없는 구간";
+    static final String NO_TRANSIT = "그 시각 대중교통 없음";
     static final String NO_COORDS = "위치 모름";
 
     private static final Map<String, Integer> SLOT_ORDER = Map.of(
@@ -138,15 +144,28 @@ final class DayBuilder {
      * @param lastLeg    숙소까지의 이동을 정해 둔 경우(저녁에 하는 도시 간 이동). null이면 거리로 계산한다
      * @param country    여행 나라. 명절 휴관과 입국 시간을 정한다
      * @param hubDeadline 출발 허브에 닿아야 하는 시각. endIsHub인 날만 쓴다
+     * @param routes     경로 엔진에 물어 본 구간({@link #hopKey}). 있으면 거리 추정과 정해 둔 도시 간 구간보다 먼저 쓴다
      */
     record Frame(int dayNumber, LocalDate date, int startMin, int endMin, int lodgingBy, int sunset, int sunrise,
                  PlaceCandidate startAt, PlaceCandidate arrivalHub, PlaceCandidate endAt, boolean endIsHub,
                  boolean hardEnd, TransportLeg firstLeg, boolean slowWalk, String transportPref,
                  List<Stop> spares, List<PlaceCandidate> earlier, int maxSights, double stayFactor,
-                 TransportLeg lastLeg, String country, int hubDeadline, DraftItineraryPlanner.Layout layout) {
+                 TransportLeg lastLeg, String country, int hubDeadline, DraftItineraryPlanner.Layout layout,
+                 Map<String, TransportLeg> routes) {
 
         Frame {
             layout = layout == null ? DraftItineraryPlanner.Layout.NONE : layout;
+            routes = routes == null ? Map.of() : Map.copyOf(routes);
+        }
+
+        Frame(int dayNumber, LocalDate date, int startMin, int endMin, int lodgingBy, int sunset, int sunrise,
+              PlaceCandidate startAt, PlaceCandidate arrivalHub, PlaceCandidate endAt, boolean endIsHub,
+              boolean hardEnd, TransportLeg firstLeg, boolean slowWalk, String transportPref,
+              List<Stop> spares, List<PlaceCandidate> earlier, int maxSights, double stayFactor,
+              TransportLeg lastLeg, String country, int hubDeadline, DraftItineraryPlanner.Layout layout) {
+            this(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, startAt, arrivalHub, endAt, endIsHub,
+                    hardEnd, firstLeg, slowWalk, transportPref, spares, earlier, maxSights, stayFactor, lastLeg,
+                    country, hubDeadline, layout, Map.of());
         }
 
         Frame(int dayNumber, LocalDate date, int startMin, int endMin, int lodgingBy, int sunset, int sunrise,
@@ -162,13 +181,38 @@ final class DayBuilder {
         Frame withLodging(PlaceCandidate newStartAt, PlaceCandidate newEndAt) {
             return new Frame(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, newStartAt, arrivalHub,
                     newEndAt, endIsHub, hardEnd, firstLeg, slowWalk, transportPref, spares, earlier, maxSights,
-                    stayFactor, lastLeg, country, hubDeadline, layout);
+                    stayFactor, lastLeg, country, hubDeadline, layout, routes);
         }
 
         Frame withSpares(List<Stop> newSpares, List<PlaceCandidate> newEarlier) {
             return new Frame(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, startAt, arrivalHub,
                     endAt, endIsHub, hardEnd, firstLeg, slowWalk, transportPref, newSpares, newEarlier, maxSights,
-                    stayFactor, lastLeg, country, hubDeadline, layout);
+                    stayFactor, lastLeg, country, hubDeadline, layout, routes);
+        }
+
+        Frame withRoutes(Map<String, TransportLeg> newRoutes) {
+            return new Frame(dayNumber, date, startMin, endMin, lodgingBy, sunset, sunrise, startAt, arrivalHub,
+                    endAt, endIsHub, hardEnd, firstLeg, slowWalk, transportPref, spares, earlier, maxSights,
+                    stayFactor, lastLeg, country, hubDeadline, layout, newRoutes);
+        }
+
+        /** 경로 엔진에 물어 본 구간. 묻지 않았으면 null이다. */
+        TransportLeg routed(PlaceCandidate from, PlaceCandidate to) {
+            if (routes.isEmpty()) return null;
+            String key = hopKey(from, to);
+            return key == null ? null : routes.get(key);
+        }
+
+        /**
+         * 이 시각에 떠나면 고른 수단으로 갈 수 없는 구간. 갈 수 없다는 답은 물어 본 시각 둘레에만 맞아, 그보다 벗어나 떠나면
+         * 추정으로 짓고 그 시각으로 다시 묻는다.
+         */
+        boolean unreachableAt(TransportLeg leg, int departMin) {
+            if (leg == null || !leg.unreachable() || leg.route().departAt() == null) return false;
+            java.time.OffsetDateTime at = java.time.OffsetDateTime.parse(leg.route().departAt());
+            long asked = java.time.temporal.ChronoUnit.DAYS.between(date, at.toLocalDate()) * 1440
+                    + at.getHour() * 60L + at.getMinute();
+            return Math.abs(asked - departMin) <= UNREACHABLE_WINDOW_MINUTES;
         }
 
         /** 구간을 떠나는 곳이 든 지역의 이동 방법. 같은 날에도 렌터카 지역과 대중교통 지역이 섞인다. */
@@ -181,6 +225,8 @@ final class DayBuilder {
          * (삿포로에서 오타루)가 실제의 두 배 가까이 걸린다.
          */
         TransportLeg leg(PlaceCandidate from, PlaceCandidate to) {
+            TransportLeg routed = routed(from, to);
+            if (routed != null) return routed;
             return layoutLeg(layout, from, to, modeFrom(from), slowWalk);
         }
 
@@ -200,8 +246,16 @@ final class DayBuilder {
         }
     }
 
-    /** @param placed 그날 넣은 장소(숙소·허브 제외). stops는 같은 순서의 정류지다 */
-    record Built(List<StepData> steps, List<Drop> drops, List<PlaceCandidate> placed, List<Stop> stops) {
+    /**
+     * @param placed 그날 넣은 장소(숙소·허브 제외). stops는 같은 순서의 정류지다
+     * @param hops   일정에 들어간 이동. 경로 엔진에는 이 구간만 묻는다
+     */
+    record Built(List<StepData> steps, List<Drop> drops, List<PlaceCandidate> placed, List<Stop> stops,
+                 List<Hop> hops) {
+
+        Built(List<StepData> steps, List<Drop> drops, List<PlaceCandidate> placed, List<Stop> stops) {
+            this(steps, drops, placed, stops, List.of());
+        }
 
         List<String> dropped() {
             return drops.stream().map(Drop::toString).toList();
@@ -220,6 +274,23 @@ final class DayBuilder {
         }
     }
 
+    /**
+     * 일정에 들어간 이동 한 번.
+     *
+     * @param departMin 앞 장소를 떠나는 시각(분)
+     * @param leg       이 일정을 지을 때 쓴 구간
+     * @param step      이 구간으로 도착하는 스텝의 순번(그날 steps 안)
+     */
+    record Hop(PlaceCandidate from, PlaceCandidate to, int departMin, TransportLeg leg, int step) {}
+
+    /** 구간 열쇠. 숙소·허브는 id가 없을 수 있어 좌표로 잇는다. 좌표가 없으면 null이다. */
+    static String hopKey(PlaceCandidate from, PlaceCandidate to) {
+        double[] a = from == null ? null : coordsOf(from);
+        double[] b = to == null ? null : coordsOf(to);
+        if (a == null || b == null) return null;
+        return String.format(java.util.Locale.ROOT, "%.5f,%.5f>%.5f,%.5f", a[0], a[1], b[0], b[1]);
+    }
+
     /** 그날 넣지 못한 곳과 이유. */
     record Drop(Stop stop, String reason) {
         @Override
@@ -233,6 +304,7 @@ final class DayBuilder {
                 case CLOSED_DAY, HOLIDAY_CLOSED -> MissCause.CLOSED;
                 case OUTSIDE_HOURS, LONG_OPENING_WAIT, LUNCH_PASSED, SUNRISE_PASSED -> MissCause.HOURS;
                 case PAST_DAY_END, LATE_FOR_LODGING, YIELDED -> MissCause.TIME;
+                case NO_TRANSIT -> MissCause.TRANSIT;
                 case AFTER_DARK -> MissCause.DAYLIGHT;
                 case NO_ROUTE, NO_COORDS -> MissCause.ROUTE;
                 default -> MissCause.OTHER;
@@ -242,6 +314,10 @@ final class DayBuilder {
 
     /** 요청 장소를 살리려고 다른 장소를 빼며 다시 짓는 횟수 상한. */
     private static final int MAX_REBUILDS = 8;
+    /** 편이 없는 마지막 구간을 풀려고 덜어 내는 장소 수 상한. */
+    static final int MAX_UNREACHABLE_DROPS = 3;
+    /** 갈 수 없다는 답을 그대로 보는 출발 시각 폭(분). 장소 하나를 덜면 출발이 이보다 크게 당겨진다. */
+    static final int UNREACHABLE_WINDOW_MINUTES = 30;
 
     /**
      * 도는 순서와 덜 좋은 배치를 빼는 기준을 바꿔 하루를 여러 번 짓고, 요청 장소를 가장 덜 잃고 숙소에 늦지 않는 안 가운데
@@ -275,6 +351,29 @@ final class DayBuilder {
         if (!keepOrder || kept.lostProtected() == 0) return kept.built();
         Variant moved = buildOrder(f, protectedFirst(meals), true, true);
         return moved.betterThan(kept, f.endIsHub()) ? moved.built() : kept.built();
+    }
+
+    /**
+     * 고른 장소와 순서는 두고 실제 이동 시간으로 시각만 다시 맞춘다. 늦어진 도착 때문에 영업시간을 넘기는 곳은 이때 빠지고,
+     * 먼저 지을 때 빠진 곳의 이유는 그대로 남긴다. 그 순서로 요청 장소가 빠지면 요청 장소를 앞으로 옮긴 안과 견준다.
+     */
+    static Built retimed(Frame f, Built prior) {
+        Variant best = null;
+        for (boolean strictSoft : new boolean[]{true, false}) {
+            Variant v = buildOrder(f, prior.stops(), true, strictSoft);
+            v = new Variant(v.built(), v.lostProtected(), v.late(), DayScore.penalty(f, prior.stops(), v.built()));
+            if (best == null || v.betterThan(best, f.endIsHub())) best = v;
+        }
+        if (best.lostProtected() > 0) {
+            Variant moved = buildOrder(f, protectedFirst(prior.stops()), true, true);
+            moved = new Variant(moved.built(), moved.lostProtected(), moved.late(),
+                    DayScore.penalty(f, prior.stops(), moved.built()));
+            if (moved.betterThan(best, f.endIsHub())) best = moved;
+        }
+        Built b = best.built();
+        java.util.LinkedHashSet<Drop> drops = new java.util.LinkedHashSet<>(prior.drops());
+        drops.addAll(b.drops());
+        return new Built(b.steps(), List.copyOf(drops), b.placed(), b.stops(), b.hops());
     }
 
     /** @param penalty 덜 좋은 정도. 지을 때만 매긴다 */
@@ -313,12 +412,28 @@ final class DayBuilder {
         Attempt best = null;
         List<Drop> bestDropped = null;
         int bestLost = 0;
+        int unreachableDrops = 0;
+        Attempt lastUnreachable = null;
+        List<Drop> lastUnreachableDropped = null;
+        int lastUnreachableLost = 0;
         for (int round = 0; ; round++) {
             List<Drop> dropped = new ArrayList<>(finalDropped);
             // 늦어서 빼낸 요청 장소도 잃은 것으로 센다. 세지 않으면 자리를 양보시킨 뒤 그 요청 장소마저 뺀 안이 더 나아 보인다.
             int lostAsVictims = (int) finalDropped.stream().filter(d -> d.stop().protect()).count();
             Attempt a = attempt(f, stops, excluded, dropped, keepOrder, strictSoft);
             int lost = a.lostProtected.size() + lostAsVictims;
+            // 덜어도 마지막 구간을 떠나는 시각이 당겨지지 않으면(저녁 식당 뒤) 뺀 것을 되돌리고 충돌로 남긴다.
+            if (a.endUnreachable && lastUnreachable != null && a.endDepartMin >= lastUnreachable.endDepartMin
+                    && best == null) {
+                return new Variant(new Built(lastUnreachable.steps, lastUnreachableDropped,
+                        lastUnreachable.placed.stream().map(Stop::place).toList(), lastUnreachable.placed,
+                        lastUnreachable.hops), lastUnreachableLost, true, 0);
+            }
+            if (a.endUnreachable) {
+                lastUnreachable = a;
+                lastUnreachableDropped = dropped;
+                lastUnreachableLost = lost;
+            }
             // 자리를 양보해도 요청 장소가 들어가지 않으면(마지막 날 저녁에 둔 야경) 양보 전 일정을 쓴다.
             if (a.lateBy <= 0 && (best == null || lost < bestLost)) {
                 best = a;
@@ -329,8 +444,17 @@ final class DayBuilder {
             String reason = null;
             if (a.lateBy > 0 && !a.placed.isEmpty()) {
                 victim = lastUnprotected(a.placed);
-                if (victim == null) victim = a.placed.get(a.placed.size() - 1);
-                reason = LATE_FOR_LODGING;
+                // 마지막 구간에 편이 없는 것은 시간이 모자란 것과 달라 요청 장소를 빼서 풀지 않는다.
+                if (victim == null && !a.endUnreachable) {
+                    Stop last = a.placed.get(a.placed.size() - 1);
+                    // 저녁에 도시를 옮기는 날은 늦추면 탈 편을 놓친다.
+                    boolean keepRequest = last.protect() && !f.endIsHub() && f.lastLeg() == null
+                            && a.lateBy <= LATE_LODGING_TOLERANCE_MINUTES;
+                    victim = keepRequest ? null : last;
+                }
+                // 덜어도 마지막 구간이 풀리지 않으면 더 빼지 않고 충돌로 남긴다.
+                if (a.endUnreachable && ++unreachableDrops > MAX_UNREACHABLE_DROPS) victim = null;
+                reason = a.endUnreachable ? NO_TRANSIT : LATE_FOR_LODGING;
             } else if (!a.lostProtected.isEmpty() && round < MAX_REBUILDS) {
                 victim = lastUnprotected(a.placed.subList(0, a.firstLossAt));
                 reason = YIELDED;
@@ -341,8 +465,8 @@ final class DayBuilder {
                     dropped = bestDropped;
                     lost = bestLost;
                 }
-                return new Variant(new Built(a.steps, dropped, a.placed.stream().map(Stop::place).toList(), a.placed),
-                        lost, a.lateBy > 0, 0);
+                return new Variant(new Built(a.steps, dropped, a.placed.stream().map(Stop::place).toList(), a.placed,
+                        a.hops), lost, a.lateBy > 0, 0);
             }
             excluded.add(victim.place().placeId());
             finalDropped.add(new Drop(victim, reason));
@@ -375,9 +499,13 @@ final class DayBuilder {
         return null;
     }
 
-    /** @param lostProtected 시간이 모자라 빠진 요청 장소 */
+    /**
+     * @param lostProtected  시간이 모자라 빠진 요청 장소
+     * @param endUnreachable 숙소·출발 허브로 가는 마지막 구간에 그 시각 편이 없다
+     * @param endDepartMin   마지막 구간을 떠나는 시각. 마지막 구간이 없으면 -1
+     */
     private record Attempt(List<StepData> steps, List<Stop> placed, int lateBy, List<Stop> lostProtected,
-                           int firstLossAt) {
+                           int firstLossAt, List<Hop> hops, boolean endUnreachable, int endDepartMin) {
     }
 
     private static Attempt attempt(Frame f, List<Stop> stops, Set<Long> excluded, List<Drop> dropped,
@@ -398,6 +526,7 @@ final class DayBuilder {
         seen.forEach(c -> used.add(c.placeId()));
 
         List<StepData> steps = new ArrayList<>();
+        List<Hop> hops = new ArrayList<>();
         List<Stop> placed = new ArrayList<>();
         List<Stop> lostProtected = new ArrayList<>();
         int firstLossAt = -1;
@@ -483,6 +612,9 @@ final class DayBuilder {
                     ScheduleTimes.formatMinutes(slot.arrive()));
             steps.add(DayTiming.buildStep(day, stop.place(), slot.start(), slot.end(), slot.leg(),
                     alternativesOf(stop)));
+            if (prev != null && slot.leg() != null) {
+                hops.add(new Hop(prev, stop.place(), t, slot.leg(), steps.size() - 1));
+            }
             placed.add(stop);
             seen.add(stop.place());
             t = slot.end();
@@ -500,6 +632,9 @@ final class DayBuilder {
             if (slot == null || slot.end() > endLimit(f, filler.place())) break;
             used.add(filler.place().placeId());
             steps.add(DayTiming.buildStep(day, filler.place(), slot.start(), slot.end(), slot.leg(), List.of()));
+            if (prev != null && slot.leg() != null) {
+                hops.add(new Hop(prev, filler.place(), t, slot.leg(), steps.size() - 1));
+            }
             placed.add(filler);
             seen.add(filler.place());
             t = slot.end();
@@ -508,24 +643,35 @@ final class DayBuilder {
         }
 
         int lateBy = 0;
+        boolean endUnreachable = false;
+        int endDepartMin = f.endAt() == null ? -1 : t;
         if (f.endAt() != null) {
-            TransportLeg leg = f.lastLeg() != null ? f.lastLeg()
+            TransportLeg routed = f.routed(prev, f.endAt());
+            TransportLeg leg = routed != null ? routed
+                    : f.lastLeg() != null ? f.lastLeg()
                     : !crossed ? f.firstLeg()
                     : f.leg(prev, f.endAt());
             Integer legMinutes = leg == null ? null : leg.durationMin();
             // 허브까지 구간을 모르면 0분이 아니라 기본 몫으로 본다. 0분이면 출발 허브에 바로 닿는 일정이 된다.
             int arrive = t + (legMinutes != null ? legMinutes : f.endIsHub() ? TripHubs.HUB_TRAVEL_MINUTES : 0);
-            int limit = f.endIsHub() ? f.hubDeadline() - TripHubs.estimatedLegSlack(legMinutes) : f.lodgingBy();
+            int limit = f.endIsHub()
+                    ? f.hubDeadline() - TripHubs.legSlack(legMinutes, leg == null ? null : leg.route())
+                    : f.lodgingBy();
             lateBy = arrive - limit;
+            // 편이 없는 마지막 구간은 늦은 것으로 보아 앞 장소를 덜어 더 이른 시각에 떠나게 한다.
+            endUnreachable = f.unreachableAt(leg, t);
+            if (endUnreachable) lateBy = Math.max(lateBy, 1);
             int stay = f.endIsHub() ? HUB_MINUTES : LODGING_MINUTES;
             steps.add(DayTiming.buildStep(day, f.endAt(), arrive, arrive + stay, leg, List.of()));
+            if (prev != null && leg != null) hops.add(new Hop(prev, f.endAt(), t, leg, steps.size() - 1));
         }
         // 떠나기 전에 쓸 시간이 없는 출발일은 전날 숙소에서 나서는 것으로 둔다. 스텝이 없는 날은 저장 관문이 거부한다.
         if (steps.isEmpty() && f.startAt() != null) {
             steps.add(DayTiming.buildStep(day, f.startAt(), f.startMin(), f.startMin() + LODGING_MINUTES, null,
                     List.of()));
         }
-        return new Attempt(steps, placed, lateBy, lostProtected, Math.max(0, firstLossAt));
+        return new Attempt(steps, placed, lateBy, lostProtected, Math.max(0, firstLossAt), hops, endUnreachable,
+                endDepartMin);
     }
 
     private record Slot(int arrive, int start, int end, TransportLeg leg) {
@@ -541,8 +687,11 @@ final class DayBuilder {
             if (!next.meal()) continue;
             // 출발일은 끼니도 그 식당에서 허브로 떠날 시각 전에 끝나야 한다.
             int mealBy = endLimit(f, next.place()) - MEAL_MINUTES;
-            if ("lunch".equals(next.slot()) && slot.end() > Math.min(LUNCH_LATEST_START, mealBy)) return true;
-            if ("dinner".equals(next.slot()) && slot.end() > Math.min(DINNER_LATEST_START, mealBy)) return true;
+            // 바로 다음이 식당이면 식당까지 가는 시간까지 넣어야 끼니 시작이 검사 기준(LUNCH_END)을 넘는지 맞게 본다.
+            TransportLeg toMeal = j == index + 1 ? f.leg(queue.get(index).place(), next.place()) : null;
+            int mealAt = slot.end() + (toMeal == null ? 0 : toMeal.durationMin());
+            if ("lunch".equals(next.slot()) && mealAt > Math.min(LUNCH_LATEST_START, mealBy)) return true;
+            if ("dinner".equals(next.slot()) && mealAt > Math.min(DINNER_LATEST_START, mealBy)) return true;
             return false;
         }
         return false;
@@ -570,9 +719,14 @@ final class DayBuilder {
      * 잡으면 공항이 먼 곳의 마지막 장소가 출발편을 놓친다.
      */
     static int endLimit(Frame f, PlaceCandidate at) {
-        if (!f.endIsHub()) return f.endMin();
+        if (!f.endIsHub()) {
+            // 저녁에 도시를 옮기는 날은 하루 끝을 도시 간 이동 추정으로 잡아 두었다. 실제 경로를 받으면 그 시간으로 다시 잡는다.
+            TransportLeg routed = f.lastLeg() == null ? null : f.routed(at, f.endAt());
+            if (routed == null || routed.unreachable()) return f.endMin();
+            return f.endMin() + f.lastLeg().durationMin() - routed.durationMin();
+        }
         TransportLeg leg = f.leg(at, f.endAt());
-        return TripHubs.latestLeave(f.hubDeadline(), leg == null ? null : leg.durationMin());
+        return TripHubs.latestLeaveOn(f.hubDeadline(), leg);
     }
 
     /**
@@ -587,7 +741,10 @@ final class DayBuilder {
     private static Slot fitInDay(Frame f, DayOfWeek dow, PlaceCandidate prev, Stop stop, int t,
                                  TransportLeg override, boolean strictSoft) {
         PlaceCandidate c = stop.place();
-        TransportLeg leg = override != null && towardNewCity(f, c) ? override
+        TransportLeg routed = f.routed(prev, c);
+        if (f.unreachableAt(routed, t)) return null;
+        TransportLeg leg = routed != null ? routed
+                : override != null && towardNewCity(f, c) ? override
                 : f.leg(prev, c);
         if (leg == null && prev != null) return null;
         int arrive = t + (leg == null ? 0 : leg.durationMin());
@@ -643,6 +800,7 @@ final class DayBuilder {
 
     private static String whyNot(Frame f, DayOfWeek dow, PlaceCandidate prev, Stop stop, int t) {
         PlaceCandidate c = stop.place();
+        if (prev != null && f.unreachableAt(f.routed(prev, c), t)) return NO_TRANSIT;
         if (prev != null && f.leg(prev, c) == null) return NO_ROUTE;
         Slot inDay = f.endIsHub() ? fitInDay(f, dow, prev, stop, t, null, false) : null;
         if (inDay != null && inDay.end() > endLimit(f, c)) return DEPARTURE_TOO_SOON;
@@ -796,14 +954,21 @@ final class DayBuilder {
                     BigDecimal.valueOf(Math.round(km * 300)));
         }
         // 대중교통으로만 다니는 지역은 가까운 구간도 택시로 잇지 않는다. 택시로 다니는 지역은 먼 구간도 택시다.
-        if ("taxi".equals(pref) || km <= TAXI_KM && !"transit".equals(pref)) {
-            return new TransportLeg("TAXI", (int) Math.ceil(5 + km / 25 * 60), distance,
-                    BigDecimal.valueOf(4800 + Math.round(Math.max(0, km - 1.6) * 800)));
-        }
+        if ("taxi".equals(pref) || km <= TAXI_KM && !"transit".equals(pref)) return taxiLeg(km, distance);
         // 먼 구간은 정류장이 드문 급행·간선이라 시내 구간보다 빠르다.
         double hours = km <= BUS_CITY_KM ? km / 20 : BUS_CITY_KM / 20 + (km - BUS_CITY_KM) / 35;
         int minutes = (int) Math.ceil(12 + hours * 60);
         return new TransportLeg("BUS", minutes, distance, BigDecimal.valueOf(1500));
+    }
+
+    /** 도로 km로 낸 택시 구간 추정. */
+    static TransportLeg taxiLeg(BigDecimal roadKm) {
+        return taxiLeg(roadKm == null ? 0 : roadKm.doubleValue(), roadKm);
+    }
+
+    private static TransportLeg taxiLeg(double km, BigDecimal shownKm) {
+        return new TransportLeg("TAXI", (int) Math.ceil(5 + km / 25 * 60), shownKm,
+                BigDecimal.valueOf(4800 + Math.round(Math.max(0, km - 1.6) * 800)));
     }
 
     static int closesAt(LocalDate date) {
