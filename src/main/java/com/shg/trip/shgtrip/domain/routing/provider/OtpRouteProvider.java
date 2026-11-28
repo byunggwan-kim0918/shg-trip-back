@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.routing.provider;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.shg.trip.shgtrip.domain.routing.FeedCoverage;
 import com.shg.trip.shgtrip.domain.routing.GeoPoint;
 import com.shg.trip.shgtrip.domain.routing.LegMode;
 import com.shg.trip.shgtrip.domain.routing.RouteBasis;
@@ -94,8 +95,18 @@ public class OtpRouteProvider extends AbstractRouteProvider {
     /** 운행 기간 조회가 실패하면 그동안 다시 묻지 않는다. 느린 서버에서 질의마다 제한시간을 더 쓰지 않게 한다. */
     private static final Duration SERVICE_RANGE_RETRY = Duration.ofMinutes(1);
 
+    private final FeedCoverage.File feedCoverage;
+
     public OtpRouteProvider(String id, ProviderSettings settings, RoutingHttp http, ObjectMapper mapper, Clock clock) {
+        this(id, settings, http, mapper, clock, null);
+    }
+
+    /** @param coverageDir feed-coverage-file 상대 경로의 기준 폴더. null이면 절대 경로만 쓴다 */
+    public OtpRouteProvider(String id, ProviderSettings settings, RoutingHttp http, ObjectMapper mapper, Clock clock,
+                            String coverageDir) {
         super(id, settings, http, mapper, clock);
+        this.feedCoverage = settings.feedCoveragePath(coverageDir).map(p -> new FeedCoverage.File(p, mapper, clock))
+                .orElse(null);
     }
 
     private static final String SERVICE_RANGE = "{ serviceTimeRange { start end } }";
@@ -118,7 +129,8 @@ public class OtpRouteProvider extends AbstractRouteProvider {
                 return projected(q, range.get());
             }
             RouteResult r = settings.stopToStop() ? stopToStop(q) : coordinates(q);
-            return range.map(sr -> withValidity(r, sr, true, q.departAt().toLocalDate())).orElse(r);
+            RouteResult valid = range.map(sr -> withValidity(r, sr, true, q.departAt().toLocalDate())).orElse(r);
+            return withFeedCoverage(valid, q);
         } finally {
             deadline.remove();
         }
@@ -175,6 +187,24 @@ public class OtpRouteProvider extends AbstractRouteProvider {
     /** 일광절약시간을 건너도 현지 시각이 같게 옮긴다. */
     static OffsetDateTime plusLocalDays(OffsetDateTime t, long days, ZoneId zone) {
         return t.atZoneSameInstant(zone).plusDays(days).toOffsetDateTime();
+    }
+
+    /** 근처 피드가 그날 운행 기간 밖이면 그 운행이 빠진 경로라 시간표를 확정하지 않는다. */
+    private RouteResult withFeedCoverage(RouteResult r, RouteQuery q) {
+        if (feedCoverage == null || r.status() != RouteStatus.FOUND) return r;
+        java.time.LocalDate day = q.departAt().withZoneSameInstant(zone(q)).toLocalDate();
+        List<FeedCoverage.Feed> lapsed = feedCoverage.get().lapsed(q.origin(), q.destination(), day);
+        if (lapsed.isEmpty()) return r;
+        // 도보만 나온 경로도 빠진 버스 대신 나온 것일 수 있어 함께 낮춘다.
+        List<RouteItinerary> out = r.itineraries().stream().map(it -> {
+            RouteSource s = it.source();
+            return new RouteItinerary(it.departure(), it.arrival(), it.durationSeconds(), it.transfers(), it.legs(),
+                    it.fares(), new RouteSource(s.providerId(), RouteBasis.weakest(s.basis(), RouteBasis.UNVERIFIED_SCHEDULE),
+                    s.officialData(), s.attribution(), s.observedAt(), s.expiresAt(), s.validity()), it.endpointGapMeters());
+        }).toList();
+        String note = FeedCoverage.describe(lapsed, day);
+        return new RouteResult(r.status(), out, r.providerId(), r.reason() == null ? note : r.reason() + "; " + note,
+                r.attempts());
     }
 
     private RouteResult withValidity(RouteResult r, ServiceRange range, boolean covered, java.time.LocalDate day) {

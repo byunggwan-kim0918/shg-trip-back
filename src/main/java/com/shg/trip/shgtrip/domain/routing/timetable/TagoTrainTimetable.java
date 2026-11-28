@@ -27,7 +27,7 @@ import java.util.Map;
 @Component
 public class TagoTrainTimetable {
 
-    static final String PROVIDER_ID = "tago-train";
+    public static final String PROVIDER_ID = "tago-train";
     private static final String PATH = "/1613000/TrainInfo/GetStrtpntAlocFndTrainInfo";
     private static final ZoneId KOREA = ZoneId.of("Asia/Seoul");
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyyMMdd");

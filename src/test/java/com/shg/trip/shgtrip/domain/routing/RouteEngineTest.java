@@ -36,7 +36,7 @@ class RouteEngineTest {
     }
 
     private RouteEngine engine(boolean enabled, RouteProvider... providers) {
-        RoutingProperties props = new RoutingProperties(enabled, 4, Map.of(), null, null, null, null, null, false, null, null);
+        RoutingProperties props = new RoutingProperties(enabled, 4, Map.of(), null, null, null, null, null, false, null, null, null);
         return new RouteEngine(new RouteProviderRegistry(List.of(providers)), cache, budget, props);
     }
 
@@ -63,6 +63,31 @@ class RouteEngineTest {
         assertThat(r.providerId()).isEqualTo("b");
         assertThat(r.attempts()).extracting(ProviderAttempt::status)
                 .containsExactly(RouteStatus.NO_CONNECTION, RouteStatus.FOUND);
+    }
+
+    @Test
+    void 앞_공급자가_답하지_못해_다음_공급자가_찾으면_대체_전환을_남긴다() {
+        Fake first = new Fake("a", 1, RouteResult.of(RouteStatus.UNAVAILABLE, "a", "http 401"));
+        Fake second = new Fake("b", 2, found("b"));
+        RouteEngine e = engine(true, first, second);
+
+        e.route(query(TravelMode.TRANSIT));
+
+        ProviderHealth.Fallback f = e.health("b").lastFallback();
+        assertThat(f.from()).isEqualTo("a");
+        assertThat(f.reason()).isEqualTo("http 401");
+        assertThat(e.health("a").state()).isEqualTo(ProviderHealth.State.AUTH_FAILED);
+    }
+
+    @Test
+    void 앞_공급자가_데이터_밖이면_대체_전환이_아니다() {
+        Fake first = new Fake("a", 1, RouteResult.of(RouteStatus.NOT_COVERED, "a", "outside"));
+        Fake second = new Fake("b", 2, found("b"));
+        RouteEngine e = engine(true, first, second);
+
+        e.route(query(TravelMode.TRANSIT));
+
+        assertThat(e.health("b").lastFallback()).isNull();
     }
 
     @Test
@@ -166,8 +191,8 @@ class RouteEngineTest {
     void 일일_한도가_있는데_시간대가_없으면_기동하지_않는다() {
         var s = new RoutingProperties.ProviderSettings("kakao-car", true, 1, "https://example.com", "k",
                 Set.of(TravelMode.CAR), List.of(RoutingTestSettings.HOKKAIDO), null, null, 100, 0, null, null, null, false,
-                "t", null, null, false, null, null, null, 0, null, false, null, null);
-        RoutingProperties props = new RoutingProperties(true, 4, Map.of("kakao-car", s), null, null, null, null, null, false, null, null);
+                "t", null, null, false, null, null, null, 0, null, false, null, null, null);
+        RoutingProperties props = new RoutingProperties(true, 4, Map.of("kakao-car", s), null, null, null, null, null, false, null, null, null);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> new RouteProviderRegistry(props, null,
                 new com.fasterxml.jackson.databind.ObjectMapper(), java.time.Clock.systemUTC()))
@@ -354,7 +379,7 @@ class RouteEngineTest {
 
     private static RouteEngine engineWith(List<ScheduleVerifier> verifiers, RouteCache cache, ProviderCallBudget budget,
                                           RouteProvider... providers) {
-        RoutingProperties props = new RoutingProperties(true, 4, Map.of(), null, null, null, null, null, false, null, null);
+        RoutingProperties props = new RoutingProperties(true, 4, Map.of(), null, null, null, null, null, false, null, null, null);
         return new RouteEngine(new RouteProviderRegistry(List.of(providers)), cache, budget, props,
                 new org.springframework.beans.factory.support.StaticListableBeanFactory().getBeanProvider(
                         io.micrometer.core.instrument.MeterRegistry.class), java.time.Clock.systemUTC(), verifiers);

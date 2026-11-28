@@ -18,14 +18,14 @@ public final class RoutingTestSettings {
                                                               String apiKey, int snapMeters, String timezone) {
         return new RoutingProperties.ProviderSettings(type, true, priority, "http://127.0.0.1:8091", apiKey, modes,
                 List.of(HOKKAIDO), null, Duration.ofSeconds(5), 0, 0, Duration.ofHours(1), Duration.ofMinutes(30),
-                Duration.ofMinutes(15), false, "test", timezone, snapMeters, false, null, null, null, 0, null, false, null, null);
+                Duration.ofMinutes(15), false, "test", timezone, snapMeters, false, null, null, null, 0, null, false, null, null, null);
     }
 
     public static RoutingProperties.ProviderSettings stopToStop(int snapMeters, Set<String> stopModes) {
         return new RoutingProperties.ProviderSettings("otp", true, 1, "http://127.0.0.1:8100", null,
                 Set.of(TravelMode.TRANSIT), List.of(HOKKAIDO), null, Duration.ofSeconds(5), 0, 0, Duration.ofHours(1),
                 Duration.ofMinutes(30), Duration.ofMinutes(15), false, "test", "Asia/Tokyo", snapMeters, true, stopModes,
-                null, 10, 0, null, false, null, null);
+                null, 10, 0, null, false, null, null, null);
     }
 
     public static RoutingProperties.ProviderSettings withUnverified(RoutingProperties.ProviderSettings s,
@@ -34,7 +34,7 @@ public final class RoutingTestSettings {
                 s.modes(), s.coverage(), s.coverageAreas(), s.timeout(), s.dailyLimit(), s.perMinuteLimit(), s.cacheTtl(),
                 s.noConnectionTtl(), s.cacheBucket(), s.officialData(), s.attribution(), s.timezone(),
                 s.snapToStopMeters(), s.stopToStop(), s.stopModes(), agencies, s.transferMinutes(), s.monthlyLimit(),
-                s.commercialUse(), s.external(), s.verifiers(), s.unverifiedFeeds());
+                s.commercialUse(), s.external(), s.verifiers(), s.unverifiedFeeds(), s.feedCoverageFile());
     }
 
     public static RoutingProperties.ProviderSettings withUnverifiedFeeds(RoutingProperties.ProviderSettings s,
@@ -43,7 +43,7 @@ public final class RoutingTestSettings {
                 s.modes(), s.coverage(), s.coverageAreas(), s.timeout(), s.dailyLimit(), s.perMinuteLimit(),
                 s.cacheTtl(), s.noConnectionTtl(), s.cacheBucket(), s.officialData(), s.attribution(), s.timezone(),
                 s.snapToStopMeters(), s.stopToStop(), s.stopModes(), s.unverifiedAgencies(), s.transferMinutes(),
-                s.monthlyLimit(), s.commercialUse(), s.external(), s.verifiers(), feeds);
+                s.monthlyLimit(), s.commercialUse(), s.external(), s.verifiers(), feeds, s.feedCoverageFile());
     }
 
     public static RoutingProperties.ProviderSettings withVerifiers(RoutingProperties.ProviderSettings s,
@@ -52,7 +52,7 @@ public final class RoutingTestSettings {
                 s.modes(), s.coverage(), s.coverageAreas(), s.timeout(), s.dailyLimit(), s.perMinuteLimit(),
                 s.cacheTtl(), s.noConnectionTtl(), s.cacheBucket(), s.officialData(), s.attribution(), s.timezone(),
                 s.snapToStopMeters(), s.stopToStop(), s.stopModes(), unverified, s.transferMinutes(), s.monthlyLimit(),
-                s.commercialUse(), s.external(), verifiers, s.unverifiedFeeds());
+                s.commercialUse(), s.external(), verifiers, s.unverifiedFeeds(), s.feedCoverageFile());
     }
 
     public static RoutingProperties.ProviderSettings external(RoutingProperties.ProviderSettings s,
@@ -61,7 +61,15 @@ public final class RoutingTestSettings {
                 s.modes(), s.coverage(), s.coverageAreas(), s.timeout(), s.dailyLimit(), s.perMinuteLimit(),
                 s.cacheTtl(), s.noConnectionTtl(), s.cacheBucket(), s.officialData(), s.attribution(), s.timezone(),
                 s.snapToStopMeters(), s.stopToStop(), s.stopModes(), s.unverifiedAgencies(), s.transferMinutes(),
-                s.monthlyLimit(), commercialUse, true, s.verifiers(), s.unverifiedFeeds());
+                s.monthlyLimit(), commercialUse, true, s.verifiers(), s.unverifiedFeeds(), s.feedCoverageFile());
+    }
+
+    public static RoutingProperties.ProviderSettings withFeedCoverage(RoutingProperties.ProviderSettings s, String file) {
+        return new RoutingProperties.ProviderSettings(s.type(), s.enabled(), s.priority(), s.baseUrl(), s.apiKey(),
+                s.modes(), s.coverage(), s.coverageAreas(), s.timeout(), s.dailyLimit(), s.perMinuteLimit(),
+                s.cacheTtl(), s.noConnectionTtl(), s.cacheBucket(), s.officialData(), s.attribution(), s.timezone(),
+                s.snapToStopMeters(), s.stopToStop(), s.stopModes(), s.unverifiedAgencies(), s.transferMinutes(),
+                s.monthlyLimit(), s.commercialUse(), s.external(), s.verifiers(), s.unverifiedFeeds(), file);
     }
 
     public static RouteQuery query(TravelMode mode) {

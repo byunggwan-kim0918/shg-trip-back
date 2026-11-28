@@ -45,6 +45,9 @@
 - 공급자는 `application-routing.yml`의 `routing.providers.<id>` 항목 하나다. 영역은 ISO 3166-2 구역 코드(`coverage-areas`, 나라 코드면 전체, 경계는 `routing/admin-areas.json`)나 사각형으로 적는다. 앞 공급자가 데이터 밖이면 다음 공급자에 묻는다
 - 역→역 공급자(`stop-to-stop`) 결과에는 엔진이 출발지→역, 역→목적지 구간을 지역 공급자로 붙이고, 열차는 접근 도착 + `transfer-minutes`(기본 10분) 뒤로 다시 고른다
 - 장소 좌표가 길과 끊겨 출발지를 정류장으로 옮기면, 그 거리를 OTP 보행 속도(1.33m/s)로 걸은 뒤 떠나는 편을 묻는다. 걷는 시간은 호출부가 `endpointGapMeters`로 더한다
+- 공급자 목록: `routing/providers.json` 한 곳에 데이터·경로 공급자 전체를 역할(CORE·FALLBACK·VALIDATION·DEPRECATED)과 연결 상태(코드 연결·키만 있음·없음), 인증정보 환경변수 이름과 함께 적는다. 설정 공급자와 목록이 어긋나면 테스트가 실패한다. `otp_region.py providers`는 키 설정 여부만(값 없이) 보여 준다
+- 상태 노출: `/actuator/routing`(운영 프로필은 노출 안 함)에 공급자별 역할·키 설정 여부·분·일·월 사용량과 한도 대비 비율·마지막 성공·실패 시각·실패 종류(인증·호출 제한·시간 초과·오류)·차단 상태·대체 공급자 전환(앞 공급자가 답하지 못해 뒤 공급자가 낸 횟수, `routing.provider.fallback`). 인증 실패·호출 제한 응답은 한 번에 차단한다
+- 한도 경고: 분·일·월 카운터를 Lua 스크립트 하나로 확인하고 모두 남았을 때만 함께 올린다(올림과 만료를 한 번에 해 만료 없는 카운터가 남지 않는다). 무료 한도 80%에 닿는 호출에서 `route budget warning`, 소진 때 `route budget exhausted`를 한 번 남기고 매시 사용량을 `route budget usage`로 남긴다. 카카오 월 한도는 `ROUTING_KAKAO_MONTHLY_LIMIT`(앱 콘솔 쿼터 값)
 - 호출 관리: 분·일·월 한도(Valkey, 공급자 현지 날짜, 못 읽으면 호출 안 함) · 연속 실패 5회면 60초 차단 뒤 한 요청만 다시 묻기 · 같은 요청 동시 합치기 · 일정당 외부 호출 예산(`CallAllowance`) · 조회 한 번 40초 기한, OTP 한 호출 안의 재조회는 제한시간 3배 기한 · 공급자별 응답 시간·결과 측정(`routing.provider.call`) · 상업 이용 불가 공급자는 `allow-non-commercial`일 때만
 - TAGO: 역·터미널 목록 6시간 캐시(다 못 받으면 10분 뒤 다시), 역 쌍·날짜별 시간표 6시간 캐시, 하루치가 한 쪽을 넘으면 `totalCount`까지 이어 받기(일부만 받으면 확인 못 함)
 - 캐시: Valkey `route:v2`. 실제로 물어본 시각보다 이른 대중교통 요청에는 쓰지 않는다. `UNAVAILABLE`은 저장하지 않는다
@@ -54,13 +57,19 @@
 ## 데이터 파이프라인(`scripts/routing`)
 
 ```bash
-python3 -I scripts/routing/otp_region.py build jp-kanto     # 수집 → 자르기 → 임시 빌드 → 품질 검사 → 교체
+python3 -I scripts/routing/otp_region.py build jp-kanto     # 수요 기반: 수집 → 판 선택 → 자르기 → 임시 빌드 → 품질 검사 → 교체
+python3 -I scripts/routing/otp_region.py check jp-kanto     # 같은 과정에서 교체만 하지 않는다(회귀 검증)
+python3 -I scripts/routing/otp_region.py refresh            # 정기 갱신: 입력이 바뀐 지역만 차례로 다시 짓는다(실패 지역은 지금 그래프 유지, 종료 코드 1)
+python3 -I scripts/routing/otp_region.py lifecycle --prefetch  # 판 만료 상태, 만료 예정 피드의 다음 판 사전 수집
+python3 -I scripts/routing/otp_region.py catalog JP         # 카탈로그 형식·상태·공식 여부·MDB와 Atlas 원천 중복
+python3 -I scripts/routing/otp_region.py baseline           # 입력 기록이 없는 지금 그래프의 기준선(내려받기 없이 검증된 지역만)
 python3 -I scripts/routing/otp_region.py serve jp-kanto     # 127.0.0.1에만 바인딩
-python3 -I scripts/routing/otp_region.py rollback jp-kanto  # 교체 전 그래프로
+python3 -I scripts/routing/otp_region.py restart jp-kanto   # 교체·롤백 뒤 서버를 지금 graph/로 다시 띄우고 대표 구간 확인
+python3 -I scripts/routing/otp_region.py rollback jp-kanto  # 교체 전 그래프로(정기 갱신 보류, release로 해제)
 python3 -I -m unittest discover -s scripts/routing -p 'test_*.py'
 ```
 
-1. 발견: 지역 정의(`regions.json`)의 핵심 피드 + Mobility Database(현·주, 빈 목록이면 나라 전체) + ODPT 카탈로그(토큰 피드는 `ODPT_ACCESS_TOKEN`) + Transitland Atlas(나라별 후보 패턴). 신청해서 받는 자료는 `pathEnv`(예: `KTDB_GTFS_PATH`, 로컬 경로 또는 `s3://`)로 넣고, 판(`edition`)과 파일 해시(`sha256`)를 설정에 고정한다. 해시가 다르면 싣지 않고, 기준월에서 `editionMaxAgeDays`가 지나면 다음 판 신청을 알린다
+1. 발견: 지역 정의(`regions.json`)의 핵심 피드 + Mobility Database(현·주 이름, 이름 목록이 없으면 카탈로그 `location.bounding_box`와 지역 영역이 겹치는 피드. `is_official`·`static_reference`(실시간 피드)·`redirect.id`(대체 관계)를 피드 목록에 남긴다) + ODPT 카탈로그(토큰 피드는 `ODPT_ACCESS_TOKEN`) + Transitland Atlas(나라별 후보 패턴). 신청해서 받는 자료는 `pathEnv`(예: `KTDB_GTFS_PATH`, 로컬 경로 또는 `s3://`)로 넣고, 판(`edition`)과 파일 해시(`sha256`)를 설정에 고정한다. 해시가 다르면 싣지 않고, 기준월에서 `editionMaxAgeDays`가 지나면 다음 판 신청을 알린다
 2. 수집: 피드·카탈로그별 `refreshDays`·`catalogRefreshDays`로 다시 받기, 다시 받기 실패면 전에 받은 파일, 실패한 카탈로그 주소는 하루 동안 건너뜀, 내려받기 전체 기한
 3. 정리(`gtfs_clip.py`): 영역·기간(오늘부터 365일) 자르기, 깨진 행·중복 키·없는 참조 제거, 표준이 아닌 노선 종류 변환, 겹치는 노선 이름 규칙 제외
 4. 운행 기간: 달력이 형식상인 대표 시각표 피드(`representativeCalendar`, 예: KTDB)는 실제 달력이 있는 핵심 피드가 모두 운행하는 기간으로 달력까지 잘라 싣는다. 그 기간을 못 구하면 싣지 않는다. 그래서 OTP `serviceTimeRange`가 실제 시간표 기간을 넘지 않는다
@@ -69,6 +78,18 @@ python3 -I -m unittest discover -s scripts/routing -p 'test_*.py'
 7. 이전 그래프와 비교: 핵심 피드 운행 수가 절반 밑으로 줄거나 핵심 피드가 격리되면 교체하지 않음
 8. 품질 검사: 임시 포트로 새 그래프를 띄워 지역별 대표 구간(`smoke`, 역→역 그래프는 정류장 id)이 대중교통으로 나오는지, `expectRoute`가 있으면 그 노선이 나오는지. 실패하면 교체하지 않음
 9. 교체·롤백: `staging → graph`, 기존은 `previous`. 교체가 중간에 끊겨 `graph`가 없으면 롤백이 `previous`를 되살린다
+
+### 피드 수명 관리(`feed_versions.py`·`feed_compare.py`)
+
+- 판 보관: 받은 피드는 `sources/versions/<피드>/<sha256 앞 16자>.zip`(읽기 전용)으로 판마다 따로 두고, `versions.json`에 원천 주소·카탈로그·라이선스·공식 여부·운영기관·받은 시각·실제 운행 기간(달력·운행 기준, feed_info 아님)·운행 수·품질 문제를 적는다. 다시 받기 전에 지금 사본을 먼저 판으로 남겨 새 다운로드가 원본을 덮지 않는다
+- 판 선택: 오늘 운행하는 정상 판 중 가장 최근에 보인 판(원천이 예전 판으로 되돌리면 그 판). 같은 원천은 판 쿼리(`date`, GTFSデータリポジトリ `rid`)를 빼고 한 피드로 본다
+- 품질: 필수 파일·달력·운행·정류장 좌표가 없거나 운행 수가 직전 정상 판의 절반 밑이면 그 판은 보관만 하고 싣지 않는다(이전 정상 판 사용, `warn` 줄)
+- 만료: 운행 종료 14일 전부터 `expiring`, 매일 다시 받고 다음 판을 찾는다. 나머지는 원래 갱신 주기. 다음 판은 `regions.json` `nextEdition` 규칙(원천 호스트·판 쿼리)으로 지금 판 끝 다음 날을 묻고, 하루 한 번만 묻는다. 규칙이 없는 원천은 만료만 알린다
+- 다음 판: 지금 판보다 늦게 시작하고 늦게 끝나며 나중에 받은 정상 판만 다음 판이다(개정으로 짧아진 새 판 뒤에 예전의 긴 판이 끼어들지 않는다). 끊는 날이 오늘 이전이면 잇지 않는다. 이어 싣지 못하는 다음 판이 있으면 상태는 `expiring`·`nextUnlinked`로 남고, 운행 수가 줄어 거부된 새 판은 `newestRejected`로 보고한다(정당한 감편은 피드 설정 `allowTripDrop`)
+- 판 연결: 다음 판이 있으면 기간 연속성·정류장 id 일관성(같은 id의 위치 100m 이상·이름 변경)·노선 id 충돌·trip_id·service_id 충돌·겹친 날의 같은 운행·날짜별 운행 여부를 본다. 이어지면 판마다 OTP 피드 id를 따로 두고(`<피드>-v<시작일>`) 판별 기간으로 잘라 함께 싣는다. 다음 판에도 같은 실시간 갱신기와 핵심 피드 보호가 붙고, 판 사이에 빈 날이 있으면 지역 운행 기간은 앞 판까지다. stop_times가 400MB를 넘는 피드는 기간·정류장만 보고 운행 단위 검사는 건너뛰었다고 남긴다. 겹치면 새 판 시작 전날에서 앞 판을 끊는다. 정류장 id가 5% 넘게 다른 곳을 가리키면 잇지 않고 지금 판만 싣고 그 뒤 기간을 공백으로 알린다. id가 다른 내용으로 다시 쓰였으면(`mergeable: false`) 한 피드로 합치지 않는다. 결과는 그래프의 `feeds-lifecycle.json`
+- 서빙: 그래프마다 `feeds-coverage.json`(피드별 정류장 범위·수단·실은 기간, 이어 실은 판은 한 피드로 묶음)을 남기고, OTP 공급자는 출발지·도착지 근처 피드가 그날 기간 밖이면 그 경로를 `UNVERIFIED_SCHEDULE`로 낮추고 사유를 단다. 다른 지역·피드 경로는 그대로다. 대표 시각표·형식상 달력은 이미 미검증이라 넣지 않는다
+- 중복: SHA-256이 같으면 뺀다. 운행 지문(실제 운행일·정류장 순서(이름·좌표)·시각·승하차 제한·노선 종류·이름·배차 간격)이 다른 피드에 모두 들어 있으면 뺀다. 설정 피드는 빼지 않고, 남는 피드가 형식상 달력이거나 자르기 규칙(노선 제외·종류 변환)이 있거나 공식 피드를 비공식 피드로 바꾸게 되거나 뺄 피드에만 환승·요금·통로 파일이 있으면 빼지 않는다. 95% 넘게 비슷하면 후보로만 기록하고 둘 다 싣는다. 운영기관이 같다는 것만으로는 빼지 않는다. 남긴 피드가 빌드에서 격리되면 그 피드 때문에 뺀 피드를 다시 싣는다. 정류장이 크게 겹치는(90%) 쌍만 운행 지문을 만들고, 압축을 푼 stop_times가 400MB를 넘는 피드는 비교하지 않는다
+- 다시 짓기: 그래프마다 입력 기록(`inputs.json`: 피드 판 해시·판별 기간·OSM 크기·시각·지역 설정·피드 설정·OTP 판·`GRAPH_INPUTS_VERSION`)을 남기고 `refresh`는 입력이 같고 그래프가 `graphMaxAgeDays`(30일)보다 새로우면 짓지 않는다. 같은 기계의 빌드·롤백은 잠금 하나로 막는다
 
 새 나라에 필요한 것: `regions.json` 지역 항목(OSM 주소, 영역, 시간대, 포트, 품질 검사 구간), `admin_areas.py`로 경계에 나라 코드 추가, `application-routing.yml` 공급자 항목, (선택) Atlas 후보 패턴·택시 요금 행. 코드가 필요한 것은 그 나라 공식 API 어댑터(예: TAGO·TfL)와 공식 시간표 검증기뿐이다. 전 세계 단일 OTP 그래프는 만들지 않는다.
 
@@ -112,13 +133,66 @@ python3 -I -m unittest discover -s scripts/routing -p 'test_*.py'
 - `endpointGapMeters > 0`이면 그 거리의 도보·택시 시간을 호출부가 더한다(공항·역 장소 좌표가 부지 중심이라 생긴다)
 - 바꿀 곳: `DayBuilder`(덮어쓰기 구간), `DraftItineraryPlanner`(허브 구간 2곳), `IntercityLegs`, `TransportLeg`(근거·공급자 필드), `ItineraryDataMapper` + 새 마이그레이션, 프론트 "추정" 표시, `DraftEvalRunner`의 eval.mode 목록에 `route`
 
+## 운영 절차
+
+### 입력 기준선(처음 refresh 전)
+
+이 기능 전에 지은 그래프에는 `inputs.json`이 없어 `refresh`가 모든 지역을 다시 짓는다. `baseline`은 빌드 잠금을 잡고 내려받기를 끈 채(`OFFLINE`, 받은 사본만 쓰고 다음 판도 묻지 않음) 지금 파이프라인으로 수집·판 선택·중복 제외·자르기를 다시 돌린다. 그래프에 든 피드 집합, 피드별 자르기 요약(정류장·운행·stop_times·서비스·운행일 범위), 피드 목록의 원본 sha256, 지금 그래프 smoke 통과, OSM 사본이 그래프보다 오래됐는지를 모두 맞춰 본 뒤 같을 때만 `inputs.json`을 쓴다(그래프 파일은 건드리지 않음). 격리된 피드는 OTP가 다시 격리하므로 비교에서 뺀다. 하나라도 다르면 쓰지 않고 이유를 내므로 그 지역만 다음 refresh가 다시 짓는다.
+
+2026-11-27 실행: 홋카이도·주부·간사이·주고쿠·시코쿠·규슈·전국 철도·한국·싱가포르 9개 지역 기록. 도호쿠(센다이 12월판 추가, 오가시 정시정로 피드 112편이 같은 날 낸 오가시 전체 피드에 모두 포함)와 간토(미즈호정 커뮤니티 버스 94편이 ODPT 미즈호정 전 노선 피드에 모두 포함)는 기록하지 않았다. 이어서 `refresh --check`는 9개 지역을 재사용하고 도호쿠·간토만 다시 지었다(교체 없음, smoke 통과, 나머지 피드는 해시·운행 수 같음).
+
+교체 전 회귀 검사(지금 그래프와 staging을 같은 포트에 차례로 띄워 같은 질의): 도호쿠 9개·간토 7개 구간이 노선·시각까지 같다(미즈호정은 같은 시각·노선을 ODPT 피드가 낸다). 뺀 오가시·미즈호정 피드의 노선(6/6, 5/5)·정류장(392/392, 60/60)·날짜별 운행이 남은 피드에 모두 있다. 센다이는 11/30까지 11월판, 12/01부터 12월판만 운행하고(평일 3,390편, 겹치는 날 없음, 24시 넘는 운행 없음) 12/31부터 버스가 없다. 임시 ROOT에서 실제로 지어 교체하면 `inputs.json`이 그래프에 남고 다음 refresh가 재사용하며, 기준선 digest는 실제 빌드가 쓰는 digest와 같다.
+
+2026-11-28 교체: 도호쿠·간토는 지금 수집 규칙으로 구한 입력이 검증한 staging 입력 기록과 같아 다시 짓지 않고 staging을 교체했다(옛 그래프는 `previous`, 그 전 `previous`는 `archive/`). `restart` 뒤 smoke 통과(기동 10초·22초), 다음 refresh는 두 지역 모두 재사용했다.
+
+센다이 11/30 23:50(막차 뒤): 새 도호쿠 그래프는 다음 버스가 12/01 06:00이라 OTP가 도보 대안 없이 `NO_TRANSIT_CONNECTION_IN_SEARCH_WINDOW`를 낸다(옛 그래프는 12월 버스가 없어 도보 113분을 냈다). RouteEngine은 이 결과를 찾음으로 보지 않고 다음 공급자(전국 철도 역→역)로 넘겨 JR 00:02-00:12 + 도보 구간을 01:06 도착으로 냈고, 같은 시각 도보 요청은 Valhalla가 98분으로 낸다. 12/31은 12월판이 끝나 경로가 `UNVERIFIED_SCHEDULE`과 만료 사유로 나온다.
+
+### 그래프 전환
+
+OTP 2.8은 기동할 때만 `graph.obj`를 읽고 실행 중 다시 읽는 API가 없다. 교체(`build`)와 롤백은 폴더만 바꾸고, 그 포트에 서버가 떠 있으면 `restart`를 안내한다.
+
+1. `build <지역>`(검사 통과 뒤 교체) 또는 `rollback <지역>`
+2. `restart <지역>`: 그 포트를 듣는 프로세스가 이 지역 `graph/`를 읽은 OTP인지 확인하고(아니면 멈춤) 끄고, `serve`로 다시 띄워 기동 로그를 기다린 뒤 대표 구간을 묻는다. 기동하는 동안(지역별 5~25초) 그 공급자는 `UNAVAILABLE`이고 엔진은 추정으로 둔다
+3. `serve`는 띄울 때 그 그래프의 `feeds-coverage.json`을 `serving/`에 복사한다. 경로 엔진은 `serving/` 사본을 읽으므로 교체 뒤 재기동 전까지도 지금 서버 그래프 기준으로 판정한다
+4. 롤백은 `hold.json`을 남겨 정기 갱신이 같은 입력으로 다시 지어 되돌리기 전 그래프로 바꾸지 않게 한다. 원인을 고친 뒤 `build`(교체되면 해제) 또는 `release`
+
+AWS: 그래프를 `s3://…/<지역>/<입력 digest>/`처럼 판 경로로 올리고, OTP 서비스 태스크 정의의 그래프 경로만 바꿔 ECS 롤링 배포(새 태스크가 health 통과 뒤 옛 태스크 종료)로 바꾸면 중단이 없다. 롤백은 이전 태스크 정의 리비전으로 되돌린다.
+
+### 빌드 잠금(분산 잠금은 설계만 있고 구현하지 않았다)
+
+> 지금 구현된 잠금은 한 기계 안의 `flock` 하나뿐이다. 아래 분산 잠금은 운영(여러 Fargate 작업)을 위한 설계안이고 코드·인프라 어디에도 아직 없다. 여러 작업으로 돌리기 전에 구현해야 한다.
+
+`build_lock()`은 `build/otp/.build.lock`에 대한 `fcntl.flock`이라 한 기계·한 파일 시스템 안의 프로세스끼리만 막는다(빌드·롤백·기준선·재기동·판 사전 수집이 함께 쓴다). 여러 Fargate 작업이 같은 지역을 동시에 지으면 막지 못한다. 분산 잠금 설계안(미구현):
+
+- 잠금: 기존 Valkey에 지역별 키 `route:graph-lock:{지역}`을 `SET 값=<작업 id>:<토큰> NX PX 15분`으로 잡고, 빌드 중 5분마다 Lua로 "값이 내 것일 때만 PEXPIRE"로 늘리고, 끝나면 "값이 내 것일 때만 DEL"로 푼다. 작업이 죽으면 만료로 풀린다
+- 펜싱: 잠금을 잡을 때 `INCR route:graph-fence:{지역}`으로 받은 번호를 교체 단계에 싣는다. 교체는 S3의 `<지역>/current.json`을 조건부 쓰기(`If-Match` 이전 ETag)로 바꾸고 번호가 지금 것보다 작으면 쓰지 않는다. 잠금 만료 뒤 늦게 끝난 옛 작업이 새 그래프를 덮지 못한다
+- 실행: Step Functions 한 실행이 지역 목록을 Map(동시 실행 수 = 메모리 한도)으로 돌리고, 실행 이름을 `refresh-<날짜>`로 두어 같은 날 중복 시작을 막는다. 수요 기반 빌드도 같은 잠금을 거친다
+- 비용: Valkey·S3·Step Functions 모두 기존 자원이라 새 자원이 없다
+
+## 미완료(이번 단계에서 하지 않은 것)
+
+| 항목 | 지금 상태 | 하려면 |
+|---|---|---|
+| 한도 경고 SNS 알림 | `route budget warning`·`exhausted` 로그와 `/actuator/routing`만 있다. 기존 SNS 토픽(`pipeline-alerts`)에 연결하지 않았다 | CloudWatch 로그 지표 필터 + 알람 → 기존 SNS(terraform, 승인 필요) |
+| NeTEx·SIRI·GBFS | 구현 안 함. `catalog`가 카탈로그 형식별 개수만 센다(일본 MDB GBFS 4개) | 대상 국가와 데이터가 정해지면 형식 어댑터(NeTEx → GTFS 변환 등) |
+| GTFS-RT 자동 연결 | MDB `static_reference`(일본 143개)를 피드 목록에 기록만 한다. 갱신기는 `regions.json`에 적은 것만 켠다 | 인증 없는 RT 피드를 피드 id와 묶어 갱신기 자동 생성 |
+| 다음 판 자동 수집 | `nextEdition` 규칙은 ODPT(`date=`)만 있다. 나머지 원천은 만료 14일 전부터 매일 다시 받고 만료를 알리기만 한다 | 원천별 판 쿼리 규칙(설정)이나 카탈로그 갱신 감지 |
+| 분산 빌드 잠금 | 설계 단계. 구현된 것은 한 기계 안 `flock`뿐이라 여러 Fargate 작업의 같은 지역 동시 빌드를 막지 못한다 | 위 "빌드 잠금" 설계(Valkey 잠금 + 펜싱 + S3 조건부 교체) 구현 |
+| 무중단 그래프 전환 | 로컬은 `restart`(기동 동안 그 공급자 조회 불가) | ECS 롤링 배포로 그래프 경로 교체 |
+| 카카오 월 한도 값 | 설정만 있고 값은 비어 있다(일 9,000회는 그대로 막음) | 앱 콘솔 쿼터 값을 `ROUTING_KAKAO_MONTHLY_LIMIT`에 넣기 |
+| TMAP·LTA·DB·PRIM·ODsay | 인증정보만 있거나 없다(`providers.json` keyOnly·none) | 역할에 맞는 어댑터가 필요할 때 |
+| `otp_region.py` 크기 | 1,800줄 한 파일 | 수집(카탈로그)·판·빌드·서빙 모듈로 나누기 |
+
 ## 남은 과제
 
 - 데이터: KTDB는 1년 반 늦게 나오는 평일 대표 시각표라 날짜별 운행을 확정하지 못한다. ODPT 토큰 피드 53개(교토 시버스·요코하마 시영 버스 등), 오사카 시티버스·니시테쓰 버스(공개 데이터 없음), 일본 국내선 항공·미야지마 배 시간표 없음. Atlas 후보 140개는 원천 주소가 사라졌다(404 123·403 9 등)
-- 판 갱신(다음 브랜치): 한 달 단위로 판을 끊어 내는 피드의 다음 판 자동 수집, 피드 만료 관리, 나라 공통 피드 수명 관리. 센다이 시영 버스는 `?date=current`가 지금 판(~2026-11-30)만 주고 `?date=20261201`로 다음 판을 받는다. 일본 그래프 피드 787개 중 24개가 30일 안에 끝난다
 - 형식상 달력: 간토 등 일부 버스 피드는 2099년까지로 적혀 있다. 지역 기간 맞춤으로 그래프 기간은 넘지 않지만 운행일 확정 여부는 따로 표시하지 않는다
 - 중복 제외 피드의 다국어 이름(`translations`)은 `duplicates-meta/`에만 보관하고 그래프에 합치지 않는다
 - 공식 대조: TAGO 시외버스 대조 미연결, ODsay IP 등록, DB OpenBoards Client Secret. 코레일 피드는 커뮤니티(mkuran) 재가공본이라 SR 열차 이름·운영사가 차량 기준으로 적힌다
-- 운영 전: 별도 경로 서비스로 OTP·Valhalla 분리(2GB 앱 태스크에 넣지 않음), 내부망 OTP 주소 허용(지금은 원격 https·로컬 http만), 응답 크기 상한, 한도 카운터 INCR·EXPIRE 원자화
+- 운영 전: 별도 경로 서비스로 OTP·Valhalla 분리(2GB 앱 태스크에 넣지 않음), 내부망 OTP 주소 허용(지금은 원격 https·로컬 http만), 응답 크기 상한
+- 계절·행사 피드도 끝나면 그 정류장 범위 경로를 미검증으로 낮춘다(정기 피드와 가르는 정보가 카탈로그에 없다)
+- 베를린은 지역 id `de-berlin` 하나로 관리한다. 파이프라인 전 수작업 그래프(피드 목록·품질 검사 기록 없음)는 `de-berlin/archive/legacy-berlin`에 보관한다. `archiveKeep`을 켜면 보관본 정리가 이름순이라 이 폴더가 가장 새 보관본으로 남는다
+- 기준선 이전 그래프에는 `feeds-coverage.json`이 없어 다시 지을 때까지 그 지역은 피드 단위 만료 판정을 하지 않는다(그래프 전체 운행 기간 판정만)
+- 한도 카운터 키가 `route:budget:{공급자}:…`로 바뀌었다. routing 프로필을 운영에 켜는 첫 배포 전에는 영향이 없고, 켠 뒤 형식을 다시 바꾸면 그날 카운터가 0부터 다시 센다
 - `.env.example`에 `TAGO_SERVICE_KEY`·`ODPT_ACCESS_TOKEN` 항목이 없다. `TOUR_API_SERVICE_KEY`가 URL 인코딩된 키면 두 번 인코딩돼 TAGO 대조가 조용히 꺼진다
 - 카카오 키는 `KAKAO_MOBILITY_REST_KEY`가 없으면 로그인 앱 키(`KAKAO_CLIENT_ID`)를, TAGO 키는 `TAGO_SERVICE_KEY`가 없으면 `TOUR_API_SERVICE_KEY`를 쓴다. 같은 앱·계정이라 한도도 함께 쓴다

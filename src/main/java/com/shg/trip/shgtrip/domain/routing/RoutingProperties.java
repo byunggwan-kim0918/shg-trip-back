@@ -19,6 +19,7 @@ import java.util.Set;
  * @param areaBufferKm       행정구역 경계에서 이 거리 안은 구역 안으로 본다
  * @param allowNonCommercial 상업 이용이 안 되는 공급자(commercial-use: false)를 켠다. 평가·비교 실행에서만 켠다
  * @param breakerFailures    공급자가 연속으로 이만큼 실패하면 breakerOpen 동안 묻지 않는다
+ * @param otpCoverageDir     OTP 공급자 feed-coverage-file 상대 경로의 기준 폴더(build/otp). 비면 피드 단위 운행 기간 판정을 끈다
  */
 @ConfigurationProperties(prefix = "routing")
 public record RoutingProperties(
@@ -32,7 +33,8 @@ public record RoutingProperties(
         Double areaBufferKm,
         boolean allowNonCommercial,
         Integer breakerFailures,
-        Duration breakerOpen
+        Duration breakerOpen,
+        String otpCoverageDir
 ) {
 
     /** 소수 넷째 자리는 약 11m다. 같은 장소 좌표는 한 칸에 들고 다른 입구는 갈린다. */
@@ -75,6 +77,8 @@ public record RoutingProperties(
      * @param external       외부 API라 호출이 비용·한도를 쓰는지. 일정당 외부 호출 예산을 센다
      * @param verifiers      찾은 경로의 대중교통 구간을 공식 시간표와 대조할 {@link ScheduleVerifier} id
      * @param unverifiedFeeds 운행일을 확정하지 못하는 피드 id(빌드 피드 목록의 calendarSuspect). 이 피드 구간이 든 경로는 UNVERIFIED_SCHEDULE이다
+     * @param feedCoverageFile 그래프 빌드가 남긴 feeds-coverage.json 경로(상대 경로는 otpCoverageDir 기준). 출발지·도착지
+     *                         근처 피드가 그날 운행 기간 밖이면 경로를 UNVERIFIED_SCHEDULE로 낮춘다. 비면 그래프 전체 운행 기간만 본다
      */
     /** 역 안 이동·표 구매를 포함한 갈아타기 여유. 큰 역 환승 안내 최소 시간에 맞춘다. */
     private static final int DEFAULT_TRANSFER_MINUTES = 10;
@@ -102,13 +106,21 @@ public record RoutingProperties(
             Set<String> stopModes,
             Set<String> unverifiedAgencies,
             Integer transferMinutes,
-            int monthlyLimit,
+            Integer monthlyLimit,
             Boolean commercialUse,
             boolean external,
             List<String> verifiers,
-            Set<String> unverifiedFeeds
+            Set<String> unverifiedFeeds,
+            String feedCoverageFile
     ) {
         public ProviderSettings {
+            // 환경변수를 빈 값으로 두면 설정하지 않은 것(월 한도 세지 않음)으로 본다.
+            if (monthlyLimit == null) monthlyLimit = 0;
+            // 음수 한도는 "한도 없음"(0 이하)으로 읽혀 과금 공급자를 무제한으로 부른다. 잘못 적은 값은 기동에서 막는다.
+            if (dailyLimit < 0 || perMinuteLimit < 0 || monthlyLimit < 0) {
+                throw new IllegalArgumentException("호출 한도는 0 이상이어야 한다: daily=" + dailyLimit
+                        + " perMinute=" + perMinuteLimit + " monthly=" + monthlyLimit);
+            }
             modes = modes == null ? Set.of() : Set.copyOf(modes);
             coverage = coverage == null ? List.of() : List.copyOf(coverage);
             coverageAreas = coverageAreas == null ? List.of() : List.copyOf(coverageAreas);
@@ -123,6 +135,15 @@ public record RoutingProperties(
             if (commercialUse == null) commercialUse = true;
             verifiers = verifiers == null ? List.of() : List.copyOf(verifiers);
             unverifiedFeeds = unverifiedFeeds == null ? Set.of() : Set.copyOf(unverifiedFeeds);
+        }
+
+        /** 피드 범위 파일 위치. 상대 경로인데 기준 폴더가 없으면 판정을 끈다. */
+        public java.util.Optional<java.nio.file.Path> feedCoveragePath(String baseDir) {
+            if (feedCoverageFile == null || feedCoverageFile.isBlank()) return java.util.Optional.empty();
+            java.nio.file.Path p = java.nio.file.Path.of(feedCoverageFile);
+            if (p.isAbsolute()) return java.util.Optional.of(p);
+            return baseDir == null || baseDir.isBlank() ? java.util.Optional.empty()
+                    : java.util.Optional.of(java.nio.file.Path.of(baseDir).resolve(p));
         }
 
         public ZoneId zone() {

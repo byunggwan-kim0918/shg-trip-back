@@ -93,6 +93,7 @@ public class RouteEngine {
             RouteResult r = fromCache ? cached.get() : call(p, q, c);
             attempts.add(new ProviderAttempt(p.id(), r.status(), r.reason(), fromCache));
             if (r.status() == RouteStatus.FOUND) {
+                fallbackFrom(attempts).ifPresent(a -> fallback(a, p));
                 if (connectStops && p.settings().stopToStop() && q.mode() == TravelMode.TRANSIT) {
                     r = connect(q, p, r, c);
                     if (r.status() != RouteStatus.FOUND) return r.withAttempts(attempts);
@@ -101,6 +102,22 @@ public class RouteEngine {
             }
         }
         return summarize(attempts);
+    }
+
+    /** 앞 공급자가 답하지 못해(UNAVAILABLE) 뒤 공급자가 답한 경우. 데이터 밖(NOT_COVERED)은 원래 다음 공급자 몫이다. */
+    private static Optional<ProviderAttempt> fallbackFrom(List<ProviderAttempt> attempts) {
+        return attempts.subList(0, attempts.size() - 1).stream()
+                .filter(a -> a.status() == RouteStatus.UNAVAILABLE).findFirst();
+    }
+
+    private void fallback(ProviderAttempt from, RouteProvider to) {
+        health.recordFallback(from.providerId(), to.id(), from.reason());
+        meters.counter("routing.provider.fallback", "from", from.providerId(), "to", to.id()).increment();
+    }
+
+    /** 공급자 장애·인증 실패·대체 전환 상태. */
+    public ProviderHealth.Snapshot health(String providerId) {
+        return health.snapshot(providerId);
     }
 
     private RouteResult cachedOrCall(RouteProvider p, RouteQuery q, Call c) {
@@ -141,7 +158,7 @@ public class RouteEngine {
         RouteResult r = callSafely(p, q);
         Timer.builder("routing.provider.call").tag("provider", p.id()).tag("status", r.status().name())
                 .register(meters).record(Duration.ofNanos(System.nanoTime() - started));
-        health.record(p.id(), r.status());
+        health.record(p.id(), r.status(), r.reason());
         cache.put(p, q, r);
         return r;
     }

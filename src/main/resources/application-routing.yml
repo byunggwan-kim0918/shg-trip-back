@@ -8,6 +8,8 @@ routing:
   allow-non-commercial: ${ROUTING_ALLOW_NON_COMMERCIAL:false}
   breaker-failures: 5
   breaker-open: 60s
+  # OTP 공급자 feed-coverage-file(지역/serving/feeds-coverage.json, 서버를 띄울 때 그 그래프에서 복사)의 기준 폴더. 로컬은 build/otp, 비면 피드 단위 만료 판정을 끈다.
+  otp-coverage-dir: ${ROUTING_OTP_COVERAGE_DIR:}
   admin-areas-file: routing/admin-areas.json
   area-buffer-km: 3
   providers:
@@ -16,6 +18,7 @@ routing:
       enabled: ${ROUTING_OTP_JP_ENABLED:true}
       priority: 10
       base-url: ${ROUTING_OTP_JP_HOKKAIDO_URL:http://127.0.0.1:8101}
+      feed-coverage-file: jp-hokkaido/serving/feeds-coverage.json
       modes: [TRANSIT]
       coverage-areas: [JP-01]
       timeout: 10s
@@ -31,30 +34,37 @@ routing:
     otp-jp-tohoku:
       <<: *otp-jp
       base-url: ${ROUTING_OTP_JP_TOHOKU_URL:http://127.0.0.1:8102}
+      feed-coverage-file: jp-tohoku/serving/feeds-coverage.json
       coverage-areas: [JP-02, JP-03, JP-04, JP-05, JP-06, JP-07]
     otp-jp-kanto:
       <<: *otp-jp
       base-url: ${ROUTING_OTP_JP_KANTO_URL:http://127.0.0.1:8103}
+      feed-coverage-file: jp-kanto/serving/feeds-coverage.json
       coverage-areas: [JP-08, JP-09, JP-10, JP-11, JP-12, JP-13, JP-14]
     otp-jp-chubu:
       <<: *otp-jp
       base-url: ${ROUTING_OTP_JP_CHUBU_URL:http://127.0.0.1:8104}
+      feed-coverage-file: jp-chubu/serving/feeds-coverage.json
       coverage-areas: [JP-15, JP-16, JP-17, JP-18, JP-19, JP-20, JP-21, JP-22, JP-23]
     otp-jp-kansai:
       <<: *otp-jp
       base-url: ${ROUTING_OTP_JP_KANSAI_URL:http://127.0.0.1:8105}
+      feed-coverage-file: jp-kansai/serving/feeds-coverage.json
       coverage-areas: [JP-24, JP-25, JP-26, JP-27, JP-28, JP-29, JP-30]
     otp-jp-chugoku:
       <<: *otp-jp
       base-url: ${ROUTING_OTP_JP_CHUGOKU_URL:http://127.0.0.1:8106}
+      feed-coverage-file: jp-chugoku/serving/feeds-coverage.json
       coverage-areas: [JP-31, JP-32, JP-33, JP-34, JP-35]
     otp-jp-shikoku:
       <<: *otp-jp
       base-url: ${ROUTING_OTP_JP_SHIKOKU_URL:http://127.0.0.1:8107}
+      feed-coverage-file: jp-shikoku/serving/feeds-coverage.json
       coverage-areas: [JP-36, JP-37, JP-38, JP-39]
     otp-jp-kyushu:
       <<: *otp-jp
       base-url: ${ROUTING_OTP_JP_KYUSHU_URL:http://127.0.0.1:8108}
+      feed-coverage-file: jp-kyushu/serving/feeds-coverage.json
       coverage-areas: [JP-40, JP-41, JP-42, JP-43, JP-44, JP-45, JP-46, JP-47]
     # 지역 그래프를 넘는 도시 간 철도. 도로 없이 시간표만 넣어 양 끝을 가까운 철도역으로 바꿔 묻고,
     # 엔진이 출발지→역, 역→목적지 구간을 지역 그래프로 붙인다.
@@ -62,6 +72,7 @@ routing:
       <<: *otp-jp
       priority: 30
       base-url: ${ROUTING_OTP_JP_RAIL_URL:http://127.0.0.1:8100}
+      feed-coverage-file: jp-rail/serving/feeds-coverage.json
       coverage-areas: [JP]
       snap-to-stop-meters: 5000
       stop-to-stop: true
@@ -71,6 +82,7 @@ routing:
       enabled: ${ROUTING_OTP_KR_ENABLED:true}
       priority: 10
       base-url: ${ROUTING_OTP_KR_URL:http://127.0.0.1:8110}
+      feed-coverage-file: kr/serving/feeds-coverage.json
       modes: [TRANSIT]
       coverage-areas: [KR]
       timeout: 10s
@@ -91,6 +103,7 @@ routing:
       enabled: ${ROUTING_OTP_BERLIN_ENABLED:true}
       priority: 10
       base-url: ${ROUTING_OTP_BERLIN_URL:http://127.0.0.1:8092}
+      feed-coverage-file: de-berlin/serving/feeds-coverage.json
       modes: [TRANSIT]
       coverage-areas: [DE-BE]
       timeout: 10s
@@ -108,6 +121,7 @@ routing:
       enabled: ${ROUTING_OTP_SG_ENABLED:true}
       priority: 10
       base-url: ${ROUTING_OTP_SG_URL:http://127.0.0.1:8120}
+      feed-coverage-file: sg/serving/feeds-coverage.json
       modes: [TRANSIT]
       coverage-areas: [SG]
       timeout: 10s
@@ -147,8 +161,9 @@ routing:
       modes: [CAR, TAXI]
       coverage-areas: [KR]
       timeout: 5s
-      # 무료 한도(하루 10,000회) 안에서 멈춘다.
+      # 무료 한도(하루 10,000회) 안에서 멈춘다. 월 한도는 앱 콘솔의 쿼터 값을 넣는다(0이면 세지 않는다).
       daily-limit: 9000
+      monthly-limit: ${ROUTING_KAKAO_MONTHLY_LIMIT:0}
       per-minute-limit: 120
       external: true
       cache-ttl: 6h

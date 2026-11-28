@@ -397,6 +397,43 @@ class OtpRouteProviderTest {
     }
 
     @Test
+    void 근처_피드가_그날_운행_기간_밖이면_그_지역_경로만_미검증으로_낮춘다(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws IOException {
+        serviceRange("2026-11-19T00:00:00Z", "2027-02-28T15:00:00Z");
+        when(http.postJson(any(), argThat(b -> b != null && b.contains("planConnection")), anyMap(), any()))
+                .thenReturn(new RoutingHttp.Response(200, new String(fixture("otp-sapporo-otaru.json"), StandardCharsets.UTF_8)));
+        java.nio.file.Files.writeString(dir.resolve("feeds-coverage.json"), """
+                {"feeds": [
+                  {"feed": "otaru-bus", "modes": ["BUS"], "bbox": [43.15, 140.95, 43.25, 141.05], "periods": [["20261101", "20261125"]]},
+                  {"feed": "far-bus", "modes": ["BUS"], "bbox": [35.0, 135.0, 35.1, 135.1], "periods": [["20261101", "20261110"]]}]}""");
+        OtpRouteProvider p = new OtpRouteProvider("otp-hokkaido", RoutingTestSettings.withFeedCoverage(
+                settings("otp", Set.of(TravelMode.TRANSIT), 1, null, 0, "Asia/Tokyo"), "feeds-coverage.json"),
+                http, mapper, clock, dir.toString());
+
+        RouteResult r = p.route(query(TravelMode.TRANSIT));
+
+        assertThat(r.itineraries()).allMatch(it -> it.source().basis() == RouteBasis.UNVERIFIED_SCHEDULE);
+        assertThat(r.reason()).contains("otaru-bus [BUS] ended 2026-11-25").doesNotContain("far-bus");
+    }
+
+    @Test
+    void 근처_피드가_그날_운행하면_시간표_근거를_그대로_둔다(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws IOException {
+        serviceRange("2026-11-19T00:00:00Z", "2027-02-28T15:00:00Z");
+        when(http.postJson(any(), argThat(b -> b != null && b.contains("planConnection")), anyMap(), any()))
+                .thenReturn(new RoutingHttp.Response(200, new String(fixture("otp-sapporo-otaru.json"), StandardCharsets.UTF_8)));
+        java.nio.file.Files.writeString(dir.resolve("feeds-coverage.json"), """
+                {"feeds": [{"feed": "otaru-bus", "modes": ["BUS"], "bbox": [43.15, 140.95, 43.25, 141.05],
+                            "periods": [["20261101", "20261130"], ["20261201", "20261230"]]}]}""");
+        OtpRouteProvider p = new OtpRouteProvider("otp-hokkaido", RoutingTestSettings.withFeedCoverage(
+                settings("otp", Set.of(TravelMode.TRANSIT), 1, null, 0, "Asia/Tokyo"),
+                dir.resolve("feeds-coverage.json").toString()), http, mapper, clock, null);
+
+        assertThat(p.route(query(TravelMode.TRANSIT)).itineraries().getFirst().source().basis())
+                .isEqualTo(RouteBasis.GTFS_SCHEDULE);
+    }
+
+    @Test
     void 기간이_일주일보다_짧아_같은_요일이_없으면_데이터_밖이다() {
         serviceRange("2026-11-25T00:00:00Z", "2026-11-28T00:00:00Z");
         RouteQuery later = new RouteQuery(RoutingTestSettings.SAPPORO, RoutingTestSettings.OTARU,

@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 /** 설정에 적힌 공급자를 어댑터로 만든다. 새 지역 OTP는 설정 항목만 더하면 된다. */
+@lombok.extern.slf4j.Slf4j
 @Component
 public class RouteProviderRegistry {
 
@@ -29,7 +30,7 @@ public class RouteProviderRegistry {
         this.providers = properties.providers().entrySet().stream()
                 .filter(e -> e.getValue().enabled())
                 .filter(e -> e.getValue().commercialUse() || properties.allowNonCommercial())
-                .map(e -> create(e.getKey(), e.getValue(), http, mapper, clock, taxiFares, areas))
+                .map(e -> create(e.getKey(), e.getValue(), http, mapper, clock, taxiFares, areas, properties.otpCoverageDir()))
                 .sorted(Comparator.comparingInt((RouteProvider p) -> p.settings().priority()).thenComparing(RouteProvider::id))
                 .toList();
     }
@@ -59,13 +60,18 @@ public class RouteProviderRegistry {
                 .toList();
     }
 
+    /** 켜진 공급자 전체(우선순위 순). */
+    public List<RouteProvider> providers() {
+        return providers;
+    }
+
     public List<RouteProvider> providersFor(RouteQuery q) {
         return providers.stream().filter(p -> p.settings().covers(q, areas)).toList();
     }
 
     private static RouteProvider create(String id, RoutingProperties.ProviderSettings s, RoutingHttp http,
                                         ObjectMapper mapper, Clock clock, TaxiFareTable taxiFares,
-                                        AdminAreas areas) {
+                                        AdminAreas areas, String coverageDir) {
         RoutingHttp.requireSafeBaseUrl(id, s.baseUrl());
         if ((s.coverage().isEmpty() && s.coverageAreas().isEmpty()) || s.modes().isEmpty()) {
             throw new IllegalStateException(id + ": coverage 또는 coverage-areas와 modes를 적어야 한다");
@@ -76,8 +82,11 @@ public class RouteProviderRegistry {
         if (s.dailyLimit() > 0 && (s.timezone() == null || s.timezone().isBlank())) {
             throw new IllegalStateException(id + ": 일일 한도를 공급자 현지 날짜로 세도록 timezone을 적어야 한다");
         }
+        if (s.external() && s.dailyLimit() > 0 && s.monthlyLimit() == 0) {
+            log.warn("route budget monthly limit not set provider={} daily={}", id, s.dailyLimit());
+        }
         Map<String, java.util.function.Supplier<RouteProvider>> factories = Map.of(
-                "otp", () -> new OtpRouteProvider(id, s, http, mapper, clock),
+                "otp", () -> new OtpRouteProvider(id, s, http, mapper, clock, coverageDir),
                 "tfl", () -> new TflRouteProvider(id, s, http, mapper, clock),
                 "kakao-car", () -> new KakaoCarRouteProvider(id, s, http, mapper, clock),
                 "valhalla", () -> new ValhallaRouteProvider(id, s, http, mapper, clock, taxiFares),
