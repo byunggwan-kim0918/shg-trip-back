@@ -45,7 +45,7 @@ class TagoScheduleVerifierTest {
         when(budget.tryAcquire(anyString(), anyInt(), anyInt(), anyInt(), any())).thenReturn(true);
         RoutingProperties props = new RoutingProperties(true, 4, Map.of(),
                 new RoutingProperties.TagoSettings(true, "https://apis.data.go.kr", "k", Duration.ofSeconds(5), 9000),
-                null, null, null, null, false, null, null);
+                null, null, null, null, false, null, null, null);
         verifier = new TagoScheduleVerifier(props, trains, http, new ObjectMapper(), budget, Clock.systemUTC());
         when(http.get(argThat((URI u) -> u != null && u.getPath().endsWith("GetCtyCodeList")), anyMap(), any()))
                 .thenReturn(ok("{\"citycode\":\"11\",\"cityname\":\"서울\"}"));

@@ -292,7 +292,7 @@ class FeedLifecycleTest(unittest.TestCase):
         other_calendar = self.make_feed("c.zip", **{"calendar.txt": "service_id\nSA\n"})
         other_agency = self.make_feed("d.zip", **{"agency.txt": "agency_id,agency_name\nB,Other bus\n"})
         extra_transfers = self.make_feed("e.zip", **{"transfers.txt": "from_stop_id\nS\n"})
-        kept, report, dropped = otp_region.drop_same_feeds(
+        kept, report, dropped, _ = otp_region.drop_same_feeds(
             [("mdb-1", same[0]), ("odpt-x", same[1]), ("atlas-c", other_calendar), ("atlas-d", other_agency),
              ("atlas-e", extra_transfers)], cfg)
         self.assertEqual([f for f, _ in kept], ["mdb-1", "atlas-c", "atlas-d", "atlas-e"])
@@ -306,7 +306,7 @@ class FeedLifecycleTest(unittest.TestCase):
         a = self.make_feed("a.zip")
         b = self.make_feed("b.zip", **{"translations.txt": "table_name,field_name,language,translation,record_id\nstops,stop_name,en,Station,S\n",
                                         "feed_info.txt": "feed_publisher_name\nOther\n"})
-        _, _, dropped = otp_region.drop_same_feeds([("mdb-1", a), ("odpt-x", b)], {"feeds": {}}, graph)
+        _, _, dropped, _ = otp_region.drop_same_feeds([("mdb-1", a), ("odpt-x", b)], {"feeds": {}}, graph)
         files = dropped["mdb-1"][0]["metadataFiles"]
         self.assertEqual(sorted(files), ["duplicates-meta/odpt-x/feed_info.txt", "duplicates-meta/odpt-x/translations.txt"])
         self.assertIn("Station", open(os.path.join(graph, "duplicates-meta/odpt-x/translations.txt")).read())
@@ -316,7 +316,7 @@ class FeedLifecycleTest(unittest.TestCase):
         original = otp_region.same_routing_content
         otp_region.same_routing_content = lambda x, y: False
         try:
-            kept, report, _ = otp_region.drop_same_feeds([("x", a), ("y", b)], {"feeds": {}})
+            kept, report, _, _ = otp_region.drop_same_feeds([("x", a), ("y", b)], {"feeds": {}})
         finally:
             otp_region.same_routing_content = original
         self.assertEqual(len(kept), 2)
@@ -326,7 +326,7 @@ class FeedLifecycleTest(unittest.TestCase):
     def test_필수_파일이나_달력이_없으면_같은_피드로_판정하지_않는다(self):
         a = self.make_feed("a.zip", **{"calendar.txt": None})
         b = self.make_feed("b.zip", **{"calendar.txt": None})
-        kept, report, _ = otp_region.drop_same_feeds([("x", a), ("y", b)], {"feeds": {}})
+        kept, report, _, _ = otp_region.drop_same_feeds([("x", a), ("y", b)], {"feeds": {}})
         self.assertEqual(len(kept), 2)
         self.assertEqual(report, [])
 

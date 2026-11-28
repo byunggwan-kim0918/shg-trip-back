@@ -75,9 +75,9 @@ class RoutingConfigCoverageTest {
         var s = providers().get("otp-sg");
         var broken = new RoutingProperties.ProviderSettings(s.type(), true, s.priority(), s.baseUrl(), null, s.modes(),
                 List.of(), List.of("XX-99"), s.timeout(), 0, 0, null, null, null, false, "t", "UTC", 0, false, null,
-                null, null, 0, null, false, null, null);
+                null, null, 0, null, false, null, null, null);
         RoutingProperties props = new RoutingProperties(true, 4, Map.of("broken", broken), null, null, null,
-                "routing/admin-areas.json", 3.0, false, null, null);
+                "routing/admin-areas.json", 3.0, false, null, null, null);
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> new RouteProviderRegistry(props, null,
                         new ObjectMapper(), java.time.Clock.systemUTC()))

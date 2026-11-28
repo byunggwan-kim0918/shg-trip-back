@@ -1085,5 +1085,15 @@
   "sourceHostAliases": {
     "api-public.odpt.org": "api.odpt.org"
   },
-  "catalogRefreshDays": 7
+  "catalogRefreshDays": 7,
+  "graphMaxAgeDays": 30,
+  "nextEdition": [
+    {"_comment": "ODPT 파일 API는 date=판 시작일로 그 판을 준다. 지금 판 끝 다음 날로 다음 판을 묻는다.",
+     "host": "api-public.odpt.org", "param": "date", "format": "%Y%m%d"},
+    {"host": "api.odpt.org", "param": "date", "format": "%Y%m%d", "tokenEnv": "ODPT_ACCESS_TOKEN", "tokenParam": "acl:consumerKey"}
+  ],
+  "formats": {
+    "_comment": "카탈로그 형식별 처리. build는 그래프에 싣고, reference는 피드 목록에 기록만 한다. 나머지는 대상 국가와 데이터가 확인되면 어댑터를 더한다.",
+    "gtfs": "build", "gtfs_rt": "reference", "gtfs-rt": "reference", "gbfs": "unsupported", "netex": "unsupported", "siri": "unsupported"
+  }
 }
