@@ -2,12 +2,15 @@
 
   python3 -I coverage_report.py agencies jp-kanto            # 떠 있는 지역 서버의 운영사·수단 목록을 저장
   python3 -I coverage_report.py report coverage-targets.json  # 대상 운영사 표(마크다운)
+  python3 -I coverage_report.py areas [out.json]              # 지은 그래프의 행정구역·수단별 시간표 범위(서버 불필요)
 
 경로 조회 성공은 RouteCompareRunner 결과(build/eval-route/route-compare.md)의 기대 판정에서 읽는다.
 """
 import csv
+import datetime
 import glob
 import json
+import math
 import os
 import re
 import sys
@@ -118,10 +121,136 @@ def report(targets_file):
         print(f"| {t['group']} | {t['label']} | {', '.join(exists) or '없음'} | {', '.join(feeds) or '-'} | {load} | {check} |")
 
 
+ADMIN_AREAS = os.path.normpath(os.path.join(HERE, "..", "..", "src", "main", "resources", "routing", "admin-areas.json"))
+# nearest_within이 이웃 띠 하나씩만 보므로 띠 폭(약 5.5km)이 AREA_BUFFER_KM보다 넓어야 한다.
+BAND_DEG = 0.05
+# application-routing.yml routing.area-buffer-km과 같은 값이어야 엔진이 구역 밖으로 보는 정류장을 같게 센다.
+AREA_BUFFER_KM = 3
+KM_PER_DEG = 111.32
+EXPIRY_WARN_DAYS = 14
+
+
+def otp_region():
+    spec = importlib.util.spec_from_file_location("otp_region", os.path.join(HERE, "otp_region.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class AreaIndex:
+    """행정구역 고리마다 위도 띠별 변 목록을 두어 점 하나가 변 몇 개만 본다.
+    admin-areas.json은 구멍을 버려 서울이 경기 고리 안에도 들므로 점을 품은 가장 작은 고리를 고른다."""
+
+    def __init__(self, path):
+        self.rings = []
+        for code, rings in json.load(open(path, encoding="utf-8")).items():
+            for ring in rings:
+                area = abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(ring, ring[1:] + ring[:1]))) / 2
+                bands = {}
+                for a, b in zip(ring, ring[1:] + ring[:1]):
+                    for k in range(int(min(a[0], b[0]) // BAND_DEG), int(max(a[0], b[0]) // BAND_DEG) + 1):
+                        bands.setdefault(k, []).append((a, b))
+                lats, lngs = [p[0] for p in ring], [p[1] for p in ring]
+                self.rings.append((area, code, (min(lats), min(lngs), max(lats), max(lngs)), bands))
+        self.rings.sort(key=lambda r: r[0])
+
+    def locate(self, lat, lng):
+        for _, code, box, bands in self.rings:
+            if not (box[0] <= lat <= box[2] and box[1] <= lng <= box[3]):
+                continue
+            inside = False
+            for (y1, x1), (y2, x2) in bands.get(int(lat // BAND_DEG), ()):
+                if (y1 > lat) != (y2 > lat) and lng < x1 + (lat - y1) * (x2 - x1) / (y2 - y1):
+                    inside = not inside
+            if inside:
+                return code
+        return self.nearest_within(lat, lng)
+
+    def nearest_within(self, lat, lng):
+        """경로 엔진(AdminAreas)처럼 경계에서 AREA_BUFFER_KM 안이면 그 구역으로 본다."""
+        pad, k = AREA_BUFFER_KM / KM_PER_DEG, math.cos(math.radians(lat))
+        best, found = AREA_BUFFER_KM, None
+        for _, code, box, bands in self.rings:
+            if not (box[0] - pad <= lat <= box[2] + pad and box[1] - pad / k <= lng <= box[3] + pad / k):
+                continue
+            band = int(lat // BAND_DEG)
+            for (y1, x1), (y2, x2) in (e for b in (band - 1, band, band + 1) for e in bands.get(b, ())):
+                ax, ay, dx, dy = (x1 - lng) * k, y1 - lat, (x2 - x1) * k, y2 - y1
+                t = max(0.0, min(1.0, -(ax * dx + ay * dy) / (dx * dx + dy * dy))) if dx or dy else 0.0
+                d = math.hypot(ax + t * dx, ay + t * dy) * KM_PER_DEG
+                if d <= best:
+                    best, found = d, code
+        return found
+
+
+def area_coverage(out_path=None, today=None):
+    """지역 그래프에 실은 피드의 정류장을 행정구역에 넣어 구역·그래프·수단별 피드·노선·정류장 수와 가장 이른 피드 종료일을 낸다.
+    대표 시각표 피드(representativeCalendar)는 운행일을 확정하지 않아 종료일 계산에서 뺀다.
+    경계에서 AREA_BUFFER_KM 넘게 떨어진 정류장은 엔진도 영역 밖으로 보므로 "-"로 센다."""
+    otp = otp_region()
+    rows = otp.feed_compare.rows
+    cfg = otp.config()
+    today = today or datetime.date.today()
+    warn = (today + datetime.timedelta(days=EXPIRY_WARN_DAYS)).strftime("%Y%m%d")
+    index = AreaIndex(ADMIN_AREAS)
+    out = {}
+    for region in cfg["regions"]:
+        graph = os.path.join(ROOT, region, "graph")
+        manifest_path = os.path.join(graph, "feeds-manifest.json")
+        if not os.path.exists(manifest_path):
+            continue
+        for fid, entry in json.load(open(manifest_path, encoding="utf-8")).items():
+            path = os.path.join(graph, fid + ".gtfs.zip")
+            if not os.path.exists(path):
+                continue
+            z = feed_zip(path)
+            modes = {r["route_id"]: otp.route_mode(r.get("route_type")) for r in rows(z, "routes.txt")}
+            trips = {r["trip_id"]: r["route_id"] for r in rows(z, "trips.txt")}
+            stops = {}
+            for r in rows(z, "stops.txt"):
+                try:
+                    stops[r["stop_id"]] = (float(r["stop_lat"]), float(r["stop_lon"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            served = {}
+            for r in rows(z, "stop_times.txt"):
+                route = trips.get(r["trip_id"])
+                if route in modes and r["stop_id"] in stops:
+                    served.setdefault(r["stop_id"], set()).add(route)
+            base = entry.get("versionOf") or fid
+            representative = bool(cfg["feeds"].get(base, {}).get("representativeCalendar") or entry.get("calendarSuspect"))
+            end = min(filter(None, (entry.get("serviceTo"), entry.get("loadedTo"))), default=None)
+            for sid, routes in served.items():
+                code = index.locate(*stops[sid]) or "-"
+                for route in routes:
+                    m = out.setdefault(code, {}).setdefault(region, {}).setdefault(modes[route], {
+                        "feeds": set(), "routes": set(), "stops": set(), "earliestEnd": None, "endingSoon": set()})
+                    m["feeds"].add(fid)
+                    m["routes"].add((fid, route))
+                    m["stops"].add((fid, sid))
+                    if end and not representative:
+                        m["earliestEnd"] = min(filter(None, (m["earliestEnd"], end)))
+                        if end <= warn:
+                            m["endingSoon"].add(fid)
+    result = {code: {region: {mode: {"feeds": len(v["feeds"]), "routes": len(v["routes"]), "stops": len(v["stops"]),
+                                     "earliestEnd": v["earliestEnd"], "endingSoon": sorted(v["endingSoon"])}
+                              for mode, v in sorted(modes.items())} for region, modes in by_region.items()}
+              for code, by_region in sorted(out.items())}
+    if out_path:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump({"date": today.isoformat(), "areas": result}, f, ensure_ascii=False, indent=1)
+    for code, by_region in result.items():
+        for region, modes in by_region.items():
+            print(code, region, " ".join(f"{m}={v['feeds']}/{v['routes']}/{v['stops']}" for m, v in modes.items()))
+    return result
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "agencies":
         save_agencies(sys.argv[2])
     elif len(sys.argv) == 3 and sys.argv[1] == "report":
         report(sys.argv[2])
+    elif len(sys.argv) in (2, 3) and sys.argv[1] == "areas":
+        area_coverage(sys.argv[2] if len(sys.argv) == 3 else None)
     else:
-        sys.exit("usage: coverage_report.py agencies <region> | report <targets.json>")
+        sys.exit("usage: coverage_report.py agencies <region> | report <targets.json> | areas [out.json]")

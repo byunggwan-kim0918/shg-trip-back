@@ -32,12 +32,23 @@ public class QualityGate {
     /**
      * @param rules        판정 입력
      * @param fixedNotices 판정으로 다시 만들 수 없는 안내(운전면허·못 찾은 장소). 편집 뒤에도 그대로 둔다
+     * @param partySize    여행 인원. 편집한 구간 요금을 생성 때와 같은 인원으로 곱한다. 모르면 null
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record PlanContext(ItineraryRules.Context rules, List<String> fixedNotices) {
+    public record PlanContext(ItineraryRules.Context rules, List<String> fixedNotices, Integer partySize) {
         public PlanContext {
             fixedNotices = fixedNotices == null ? List.of() : List.copyOf(fixedNotices);
         }
+
+        public PlanContext(ItineraryRules.Context rules, List<String> fixedNotices) {
+            this(rules, fixedNotices, null);
+        }
+    }
+
+    /** 생성 때 반영한 여행 인원. 기록이 없는 옛 일정이면 null이다. */
+    public Integer partySize(Itinerary itinerary) {
+        PlanContext ctx = read(itinerary);
+        return ctx == null ? null : ctx.partySize();
     }
 
     /** HARD 판정. 저장 트랜잭션이 롤백되고 생성은 쿼터를 쓰지 않은 실패로 끝난다. */
@@ -115,10 +126,30 @@ public class QualityGate {
         if (ctx == null) return;
         try {
             Verdict verdict = SavedItineraryFacts.evaluate(itinerary, ctx.rules(), facts(itinerary));
-            itinerary.reflectEdit(mergedNotices(verdict, ctx));
+            List<String> notices = new ArrayList<>(mergedNotices(verdict, ctx));
+            unreachableNotices(itinerary).stream().filter(n -> !notices.contains(n)).forEach(notices::add);
+            itinerary.reflectEdit(notices);
         } catch (RuntimeException e) {
             log.error("편집 뒤 판정 실패 itineraryId={}", itinerary.getId(), e);
         }
+    }
+
+    /** 편집한 구간에 고르신 수단으로 그 시각 편이 없으면 숨기지 않고 안내한다. */
+    private static List<String> unreachableNotices(Itinerary itinerary) {
+        List<com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep> steps = itinerary.getSteps().stream()
+                .sorted(java.util.Comparator.comparingInt(
+                        com.shg.trip.shgtrip.domain.itinerary.entity.ItineraryStep::getStepOrder)).toList();
+        List<String> out = new ArrayList<>();
+        for (int i = 1; i < steps.size(); i++) {
+            var s = steps.get(i);
+            var prev = steps.get(i - 1);
+            var r = com.shg.trip.shgtrip.domain.planning.dto.TransportRoute.fromJson(s.getTransportationRoute());
+            if (r == null || !r.unreachable() || !prev.getDayNumber().equals(s.getDayNumber())
+                    || prev.getPlace() == null || s.getPlace() == null) continue;
+            out.add(TripPlanner.unreachableNotice(s.getDayNumber(), prev.getEndTime(), prev.getPlace().getName(),
+                    s.getPlace().getName()));
+        }
+        return out;
     }
 
     /** @param notices 교체 뒤 편집 재판정이 남길 안내(고정 안내 포함) */

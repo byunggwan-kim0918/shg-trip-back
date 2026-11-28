@@ -10,6 +10,7 @@ import com.shg.trip.shgtrip.domain.planning.dto.EnrichedInput;
 import com.shg.trip.shgtrip.domain.planning.dto.ItineraryData;
 import com.shg.trip.shgtrip.domain.planning.dto.PlaceData;
 import com.shg.trip.shgtrip.domain.planning.dto.StepData;
+import com.shg.trip.shgtrip.domain.planning.dto.TransportRoute;
 import com.shg.trip.shgtrip.global.util.GeoUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -111,7 +112,8 @@ public class ItineraryDataMapper {
     private static StepData withTransportOf(StepData step, StepData legSource) {
         return new StepData(step.stepOrder(), step.dayNumber(), step.startTime(), step.endTime(), step.place(),
                 step.alternatives(), legSource.transportationMode(), legSource.transportationDuration(),
-                legSource.transportationDistance(), legSource.transportationCost(), step.notes(), step.estimatedCost());
+                legSource.transportationDistance(), legSource.transportationCost(), step.notes(), step.estimatedCost(),
+                legSource.transportationRoute());
     }
 
     private Map<String, PlaceData> collectUniquePlaces(ItineraryData data) {
@@ -264,6 +266,8 @@ public class ItineraryDataMapper {
                 .transportationDuration(precededByDrop ? null : stepData.transportationDuration())
                 .transportationDistance(precededByDrop ? null : stepData.transportationDistance())
                 .transportationCost(precededByDrop ? null : stepData.transportationCost())
+                .transportationRoute(precededByDrop || stepData.transportationRoute() == null ? null
+                        : stepData.transportationRoute().toJson())
                 // 대체 경로는 모델이 스텝 설명을 바로 써서 이야기 저장과 같은 일차 표현 교정을 여기서 한다.
                 .notes(StoryDayWords.fix(stepData.notes(), stepData.dayNumber(), totalDays))
                 .estimatedCost(stepData.estimatedCost())

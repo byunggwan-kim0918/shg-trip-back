@@ -60,6 +60,7 @@ class RouteCompareRunner implements CommandLineRunner {
     private final ObjectMapper objectMapper;
     private final RouteEngine engine;
     private final TagoTrainTimetable tago;
+    private final TripRoutes tripRoutes;
     private final ApplicationContext context;
 
     @Override
@@ -68,8 +69,8 @@ class RouteCompareRunner implements CommandLineRunner {
         Path out = Path.of(outDir);
         Files.createDirectories(out);
         try (Writer md = Files.newBufferedWriter(out.resolve("route-compare.md"), StandardCharsets.UTF_8)) {
-            md.write("| id | 지역 | 추정(지금) | 실제 경로 | 출발→도착 | 환승 | 상태·공급자 | 근거 | 기대 | 구간 |\n"
-                    + "|---|---|---|---|---|---|---|---|---|---|\n");
+            md.write("| id | 지역 | 추정(지금) | 실제 경로 | 출발→도착 | 환승 | 상태·공급자 | 근거 | 기대 | 구간 | 일정기 구간 |\n"
+                    + "|---|---|---|---|---|---|---|---|---|---|---|\n");
             List<Long> elapsed = new java.util.ArrayList<>();
             for (String line : Files.readAllLines(Path.of(casesFile), StandardCharsets.UTF_8)) {
                 if (line.isBlank()) continue;
@@ -94,8 +95,12 @@ class RouteCompareRunner implements CommandLineRunner {
             case CAR, TAXI -> "car";
             default -> "any";
         };
-        TransportLeg estimate = DayBuilder.legOf(from, to, pref, false);
+        TransportLeg estimate = c.has("estimateMode") ? new TransportLeg(c.path("estimateMode").asText(),
+                c.path("estimateMinutes").asInt(), null,
+                c.has("estimateCost") ? BigDecimal.valueOf(c.path("estimateCost").asLong()) : null)
+                : DayBuilder.legOf(from, to, pref, false);
         ZonedDateTime departAt = ZonedDateTime.parse(c.path("departAt").asText());
+        String planner = plannerLeg(c, from, to, departAt, estimate);
         RouteResult r = engine.route(new RouteQuery(point(c.path("from")), point(c.path("to")), departAt, travelMode));
         String est = estimate == null ? "구간 없음" : estimate.mode() + " " + estimate.durationMin() + "분";
         String actual = "-";
@@ -116,7 +121,36 @@ class RouteCompareRunner implements CommandLineRunner {
                     + (best.endpointGapMeters() > 0 ? " (끝점 간격 " + best.endpointGapMeters() + "m는 소요 시간 밖)" : "");
         }
         return row(c, travelMode + " " + est, actual + " | " + times + " | " + transfers,
-                r.status() + " " + (r.providerId() == null ? "" : r.providerId()), basis + " | " + expected, legs);
+                r.status() + " " + (r.providerId() == null ? "" : r.providerId()), basis + " | " + expected,
+                legs, planner);
+    }
+
+    /** 일정기가 이 구간을 지을 때 쓰는 값(대중교통이 없거나 너무 길면 택시, 받지 못하면 추정). */
+    private String plannerLeg(JsonNode c, PlaceCandidate from, PlaceCandidate to, ZonedDateTime departAt,
+                              TransportLeg estimate) {
+        if (estimate == null) return "-";
+        Integer party = c.has("party") ? c.path("party").asInt() : null;
+        TripRoutes.Session session = tripRoutes.session(c.path("from").path("country").asText("KR"),
+                c.has("dayBudget") ? BigDecimal.valueOf(c.path("dayBudget").asLong()) : null, 1, party);
+        int departMin = departAt.getHour() * 60 + departAt.getMinute();
+        TransportLeg leg = session.legAt(departAt.toLocalDate(), from, to, departMin, estimate,
+                TripRoutes.Session.unrestricted(c.path("pref").asText("any")));
+        var route = leg.route();
+        return leg.mode() + " " + leg.durationMin() + "분" + (route == null ? " (추정)"
+                : " " + route.confidence() + "/" + route.status() + (route.unreachable() ? " 그 시각 갈 수 없음" : "")
+                + (route.note() == null ? "" : " " + route.note()) + " / 요금 " + fare(route, leg.mode(), party));
+    }
+
+    /** 인원을 반영한 요금. 근거·단위·곱한 수·현지 금액·원화·빠진 항목. */
+    private static String fare(com.shg.trip.shgtrip.domain.planning.dto.TransportRoute route, String mode,
+                               Integer party) {
+        if (route.fare() == null) return "없음";
+        var f = route.fare().forParty(party, PartyCosts.seatsPerVehicle(mode));
+        if (!f.known()) return f.basis() + " (" + f.per() + ")";
+        return f.basis() + " " + f.amount().stripTrailingZeros().toPlainString() + " " + (f.currency() == null ? ""
+                : f.currency()) + "×" + f.units() + (f.totalWon() == null ? " 원화 환산 없음"
+                : " = " + f.totalWon().toPlainString() + "원") + (f.excludes().isEmpty() ? ""
+                : " 제외 " + String.join(",", f.excludes()));
     }
 
     private String intercityRow(JsonNode c) {
@@ -130,7 +164,7 @@ class RouteCompareRunner implements CommandLineRunner {
         String est = estimate.mode() + " " + estimate.minutes() + "분(역 오가는 시간 포함)"
                 + (estimate.costWon() == null ? "" : ", " + estimate.costWon() + "원");
         if (r.status() != RouteStatus.FOUND) {
-            return row(c, est, "- | - | -", r.status() + " tago-train", "- | -", r.reason());
+            return row(c, est, "- | - | -", r.status() + " tago-train", "- | -", r.reason(), "-");
         }
         TagoTrainTimetable.ScheduledTrain next = r.trains().stream()
                 .filter(t -> !t.departure().toInstant().isBefore(departAt.toInstant()))
@@ -140,7 +174,8 @@ class RouteCompareRunner implements CommandLineRunner {
         String actual = "열차만 " + fastest.minutes() + "분(최단 " + fastest.grade() + ")"
                 + (next == null ? "" : ", 다음 열차 " + next.grade() + " " + next.departure().toLocalTime() + "→"
                 + next.arrival().toLocalTime() + (next.adultFare() == null ? "" : " " + next.adultFare() + "원"));
-        return row(c, est, actual + " | - | 0", "FOUND tago-train", "OFFICIAL_SCHEDULE | -", "그날 " + r.trains().size() + "편");
+        return row(c, est, actual + " | - | 0", "FOUND tago-train", "OFFICIAL_SCHEDULE | -",
+                "그날 " + r.trains().size() + "편", "-");
     }
 
     /** 캐시를 거친 호출과 공급자 호출이 섞여 있으므로 처음 실행(캐시 없음)의 값을 응답 시간으로 본다. */
@@ -179,9 +214,10 @@ class RouteCompareRunner implements CommandLineRunner {
                 + Math.round(l.durationSeconds() / 60.0) + "분";
     }
 
-    private static String row(JsonNode c, String est, String actual, String status, String basis, String legs) {
+    private static String row(JsonNode c, String est, String actual, String status, String basis, String legs,
+                              String planner) {
         return "| " + String.join(" | ", c.path("id").asText(), c.path("region").asText(), est, actual, status, basis,
-                legs.replace("|", "/")) + " |\n";
+                legs.replace("|", "/"), planner.replace("|", "/")) + " |\n";
     }
 
     private static GeoPoint point(JsonNode p) {

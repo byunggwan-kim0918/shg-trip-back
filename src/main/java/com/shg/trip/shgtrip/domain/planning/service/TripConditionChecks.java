@@ -375,8 +375,9 @@ final class TripConditionChecks {
         Rule rule = activities(day).isEmpty() ? Rule.DEPARTURE_UNREACHABLE : Rule.DEPARTURE_MISSED;
         PlaceCandidate hub = hubOrNull(end.place());
         int deadline = TripHubs.departureDeadline(conditions.departure(), hub, drivesHome(hub, conditions), country);
-        // 허브까지의 이동은 추정이라 여유를 더한 도착으로 본다. 빠듯한 일정을 지킬 수 있다고 확정하지 않는다.
-        int slack = hub == null ? 0 : TripHubs.estimatedLegSlack(end.step().transportationDuration());
+        // 추정한 허브 구간은 여유를 더한 도착으로 보아 빠듯한 일정을 확정하지 않는다. 시간표로 확인한 구간은 그 시각이다.
+        int slack = hub == null ? 0
+                : TripHubs.legSlack(end.step().transportationDuration(), end.step().transportationRoute());
         if (end.start() + slack > deadline) {
             out.add(new Violation(rule, d, "출발 " + conditions.departure() + "인데 " + end.name()
                     + " " + end.step().startTime() + " 도착(추정 이동 여유 " + slack + "분)", List.of(end.name())));

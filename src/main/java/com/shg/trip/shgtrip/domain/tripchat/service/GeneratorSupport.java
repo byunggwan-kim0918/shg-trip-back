@@ -59,12 +59,14 @@ public final class GeneratorSupport {
             Map.entry("budget", List.of("attraction", "street_food", "market")),
             Map.entry("pet", List.of("cafe", "nature", "attraction")));
 
-    /** 생성기 transportPref는 walk·car·any뿐이다. walk는 구간 8km·하루 30km 상한이라 대중교통 여행에 쓰면 갈 곳이 크게 줄어든다. */
+    /**
+     * 생성기 transportPref. 대중교통·택시만 말하면 그 수단만 쓴다는 조건으로 넘긴다. 섞어 다니거나 걷다가 탈 것을 고르면
+     * 수단 제한이 없는 any다. walk는 구간 8km·하루 30km 상한이라 대중교통 여행에 쓰면 갈 곳이 크게 줄어든다.
+     */
     public static String transportPref(String mode, boolean tentative) {
         if (mode == null || tentative) return "any";
         return switch (mode) {
-            case "car" -> "car";
-            case "walk" -> "walk";
+            case "car", "walk", "transit", "taxi" -> mode;
             default -> "any";
         };
     }

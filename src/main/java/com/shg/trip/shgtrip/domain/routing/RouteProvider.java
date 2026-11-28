@@ -14,4 +14,9 @@ public interface RouteProvider {
      * 예외를 던지지 않는다. 통신 실패는 UNAVAILABLE로 돌려준다.
      */
     RouteResult route(RouteQuery query);
+
+    /** 응답을 낸 데이터의 판(그래프 빌드 시각 등). 판이 바뀌면 캐시를 새로 채운다. 모르면 null이다. */
+    default String dataVersion() {
+        return null;
+    }
 }

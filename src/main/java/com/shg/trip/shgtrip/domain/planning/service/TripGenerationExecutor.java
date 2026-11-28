@@ -134,7 +134,7 @@ public class TripGenerationExecutor {
         planned.built().tripNotes().forEach(n -> {
             if (!fixed.contains(n)) fixed.add(n);
         });
-        QualityGate.PlanContext context = new QualityGate.PlanContext(rules, fixed);
+        QualityGate.PlanContext context = new QualityGate.PlanContext(rules, fixed, input.partySize());
         ItineraryRules.Verdict preview = previewQuality(steps, result.candidates(), rules, planned.built().facts());
         if (cancellationRegistry.isCancelled(jobId)) return;
         sendProgress(emitter, "VALIDATING", 80, "일정을 검증하고 있습니다...");

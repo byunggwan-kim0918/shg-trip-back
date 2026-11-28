@@ -3,6 +3,7 @@ package com.shg.trip.shgtrip.domain.routing;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -31,7 +32,7 @@ class RouteEngineTest {
     void setUp() {
         cache = mock(RouteCache.class);
         budget = mock(ProviderCallBudget.class);
-        when(cache.get(any(), any())).thenReturn(Optional.empty());
+        when(cache.get(any(), any(), any())).thenReturn(Optional.empty());
         when(budget.tryAcquire(anyString(), anyInt(), anyInt(), anyInt(), any())).thenReturn(true);
     }
 
@@ -50,7 +51,7 @@ class RouteEngineTest {
         assertThat(r.status()).isEqualTo(RouteStatus.FOUND);
         assertThat(r.providerId()).isEqualTo("a");
         assertThat(second.calls.get()).isZero();
-        verify(cache).put(any(), any(), any());
+        verify(cache).put(any(), any(), any(), any());
     }
 
     @Test
@@ -149,7 +150,7 @@ class RouteEngineTest {
     @Test
     void 캐시에_있으면_공급자를_부르지_않는다() {
         Fake p = new Fake("a", 1, found("a"));
-        when(cache.get(any(), any())).thenReturn(Optional.of(found("a")));
+        when(cache.get(any(), any(), any())).thenReturn(Optional.of(found("a")));
 
         RouteResult r = engine(true, p).route(query(TravelMode.TRANSIT));
 
@@ -411,6 +412,31 @@ class RouteEngineTest {
         };
     }
 
+    private static ScheduleVerifier fareVerifier(java.util.function.Function<RouteLeg, BigDecimal> fare) {
+        return new ScheduleVerifier() {
+            public String id() { return "v"; }
+            public Verdict verify(RouteLeg leg) { return check(leg).verdict(); }
+            public Check check(RouteLeg leg) {
+                BigDecimal won = fare.apply(leg);
+                return new Check(Verdict.CONFIRMED, won == null ? null : new Fare(won, "KRW", Fare.Kind.TICKET));
+            }
+        };
+    }
+
+    @Test
+    void 탈_것마다_공식_운임을_받으면_그_합을_경로_요금으로_두고_하나라도_없으면_두지_않는다() {
+        RouteResult all = engineWith(List.of(fareVerifier(l -> l.mode() == LegMode.RAIL ? BigDecimal.valueOf(23700)
+                        : BigDecimal.valueOf(4700))), cache, budget,
+                verified(twoLegs(RouteBasis.UNVERIFIED_SCHEDULE, "코레일"))).route(query(TravelMode.TRANSIT));
+        RouteResult partial = engineWith(List.of(fareVerifier(l -> l.mode() == LegMode.RAIL ? BigDecimal.valueOf(23700)
+                        : null)), cache, budget,
+                verified(twoLegs(RouteBasis.UNVERIFIED_SCHEDULE, "코레일"))).route(query(TravelMode.TRANSIT));
+
+        assertThat(all.itineraries().getFirst().fares()).singleElement()
+                .satisfies(f -> assertThat(f.amount()).isEqualByComparingTo("28400"));
+        assertThat(partial.itineraries().getFirst().fares()).isEmpty();
+    }
+
     @Test
     void 모든_대중교통_구간이_공식_시간표와_맞으면_확정_시각으로_올린다() {
         RouteResult r = engineWith(List.of(verifier(l -> ScheduleVerifier.Verdict.CONFIRMED)), cache, budget,
@@ -483,6 +509,146 @@ class RouteEngineTest {
                 verified(twoLegs(RouteBasis.ESTIMATED, "코레일"))).route(query(TravelMode.TRANSIT));
 
         assertThat(r.itineraries().getFirst().source().basis()).isEqualTo(RouteBasis.ESTIMATED);
+    }
+
+    @Test
+    void 동시_질의_상한을_둔_공급자에는_그_수만큼만_동시에_묻는다() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger running = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger peak = new java.util.concurrent.atomic.AtomicInteger();
+        RoutingProperties.ProviderSettings one = RoutingTestSettings.withMaxConcurrent(
+                RoutingTestSettings.settings("fake", Set.of(TravelMode.TRANSIT), 1, null, 0, null), 1);
+        Fake slow = new Fake("a", 1, found("a")) {
+            @Override
+            public RoutingProperties.ProviderSettings settings() {
+                return one;
+            }
+
+            @Override
+            public RouteResult route(RouteQuery q) {
+                peak.accumulateAndGet(running.incrementAndGet(), Math::max);
+                try {
+                    Thread.sleep(30);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                running.decrementAndGet();
+                return super.route(q);
+            }
+        };
+        RouteEngine e = engine(true, slow);
+        try (var pool = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            List<java.util.concurrent.Future<RouteResult>> all = new ArrayList<>();
+            for (int i = 0; i < 4; i++) {
+                RouteQuery q = query(TravelMode.TRANSIT);
+                RouteQuery shifted = new RouteQuery(q.origin(), q.destination(), q.departAt().plusHours(i), q.mode());
+                all.add(pool.submit(() -> e.route(shifted)));
+            }
+            for (var f : all) assertThat(f.get().status()).isEqualTo(RouteStatus.FOUND);
+        }
+
+        assertThat(peak.get()).isEqualTo(1);
+        assertThat(slow.calls.get()).isEqualTo(4);
+    }
+
+    @Test
+    void 일정의_조회_기한이_지나면_공급자를_부르지_않고_차단기도_열지_않는다() {
+        Fake p = new Fake("a", 1, found("a"));
+        RouteEngine e = engine(true, p);
+        CallAllowance late = CallAllowance.of(12).until(java.time.Instant.now().minusSeconds(1));
+
+        for (int i = 0; i < 6; i++) {
+            RouteResult r = e.route(query(TravelMode.TRANSIT), late);
+            assertThat(r.status()).isEqualTo(RouteStatus.UNAVAILABLE);
+        }
+
+        assertThat(p.calls.get()).isZero();
+        assertThat(e.health("a").consecutiveFailures()).isZero();
+    }
+
+    @Test
+    void 제한시간보다_짧게_줄인_일정_기한에_끊긴_질의만_장애로_세지_않는다() {
+        Fake hangs = new Fake("a", 1, RouteResult.of(RouteStatus.UNAVAILABLE, "a", "timeout")) {
+            @Override
+            public RouteResult route(RouteQuery q) {
+                try {
+                    Thread.sleep(120);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.route(q);
+            }
+        };
+        RouteEngine e = engine(true, hangs);
+
+        e.route(query(TravelMode.TRANSIT), CallAllowance.of(12).until(java.time.Instant.now().plusMillis(50)));
+        assertThat(e.health("a").consecutiveFailures()).as("공급자 제한시간 5초보다 짧은 기한").isZero();
+
+        e.route(query(TravelMode.TRANSIT), CallAllowance.of(12).until(java.time.Instant.now().plusSeconds(30)));
+        assertThat(e.health("a").consecutiveFailures()).as("기한이 넉넉한데 실패하면 장애다").isEqualTo(1);
+    }
+
+    @Test
+    void 묶음마다_만든_기한은_호출_수를_함께_나눠_쓴다() {
+        CallAllowance trip = CallAllowance.of(2);
+        CallAllowance day1 = trip.until(java.time.Instant.now().plusSeconds(5));
+        CallAllowance day2 = trip.until(java.time.Instant.now().plusSeconds(9));
+
+        assertThat(day1.take()).isTrue();
+        assertThat(day2.take()).isTrue();
+        assertThat(trip.take()).isFalse();
+        assertThat(day1.deadline()).isBefore(day2.deadline());
+    }
+
+    @Test
+    void 조회하는_동안_그래프_판이_바뀌면_캐시에_넣지_않고_판을_남기지_않는다() {
+        java.util.concurrent.atomic.AtomicReference<String> version = new java.util.concurrent.atomic.AtomicReference<>("v1");
+        Fake p = new Fake("a", 1, found("a")) {
+            @Override
+            public RouteResult route(RouteQuery q) {
+                version.set("v2");
+                return super.route(q);
+            }
+
+            @Override
+            public String dataVersion() {
+                return version.get();
+            }
+        };
+
+        RouteResult r = engine(true, p).route(query(TravelMode.TRANSIT));
+
+        assertThat(r.status()).isEqualTo(RouteStatus.FOUND);
+        assertThat(r.attempts().getFirst().dataVersion()).isNull();
+        verify(cache, never()).put(any(), any(), any(), any());
+    }
+
+    @Test
+    void 응답한_그래프_판을_시도_기록에_남긴다() {
+        Fake p = new Fake("a", 1, found("a")) {
+            @Override
+            public String dataVersion() {
+                return "2026-11-27T15:25:12";
+            }
+        };
+
+        RouteResult r = engine(true, p).route(query(TravelMode.TRANSIT));
+
+        assertThat(r.attempts().getFirst().dataVersion()).isEqualTo("2026-11-27T15:25:12");
+    }
+
+    @Test
+    void 요금을_모르는_탈_것이_섞인_경로는_아는_토막만_더한_요금을_두지_않는다() {
+        RouteItinerary bus = withFare(found("a").itineraries().getFirst(), new Fare(BigDecimal.valueOf(230), "JPY",
+                Fare.Kind.TICKET));
+        RouteItinerary rail = found("rail").itineraries().getFirst();
+
+        assertThat(RouteEngine.join(bus, rail).fares()).isEmpty();
+        assertThat(RouteEngine.join(bus, bus).fares()).hasSize(2);
+    }
+
+    private static RouteItinerary withFare(RouteItinerary it, Fare fare) {
+        return new RouteItinerary(it.departure(), it.arrival(), it.durationSeconds(), it.transfers(), it.legs(),
+                List.of(fare), it.source(), it.endpointGapMeters());
     }
 
     static RouteResult found(String id) {

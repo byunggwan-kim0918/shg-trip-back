@@ -34,6 +34,11 @@ public class RouteEngine {
     private static final double SAME_PLACE_METERS = 80;
     /** 접근·열차·도착을 이어 붙이는 도시 간 경로까지 한 번의 조회가 끝나야 하는 시간. 넘으면 남은 공급자는 묻지 않는다. */
     private static final Duration ROUTE_DEADLINE = Duration.ofSeconds(40);
+    /**
+     * 일정 기한에 걸려 끊긴 질의도 공급자가 이만큼 받고 답하지 못했으면 장애로 센다. 자체 OTP의 넓은 탐색 한 번이 끝나는
+     * 시간이라 정상 서버는 이 안에 답한다.
+     */
+    private static final Duration FAILURE_MIN_WAIT = Duration.ofSeconds(3);
 
     /** 조회 한 번 동안 공유하는 외부 호출 수와 기한. */
     private record Call(CallAllowance allowance, java.time.Instant deadline) {}
@@ -47,6 +52,8 @@ public class RouteEngine {
     private final int coordinateDecimals;
     private final boolean enabled;
     private final Map<String, CompletableFuture<RouteResult>> inFlight = new ConcurrentHashMap<>();
+    /** 동시 질의 상한을 둔 공급자의 자리. 먼저 기다린 질의가 먼저 묻는다. */
+    private final Map<String, java.util.concurrent.Semaphore> slots = new ConcurrentHashMap<>();
     private final Map<String, ScheduleVerifier> verifiers;
 
     @Autowired
@@ -70,6 +77,11 @@ public class RouteEngine {
                 .getBeanProvider(MeterRegistry.class), Clock.systemUTC(), List.of());
     }
 
+    /** 꺼져 있으면 모든 조회가 NOT_COVERED다. 호출부는 이때 추정만 쓴다. */
+    public boolean enabled() {
+        return enabled;
+    }
+
     public RouteResult route(RouteQuery query) {
         return route(query, CallAllowance.unlimited());
     }
@@ -82,16 +94,21 @@ public class RouteEngine {
         RouteQuery q = query.snapped(coordinateDecimals);
         List<RouteProvider> candidates = registry.providersFor(q);
         if (candidates.isEmpty()) return RouteResult.of(RouteStatus.NOT_COVERED, null, "no provider for area and mode");
-        return routeVia(q, candidates, true, new Call(allowance, clock.instant().plus(ROUTE_DEADLINE)));
+        java.time.Instant own = clock.instant().plus(ROUTE_DEADLINE);
+        java.time.Instant until = allowance.deadline().isBefore(own) ? allowance.deadline() : own;
+        return routeVia(q, candidates, true, new Call(allowance, until));
     }
 
     private RouteResult routeVia(RouteQuery q, List<RouteProvider> candidates, boolean connectStops, Call c) {
         List<ProviderAttempt> attempts = new ArrayList<>();
         for (RouteProvider p : candidates) {
-            Optional<RouteResult> cached = cache.get(p, q);
+            String version = p.dataVersion();
+            Optional<RouteResult> cached = cache.get(p, q, version);
             boolean fromCache = cached.isPresent();
             RouteResult r = fromCache ? cached.get() : call(p, q, c);
-            attempts.add(new ProviderAttempt(p.id(), r.status(), r.reason(), fromCache));
+            // 조회하는 동안 그래프가 바뀌면 어느 판의 답인지 몰라 판을 남기지 않는다.
+            String answeredBy = fromCache || java.util.Objects.equals(version, p.dataVersion()) ? version : null;
+            attempts.add(new ProviderAttempt(p.id(), r.status(), r.reason(), fromCache, answeredBy));
             if (r.status() == RouteStatus.FOUND) {
                 fallbackFrom(attempts).ifPresent(a -> fallback(a, p));
                 if (connectStops && p.settings().stopToStop() && q.mode() == TravelMode.TRANSIT) {
@@ -115,13 +132,19 @@ public class RouteEngine {
         meters.counter("routing.provider.fallback", "from", from.providerId(), "to", to.id()).increment();
     }
 
+    /** 공급자가 지금 답하는 데이터의 판. 저장한 경로가 어느 그래프에서 나왔는지 남길 때 쓴다. */
+    public String dataVersion(String providerId) {
+        return registry.providers().stream().filter(p -> p.id().equals(providerId)).findFirst()
+                .map(RouteProvider::dataVersion).orElse(null);
+    }
+
     /** 공급자 장애·인증 실패·대체 전환 상태. */
     public ProviderHealth.Snapshot health(String providerId) {
         return health.snapshot(providerId);
     }
 
     private RouteResult cachedOrCall(RouteProvider p, RouteQuery q, Call c) {
-        return cache.get(p, q).orElseGet(() -> call(p, q, c));
+        return cache.get(p, q, p.dataVersion()).orElseGet(() -> call(p, q, c));
     }
 
     /** 같은 공급자·같은 캐시 칸 요청이 동시에 오면 한 번만 부르고 결과를 나눈다. */
@@ -135,7 +158,7 @@ public class RouteEngine {
         CompletableFuture<RouteResult> running = inFlight.putIfAbsent(key, mine);
         if (running != null) return running.join();
         try {
-            RouteResult r = callOnce(p, q, c.allowance());
+            RouteResult r = callInSlot(p, q, c);
             mine.complete(r);
             return r;
         } catch (RuntimeException e) {
@@ -146,7 +169,36 @@ public class RouteEngine {
         }
     }
 
-    private RouteResult callOnce(RouteProvider p, RouteQuery q, CallAllowance allowance) {
+    /** 공급자 자리를 기한까지 기다린다. 기한 안에 자리가 나지 않으면 부르지 않는다. */
+    private RouteResult callInSlot(RouteProvider p, RouteQuery q, Call c) {
+        int max = p.settings().maxConcurrent();
+        java.util.concurrent.Semaphore slot = max <= 0 ? null
+                : slots.computeIfAbsent(p.id(), k -> new java.util.concurrent.Semaphore(max, true));
+        if (slot != null) {
+            long waitMs = Duration.between(clock.instant(), c.deadline()).toMillis();
+            try {
+                if (waitMs <= 0 || !slot.tryAcquire(waitMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    return RouteResult.of(RouteStatus.UNAVAILABLE, p.id(), "route deadline exceeded waiting for provider");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return RouteResult.of(RouteStatus.UNAVAILABLE, p.id(), "interrupted");
+            }
+        }
+        try {
+            if (clock.instant().isAfter(c.deadline())) {
+                return RouteResult.of(RouteStatus.UNAVAILABLE, p.id(), "route deadline exceeded");
+            }
+            // 엔진 시계는 시험에서 고정될 수 있어 HTTP 기한은 남은 시간으로 넘긴다.
+            java.time.Instant httpDeadline = java.time.Instant.now().plus(Duration.between(clock.instant(), c.deadline()));
+            return RoutingHttp.within(httpDeadline, () -> callOnce(p, q, c.allowance(), c.deadline()));
+        } finally {
+            if (slot != null) slot.release();
+        }
+    }
+
+    /** @param deadline 이 조회의 기한. 기한에 걸려 끊겼는데 공급자에 준 시간이 짧으면 공급자 장애로 세지 않는다 */
+    private RouteResult callOnce(RouteProvider p, RouteQuery q, CallAllowance allowance, java.time.Instant deadline) {
         RoutingProperties.ProviderSettings s = p.settings();
         if (s.external() && !allowance.take()) {
             return RouteResult.of(RouteStatus.UNAVAILABLE, p.id(), "trip call allowance exhausted");
@@ -155,11 +207,15 @@ public class RouteEngine {
             return RouteResult.of(RouteStatus.UNAVAILABLE, p.id(), "call budget exhausted");
         }
         long started = System.nanoTime();
+        String version = p.dataVersion();
         RouteResult r = callSafely(p, q);
         Timer.builder("routing.provider.call").tag("provider", p.id()).tag("status", r.status().name())
                 .register(meters).record(Duration.ofNanos(System.nanoTime() - started));
-        health.record(p.id(), r.status(), r.reason());
-        cache.put(p, q, r);
+        // 일정의 조회 기한에 걸려 끊긴 질의는 공급자 장애가 아니라 차단기를 열지 않는다.
+        boolean cutByDeadline = r.status() == RouteStatus.UNAVAILABLE && !clock.instant().isBefore(deadline)
+                && Duration.ofNanos(System.nanoTime() - started).compareTo(FAILURE_MIN_WAIT) < 0;
+        if (!cutByDeadline) health.record(p.id(), r.status(), r.reason());
+        if (java.util.Objects.equals(version, p.dataVersion())) cache.put(p, q, r, version);
         return r;
     }
 
@@ -255,6 +311,9 @@ public class RouteEngine {
         RouteItinerary first = parts[0].legs().isEmpty() ? parts[1] : parts[0];
         RouteItinerary last = parts[parts.length - 1].legs().isEmpty() ? parts[parts.length - 2] : parts[parts.length - 1];
         RouteSource s = parts[1].source();
+        // 요금을 모르는 탈 것이 하나라도 있으면 아는 토막만 더한 금액은 전체 요금이 아니다.
+        boolean faresComplete = Arrays.stream(parts).filter(RouteItinerary::usesTransit).noneMatch(p -> p.fares().isEmpty());
+        if (!faresComplete) fares.clear();
         var departure = first.departure();
         var arrival = last.arrival();
         return new RouteItinerary(departure, arrival, (int) Duration.between(departure, arrival).toSeconds(),
@@ -285,13 +344,16 @@ public class RouteEngine {
             int confirmed = 0;
             boolean rejected = false;
             boolean unverifiedLeft = false;
+            List<Fare> officialFares = new ArrayList<>();
             for (RouteLeg leg : it.legs()) {
                 if (!leg.mode().isTransit()) continue;
                 transit++;
-                ScheduleVerifier.Verdict v = vs.stream().map(x -> x.verify(leg))
-                        .filter(x -> x != ScheduleVerifier.Verdict.UNKNOWN).findFirst()
-                        .orElse(ScheduleVerifier.Verdict.UNKNOWN);
+                ScheduleVerifier.Check check = vs.stream().map(x -> x.check(leg))
+                        .filter(x -> x.verdict() != ScheduleVerifier.Verdict.UNKNOWN).findFirst()
+                        .orElse(new ScheduleVerifier.Check(ScheduleVerifier.Verdict.UNKNOWN, null));
+                ScheduleVerifier.Verdict v = check.verdict();
                 if (v == ScheduleVerifier.Verdict.CONFIRMED) confirmed++;
+                if (check.fare() != null) officialFares.add(check.fare());
                 if (v == ScheduleVerifier.Verdict.NOT_IN_OFFICIAL) {
                     rejected = true;
                     itNotes.add("not in official timetable: " + leg.line());
@@ -306,8 +368,13 @@ public class RouteEngine {
                     ? RouteBasis.GTFS_SCHEDULE : it.source().basis();
             if (confirmed > 0) itNotes.add("official timetable confirmed " + confirmed + "/" + transit + " transit legs");
             RouteSource s = it.source();
+            // 탈 것마다 공식 운임을 받았을 때만 운임으로 쓴다. 일부만 더하면 전체 요금이 아니다.
+            boolean oneCurrency = officialFares.stream().map(Fare::currency).distinct().count() == 1;
+            List<Fare> fares = it.fares().isEmpty() && officialFares.size() == transit && oneCurrency
+                    ? List.of(new Fare(officialFares.stream().map(Fare::amount).reduce(java.math.BigDecimal.ZERO,
+                    java.math.BigDecimal::add), officialFares.getFirst().currency(), Fare.Kind.TICKET)) : it.fares();
             out.add(new RouteItinerary(it.departure(), it.arrival(), it.durationSeconds(), it.transfers(), it.legs(),
-                    it.fares(), new RouteSource(s.providerId(), basis, s.officialData() || confirmed == transit,
+                    fares, new RouteSource(s.providerId(), basis, s.officialData() || confirmed == transit,
                     s.attribution(), s.observedAt(), s.expiresAt(), s.validity()), it.endpointGapMeters()));
         }
         String reason = java.util.stream.Stream.concat(java.util.stream.Stream.ofNullable(r.reason()),

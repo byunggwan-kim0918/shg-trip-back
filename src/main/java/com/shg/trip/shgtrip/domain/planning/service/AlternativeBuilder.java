@@ -40,7 +40,7 @@ final class AlternativeBuilder {
         return new StepData(s.stepOrder(), s.dayNumber(), s.startTime(), s.endTime(),
                 s.place(), filtered, s.transportationMode(),
                 s.transportationDuration(), s.transportationDistance(),
-                s.transportationCost(), s.notes(), s.estimatedCost());
+                s.transportationCost(), s.notes(), s.estimatedCost(), s.transportationRoute());
     }
 
 }

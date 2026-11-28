@@ -105,6 +105,11 @@ public final class SavedItineraryFacts {
         return toCandidate(p, 0);
     }
 
+    /** 저장된 장소를 생성기 후보로. 트랜잭션 밖에서 쓸 값만 옮긴다. */
+    public static PlaceCandidate candidate(Place p) {
+        return toCandidate(p, 0);
+    }
+
     private static PlaceCandidate toCandidate(Place p, int index) {
         return new PlaceCandidate(index, p.getId(), p.getName(), p.getAddress(), p.getCategory(), p.getTags(),
                 p.getRegion(), p.getCountry(), p.getLatitude(), p.getLongitude(), p.getDescription(),

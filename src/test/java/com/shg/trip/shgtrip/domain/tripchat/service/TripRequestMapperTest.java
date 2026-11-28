@@ -162,11 +162,11 @@ class TripRequestMapperTest {
     }
 
     @Test
-    @DisplayName("대중교통은 walk로 바꾸지 않고 any로 보내며 노선·시간표 미반영을 알린다")
-    void transitIsApproximated() {
+    @DisplayName("대중교통만 다닌다는 조건은 walk·any로 바꾸지 않고 transit으로 보내며 노선·시간표 미반영을 알린다")
+    void transitIsKeptAsConstraint() {
         TripRequestMapper.Result r = map(Events.busanTrip().user(DraftField.TRANSPORT, "transit", "대중교통"));
 
-        assertThat(r.request().transportPref()).isEqualTo("any");
+        assertThat(r.request().transportPref()).isEqualTo("transit");
         assertThat(r.request().description()).contains("이동: 대중교통(차 없음)");
         assertThat(r.notes().get(Slot.TRANSPORT)).singleElement().asString().contains("시간표는 반영되지 않아요");
     }

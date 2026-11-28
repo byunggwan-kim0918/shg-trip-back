@@ -15,7 +15,14 @@ public interface ScheduleVerifier {
         UNKNOWN
     }
 
+    /** @param fare 공식 시간표가 준 그 편의 어른 운임. 주지 않으면 null이다 */
+    record Check(Verdict verdict, Fare fare) {}
+
     String id();
 
     Verdict verify(RouteLeg leg);
+
+    default Check check(RouteLeg leg) {
+        return new Check(verify(leg), null);
+    }
 }

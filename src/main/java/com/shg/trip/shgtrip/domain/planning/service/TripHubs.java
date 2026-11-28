@@ -113,7 +113,7 @@ class TripHubs {
 
     /**
      * 추정한 이동 뒤에 출발 허브 기한이 있으면 더 남길 분. 짓는 쪽과 검사가 같은 값을 써야 여유를 둔 일정이 출발 초과로
-     * 판정되지 않는다. TODO: 실제 경로 시간을 쓰는 구간은 여유를 두지 않는다.
+     * 판정되지 않는다.
      *
      * @param legMinutes 추정한 이동 분. 모르면 null
      */
@@ -132,6 +132,22 @@ class TripHubs {
     static int latestLeave(int hubDeadline, Integer legMinutes) {
         int leg = legMinutes == null ? HUB_TRAVEL_MINUTES : legMinutes;
         return hubDeadline - leg - estimatedLegSlack(legMinutes);
+    }
+
+    /** 경로 근거가 있는 구간. 시간표로 확인한 구간은 그 시각에 닿으므로 여유를 두지 않는다. */
+    static int latestLeaveOn(int hubDeadline, TransportLeg leg) {
+        if (leg == null) return latestLeave(hubDeadline, (Integer) null);
+        return hubDeadline - leg.durationMin() - legSlack(leg.durationMin(), leg.route());
+    }
+
+    /**
+     * 허브까지 구간에 더 남길 분. 공식·GTFS 시간표로 확인한 구간은 0이고, 도로망·추정 구간은 {@link #estimatedLegSlack}다.
+     *
+     * @param route 경로 근거. 거리 추정만 했으면 null
+     */
+    static int legSlack(Integer legMinutes, com.shg.trip.shgtrip.domain.planning.dto.TransportRoute route) {
+        boolean confirmed = route != null && "FOUND".equals(route.status()) && !route.estimated();
+        return confirmed ? 0 : estimatedLegSlack(legMinutes);
     }
 
     /** 국제선은 출국 수속에 국내선보다 오래 걸린다. */

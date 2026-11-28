@@ -212,13 +212,15 @@ class DraftEvalRunner implements CommandLineRunner {
                 }
                 md.append('\n');
                 built.put(file, new String[]{md.toString(), objectMapper.writeValueAsString(Map.ofEntries(
-                        Map.entry("id", id), Map.entry("request", req), Map.entry("steps", stepRows(result)),
+                        Map.entry("id", id), Map.entry("request", req),
+                        Map.entry("steps", stepRows(result, base.input().partySize())),
                         Map.entry("notes", result.notes()), Map.entry("violations", violations),
                         Map.entry("omissions", result.omissions().stream().map(o -> Map.of("day", o.day(),
                                 "name", o.place().name(), "reason", o.reason(), "cause", o.cause())).toList()),
                         Map.entry("intent", TripPlanner.intentOf(trip)), Map.entry("problems", root.path("problems")),
                         Map.entry("edits", edits.size()), Map.entry("finished", root.path("finished").asBoolean(true)),
-                        Map.entry("ms", buildMs)))});
+                        Map.entry("ms", buildMs), Map.entry("routes", result.routes() == null ? Map.of()
+                                : result.routes().stats().summary())))});
             } catch (RuntimeException e) {
                 log.warn("여행 재구성 실패 {}: {}", id, e.toString());
                 built.put(file, new String[]{"## 일정 " + id + "\n실패: " + e + "\n\n", null});
@@ -422,12 +424,13 @@ class DraftEvalRunner implements CommandLineRunner {
         return sb.toString();
     }
 
-    private static List<Map<String, Object>> stepRows(DraftItineraryPlanner.Result result) {
+    /** 비용은 저장할 때와 같이 인원을 반영한 값이다. */
+    private static List<Map<String, Object>> stepRows(DraftItineraryPlanner.Result result, Integer partySize) {
         Map<Long, PlaceCandidate> byId = result.candidates().stream()
                 .filter(c -> c.placeId() != null)
                 .collect(Collectors.toMap(PlaceCandidate::placeId, Function.identity(), (a, b) -> a));
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (StepData s : result.steps()) {
+        for (StepData s : com.shg.trip.shgtrip.domain.planning.service.PartyCosts.scale(result.steps(), partySize)) {
             PlaceCandidate c = s.place().placeId() == null ? null : byId.get(s.place().placeId());
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("day", s.dayNumber());
@@ -443,6 +446,9 @@ class DraftEvalRunner implements CommandLineRunner {
             row.put("mode", s.transportationMode());
             row.put("minutes", s.transportationDuration());
             row.put("km", s.transportationDistance());
+            row.put("cost", s.transportationCost());
+            row.put("placeCost", s.estimatedCost());
+            row.put("route", s.transportationRoute());
             rows.add(row);
         }
         return rows;

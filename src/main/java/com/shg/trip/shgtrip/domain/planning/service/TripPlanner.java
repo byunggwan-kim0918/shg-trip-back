@@ -208,6 +208,8 @@ public class TripPlanner {
     private static List<String> tripNotes(TripSkeletonPlanner.Skeleton skeleton, DraftItineraryPlanner.Result result,
                                           List<ItineraryRules.Violation> violations) {
         List<String> out = new ArrayList<>(skeleton.conflicts());
+        out.addAll(unreachableLegs(result.steps()));
+        out.addAll(lateLodging(result));
         for (ItineraryRules.Violation v : violations) {
             if (v.rule() == ItineraryRules.Rule.DAILY_TRANSIT) {
                 out.add(v.day() + "일차는 이동 시간이 길어요(" + v.message().replaceAll("^.* (\\d+)분$", "$1")
@@ -240,6 +242,40 @@ public class TripPlanner {
         return out;
     }
 
+    /** 다시 지어도 고르신 수단으로 그 시각 편이 없는 구간. 시간은 거리 추정이라 일정과 맞지 않을 수 있다. */
+    static List<String> unreachableLegs(List<StepData> steps) {
+        List<String> out = new ArrayList<>();
+        for (int i = 1; i < steps.size(); i++) {
+            StepData s = steps.get(i);
+            StepData prev = steps.get(i - 1);
+            if (s.transportationRoute() == null || !s.transportationRoute().unreachable()) continue;
+            if (prev.dayNumber() != s.dayNumber()) continue;
+            out.add(unreachableNotice(s.dayNumber(), prev.endTime(), prev.place().name(), s.place().name()));
+        }
+        return out;
+    }
+
+    /** 요청 장소를 지키느라 숙소 기한보다 늦게 닿는 날. 덜 수 있는 장소가 없어 충돌로 남은 것이다. */
+    static List<String> lateLodging(DraftItineraryPlanner.Result result) {
+        List<String> out = new ArrayList<>();
+        for (DayBuilder.Frame f : result.frames()) {
+            if (f.endAt() == null || f.endIsHub()) continue;
+            StepData end = result.steps().stream().filter(s -> s.dayNumber() == f.dayNumber())
+                    .reduce((a, b) -> b).orElse(null);
+            boolean atLodging = end != null && java.util.Objects.equals(end.place().placeId(), f.endAt().placeId());
+            Integer at = atLodging ? ScheduleTimes.toMinutesOrNull(end.startTime()) : null;
+            if (at == null || at <= f.lodgingBy()) continue;
+            out.add(f.dayNumber() + "일차는 요청하신 곳을 들르느라 숙소에 " + end.startTime() + "에 도착해요.");
+        }
+        return out;
+    }
+
+    /** 생성과 편집 재판정이 같은 문장을 쓴다. */
+    public static String unreachableNotice(int day, String departTime, String from, String to) {
+        return day + "일차 " + departTime + "에 " + from + "에서 " + to + "(으)로 가는 대중교통 편이 없어요. "
+                + "이 구간은 다른 교통편을 알아봐 주세요.";
+    }
+
     /** 장소는 찾았지만 넣지 못한 요구의 까닭. 까닭을 모르면 빈 문자열이다. */
     static String missedWhy(TripConditions.Want want, DraftItineraryPlanner.Result result) {
         DraftItineraryPlanner.Omission o = result.omissions().stream()
@@ -251,6 +287,7 @@ public class TripPlanner {
             case HOURS -> " 영업시간에 맞춰 들를 수 있는 날이 없었어요.";
             case TIME -> " 하루 일정 안에 들를 시간이 모자랐어요.";
             case DAYLIGHT -> " 해 지기 전에 들를 시간이 없었어요.";
+            case TRANSIT -> " 고르신 교통수단으로 그 시각에 갈 수 있는 편이 없었어요.";
             case ROUTE, OTHER -> "";
         };
     }

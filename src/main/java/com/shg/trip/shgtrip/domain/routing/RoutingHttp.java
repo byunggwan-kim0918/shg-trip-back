@@ -23,6 +23,8 @@ import java.util.stream.Collectors;
 public class RoutingHttp {
 
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    /** 조회 한 번의 기한. 공급자 안에서 여러 번 부르는 요청(끝점 옮기기·넓혀 다시 묻기)도 이 시각을 넘기지 않는다. */
+    private static final ThreadLocal<java.time.Instant> CALL_DEADLINE = new ThreadLocal<>();
 
     // 평문 http에 h2c 업그레이드를 붙이면 OTP(Grizzly)가 응답하지 않는다.
     private final HttpClient client = HttpClient.newBuilder()
@@ -44,14 +46,35 @@ public class RoutingHttp {
         }
     }
 
+    /** 같은 스레드에서 이 기한 안에 공급자를 부른다. */
+    public static <T> T within(java.time.Instant deadline, java.util.function.Supplier<T> call) {
+        java.time.Instant outer = CALL_DEADLINE.get();
+        CALL_DEADLINE.set(outer != null && outer.isBefore(deadline) ? outer : deadline);
+        try {
+            return call.get();
+        } finally {
+            if (outer == null) CALL_DEADLINE.remove();
+            else CALL_DEADLINE.set(outer);
+        }
+    }
+
+    /** 남은 기한으로 줄인 제한시간. 기한이 지났으면 부르지 않는다. */
+    static Duration clamp(Duration timeout) {
+        java.time.Instant until = CALL_DEADLINE.get();
+        if (until == null) return timeout;
+        Duration left = Duration.between(java.time.Instant.now(), until);
+        if (left.isNegative() || left.isZero()) throw new CallFailed("call deadline exceeded");
+        return left.compareTo(timeout) < 0 ? left : timeout;
+    }
+
     public Response get(URI uri, Map<String, String> headers, Duration timeout) {
-        HttpRequest.Builder b = HttpRequest.newBuilder(uri).timeout(timeout).GET();
+        HttpRequest.Builder b = HttpRequest.newBuilder(uri).timeout(clamp(timeout)).GET();
         headers.forEach(b::header);
         return send(b.build());
     }
 
     public Response postJson(URI uri, String body, Map<String, String> headers, Duration timeout) {
-        HttpRequest.Builder b = HttpRequest.newBuilder(uri).timeout(timeout)
+        HttpRequest.Builder b = HttpRequest.newBuilder(uri).timeout(clamp(timeout))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8));
         headers.forEach(b::header);

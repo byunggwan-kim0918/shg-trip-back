@@ -37,11 +37,11 @@ class TaxiFareTableTest {
         TaxiFareTable table = real();
 
         assertThat(table.estimate(new GeoPoint(35.6896, 139.7006), 1000, DAY))
-                .contains(new Fare(BigDecimal.valueOf(500), "JPY", Fare.Kind.TAXI_ESTIMATE));
+                .contains(new Fare(BigDecimal.valueOf(500), "JPY", Fare.Kind.TAXI_TABLE));
         assertThat(table.estimate(new GeoPoint(34.9858, 135.7588), 900, DAY))
-                .contains(new Fare(BigDecimal.valueOf(500), "JPY", Fare.Kind.TAXI_ESTIMATE));
+                .contains(new Fare(BigDecimal.valueOf(500), "JPY", Fare.Kind.TAXI_TABLE));
         assertThat(table.estimate(new GeoPoint(37.5547, 126.9707), 1600, DAY))
-                .contains(new Fare(BigDecimal.valueOf(4800), "KRW", Fare.Kind.TAXI_ESTIMATE));
+                .contains(new Fare(BigDecimal.valueOf(4800), "KRW", Fare.Kind.TAXI_TABLE));
     }
 
     @Test

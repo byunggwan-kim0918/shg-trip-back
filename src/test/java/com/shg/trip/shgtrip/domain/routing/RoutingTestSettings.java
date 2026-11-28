@@ -75,4 +75,13 @@ public final class RoutingTestSettings {
     public static RouteQuery query(TravelMode mode) {
         return new RouteQuery(SAPPORO, OTARU, ZonedDateTime.of(2026, 11, 26, 9, 0, 0, 0, ZoneId.of("Asia/Tokyo")), mode);
     }
+
+    public static RoutingProperties.ProviderSettings withMaxConcurrent(RoutingProperties.ProviderSettings s, int max) {
+        return new RoutingProperties.ProviderSettings(s.type(), s.enabled(), s.priority(), s.baseUrl(), s.apiKey(),
+                s.modes(), s.coverage(), s.coverageAreas(), s.timeout(), s.dailyLimit(), s.perMinuteLimit(),
+                s.cacheTtl(), s.noConnectionTtl(), s.cacheBucket(), s.officialData(), s.attribution(), s.timezone(),
+                s.snapToStopMeters(), s.stopToStop(), s.stopModes(), s.unverifiedAgencies(), s.transferMinutes(),
+                s.monthlyLimit(), s.commercialUse(), s.external(), s.verifiers(), s.unverifiedFeeds(),
+                s.feedCoverageFile(), max);
+    }
 }
